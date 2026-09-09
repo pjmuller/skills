@@ -1,60 +1,58 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare a CleanShot / screen recording (from ~/screenshots or ~/Downloads) for Gemini transcription — shrink it with ffmpeg (low fps, source-resolution frames, mono speech audio) AND build the companion markdown prompt (brief + appended project context files). Use for "shrink this video for Gemini", "make this recording uploadable", "prep the recording + prompt for Gemini", "transcribe this meeting recording".
+description: Prepare screen recordings for Gemini with a smaller video and a context-rich prompt. Use for video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
 ---
 
-# Video → Gemini (shrink + prompt)
+# Video → Gemini
 
-Deliverable = two files next to the source: `<name>.gemini.mp4` and one `<session>.gemini-prompt.md`
-(one prompt for all clips of the same session). PJ uploads both in aistudio.google.com; the transcript
-feeds later AI agents. Bytes are cheap (2 GB/file); Gemini *tokens* are the limit, and on-screen text
-must stay readable — drop frames, not pixels.
+Deliver `<name>.gemini.mp4` and `<session>.gemini-prompt.md` beside the source.
+The operator uploads both to AI Studio; later coding agents consume the text.
+Install commands with `scripts/install`; verify dependencies with `scripts/install --check`.
 
-## 1. Shrink
+## Inspect and choose mode
+
+Inspect 3–4 frames across each clip and measure duration with `ffprobe`.
+If audio exists, run `ffmpeg -i INPUT -af silencedetect=noise=-35dB:d=0.3 -f null -`.
+Estimate speech share as `(duration − total silence duration) / duration`, accounting for
+silence continuing to EOF. This measures audible activity, not speech: music, clicks,
+noise and quiet voices need listening checks. No audio stream → visual-first.
+Below roughly 20% speech → propose visual-first; speech-heavy → transcript-first;
+substantial speech plus UI actions → mixed. If unsure, include mode in the single
+question round along with missing project, speakers/language, purpose and skip ranges.
+Infer available context first; use your project's context files and `AGENTS.md`.
+
+## Shrink
+
 ```sh
-scripts/shrink-video [--preset normal|heavy|extreme] [--out DIR] "CleanShot 2026-09-08 at 11.55.46.mp4"
+scripts/shrink-video --preset normal "recording.mp4"
 ```
-Bare names resolve in `~/screenshots` then `~/Downloads`. Width is a cap (never upscales); audio always mono 16 kHz AAC 48k.
 
-| preset | fps | width cap | when | ~size / hour |
-|--------|-----|-----------|------|-------------|
-| normal (default) | 0.5 | 1280 | code/UI/slides on screen matter | 60–80 MB |
-| heavy | 0.25 | 1280 | talking + occasional screen | 50–60 MB |
-| extreme | 0.2 | 854 | picture only for orientation | 30 MB |
+Bare filenames resolve in `~/screenshots`, then `~/Downloads`. Output audio is mono
+16 kHz AAC. Presets: normal = 0.5 fps / 1280px cap; heavy = 0.25 fps / 1280px;
+extreme = 0.2 fps / 854px. Never choose a preset that makes screen text unreadable.
+For visual-first or mixed, rapid actions may disappear at 0.5 fps: retain the original
+or produce a higher-frame-rate, source-resolution copy with ffmpeg when needed.
+Check sampled output frames before delivery. Keep the original.
 
-Lesson 2026-09-08: 640 px made UI text unreadable for zero gain — never downscale below source to save bytes.
+## Prompt
 
-## 2. Close the gaps (one question round, max)
-Reverse-engineer first, ask second. Pull 3–4 frames spread over the clip
-(`ffmpeg -ss <t> -i in.mp4 -frames:v 1 /tmp/f.png`) and look at them: which app, which company,
-which people are on camera. Then ask PJ **only** what's still missing, in one `AskUserQuestion`:
-- **Project** → pick the pjcoach file `~/code/pjmuller/pjcoach/3_business/<n>_<project>.md`
-  (0_overall, 2_pro-backup, 3_kampadmin, 6_rootcause, 7_dentai, 8_leesheld, 9_momentum-tools).
-- **Counterpart** (customer/company) → its brain `~/code/rootcause-org/rootcause-brain-<slug>/AGENTS.md`
-  when it's a Rootcause pilot; otherwise the repo's top-level `AGENTS.md`.
-- **Who speaks** (names + roles) and **language** (usually Flemish Dutch + English jargon).
-- **Dead stretches**: podcast/music leaking in, silent setup work, breaks — approximate timestamps if PJ knows them.
-- **Purpose of the transcript** (customer discovery, onboarding notes, bug hunt…) — it steers what "relevant" means.
+Fill [prompt-template.md](prompt-template.md): `MODE` = visual-first, transcript-first,
+or mixed; durations/count from ffprobe; situation, language, speakers, skips and a
+short introduction to each context file. Keep the applicable rule blocks.
 
-## 3. Build the prompt
-1. Copy `prompt-template.md` to `/tmp/header.md`, fill every `{{…}}` (COUNT, DURATIONS from ffprobe,
-   SITUATION, LANGUAGE, SPEAKERS with roles, SKIPS as bullet lines, CONTEXT_INTRO = 2–4 lines saying what
-   each appended file is). Keep the rules block as-is unless PJ asks otherwise.
-2. Append the reference files verbatim — never retype them:
-   ```sh
-   scripts/build-prompt --header /tmp/header.md --out ~/screenshots/<session>.gemini-prompt.md \
-     ~/code/pjmuller/pjcoach/3_business/6_rootcause.md ~/code/rootcause-org/rootcause-brain-<slug>/AGENTS.md
-   ```
-   Each file lands as `### <path>` + a 5-backtick fence, so PJ can strip one block by hand.
-3. Reply with both paths and the preset used. Nothing else to recap.
+```sh
+scripts/build-prompt --header /tmp/header.md --out session.gemini-prompt.md \
+  /path/to/project-context.md /path/to/project/AGENTS.md
+```
 
-Worked example (2026-09-08, iBeauty onsite): `examples/ibeauty-onsite-2026-09-08.header.md`.
+Reference files are appended verbatim in separate fences. Return both output paths
+and the chosen mode/preset. For API use, load `GEMINI_API_KEY` from your own environment.
+Check current Gemini video/file limits before choosing upload/chunking settings;
+long recordings may need chunks or lower media resolution.
 
-## Gemini limits (verified 2026-09-08, ai.google.dev/gemini-api/docs/video-understanding)
-- File: 2 GB (free) / 20 GB (paid) via Files API — AI Studio uses the same path. Kept 48 h.
-- Context 1 M tokens (3.8 Flash). Gemini samples at **1 fps regardless of source fps**:
-  ~300 tokens/s at default media resolution, ~100 tokens/s at `low`. ≈55 min fits at default, ≈3 h at low.
-  Tell PJ to set **media resolution = low** in AI Studio for anything > 50 min; 3.8 Flash also has an
-  "agentic" video mode (~88 % fewer tokens).
-- API only: `video_metadata.fps` (e.g. 0.25) cuts tokens further; `start_offset`/`end_offset` to chunk.
-  Key: `GEMINI_API_KEY` in `~/.config/mise-env/dentai-org/dentai.env`.
+## PJ's local examples (optional context only)
+
+- Project notes: `~/code/pjmuller/pjcoach/3_business/<n>_<project>.md`.
+- Pilot context: `~/code/rootcause-org/rootcause-brain-<slug>/AGENTS.md`.
+- Local API environment: `~/.config/mise-env/dentai-org/dentai.env`.
+These are operator-specific examples, never required or assumed on another machine.

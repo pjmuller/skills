@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assemble a Gemini prompt: a filled-in header + reference files appended verbatim, each in its own
-# fenced block headed by its path (so PJ can delete one block/line by hand).
+# fenced block headed by its path (so the operator can delete one block/line by hand).
 # Usage: build-prompt --header FILLED_HEADER.md --out PROMPT.md FILE...
 set -euo pipefail
 header=""; out=""
