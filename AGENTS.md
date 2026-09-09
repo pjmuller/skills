@@ -16,5 +16,5 @@ checks, `t3-spawn-thread --dry-run`, and a launchd smoke job for scheduling chan
 Verify Markdown relative links. Never exercise destructive purge/cleanup in tests.
 Commit logical changes to main; update CHANGELOG and tag only verified releases.
 
-Tested: macOS arm64, T3 Code 0.0.39, skills CLI 1.5.24 (2026-09-09).
+Tested: macOS arm64, T3 Code 0.0.40, skills CLI 1.5.24 (2026-09-09).
 Linux/WSL thread helpers are supported by code paths but not live-tested here.
