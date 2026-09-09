@@ -17,6 +17,7 @@ Self-contained skills for Claude Code, Codex and other agents. MIT licensed.
 | Skill | Purpose |
 | --- | --- |
 | [video-shrink-for-gemini](skills/video-shrink-for-gemini/SKILL.md) | Smaller recordings + transcript, visual-first or mixed prompt |
+| [clickup-core](skills/clickup-core/SKILL.md) | Workspace-configured ClickUp tasks, rich content, attachments and discovery |
 | [disk-audit](skills/disk-audit/SKILL.md) | macOS disk measurements and separately authorized cache cleanup |
 
 ## Install

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in ""|--check) ;; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
+command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+uv run "$root/clickup.py" --help >/dev/null
+printf '%s\n' 'clickup-core ready; invoke scripts/clickup.py with uv run (no global command links needed)'

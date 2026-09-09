@@ -1,0 +1,50 @@
+[workspace]
+id = "123456"
+space_id = "234567"
+default_list = "development"
+
+[auth]
+env_var = "CLICKUP_API_PERSONAL_TOKEN"
+# Optional operator-owned file; never put the token here.
+# env_file = "~/.config/my-project.env"
+
+[lists.development]
+id = "345678"
+statuses = ["to do", "in progress", "to test", "complete"]
+default_status = "to do"
+closed_status = "complete"
+
+[members.author]
+id = 101
+name = "Alex Example"
+[members.reviewer]
+id = 102
+name = "Sam Example"
+
+[priorities]
+urgent = 1
+high = 2
+normal = 3
+low = 4
+
+[policy]
+require_assignee = true
+require_priority = false
+handoff_status = "to test"
+handoff_mode = "counterpart" # or assignee: one existing assignee other than token owner
+handoff_pair = ["author", "reviewer"]
+# ignored_assignees = [103]
+# default_assignee = "author"
+# review_closed_status = "complete"
+# review_header = "# Review @reviewer"
+# review_mention = "reviewer"
+# review_ok_text = "Reviewed: all fine"
+
+# [custom_fields.impact]
+# id = "00000000-0000-4000-8000-000000000001"
+# type = "drop_down"
+# list = "development"
+# [custom_fields.impact.options]
+# high = "00000000-0000-4000-8000-000000000002"
+# For customers/--customer compatibility configure custom_fields.customer with
+# id, type="list_relationship", list="onboardings", target_list="customers".
