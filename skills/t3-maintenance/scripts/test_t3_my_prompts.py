@@ -45,8 +45,8 @@ class PromptFixtureTest(unittest.TestCase):
         now = datetime.now(timezone.utc) - timedelta(minutes=5)
         rows = [
             ("1", "agent-thread", "Read ai/CLAUDE.md first and do exactly that. AGENT SECRET"),
-            ("1b", "agent-thread", "PJ-looking follow-up inside worker thread"),
-            ("2", "live-thread", "PJ request\n````python\n```\nCODE SECRET\n````\nkeep this"),
+            ("1b", "agent-thread", "user-looking follow-up inside worker thread"),
+            ("2", "live-thread", "the user request\n````python\n```\nCODE SECRET\n````\nkeep this"),
             ("2b", "live-thread", "[ping from worker] MANUAL-THREAD AGENT SECRET"),
             ("3", "deleted-thread", "DELETED SECRET"),
         ]
@@ -60,7 +60,7 @@ class PromptFixtureTest(unittest.TestCase):
             at = (now + timedelta(seconds=10 + i)).isoformat().replace("+00:00", "Z")
             conn.execute(
                 "INSERT INTO projection_thread_messages VALUES (?,?,?,?,?,0,?,?,NULL)",
-                (f"long-{i}", "live-thread", f"long-{i}", "user", "long PJ text " + "x" * 300, at, at),
+                (f"long-{i}", "live-thread", f"long-{i}", "user", "long the user text " + "x" * 300, at, at),
             )
         conn.commit()
         conn.close()
@@ -77,7 +77,7 @@ class PromptFixtureTest(unittest.TestCase):
     def test_agent_ping_filtered(self) -> None:
         output = self.run_script("--days", "1", "--budget", "20000")
         self.assertNotIn("AGENT SECRET", output)
-        self.assertNotIn("PJ-looking follow-up", output)
+        self.assertNotIn("user-looking follow-up", output)
         self.assertIn("dropped 2 row(s) from 1 agent-spawned thread", output)
         self.assertIn("1 ping row(s) inside manual threads", output)
 

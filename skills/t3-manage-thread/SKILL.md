@@ -22,7 +22,7 @@ in the local checkout, and prints the project + thread IDs — report those.
 | orchestrator verifies, then ends it | `t3-settle-thread --wait <id>` — **settle = kill** (stops the session and its sub-agents). Terminal, never automatic. |
 
 Hidden ≠ stopped: hiding is a snooze that a keeper maintains, and a hidden
-worker must resurface the moment it dies or needs PJ
+worker must resurface the moment it dies or needs the user
 ([hide-thread.md](hide-thread.md)); settling kills it
 ([settle-thread.md](settle-thread.md)). Threads without 🏓 (standalone, 📤
 hand-offs, orchestrators) are never hidden or settled by the helpers — except

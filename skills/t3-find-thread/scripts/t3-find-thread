@@ -7,7 +7,7 @@
 
 Progressive disclosure - each step costs more context than the last:
 
-    t3-find-thread search --project kampadmin --since 30d ahoy stats   # ranked candidates
+    t3-find-thread search --project example-app --since 30d ahoy stats   # ranked candidates
     t3-find-thread peek 2ac7596e,9f12ab30                              # headers + first prompts
     t3-find-thread grep 2ac7596e -k snapshot -k restore                # snippets around hits
     t3-find-thread read 2ac7596e --msg 3,7-9                           # last resort (t3-read-thread)

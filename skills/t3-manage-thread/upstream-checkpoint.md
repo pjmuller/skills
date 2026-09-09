@@ -1,10 +1,6 @@
 # Upstream replacement checkpoint
 
-Registry of every T3 hack with upstream link, status and removal condition:
-`macbook_setup/decissions/t3_monkey_patches.md` (review recipe inside).
-
-Before extending these helpers, read the native-orchestration section in
-[the T3 Code reference](../../../recommendations/t3_code.md). Orchestrator V2
+Before extending these helpers, check upstream native orchestration. Orchestrator V2
 [PR #2829](https://github.com/pingdotgg/t3code/pull/2829) is unmerged but already
 contains native `create_threads`, `t3_thread_start`, `t3_thread_send`,
 `t3_thread_wait/read/list/interrupt`, and `delegate_task` MCP tools. Follow-up

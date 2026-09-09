@@ -11,6 +11,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -67,7 +68,7 @@ CLAUDE_PAYLOAD = {
 CODEX_PAYLOAD = {
     "pace": {"secondary": {"summary": "20% in deficit | Runs out in 11h 51m"}},
     "usage": {
-        "accountEmail": "info@probackup.io",
+        "accountEmail": "user@example.com",
         "loginMethod": "pro",
         "primary": None,
         "secondary": {
@@ -97,18 +98,19 @@ class KeychainServiceTest(unittest.TestCase):
 
     def test_per_profile_hashes(self):
         self.assertEqual(
-            t3_limits.keychain_service("/Users/pjmuller/.claude_kampkompas_home"),
-            "Claude Code-credentials-892716b7",
+            t3_limits.keychain_service("/Users/example/.claude_personal_home"),
+            "Claude Code-credentials-ab379f19",
         )
         self.assertEqual(
-            t3_limits.keychain_service("/Users/pjmuller/.claude_dentai_home"),
-            "Claude Code-credentials-b6deab74",
+            t3_limits.keychain_service("/Users/example/.claude_work_home"),
+            "Claude Code-credentials-202b9f55",
         )
 
+    @patch.dict("os.environ", {"HOME": "/Users/example"})
     def test_tilde_expands_to_the_same_hash(self):
         self.assertEqual(
-            t3_limits.keychain_service("~/.claude_kampkompas_home"),
-            "Claude Code-credentials-892716b7",
+            t3_limits.keychain_service("~/.claude_personal_home"),
+            "Claude Code-credentials-ab379f19",
         )
 
 
@@ -129,7 +131,8 @@ class ClaudeRowsTest(unittest.TestCase):
         rows, _ = t3_limits.claude_rows(dict(CLAUDE_PAYLOAD, limits=[]))
         self.assertEqual([row.window for row in rows], ["session", "weekly"])
 
-    def test_expired_token_reports_instead_of_raising(self):
+    @patch.object(t3_limits, "keychain_token", return_value={"accessToken": "fixture-token"})
+    def test_expired_token_reports_instead_of_raising(self, _token):
         settings = self._settings()
 
         def fetch(_token):
@@ -149,11 +152,11 @@ class ClaudeRowsTest(unittest.TestCase):
                 {
                     "providerInstances": {
                         "grok": {"driver": "grok", "enabled": False},
-                        "claudeAgent_dentai": {
+                        "claudeAgent_work": {
                             "driver": "claudeAgent",
                             "enabled": True,
-                            "displayName": "Claude DentAI",
-                            "config": {"homePath": "~/.claude_dentai_home"},
+                            "displayName": "Claude Work",
+                            "config": {"homePath": "~/.claude_work_home"},
                         },
                     }
                 }
@@ -166,7 +169,7 @@ class CodexRowsTest(unittest.TestCase):
     def test_null_primary_and_extra_windows(self):
         account = t3_limits.codex_account(fetch=lambda: CODEX_PAYLOAD)
         self.assertEqual(account.plan, "pro")
-        self.assertEqual(account.label, "Codex  info@probackup.io")
+        self.assertEqual(account.label, "Codex  user@example.com")
         self.assertEqual(
             [(row.window, row.used_percent, row.length_seconds) for row in account.rows],
             [("weekly", 91.0, 10080 * 60)],  # Spark sub-windows are dropped
@@ -241,7 +244,7 @@ class PaceTest(unittest.TestCase):
     def test_markdown_has_one_row_per_window(self):
         account = t3_limits.codex_account(fetch=lambda: CODEX_PAYLOAD)
         text = t3_limits.render_markdown([account], NOW)
-        self.assertIn("| Codex  info@probackup.io | `codex` | weekly | 91% | 72% | -19 |", text)
+        self.assertIn("| Codex  user@example.com | `codex` | weekly | 91% | 72% | -19 |", text)
 
 
 if __name__ == "__main__":

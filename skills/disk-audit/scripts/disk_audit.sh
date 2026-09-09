@@ -195,15 +195,15 @@ suggest "$(bytes "$HOME_DIR/.cargo/registry")" 1 "rm -rf ~/.cargo/registry/cache
 suggest "$(bytes "$HOME_DIR/.Trash")" 1 "rm -rf ~/.Trash/*" "Trash"
 suggest "$NM_TOTAL" 5 \
   "find ~/code -maxdepth 5 -type d -name node_modules -prune -exec du -sh {} + | sort -hr" \
-  "PJ judgment: delete node_modules of dormant repos, 'pnpm i' restores them"
-suggest "$(bytes "$HOME_DIR/Downloads")" 3 "open ~/Downloads" "PJ judgment: old downloads"
+  "Operator judgment: delete node_modules of dormant repos, 'pnpm i' restores them"
+suggest "$(bytes "$HOME_DIR/Downloads")" 3 "open ~/Downloads" "Operator judgment: old downloads"
 suggest "$COLIMA_BYTES" 20 \
   "docker image prune -a -f && docker builder prune -a -f && colima ssh -- sudo fstrim -av" \
   "unused images/build cache are regenerated; trim returns freed VM blocks to macOS; volumes/containers stay"
 if have docker && docker info >/dev/null 2>&1; then
   SUGGESTIONS+=("$(printf '%9s  %s\n             %s' "see above" \
     "docker system df -v" \
-    "PJ judgment: inspect volumes separately; never prune DB volumes as part of routine cleanup")")
+    "Operator judgment: inspect volumes separately; never prune DB volumes as part of routine cleanup")")
 fi
 
 hr "SUGGESTED CLEANUPS (nothing was executed)"

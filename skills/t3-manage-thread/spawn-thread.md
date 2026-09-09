@@ -59,6 +59,6 @@ built-in fallback, so fix the script, not settings.json. Don't substitute
 No first-class attachments: the composer uploads via a WebSocket RPC, and a
 `thread.turn.start` carrying a hand-made attachment id is rejected
 (`invalid_command`, 2026-09-08). Copy the image to a stable path (e.g.
-`/tmp/<topic>-<date>.jpg`, not `~/.t3/userdata/attachments/` which PJ may
+`/tmp/<topic>-<date>.jpg`, not `~/.t3/userdata/attachments/` which the user may
 clear) and put the path in the brief; every harness can `Read` it. Verified:
 workers do open the file when the brief names it.

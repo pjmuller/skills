@@ -13,7 +13,7 @@ flag, the cache location and the scoring formula: `t3-find-thread --help`.
 ## Workflow
 
 1. **Translate the fuzzy ask** into filters + 4–8 keyword variants: synonyms, table/file/service
-   names, error strings, the tool involved. PJ dictates by voice — add `--fuzzy` when a term looks
+   names, error strings, the tool involved. The user dictates by voice — add `--fuzzy` when a term looks
    phonetic. `--project` is fuzzy too; `--since` keeps threads *active* in the window (created
    earlier but touched inside it still match).
 2. **`search`** — read the `terms` coverage column (`3/4`) first: full coverage beats raw hit count.
@@ -22,7 +22,7 @@ flag, the cache location and the scoring formula: `t3-find-thread --help`.
 5. **Loop ≤3×**: no hits → drop a term, add `--fuzzy`, widen `--since`, relax `--project`.
    Too many → `--all` (every term must hit), a distinguishing term, or `--role user`.
 6. **Answer** in markdown: top pick + 1–2 lines of why with one evidence snippet, runner-ups as a
-   table of short ids. PJ picks one — *then* run `t3-open-thread <id>`, never unasked.
+   table of short ids. The user picks one — *then* run `t3-open-thread <id>`, never unasked.
 
 Terms may be quoted phrases; `ahoy` matches `ahoy_events` (index keeps a raw and a
 separator-split copy). Thread ids: any prefix ≥ 8 chars.
@@ -32,7 +32,7 @@ separator-split copy). Thread ids: any prefix ≥ 8 chars.
 **Links to threads do not work inside T3 chat**: its markdown sanitizer whitelists
 http/https/mailto/file, http(s) opens externally, and there is no desktop deep link upstream
 (pingdotgg/t3code#4996) — custom schemes and helper applets were tried and dropped. Hence: answer
-with short ids; on PJ's pick run `t3-open-thread <id>` (focuses T3 Code, drives the cmd+k
+with short ids; on the user's pick run `t3-open-thread <id>` (focuses T3 Code, drives the cmd+k
 palette; needs Accessibility for T3 Code, already granted). Archived threads are not in the
 palette. `--browser` / `--dry-run` in `--help`; attempts logged under `~/.cache/t3-find-thread/`.
 

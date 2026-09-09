@@ -30,7 +30,7 @@ workers are hidden rather than settled, and why blocking sub-agents aren't requi
 `--self` resolves the calling thread (`CODEX_THREAD_ID` for Codex,
 `CLAUDE_CODE_SESSION_ID` for Claude — matched against T3's provider runtime) and
 arms a detached launchd worker bound to the *current turn*; it settles ~2 s after
-the turn ends. Same kill semantics, so only on PJ's explicit request. Rule:
+the turn ends. Same kill semantics, so only on the user's explicit request. Rule:
 
 1. Finish all work. No background Bash, sub-agents or monitors may be alive —
    `--self` warns when it sees open tasks. Settle kills them (status `stopped`)
@@ -41,11 +41,7 @@ the turn ends. Same kill semantics, so only on PJ's explicit request. Rule:
 
 `--wait <own id>` is refused (the server rejects settle while the session runs,
 and the caller's turn *is* the running session — it used to time out after 120 s).
-Verified 2026-09-06 (Claude haiku + Codex astra, DentAI profile): baseline,
-backgrounded Bash and background sub-agent all stayed settled ≥15 min; a
-`t3-ping-thread` unsettles with `reason=activity` (a real wake, expected).
-
 Related: [spawn-thread.md](spawn-thread.md), [cross-thread-ping.md](cross-thread-ping.md),
 fleet audits in `.agents/skills/t3-maintenance`. Upstream: no provider-facing
 settle/snooze tool as of v0.0.38 — see the
-[T3 Code reference](../../../recommendations/t3_code.md) before extending.
+[upstream checkpoint](upstream-checkpoint.md) before extending.

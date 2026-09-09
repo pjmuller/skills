@@ -90,10 +90,10 @@ class DraftsTest(unittest.TestCase):
                 ),
             )
 
-        thread("recent", "recent work", profile="claudeAgent_dentai", hours=1)
-        thread("old", "old work", profile="claudeAgent_kampkompas", hours=24 * 20)
+        thread("recent", "recent work", profile="claudeAgent_work", hours=1)
+        thread("old", "old work", profile="claudeAgent_personal", hours=24 * 20)
         thread("archived", "archived work", profile="codex", hours=2, archived=True)
-        thread("limited", "blocked work", profile="claudeAgent_dentai", hours=3)
+        thread("limited", "blocked work", profile="claudeAgent_work", hours=3)
         thread("empty", "no draft", profile="codex", hours=1)
         thread("twin_a", "twin a", profile="codex", hours=4)
         thread("twin_b", "twin b", profile="codex", hours=5)
@@ -190,7 +190,7 @@ class DraftsTest(unittest.TestCase):
             "cccccccc", [row["short_id"] for row in self.rows("--include-archived")]
         )
         self.assertEqual(
-            [row["short_id"] for row in self.rows("--profile", "DENTAI")],
+            [row["short_id"] for row in self.rows("--profile", "WORK")],
             ["aaaaaaaa", "dddddddd"],
         )
         self.assertEqual(

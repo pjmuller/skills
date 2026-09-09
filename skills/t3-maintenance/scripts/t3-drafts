@@ -294,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
         "list", help="one line per non-empty draft, newest thread first"
     )
     listing.add_argument(
-        "--profile", help="instanceId substring (dentai, kampkompas, codex, claude)"
+        "--profile", help="instanceId substring (work, personal, codex, claude)"
     )
     listing.add_argument("--project", help="project title substring")
     listing.add_argument(

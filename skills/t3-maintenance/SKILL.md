@@ -1,6 +1,6 @@
 ---
 name: t3-maintenance
-description: Audit and maintain PJ's T3 Code thread fleet, or mine his recent prompts for recurring instructions. Use for unexpected old or missing sidebar threads, monthly T3 cleanup, thread inventory, orchestrator fleet view of worker threads (stalled/unanswered workers, bulk unsettle or ping), bulk settle/unsettle repair, "mine my prompts", or "/t3-maintenance". Do not use for spawning, pinging, reading, or settling one known worker thread; use t3-manage-thread for that lifecycle.
+description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for unexpected old or missing sidebar threads, monthly T3 cleanup, thread inventory, orchestrator fleet view of worker threads (stalled/unanswered workers, bulk unsettle or ping), bulk settle/unsettle repair, "mine my prompts", or "/t3-maintenance". Do not use for spawning, pinging, reading, or settling one known worker thread; use t3-manage-thread for that lifecycle.
 ---
 
 # T3 Maintenance
@@ -10,12 +10,12 @@ Five helpers in `scripts/`, symlinked onto PATH by `scripts/install` (`--check` 
 - `t3-thread-maintenance` — audit/repair settlement state (`audit`, `list`, `settle-old`, `revive-auto`).
 - `t3-fleet` — orchestrator view of worker threads (`list`, `unsettle`, `ping`).
 - `t3-limited` — threads stuck on a provider rate/usage limit (`list`, `resume`, `schedule` — one-shot LaunchAgent resume at a wall-clock time); see the `t3-resume-limited` skill.
-- `t3-drafts` — unsent composer text per thread (`list`, `show`); read-only, no sending yet (PJ undecided).
-- `t3-my-prompts` — compact PJ's own prompts for recurring-instruction mining.
+- `t3-drafts` — unsent composer text per thread (`list`, `show`); read-only, no sending yet (sending is not implemented).
+- `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
 
 Drafts are not in the store: they sit in the Electron renderer's localStorage
 (`~/Library/Application Support/t3code/Local Storage/leveldb`, key `t3code:composer-drafts:v1`), which
-`t3-drafts` copies before reading. PJ uses them as per-thread sticky notes ("DONE", "TODO read",
+`t3-drafts` copies before reading. The user uses them as per-thread sticky notes ("DONE", "TODO read",
 "then $t3-settle-thread …") as well as half-written prompts, so listing them across threads is the point.
 localStorage has no per-draft timestamp — `list` sorts and filters on the thread's `updated_at`.
 
@@ -37,9 +37,9 @@ action to `~/.local/state/t3-maintenance/actions/`. Keep all five when changing 
 makes a bulk repair recoverable.
 
 Settle semantics (settle = kill the session and its sub-agents) live in
-[t3-manage-thread/settle-thread.md](../../../ai/skills/t3-manage-thread/settle-thread.md); hiding a
+[t3-manage-thread/settle-thread.md](../t3-manage-thread/settle-thread.md); hiding a
 live worker is a separate helper,
-[t3-hide-thread](../../../ai/skills/t3-manage-thread/hide-thread.md).
+[t3-hide-thread](../t3-manage-thread/hide-thread.md).
 
 ## Thread fleet repair
 
@@ -52,7 +52,7 @@ busy/error, approval-pending or user-blocked threads:
 - `settle-old` — threads T3 never gave an explicit settle state (legacy `NULL` override), idle and
   unpinned past `--older-than`. It will not override a deliberate keep-active.
 - `revive-auto` — only threads whose *latest* settle event came from T3's own `server:auto-settle`
-  command, i.e. threads the app hid on its own, not ones PJ settled.
+  command, i.e. threads the app hid on its own, not ones the user settled.
 
 The audit's "recent auto-settled" section is evidence, not a standing instruction to revive
 everything. It also reports T3's inactivity window: three days when no `sidebarAutoSettleAfterDays`
@@ -89,7 +89,7 @@ Start with `t3-my-prompts --stats`. If the projected input fits the output budge
 `--out`; if not, use `--outline` to find the heavy projects and run separate `--project` chunks
 rather than raising the budget.
 
-Judge the result against [rubric.md](rubric.md), plus global `ai/CLAUDE.md` and the relevant repo
+Judge the result against [rubric.md](rubric.md), plus global instruction file and the relevant repo
 AGENTS.md files. Existing instructions are a deduplication check, not prompt evidence. Propose
 changes; edit only when asked.
 

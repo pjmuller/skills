@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Compact PJ's own recent T3 Code prompts for recurring-instruction analysis."""
+"""Compact the user's own recent T3 Code prompts for recurring-instruction analysis."""
 
 from __future__ import annotations
 
@@ -289,7 +289,7 @@ def render_text(
     threads = len({m.thread_id for m in prepared})
     cuts = cut_summary(start_limit, limit, truncated_count, budget_drops)
     lines = [
-        "# PJ prompt patterns input",
+        "# the user prompt patterns input",
         f"Window: {iso(since)} → {iso(until)}",
         f"Totals: {len(prepared)} kept message(s) · {sum(len(m.text) for m in prepared)} compacted chars · "
         f"{threads} thread(s); selected {len(raw)} raw; dropped {agent_thread_rows_dropped} row(s) from "
@@ -385,7 +385,7 @@ def compact_output(
     if as_json:
         fallback = json.dumps({"cuts": cuts, "truncated": True}, separators=(",", ":")) + "\n"
     else:
-        fallback = f"# PJ prompt patterns input\nCuts: {cuts}\n"
+        fallback = f"# the user prompt patterns input\nCuts: {cuts}\n"
     return fallback[:budget]
 
 
@@ -396,7 +396,7 @@ def render_outline(
     signal_counts: Counter[str], deleted_dropped: int, budget: int,
 ) -> str:
     lines = [
-        "# PJ prompt patterns outline",
+        "# the user prompt patterns outline",
         f"Window: {iso(since)} → {iso(until)}",
         f"Totals: {len(messages)} kept message(s); selected {raw_count} raw; dropped {agent_thread_rows_dropped} row(s) "
         f"from {sum(signal_counts.values())} agent-spawned thread(s) ({signal_summary(signal_counts)}) "

@@ -9,7 +9,7 @@ Starts one low-cost hello-world turn on OpenAI and every enabled Claude profile
 registered in T3 Code, then settles all successfully created child threads.
 
   --only  restrict to these provider instance ids ("codex", "claudeAgent",
-          "claudeAgent_dentai", ...). Unknown/disabled ids warn on stderr.
+          "claudeAgent_work", ...). Unknown/disabled ids warn on stderr.
 EOF
   exit "${1:-2}"
 }
@@ -97,9 +97,9 @@ if [[ -n "$only" ]]; then
   }
 fi
 
-# The threads live in macbook_setup (this script's repo). Under launchd there is no cwd
+# The threads live in this script's repository. Under launchd there is no cwd
 # to infer a project from, and an unregistered "/" would break T3's runtime state file.
-hello_project="$(cd "$(dirname "$(readlink -f "$0")")" && git rev-parse --show-toplevel)"
+hello_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 
 created_ids=()
 created_labels=()

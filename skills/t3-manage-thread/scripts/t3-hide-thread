@@ -165,7 +165,7 @@ t3_issue_session t3-hide-thread "${auth_ttl_seconds}s"
 # --- --hide-worker: the keeper loop (internal) --------------------------------
 # A snoozed thread pops back into the sidebar on EVERY completed turn (T3 #6368,
 # fix PR #7179 unmerged), so hiding a live worker needs a supervisor that
-# re-snoozes it. It never touches a thread that is done, dead, or waiting on PJ.
+# re-snoozes it. It never touches a thread that is done, dead, or waiting on the user.
 if [[ "$mode" == "hide-worker" ]]; then
   keeper_log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
   keeper_log "keeper start thread=$thread_id label=$worker_label deadline=${hide_deadline_seconds}s"

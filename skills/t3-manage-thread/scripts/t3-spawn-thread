@@ -192,7 +192,7 @@ fi
 # Resolve --profile NAME against this machine's own provider registry instead of
 # a hard-coded alias list: exact instance id, then claudeAgent_<name>, then a
 # unique case-insensitive substring of a claudeAgent instance's displayName
-# (e.g. "probackup" -> instance "claudeAgent", display name "Claude ProBackup").
+# (e.g. "personal" -> instance "claudeAgent", display name "Claude Personal").
 normalize_provider() {
   local requested="$1"
   local settings_file="$t3_base_dir/userdata/settings.json"
@@ -519,7 +519,7 @@ if title_is_roundtrip "$thread_title" && [[ -n "$source_thread_id" ]]; then
   worker_label="${thread_title#🏓}"
   worker_label="${worker_label#"${worker_label%%[![:space:]]*}"}"
   worker_label="${worker_label:0:40}"
-  roundtrip_footer="$(printf '\n---\nRound-trip worker. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: report back to the orchestrator by running (do not just end your turn):\nt3-ping-thread --thread %s --from "%s" -- "<terse report: what changed, what is live, what needs PJ>"\nKeep working (blocking sub-agents are fine) until the task is complete, then ping once.' \
+  roundtrip_footer="$(printf '\n---\nRound-trip worker. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: report back to the orchestrator by running (do not just end your turn):\nt3-ping-thread --thread %s --from "%s" -- "<terse report: what changed, what is live, what needs the user>"\nKeep working (blocking sub-agents are fine) until the task is complete, then ping once.' \
     "$source_thread_id" "$worker_label")"
   prompt_text="$prompt_text
 $roundtrip_footer"

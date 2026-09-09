@@ -33,7 +33,7 @@ every step crawls (keeper start 40-50s after arming, 2026-09-09).
 
 The invariant the keeper exists to hold: **a hidden worker stays hidden only
 while it is alive and unblocked** — the moment it dies, is settled/archived, or
-needs PJ, it must become visible again. Poll interval, snooze horizon and the
+needs the user, it must become visible again. Poll interval, snooze horizon and the
 keeper's own deadline are tuning, not contract: see the `hide-worker` loop in
 `scripts/t3-hide-thread`. Re-arming is idempotent (🏓 spawn arms it; a ping to
 an already-snoozed thread re-arms it). Log: `/tmp/t3-hide-<THREAD_ID>.log`.

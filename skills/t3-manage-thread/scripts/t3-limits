@@ -15,7 +15,7 @@ expired token just reports itself. Codex comes from the CodexBar CLI.
     t3-limits                     # one aligned block per account (Europe/Brussels)
     t3-limits --json              # flat rows for other scripts
     t3-limits --markdown          # one table, for pasting into a chat / routing decision
-    t3-limits --profile dentai    # substring of instance id / display name / "codex"
+    t3-limits --profile work    # substring of instance id / display name / "codex"
     t3-limits --claude-only | --codex-only
 
 Percentages are **used**, not left (CodexBar's menubar shows the inverse).
