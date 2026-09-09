@@ -80,8 +80,3 @@ existing setup, unifies Claude homes, installs helpers and verifies a launchd sm
 and record the source commit in the consumer's SETUP.md and feedback block.
 Tool-free fallback: clone this repository and read `setup/t3-setup/SKILL.md` locally.
 Plugin marketplace packaging and submodules are deferred.
-
-The merged skill replaces `t3-hello-world` and `t3-resume-limited`. Update
-`t3-maintenance` too (draft discovery now uses the merged CLI), run both installers,
-then `t3-usage-windows topup install` to unload the old top-up label before loading
-`com.t3-skills.t3-usage-windows.topup`. `t3-limited` remains a compatibility alias.

@@ -3,6 +3,10 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 install_dir="${T3_SCHEDULE_INSTALL_DIR:-$HOME/.local/bin}"
 target="$install_dir/t3-schedule"
+if (($#)) && [[ "${1:-}" != "--check" ]]; then
+  echo "Usage: install [--check]" >&2
+  exit 2
+fi
 if [[ "${1:-}" == "--check" ]]; then
   [[ -L "$target" && "$(readlink -f "$target")" == "$script_dir/t3-schedule" ]] || { echo "missing or stale: $target" >&2; exit 1; }
   remedy='skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install'
