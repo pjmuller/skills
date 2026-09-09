@@ -41,7 +41,7 @@ RESET_AT = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.IGNORECAS
 MAX_LIMIT_CHARS = 400
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 TITLE_CHARS = 50
-LABEL_PREFIX = "com.pjmuller.t3-limited-resume"
+LABEL_PREFIX = "com.t3-skills.t3-limited-resume"
 SCHEDULE_MAX_DAYS = 7
 SCHEDULE_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RUNTIME_JSON = ".t3/userdata/server-runtime.json"
@@ -314,7 +314,7 @@ def cmd_resume(args: argparse.Namespace, rows: list[Limited], now: datetime) -> 
         draft_command = [draft_path, "list", "--limited", "--json"]
         # Query all limited drafts, then intersect naturally with the already
         # selected rows below. t3-drafts filters only raw instanceIds, whereas
-        # this command also accepts display names such as "ProBackup".
+        # this command also accepts display names such as "Personal".
         draft_result, draft_timed_out = run_ping(draft_command, args.draft_timeout)
         if draft_timed_out or draft_result.returncode:
             detail = " ".join((draft_result.stderr or draft_result.stdout).split())[:160]
@@ -684,7 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "--profile",
             help="case-insensitive substring of the instanceId or its T3 displayName "
-            "(dentai, probackup, codex; `claude` matches every Claude profile). "
+            "(work, personal, codex; `claude` matches every Claude profile). "
             "An exact instanceId wins over substrings: `claudeAgent` = only that one",
         )
         sub.add_argument("--project", help="project title substring")
@@ -739,7 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--profile",
         help="profile filter passed to the scheduled resume: substring of instanceId or "
-        "displayName, or an exact instanceId (e.g. dentai, probackup, claudeAgent)",
+        "displayName, or an exact instanceId (e.g. work, personal, claudeAgent)",
     )
     plan.add_argument(
         "--at",

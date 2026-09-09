@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_dir="${HOME}/.local/bin"
+if [[ "${1:-}" == "--check" ]]; then
+  for dependency in uv jq t3-spawn-thread t3-settle-thread t3-limits; do
+    command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (thread helpers: skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install)" >&2; exit 1; }
+    echo "ok      $dependency ($(command -v "$dependency"))"
+  done
+  for helper in t3-hello-world t3-hello-world-topup; do
+    [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
+    echo "ok      $helper"
+  done
+  exit 0
+fi
+[[ $# == 0 ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
+mkdir -p "$install_dir"
+for helper in t3-hello-world t3-hello-world-topup; do
+  ln -sfn "$script_dir/$helper" "$install_dir/$helper"
+  echo "installed $install_dir/$helper"
+done

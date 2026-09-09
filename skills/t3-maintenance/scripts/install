@@ -13,6 +13,10 @@ if [[ "${1:-}" == "--check" ]]; then
     }
     echo "ok      $name ($target)"
   done
+  for dependency in uv t3-ping-thread t3-settle-thread t3-delete-thread; do
+    command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (thread helpers: skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install)" >&2; exit 1; }
+    echo "ok      $dependency ($(command -v "$dependency"))"
+  done
   exit 0
 fi
 

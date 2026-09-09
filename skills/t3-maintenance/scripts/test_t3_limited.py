@@ -133,8 +133,8 @@ class LimitedFixtureTest(unittest.TestCase):
             60,
         )
 
-        # Monthly spend limit, dentai profile -> listed, skipped by resume.
-        self.monthly = thread("dddddddd", "monthly spend", profile="claudeAgent_dentai")
+        # Monthly spend limit, work profile -> listed, skipped by resume.
+        self.monthly = thread("dddddddd", "monthly spend", profile="claudeAgent_work")
         message(
             "d1",
             self.monthly,
@@ -204,7 +204,7 @@ class LimitedFixtureTest(unittest.TestCase):
         self.assertEqual(kinds["ffffffff"], "api")
         self.assertEqual(kinds["99999999"], "model")
         self.assertEqual(
-            [row["short_id"] for row in self.rows("--profile", "dentai")], ["dddddddd"]
+            [row["short_id"] for row in self.rows("--profile", "work")], ["dddddddd"]
         )
         self.assertEqual(
             [row["short_id"] for row in self.rows("--profile", "CODEX")], ["ffffffff"]
@@ -345,8 +345,8 @@ class ProfileFilterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_cli()
         self.names = {
-            "claudeAgent": "Claude ProBackup",
-            "claudeAgent_dentai": "Claude DentAI",
+            "claudeAgent": "Claude Personal",
+            "claudeAgent_work": "Claude Work",
             "codex": "",
         }
         self.profiles = set(self.names)
@@ -355,10 +355,10 @@ class ProfileFilterTest(unittest.TestCase):
         return self.module.profile_matches(query, self.profiles, self.names)
 
     def test_display_name_substring_matches(self) -> None:
-        self.assertEqual(self.match("probackup"), {"claudeAgent"})
-        self.assertEqual(self.match("DentAI"), {"claudeAgent_dentai"})
+        self.assertEqual(self.match("personal"), {"claudeAgent"})
+        self.assertEqual(self.match("Work"), {"claudeAgent_work"})
         self.assertEqual(
-            self.match("claude"), {"claudeAgent", "claudeAgent_dentai"}
+            self.match("claude"), {"claudeAgent", "claudeAgent_work"}
         )
         self.assertEqual(self.match("claudeAgent"), {"claudeAgent"})
 
@@ -371,7 +371,7 @@ class ProfileFilterTest(unittest.TestCase):
                 json.dumps(
                     {
                         "providerInstances": {
-                            "claudeAgent": {"displayName": "Claude ProBackup"},
+                            "claudeAgent": {"displayName": "Claude Personal"},
                             "grok": None,
                         }
                     }
@@ -379,7 +379,7 @@ class ProfileFilterTest(unittest.TestCase):
             )
             self.assertEqual(
                 self.module.display_names(settings),
-                {"claudeAgent": "Claude ProBackup", "grok": ""},
+                {"claudeAgent": "Claude Personal", "grok": ""},
             )
 
 
@@ -417,11 +417,11 @@ class ScheduleTest(unittest.TestCase):
     def test_schedule_writes_plist_and_script(self) -> None:
         target = datetime.now().astimezone() + timedelta(hours=2)
         self.module.main(
-            ["schedule", "--profile", "dentai", "--at", target.strftime("%H:%M")]
+            ["schedule", "--profile", "work", "--at", target.strftime("%H:%M")]
         )
         (plist,) = self.plists()
         data = plistlib.loads(plist.read_bytes())
-        label = f"com.pjmuller.t3-limited-resume.dentai.{target:%Y%m%d-%H%M}"
+        label = f"com.t3-skills.t3-limited-resume.work.{target:%Y%m%d-%H%M}"
         self.assertEqual(data["Label"], label)
         self.assertFalse(data["RunAtLoad"])
         self.assertEqual(
@@ -442,7 +442,7 @@ class ScheduleTest(unittest.TestCase):
             ["zsh", "-n", str(script)], capture_output=True, text=True, check=False
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        self.assertIn("t3-limited resume --profile dentai --since 7d", body)
+        self.assertIn("t3-limited resume --profile work --since 7d", body)
         self.assertIn("t3-limited-schedule.log", body)
         self.assertIn(f"launchctl bootout gui/$(id -u)/{label}", body)
         self.assertEqual(self.calls[0][0], "bootstrap")
@@ -450,7 +450,7 @@ class ScheduleTest(unittest.TestCase):
     def test_schedule_spawns_caffeinate_until_fire(self) -> None:
         target = (datetime.now().astimezone() + timedelta(hours=2)).replace(second=0, microsecond=0)
         self.module.main(
-            ["schedule", "--profile", "dentai", "--at", target.strftime("%H:%M")]
+            ["schedule", "--profile", "work", "--at", target.strftime("%H:%M")]
         )
         (command,) = self.spawned
         self.assertEqual(command[:3], ["caffeinate", "-i", "-t"])
@@ -467,7 +467,7 @@ class ScheduleTest(unittest.TestCase):
     def test_cancel_kills_caffeinate(self) -> None:
         target = datetime.now().astimezone() + timedelta(hours=2)
         self.module.main(
-            ["schedule", "--profile", "dentai", "--at", target.strftime("%H:%M")]
+            ["schedule", "--profile", "work", "--at", target.strftime("%H:%M")]
         )
         label = plistlib.loads(self.plists()[0].read_bytes())["Label"]
         pid_file = self.home / ".t3/userdata/scheduled" / f"{label}.caffeinate.pid"
@@ -498,7 +498,7 @@ class ScheduleTest(unittest.TestCase):
     def test_runner_waits_for_t3_and_notifies(self) -> None:
         target = datetime.now().astimezone() + timedelta(hours=2)
         self.module.main(
-            ["schedule", "--profile", "dentai", "--at", target.strftime("%H:%M")]
+            ["schedule", "--profile", "work", "--at", target.strftime("%H:%M")]
         )
         body = (self.home / ".t3/userdata/scheduled").glob("*.sh").__next__().read_text()
         self.assertIn(".well-known/t3/environment", body)
@@ -518,7 +518,7 @@ class ScheduleTest(unittest.TestCase):
     def test_cancel_removes_plist_and_script(self) -> None:
         target = datetime.now().astimezone() + timedelta(hours=3)
         self.module.main(
-            ["schedule", "--profile", "dentai", "--at", target.strftime("%H:%M")]
+            ["schedule", "--profile", "work", "--at", target.strftime("%H:%M")]
         )
         (plist,) = self.plists()
         label = plistlib.loads(plist.read_bytes())["Label"]
@@ -540,7 +540,7 @@ class DeriveTest(unittest.TestCase):
 
     def row(self, kind: str, reset_at: datetime | None):
         return self.module.Limited(
-            thread_id="x", profile="claudeAgent_dentai", model="fable-5", title="t",
+            thread_id="x", profile="claudeAgent_work", model="fable-5", title="t",
             project="p", kind=kind, text="", at=self.now, reset_at=reset_at,
         )
 
@@ -603,7 +603,7 @@ class NothingBlockedTest(unittest.TestCase):
 
     def test_nothing_blocked_writes_nothing(self) -> None:
         code = self.module.main(
-            ["--store", str(self.store), "schedule", "--profile", "dentai"]
+            ["--store", str(self.store), "schedule", "--profile", "work"]
         )
         self.assertEqual(code, 0)
         self.assertFalse((self.home / "Library/LaunchAgents").exists())

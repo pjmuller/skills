@@ -1,12 +1,12 @@
 # Scheduled resume ("resume rate-limited t3 threads for <profile> [at HH:MM]")
 
-Two-phase: preview now, act on a timer. Times PJ gives are Europe/Brussels (machine clock is the
+Two-phase: preview now, act on a timer. Times the user gives are Europe/Brussels (machine clock is the
 same zone, so the time is used verbatim).
 
 ## Now (preview + arm — two commands)
-1. `t3-limited list --profile <p> --since 7d` → show PJ the titles + kind + reset.
+1. `t3-limited list --profile <p> --since 7d` → show the user the titles + kind + reset.
 2. `t3-limited schedule --profile <p> [--at HH:MM] --notify-thread <this thread id>`
-   → one-shot LaunchAgent `com.pjmuller.t3-limited-resume.<profile>.<YYYYMMDD-HHMM>`.
+   → one-shot LaunchAgent `com.t3-skills.t3-limited-resume.<profile>.<YYYYMMDD-HHMM>`.
    **No `--at`** → fire time derived from those same blocked rows: latest pending `reset_at` + 1 min;
    no pending reset (only `model`/`api`) → now + 2 min; nothing blocked → prints so, arms nothing,
    exit 0; only `monthly` → exit 1 (needs credits or `--force`). It prints the derivation.

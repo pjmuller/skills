@@ -8,7 +8,7 @@
 A LaunchAgent ticks every ~10 min; when a profile's session window has expired and
 nothing re-opened it, fire `t3-hello-world --only <ids>` so a fresh window starts.
 Deterministic, no LLM thread in the loop (in-thread timers die with T3's session
-reaper or a Mac sleep — see macbook_setup/decissions/t3_monkey_patches.md).
+reaper or a Mac sleep).
 
     t3-hello-world-topup run [--dry-run] [--force] [--ignore-hours]
     t3-hello-world-topup install [--interval 600] | uninstall | status
@@ -29,7 +29,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Brussels")
-LABEL = "com.pjmuller.t3-hello-world-topup"
+LABEL = "com.t3-skills.t3-hello-world-topup"
 PATH_ENV = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HERE = Path(__file__).resolve()
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
@@ -186,6 +186,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
+    legacy = "com.pjmuller.t3-hello-world-topup"
+    launchctl("bootout", f"gui/{os.getuid()}/{legacy}")
+    if launchctl("print", f"gui/{os.getuid()}/{legacy}").returncode == 0:
+        raise SystemExit(f"cannot unload legacy job: {legacy}; retry install")
+    PLIST.with_name(f"{legacy}.plist").unlink(missing_ok=True)
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     PLIST.write_bytes(
         plistlib.dumps(

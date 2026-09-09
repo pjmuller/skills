@@ -5,10 +5,9 @@
 # ///
 """Recurring T3 Code threads on a wall-clock schedule, via macOS LaunchAgents.
 
-Each job = one LaunchAgent `com.pjmuller.t3-schedule.<name>` whose runner waits for
+Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
 T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`. Nothing here
-touches T3's store; the only T3 contact is the spawn helper. Registry of this and
-the other T3 hacks: macbook_setup/decissions/t3_monkey_patches.md.
+touches T3's store; the only T3 contact is the spawn helper.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-LABEL_PREFIX = "com.pjmuller.t3-schedule"
+LABEL_PREFIX = "com.t3-skills.t3-schedule"
 CATCH_UP = "catch-up"                 # job name reserved for the poller
 CATCH_UP_INTERVAL = 900               # seconds between catch-up ticks
 CATCH_UP_GRACE_HOURS = 10             # a missed/failed slot is retried until slot+10h (same day)
@@ -171,7 +170,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   title={shlex.quote(spec["title"])}
   profile={shlex.quote(spec.get("profile") or "")}
   if [[ -z "$profile" ]]; then
-    # pjroute's rule, scripted: the Claude profile with the most spare room right now
+    # capacity-based routing: the Claude profile with the most spare room right now
     profile=$(t3-schedule pick-profile 2>>{shlex.quote(str(p["log"]))}) || profile=""
     echo "-- profile auto → ${{profile:-project default (t3-limits failed)}}"
   fi
@@ -224,7 +223,7 @@ def bootstrap(plist: Path) -> None:
             raise SystemExit(f"launchctl bootstrap failed: {result.stderr.strip()} / {fallback.stderr.strip()}")
 
 
-# --- profile routing (scripted pjroute rule) ------------------------------------
+# --- profile routing (capacity-based routing) ------------------------------------
 SESSION_SKIP = 90.0   # session used% at/above → skip
 WEEKLY_SKIP = 95.0    # weekly / "Fable only" used% at/above → skip
 RECENT_PENALTY = 15.0     # room-points subtracted per scheduled job sent to a profile recently ...
@@ -232,7 +231,7 @@ RECENT_WINDOW_HOURS = 3   # ... within this window: near-equal profiles alternat
 
 
 def pick_profile(rows: list[dict], recent: dict[str, int] | None = None) -> tuple[str | None, str]:
-    """pjroute step 3, deterministic: per Claude profile take the tightest long window
+    """Capacity-based routing: per Claude profile take the tightest long window
     (weekly / Fable only) and the session window; skip near-exhausted ones; rank by
     long room + half the session room, minus RECENT_PENALTY per job already sent to that
     profile in the last RECENT_WINDOW_HOURS (`recent`). Nothing eligible → soonest session reset."""
@@ -350,7 +349,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     bootstrap(p["plist"])
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_days(days)} at {spec['at']} (missed/failed → catch-up until +{CATCH_UP_GRACE_HOURS}h)")
-    print(f"spawns   {project} · profile={args.profile or 'auto (most room, pjroute rule)'} model={args.model or 'default'}")
+    print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={args.model or 'default'}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     return 0
 
@@ -549,6 +548,18 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
 
 def cmd_refresh(args: argparse.Namespace) -> int:
     """Regenerate every runner + plist from its spec (after a template change) and re-arm catch-up."""
+    # Retire old labels before arming replacements; preserve specs/prompts/run markers.
+    legacy_prefix = "com.pjmuller.t3-schedule"
+    old_plists = list((home() / "Library/LaunchAgents").glob(f"{legacy_prefix}.*.plist"))
+    old_labels = {p.stem for p in old_plists}
+    old_labels.update(line.split()[-1] for line in launchctl("list").stdout.splitlines()
+                      if line.split() and line.split()[-1].startswith(legacy_prefix + "."))
+    for label in sorted(old_labels):
+        launchctl("bootout", f"{domain()}/{label}")
+        if launchctl("print", f"{domain()}/{label}").returncode == 0:
+            raise SystemExit(f"cannot unload legacy job: {label}; retry refresh")
+    for plist in old_plists:
+        plist.unlink()
     for spec in specs():
         name = spec["name"]
         spec.setdefault("wait_max", DEFAULT_WAIT_MAX)
@@ -593,7 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     add = sub.add_parser("add", help="arm a job: t3-schedule add --name X --at 07:30 --weekdays --project P -- \"prompt\"")
-    add.add_argument("--name", required=True, help="job id → com.pjmuller.t3-schedule.<name>")
+    add.add_argument("--name", required=True, help="job id → com.t3-skills.t3-schedule.<name>")
     add.add_argument("--at", required=True, help="HH:MM local (Europe/Brussels = machine clock)")
     add.add_argument("--weekdays", action="store_true", help="Mon-Fri")
     add.add_argument("--days", help="comma list mon,tue,... (default: every day)")
@@ -612,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ls = sub.add_parser("list", help="jobs, loaded state, last run")
     ls.add_argument("--json", action="store_true")
-    ls.add_argument("--markdown", action="store_true", help="one markdown table (for agents reporting to PJ)")
+    ls.add_argument("--markdown", action="store_true", help="one markdown table (for agents reporting to the user)")
     ls.set_defaults(func=cmd_list)
 
     rm = sub.add_parser("remove", help="bootout + delete a job")
@@ -625,7 +636,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=int, default=120, help="seconds to wait for the runner's result line")
     run.set_defaults(func=cmd_run_now)
 
-    pick = sub.add_parser("pick-profile", help="print the Claude profile with the most spare room (pjroute rule)")
+    pick = sub.add_parser("pick-profile", help="print the Claude profile with the most spare room (capacity rule)")
     pick.add_argument("--quiet", action="store_true", help="no ranking on stderr")
     pick.set_defaults(func=cmd_pick_profile)
 
