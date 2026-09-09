@@ -55,3 +55,31 @@ def test_wait_seconds():
     assert mod.wait_seconds([session("a", 600)], 600) == 660  # boundary: max sleep = interval + grace
     assert mod.wait_seconds([session("a", -300)], 600) is None  # already stale
     assert mod.wait_seconds([], 600) is None
+
+
+def test_hello_from_launchd_root_global_install(tmp_path):
+    import json
+    import os
+    import shutil
+    import subprocess
+    scripts = tmp_path / 'installed'
+    scripts.mkdir()
+    hello = scripts / 't3-hello-world'
+    shutil.copyfile(Path(__file__).with_name('t3-hello-world'), hello)
+    settings = tmp_path / '.t3/userdata/settings.json'
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({'providers': {'claudeAgent': {'enabled': False}}}))
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    spawn = bin_dir / 't3-spawn-thread'
+    spawn.write_text('#!/bin/sh\nprintf "project args: %s\\n" "$*"\necho "Provider: codex · Model: gpt-5.6-luna · Thinking: low"\n')
+    spawn.chmod(0o755)
+    settle = bin_dir / 't3-settle-thread'
+    settle.write_text('#!/bin/sh\nexit 0\n')
+    settle.chmod(0o755)
+    env = dict(os.environ, HOME=str(tmp_path), T3CODE_HOME=str(tmp_path / '.t3'),
+               PATH=str(bin_dir) + ':' + os.environ['PATH'])
+    result = subprocess.run(['bash', str(hello), '--dry-run', '--only', 'codex'],
+                            cwd='/', env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert '--project ' + str(tmp_path) in result.stdout

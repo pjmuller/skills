@@ -97,9 +97,11 @@ if [[ -n "$only" ]]; then
   }
 fi
 
-# The threads live in this script's repository. Under launchd there is no cwd
-# to infer a project from, and an unregistered "/" would break T3's runtime state file.
-hello_project="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+# Prefer the caller's repo, then the source repo. CLI global installs have no git
+# root; a launchd cwd of / must never become a T3 project, so fall back to home.
+hello_project="$(git rev-parse --show-toplevel 2>/dev/null ||
+  git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel 2>/dev/null ||
+  { [[ "$PWD" != / ]] && pwd -P || printf '%s\n' "$HOME"; })"
 
 created_ids=()
 created_labels=()
