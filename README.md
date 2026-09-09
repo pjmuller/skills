@@ -1,82 +1,54 @@
 # Agent skills
 
 Self-contained skills for Claude Code, Codex and other agents. MIT licensed.
+Install with the [`skills` CLI](https://github.com/vercel-labs/skills): `pnpm dlx skills add pjmuller/skills -s <name> [-g] -y`,
+then run that skill's `scripts/install` and `scripts/install --check` once (links its commands into `~/.local/bin`).
 
-## T3 Code orchestration
+**Scope.** `-g` = global, one copy per machine in `~/.agents/skills`, available in every repo.
+Without `-g` = repo-local: a tracked copy in `.agents/skills/<name>` + `skills-lock.json`, so cloud
+sandboxes, worktrees and colleagues get the exact version the repo was tested with. Rule of thumb:
+global for tools you call from any repo, repo-local for everything else.
 
-| Skill | Purpose |
-| --- | --- |
-| [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | Spawn, ping, read, hide, rename, settle/delete threads; provider limits |
-| [t3-schedule](skills/t3-schedule/SKILL.md) | macOS launchd recurring jobs; requires thread helpers |
-| [t3-maintenance](skills/t3-maintenance/SKILL.md) | Fleet, drafts, prompt mining and purge; requires thread helpers |
-| [t3-find-thread](skills/t3-find-thread/SKILL.md) | Local transcript search and opening a match |
-| [t3-usage-windows](skills/t3-usage-windows/SKILL.md) | Start windows, chain daytime top-ups, recover limited threads; requires thread helpers and maintenance |
+| Skill | You need it when… | Scope | Install (then `scripts/install` + `--check`) |
+| --- | --- | --- | --- |
+| [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
+| [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-schedule -y` |
+| [t3-maintenance](skills/t3-maintenance/SKILL.md) | you orchestrate many worker threads: fleet view, stalled workers, unsent drafts, purge, prompt mining | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-maintenance -y` |
+| [t3-find-thread](skills/t3-find-thread/SKILL.md) | "which thread did we discuss X in?"; full-text search over local transcripts, jump to it | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-find-thread -y` |
+| [t3-usage-windows](skills/t3-usage-windows/SKILL.md) | you juggle several Claude/Codex accounts: warm five-hour windows, top up during the day, resume rate-limited threads | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y` |
+| [video-shrink-for-gemini](skills/video-shrink-for-gemini/SKILL.md) | a screen recording must be small enough for Gemini and come with a context-rich prompt | setup repo | `pnpm dlx skills add pjmuller/skills -s video-shrink-for-gemini -y` |
+| [disk-audit](skills/disk-audit/SKILL.md) | the Mac is filling up; deterministic audit, cleanup only of self-regenerating caches | setup repo | `pnpm dlx skills add pjmuller/skills -s disk-audit -y` |
+| [clickup-core](skills/clickup-core/SKILL.md) | agents in a product repo read/write ClickUp tasks (rich comments, attachments) against that repo's workspace config | product repo | `pnpm dlx skills add pjmuller/skills -s clickup-core -y` + a thin `clickup` skill holding `clickup.toml` |
 
-## Misc
+Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance.
+T3 Code must be running for the T3 skills. Thread helpers work on macOS and Linux/WSL; launchd scheduling and the top-up daemon are macOS-only.
+`~/.local/bin` must be on the login-shell PATH.
 
-| Skill | Purpose |
-| --- | --- |
-| [video-shrink-for-gemini](skills/video-shrink-for-gemini/SKILL.md) | Smaller recordings + transcript, visual-first or mixed prompt |
-| [clickup-core](skills/clickup-core/SKILL.md) | Workspace-configured ClickUp tasks, rich content, attachments and discovery |
-| [disk-audit](skills/disk-audit/SKILL.md) | macOS disk measurements and separately authorized cache cleanup |
+Paste-to-your-agent version:
 
-## Install
-
-T3 must be running. Thread helpers support macOS and Linux/WSL; launchd scheduling
-and the usage-window top-up daemon are macOS-only. See each skill's dependency checks.
-Put `~/.local/bin` on the login-shell PATH.
-
-Before global installation, merge existing skills into your personal setup repo's
-`ai/skills/`, then make `~/.agents/skills`, `~/.claude/skills`, and every isolated
-Claude home's `skills` symlink to that **one directory**. Preserve originals first.
-`skills add -g` writes to the active `CLAUDE_CONFIG_DIR/skills` and `~/.agents/skills`;
-it does not update other Claude homes automatically.
-
-```sh
-pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y
-~/.agents/skills/t3-manage-thread/scripts/install
-~/.agents/skills/t3-manage-thread/scripts/install --check
-# From the project/setup repository:
-pnpm dlx skills add pjmuller/skills -s t3-schedule -y
-.agents/skills/t3-schedule/scripts/install
-.agents/skills/t3-schedule/scripts/install --check
 ```
-
-Replace the skill name for other installs; run each command-shipping skill's
-`scripts/install` and `--check`. Install dependencies first. Usage windows uses
-`t3-maintenance` for read-only store access and draft protection.
-Select named skills: `setup/t3-setup` is a one-time bootstrap, never an installed skill.
-
-Verified with skills CLI **1.5.24 on 2026-09-09**: project installs create
-`.agents/skills/<name>`, a Claude link, and `skills-lock.json`. An existing committed
-`.claude/skills -> ../.agents/skills` directory symlink **works**: preserved along
-with an unrelated sentinel skill, with the new skill visible through both paths.
-Commit the skill files, lockfile and Claude link so worktrees inherit them.
+Install the skill <name> from github.com/pjmuller/skills with `pnpm dlx skills add pjmuller/skills -s <name> [-g] -y`,
+run its scripts/install and scripts/install --check, fix what --check reports, then read its SKILL.md.
+```
 
 ## Update
 
-```sh
-pnpm dlx skills update t3-manage-thread -g
-pnpm dlx skills update t3-schedule -p
-```
+Nothing auto-updates. `pnpm dlx skills update -g` (global) or `pnpm dlx skills update -p` inside the
+repo (commit the diff + lockfile), then rerun the updated skill's `scripts/install` and `--check`.
+Updates replace installed files; keep personal customizations outside them. After updating
+t3-schedule run `t3-schedule refresh`; with an enabled top-up daemon rerun `t3-usage-windows topup install`.
+Releases and breaking changes: [CHANGELOG.md](CHANGELOG.md).
 
-Then rerun each updated skill's `scripts/install` and `scripts/install --check`.
-Updates wipe and replace installed files; keep personal customizations outside them.
-For scheduler updates run `t3-schedule refresh`; for an enabled top-up daemon rerun
-`t3-usage-windows topup install`. These migrate the old personal launchd labels to
-`com.t3-skills.*`; scheduler specs, prompts and daily markers stay in
-`~/.t3/userdata/scheduled/t3-schedule/`. Check `launchctl list` for duplicates.
-The hide keeper already uses neutral `t3-hide.*` labels. Existing one-shot limited
-resume jobs should finish before updating; new ones use `com.t3-skills.t3-usage-windows.limited.*`.
+## Multiple Claude homes
+
+`skills add -g` writes to the active `CLAUDE_CONFIG_DIR/skills` and `~/.agents/skills` only. With
+several isolated Claude homes, symlink every home's `skills` directory and `~/.agents/skills` to one
+directory first (the one-time setup below does this). A committed `.claude/skills -> ../.agents/skills`
+symlink in a repo works with project installs (verified with skills CLI 1.5.24, 2026-09-09).
 
 ## One-time machine setup
 
-Give your agent the permanent bootstrap URL:
+Give your agent the bootstrap URL and your parameters (accounts, which skills, prompt base):
 https://raw.githubusercontent.com/pjmuller/skills/main/setup/t3-setup/SKILL.md
-
-Supply desired accounts, scopes and optional prompt base. It detects and merges
-existing setup, unifies Claude homes, installs helpers and verifies a launchd smoke job.
-[Bootstrap instructions](setup/t3-setup/SKILL.md) resolve supporting links from main
-and record the source commit in the consumer's SETUP.md and feedback block.
-Tool-free fallback: clone this repository and read `setup/t3-setup/SKILL.md` locally.
-Plugin marketplace packaging and submodules are deferred.
+It detects existing setup, unifies Claude homes, installs helpers, verifies a launchd smoke job and
+ends with a feedback block. Tool-free fallback: clone this repo and read `setup/t3-setup/SKILL.md`.
