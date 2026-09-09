@@ -151,3 +151,6 @@ Repo: <url> (private, pjmuller invited, folder) · skills source commit: <SHA>
 Deviations from PROMPT.md: <or "none">
 Next prompt PJ could send: <1–3 concrete bullets>
 ```
+
+## Migrating Claude Desktop routines
+When the user already runs Claude Desktop "Routines": [migrate-claude-routines.md](migrate-claude-routines.md) (where the definitions live, mapping to `t3-schedule`, how to disable the originals).

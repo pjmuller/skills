@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- t3-setup: `migrate-claude-routines.md` — Claude Desktop local routines → t3-schedule (registry + prompt locations, mapping, disable step).
+
 ## v0.2.1 — 2026-09-09
 
 - clickup-core 0.2.1: pytest rootdir pinned to the skill (`[tool.pytest.ini_options]`) so a consumer
