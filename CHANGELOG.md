@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- t3-limits: cache usage reads per profile (90 s fresh window, `--fresh` to bypass) and fall back to
+  the last good value on 429/network errors instead of reporting the account as unknown.
+
 ## v0.2.0 — 2026-09-09
 
 - Merge window warm-up and limit recovery into t3-usage-windows; unified CLI, system timezone, migrated top-up label.

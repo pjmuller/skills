@@ -17,6 +17,7 @@ expired token just reports itself. Codex comes from the CodexBar CLI.
     t3-limits --markdown          # one table, for pasting into a chat / routing decision
     t3-limits --profile work    # substring of instance id / display name / "codex"
     t3-limits --claude-only | --codex-only
+    t3-limits --fresh             # skip the 90s cache (see limits.md)
 
 Percentages are **used**, not left (CodexBar's menubar shows the inverse).
 Pace: `pace` = the share of the window that has elapsed (what an evenly spread
@@ -29,13 +30,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -45,10 +48,19 @@ KEYCHAIN_BASE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 HEADERS = {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "t3-limits/0.1"}
 TIMEOUT = 10
+CACHE = SETTINGS.parent / "t3-limits-cache.json"
+FRESH_SECONDS = 90  # windows only move on the minute scale
+STALE_SECONDS = 15 * 60  # older than this and "no data" beats a wrong number
+MAX_RETRY_SECONDS = 5
 SESSION_SECONDS = 5 * 3600
 WEEKLY_SECONDS = 7 * 86400
 CURRENCY = {"EUR": "€", "USD": "$", "GBP": "£"}
 EXPIRED_HINT = "token expired — run any turn in that profile to refresh"
+
+
+def debug(message: str) -> None:
+    if os.environ.get("T3_LIMITS_DEBUG"):
+        print(f"t3-limits: {message}", file=sys.stderr)
 
 
 @dataclass
@@ -79,6 +91,8 @@ class Account:
     rows: list[Row] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     error: str = ""
+    stale: bool = False  # served from cache after a failed fetch
+    fetched_at: datetime | None = None
 
 
 # --- Claude ------------------------------------------------------------------
@@ -132,6 +146,49 @@ def fetch_claude_usage(token: str) -> dict:
 
 
 
+def read_cache(path: Path) -> dict:
+    """Last good usage payload per profile instance id (never tokens)."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_cache(cache: dict, path: Path) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(cache))
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    except OSError as error:
+        debug(f"cache write failed: {error}")
+
+
+def retry_delay(error: Exception) -> float:
+    header = getattr(error, "headers", None)
+    try:
+        return min(MAX_RETRY_SECONDS, max(0.0, float((header or {}).get("Retry-After"))))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def fetch_with_retry(token: str, fetch) -> dict:
+    """The usage endpoint is shared with other pollers, so a 429 is routine: back off
+    once (honouring Retry-After) before the caller falls back to its cache."""
+    try:
+        return fetch(token)
+    except urllib.error.HTTPError as error:
+        if error.code == 401:
+            raise
+        delay = retry_delay(error)
+    except urllib.error.URLError:
+        delay = 1.0
+    debug(f"retrying in {delay:.1f}s")
+    time.sleep(delay)
+    return fetch(token)
+
+
 def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
     rows: list[Row] = []
     for limit in payload.get("limits") or []:
@@ -175,24 +232,47 @@ def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
 
 
 def claude_accounts(
-    fetch=fetch_claude_usage, settings_path: Path = SETTINGS
+    fetch=fetch_claude_usage,
+    settings_path: Path = SETTINGS,
+    cache_path: Path = CACHE,
+    fresh: bool = False,
+    now: datetime | None = None,
 ) -> list[Account]:
-    accounts = []
+    now = now or datetime.now(timezone.utc)
+    cache = read_cache(cache_path)
+    accounts, dirty = [], False
     for instance_id, label, home in claude_profiles(settings_path):
         account = Account(label=label, instance_id=instance_id)
+        entry = cache.get(instance_id) or {}
+        entry = entry if entry.get("payload") else {}
+        age = now.timestamp() - float(entry.get("fetched_at") or 0) if entry else None
+        credentials: dict = {}
+        payload = None
         try:
             credentials = keychain_token(keychain_service(home))
-            payload = fetch(credentials["accessToken"])
+            if entry and not fresh and age < FRESH_SECONDS:
+                debug(f"{instance_id}: cache hit ({age:.0f}s old)")
+                payload = entry["payload"]
+            else:
+                payload = fetch_with_retry(credentials["accessToken"], fetch)
+                cache[instance_id] = {"payload": payload, "fetched_at": now.timestamp()}
+                dirty = True
         except urllib.error.HTTPError as error:
             account.error = EXPIRED_HINT if error.code == 401 else f"HTTP {error.code}"
         except (LookupError, KeyError, OSError, ValueError) as error:
             account.error = str(error) or error.__class__.__name__
-        else:
+        if account.error and account.error != EXPIRED_HINT and entry and age < STALE_SECONDS:
+            debug(f"{instance_id}: {account.error} — serving cache ({age:.0f}s old)")
+            payload, account.error = entry["payload"], ""
+            account.stale, account.fetched_at = True, now - timedelta(seconds=age)
+        if payload is not None:
             account.plan = str(credentials.get("rateLimitTier") or "").removeprefix(
                 "default_claude_"
             ) or str(credentials.get("subscriptionType") or "")
             account.rows, account.notes = claude_rows(payload)
         accounts.append(account)
+    if dirty:
+        write_cache(cache, cache_path)
     return accounts
 
 
@@ -297,6 +377,11 @@ def reset_text(when: datetime | None, now: datetime) -> str:
 PACE_LEGEND = "pace = % of window elapsed · room = pace − used (+ under pace, − over pace)"
 
 
+def relative_age(account: Account, now: datetime) -> str:
+    seconds = (now - account.fetched_at).total_seconds() if account.fetched_at else 0
+    return f"{int(seconds // 60)}m" if seconds >= 60 else f"{int(seconds)}s"
+
+
 def pace_text(row: Row, now: datetime) -> str:
     pace = row.pace(now)
     if pace is None:
@@ -313,6 +398,8 @@ def render(accounts: list[Account], now: datetime) -> str:
         head = f"{account.label}"
         if account.instance_id != "codex":
             head += f"  ({account.instance_id})"
+        if account.stale:
+            head += f"  (cached {relative_age(account, now)} ago)"
         out.append(f"{head}  {account.plan}".rstrip())
         if account.error:
             out.append(f"  {account.error}")
@@ -381,6 +468,18 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "resets_in_seconds": int((row.resets_at - now).total_seconds())
                     if row.resets_at
                     else None,
+                    **(
+                        {
+                            "stale": True,
+                            "fetched_at": account.fetched_at.isoformat().replace(
+                                "+00:00", "Z"
+                            )
+                            if account.fetched_at
+                            else None,
+                        }
+                        if account.stale
+                        else {}
+                    ),
                 }
             )
     return out
@@ -394,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--profile", help="substring of instance id / display name / 'codex'"
     )
+    parser.add_argument(
+        "--fresh", action="store_true", help="skip the 90s usage cache"
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--claude-only", action="store_true")
     group.add_argument("--codex-only", action="store_true")
@@ -401,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
 
     accounts: list[Account] = []
     if not args.codex_only:
-        accounts += claude_accounts()
+        accounts += claude_accounts(fresh=args.fresh)
     if not args.claude_only:
         accounts.append(codex_account())
     if args.profile:

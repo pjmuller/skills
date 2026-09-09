@@ -4,6 +4,7 @@
 t3-limits                   # every Claude profile + Codex, aligned, Europe/Brussels
 t3-limits --profile work  # substring of instance id / display name / "codex"
 t3-limits --markdown        # one table (used · pace · room · resets) — paste into a routing decision
+t3-limits --fresh           # skip the cache (see below)
 t3-limits --json            # rows: account, instance_id, window, used_percent, pace_percent, room_percent, resets_at, resets_in_seconds
                             # an unreachable account yields one row {account, instance_id, window: null, error} — "unknown", not "stale"
 ```
@@ -27,6 +28,13 @@ window (resets 5h after its first request, not on the clock) · `weekly` = the 7
 Extra usage (paid overage) is never shown and never a routing input. It's off by default; when the user
 enables it on a profile it is a deliberate decision to keep code running there, so the spend is
 noise for pace decisions.
+
+Cached: the usage endpoint is shared with other pollers (CodexBar, `t3-usage-windows topup`), so
+it answers 429 often. Each profile's last good payload is kept in `~/.t3/userdata/t3-limits-cache.json`
+(mode 0600, no tokens): younger than 90 s it is served without a call (`--fresh` bypasses), and on a
+429/network error one short retry (honouring `Retry-After`) is followed by the cached value if it is
+under 15 min old — shown as `(cached 3m ago)` / `"stale": true` with `fetched_at`. Only without a
+usable cache does the account report `HTTP 429`. `T3_LIMITS_DEBUG=1` traces cache hits on stderr.
 
 Tokens are never printed and never refreshed (a refresh would rotate Claude Code's own copy); an
 expired one prints `token expired — run any turn in that profile to refresh` and the rest still report.

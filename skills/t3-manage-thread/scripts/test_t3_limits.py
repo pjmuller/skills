@@ -133,7 +133,7 @@ class ClaudeRowsTest(unittest.TestCase):
 
     @patch.object(t3_limits, "keychain_token", return_value={"accessToken": "fixture-token"})
     def test_expired_token_reports_instead_of_raising(self, _token):
-        settings = self._settings()
+        settings = settings_fixture()
 
         def fetch(_token):
             raise urllib.error.HTTPError(
@@ -145,24 +145,124 @@ class ClaudeRowsTest(unittest.TestCase):
             [account.error for account in accounts], [t3_limits.EXPIRED_HINT]
         )
 
-    def _settings(self) -> Path:
-        path = Path(tempfile.mkdtemp()) / "settings.json"
-        path.write_text(
+
+def settings_fixture() -> Path:
+    """T3 settings.json with one enabled claudeAgent instance."""
+    path = Path(tempfile.mkdtemp()) / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providerInstances": {
+                    "grok": {"driver": "grok", "enabled": False},
+                    "claudeAgent_work": {
+                        "driver": "claudeAgent",
+                        "enabled": True,
+                        "displayName": "Claude Work",
+                        "config": {"homePath": "~/.claude_work_home"},
+                    },
+                }
+            }
+        )
+    )
+    return path
+
+
+class CacheTest(unittest.TestCase):
+    """The usage endpoint is shared with other pollers, so 429s are routine."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cache = self.tmp / "t3-limits-cache.json"
+        self.settings = settings_fixture()
+        patcher = patch.object(
+            t3_limits, "keychain_token", return_value={"accessToken": "fixture-token"}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write_cache(self, age_seconds: float):
+        self.cache.write_text(
             json.dumps(
                 {
-                    "providerInstances": {
-                        "grok": {"driver": "grok", "enabled": False},
-                        "claudeAgent_work": {
-                            "driver": "claudeAgent",
-                            "enabled": True,
-                            "displayName": "Claude Work",
-                            "config": {"homePath": "~/.claude_work_home"},
-                        },
+                    "claudeAgent_work": {
+                        "payload": CLAUDE_PAYLOAD,
+                        "fetched_at": NOW.timestamp() - age_seconds,
                     }
                 }
             )
         )
-        return path
+
+    def _accounts(self, fetch, **kwargs):
+        return t3_limits.claude_accounts(
+            fetch=fetch,
+            settings_path=self.settings,
+            cache_path=self.cache,
+            now=NOW,
+            **kwargs,
+        )
+
+    def test_fresh_cache_entry_skips_the_network(self):
+        self._write_cache(30)
+
+        def fetch(_token):
+            raise AssertionError("must not hit the network")
+
+        [account] = self._accounts(fetch)
+        self.assertEqual(account.error, "")
+        self.assertFalse(account.stale)  # fresh enough to pass as live
+        self.assertEqual([row.window for row in account.rows], ["session", "weekly", "Fable only"])
+
+    def test_fresh_flag_bypasses_the_cache_and_rewrites_it(self):
+        self._write_cache(30)
+        calls = []
+
+        def fetch(token):
+            calls.append(token)
+            return dict(CLAUDE_PAYLOAD, limits=[])
+
+        [account] = self._accounts(fetch, fresh=True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([row.window for row in account.rows], ["session", "weekly"])
+        stored = json.loads(self.cache.read_text())["claudeAgent_work"]
+        self.assertEqual(stored["fetched_at"], NOW.timestamp())
+        self.assertNotIn("fixture-token", self.cache.read_text())
+        self.assertEqual(self.cache.stat().st_mode & 0o777, 0o600)
+
+    def test_429_falls_back_to_a_recent_cache_entry(self):
+        self._write_cache(3 * 60)
+        calls = []
+
+        def fetch(_token):
+            calls.append(1)
+            raise urllib.error.HTTPError(
+                t3_limits.USAGE_URL, 429, "too many", {"Retry-After": "0"}, None
+            )
+
+        with patch.object(t3_limits.time, "sleep") as sleep:
+            [account] = self._accounts(fetch)
+        self.assertEqual(len(calls), 2)  # one short retry before falling back
+        sleep.assert_called_once_with(0.0)
+        self.assertEqual(account.error, "")
+        self.assertTrue(account.stale)
+        self.assertEqual(account.rows[0].used_percent, 100.0)
+        self.assertIn("(cached 3m ago)", t3_limits.render([account], NOW))
+        row = t3_limits.json_rows([account], NOW)[0]
+        self.assertTrue(row["stale"])
+        self.assertEqual(row["fetched_at"], "2026-09-05T07:02:00Z")
+
+    def test_429_without_usable_cache_reports_the_error(self):
+        self._write_cache(20 * 60)  # too old to trust
+
+        def fetch(_token):
+            raise urllib.error.HTTPError(
+                t3_limits.USAGE_URL, 429, "too many", {}, None
+            )
+
+        with patch.object(t3_limits.time, "sleep"):
+            [account] = self._accounts(fetch)
+        self.assertEqual(account.error, "HTTP 429")
+        self.assertEqual(account.rows, [])
+        self.assertFalse(account.stale)
 
 
 class CodexRowsTest(unittest.TestCase):
