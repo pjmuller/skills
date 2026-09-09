@@ -140,3 +140,9 @@ def test_refresh_retires_legacy_and_preserves_job_data(tmp_path, monkeypatch):
     assert p['prompt'].read_text() == 'keep prompt'
     assert p['last'].read_text() == '2026-09-09'
     assert json.loads(p['spec'].read_text()) == spec
+
+
+def test_runner_path_has_pnpm_and_mise():
+    # launchd gets no login shell PATH: without pnpm's global bin the runner falls back to `pnpm dlx`
+    assert mod.PNPM_BIN in mod.SCHEDULE_PATH
+    assert "$HOME/.local/share/mise/shims" in mod.SCHEDULE_PATH

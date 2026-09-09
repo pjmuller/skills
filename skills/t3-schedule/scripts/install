@@ -16,7 +16,14 @@ if [[ "${1:-}" == "--check" ]]; then
   done
   spawn="$(readlink -f "$(command -v t3-spawn-thread)")"
   [[ -r "$(dirname "$spawn")/lib/t3-common.sh" ]] || { echo "missing lib/t3-common.sh; run: $remedy" >&2; exit 1; }
-  echo 'ok      lib/t3-common.sh' 
+  echo 'ok      lib/t3-common.sh'
+  # launchd runners get SCHEDULE_PATH, not your interactive PATH: check the tools there.
+  schedule_path="$("$script_dir/t3-schedule" runner-path)"
+  for tool in pnpm uv jq sqlite3; do
+    resolved="$(PATH="$schedule_path" bash -c "command -v $tool" || true)"
+    [[ -n "$resolved" ]] || { echo "missing $tool on the launchd runner PATH ($schedule_path)" >&2; exit 1; }
+    echo "ok      $tool ($resolved, runner PATH)"
+  done
   echo "ok      t3-schedule ($target)"; exit 0
 fi
 mkdir -p "$install_dir"

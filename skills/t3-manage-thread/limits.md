@@ -25,6 +25,12 @@ Percentages are **used** — the inverse of CodexBar's menubar "% left". `sessio
 window (resets 5h after its first request, not on the clock) · `weekly` = the 7-day cap ·
 `<Model> only` = per-model weekly sub-cap (`weekly_scoped`).
 
+The plan label after the account name is `rateLimitTier` (minus `default_claude_`), plus
+`(subscriptionType)` when the tier does not match the plan — e.g. `max_20x (pro)`, while a real
+Max account just shows `max_20x`. Both come from the local
+credential written at `claude auth login`, not from the API: if the tier looks wrong, re-login
+that home.
+
 Extra usage (paid overage) is never shown and never a routing input. It's off by default; when the user
 enables it on a profile it is a deliberate decision to keep code running there, so the spend is
 noise for pace decisions.

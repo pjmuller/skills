@@ -266,9 +266,14 @@ def claude_accounts(
             payload, account.error = entry["payload"], ""
             account.stale, account.fetched_at = True, now - timedelta(seconds=age)
         if payload is not None:
-            account.plan = str(credentials.get("rateLimitTier") or "").removeprefix(
-                "default_claude_"
-            ) or str(credentials.get("subscriptionType") or "")
+            # The tier can disagree with the plan (a Pro account reporting `max_20x`);
+            # show both rather than a single misleading label. See limits.md.
+            tier = str(credentials.get("rateLimitTier") or "").removeprefix("default_claude_")
+            subscription = str(credentials.get("subscriptionType") or "")
+            if tier and subscription and not tier.startswith(subscription):
+                account.plan = f"{tier} ({subscription})"
+            else:
+                account.plan = tier or subscription
             account.rows, account.notes = claude_rows(payload)
         accounts.append(account)
     if dirty:

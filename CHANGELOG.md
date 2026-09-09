@@ -1,11 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 — 2026-09-09
 
 - clickup-core 0.2.1: pytest rootdir pinned to the skill (`[tool.pytest.ini_options]`) so a consumer
   repo's own pytest config no longer leaks into `pytest -q` inside the installed copy.
 - t3-limits: cache usage reads per profile (90 s fresh window, `--fresh` to bypass) and fall back to
   the last good value on 429/network errors instead of reporting the account as unknown.
+- t3-setup: default account's provider must carry no `CLAUDE_CONFIG_DIR` (the Keychain item is
+  hashed from its value, so an explicit `$HOME/.claude` reads an entry that never existed).
+- t3-setup: document the settings.json path for adding a Claude provider instance, reading the
+  field shape from an existing instance instead of assuming it.
+- t3-schedule: put pnpm's global bin (`$PNPM_HOME`, else `~/Library/pnpm`) on the launchd runner
+  PATH, and have `scripts/install --check` resolve pnpm/uv/jq/sqlite3 under that PATH.
+- t3-limits: print `<rateLimitTier> (<subscriptionType>)` when the tier does not match the plan.
 
 ## v0.2.0 — 2026-09-09
 

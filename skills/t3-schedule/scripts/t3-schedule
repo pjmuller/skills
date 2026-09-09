@@ -27,7 +27,10 @@ CATCH_UP = "catch-up"                 # job name reserved for the poller
 CATCH_UP_INTERVAL = 900               # seconds between catch-up ticks
 CATCH_UP_GRACE_HOURS = 10             # a missed/failed slot is retried until slot+10h (same day)
 DEFAULT_WAIT_MAX = 10                 # minutes the runner waits for T3 Code; catch-up retries later
-SCHEDULE_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# pnpm's global bin is not on launchd's PATH; without it the runner falls back to the slow
+# `pnpm dlx`. Resolved when the plist is written, so a custom PNPM_HOME is honoured.
+PNPM_BIN = os.environ.get("PNPM_HOME") or "$HOME/Library/pnpm"
+SCHEDULE_PATH = f"$HOME/.local/bin:$HOME/.local/share/mise/shims:{PNPM_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RUNTIME_JSON = ".t3/userdata/server-runtime.json"
 LAST_ORIGIN = ".t3/userdata/last-server-origin"   # written by lib/t3-common.sh t3_bootstrap
 HEALTH_PATH = "/.well-known/t3/environment"
@@ -655,7 +658,15 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show", help="spec + prompt")
     show.add_argument("name")
     show.set_defaults(func=cmd_show)
+
+    runner_path = sub.add_parser("runner-path", help="print the PATH launchd runners get (used by install --check)")
+    runner_path.set_defaults(func=cmd_runner_path)
     return parser
+
+
+def cmd_runner_path(_args) -> int:
+    print(os.path.expandvars(SCHEDULE_PATH))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
