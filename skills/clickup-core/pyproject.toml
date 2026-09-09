@@ -1,5 +1,9 @@
 [project]
 name = "clickup-core"
-version = "0.2.0"
+version = "0.2.1"
 requires-python = ">=3.11"
 dependencies = ["requests>=2.32,<3"]
+
+[tool.pytest.ini_options]
+# rootdir stops here: a consumer repo's own pytest config must not leak into the skill's tests.
+testpaths = ["scripts"]

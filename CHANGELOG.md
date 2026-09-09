@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- clickup-core 0.2.1: pytest rootdir pinned to the skill (`[tool.pytest.ini_options]`) so a consumer
+  repo's own pytest config no longer leaks into `pytest -q` inside the installed copy.
 - t3-limits: cache usage reads per profile (90 s fresh window, `--fresh` to bypass) and fall back to
   the last good value on 429/network errors instead of reporting the account as unknown.
 
