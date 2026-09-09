@@ -19,15 +19,14 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import importlib.util
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -153,13 +152,12 @@ def load_threads(store: Path) -> dict[str, dict]:
 
 
 def load_limited_ids(store: Path) -> set[str]:
-    """Reuse the sibling t3-limited CLI (no .py suffix, so import by path)."""
-    loader = SourceFileLoader("t3limited", str(Path(__file__).with_name("t3-limited")))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[loader.name] = module
-    loader.exec_module(module)
-    return {item.thread_id for item in module.load_limited(store)}
+    """Read the usage-window detector through its public JSON interface."""
+    result = subprocess.run(
+        ["t3-usage-windows", "limited", "--store", str(store), "list", "--since", "1970-01-01", "--json"],
+        capture_output=True, text=True, check=True,
+    )
+    return {item["thread_id"] for item in json.loads(result.stdout)}
 
 
 def enrich(
@@ -333,7 +331,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    limited = load_limited_ids(args.store)
+    try:
+        limited = load_limited_ids(args.store)
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        print(f"limit detection unavailable; install/update t3-usage-windows ({type(error).__name__})", file=sys.stderr)
+        if getattr(args, "limited", False):
+            return 1  # Recovery must never treat unknown draft protection as an empty set.
+        limited = set()
     drafts, orphans = enrich(
         extract_drafts(load_state(args.leveldb)), load_threads(args.store), limited
     )

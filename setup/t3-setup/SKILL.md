@@ -98,8 +98,7 @@ pnpm dlx skills add pjmuller/skills -s t3-schedule -y
 ```
 
 Install additional requested skills at their requested scopes, dependency helpers
-first; run each available `scripts/install`. Keep `t3-hello-world` for
-multi-account users only. Commit project skill files, `skills-lock.json`, and the
+first; run each available `scripts/install`. Use `t3-usage-windows` for warm-up, daytime top-ups and limit recovery. Commit project skill files, `skills-lock.json`, and the
 relative `.claude/skills` link (or CLI-created per-skill links per README).
 Recheck all global home links after installation; preserve one canonical tree.
 

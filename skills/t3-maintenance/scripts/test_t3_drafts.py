@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -18,6 +19,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("t3-drafts")
 
@@ -52,6 +54,10 @@ PNG = base64.b64encode(b"pretend-image").decode()
 
 class DraftsTest(unittest.TestCase):
     def setUp(self) -> None:
+        scripts = SCRIPT.parents[2] / 't3-usage-windows/scripts'
+        env = patch.dict(os.environ, PATH=f"{scripts}:{SCRIPT.parent}:" + os.environ['PATH'])
+        env.start()
+        self.addCleanup(env.stop)
         self.module = load_cli()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -171,6 +177,14 @@ class DraftsTest(unittest.TestCase):
     def rows(self, *args: str) -> list[dict]:
         stdout, _ = self.run_cli("list", "--json", *args)
         return json.loads(stdout)
+
+    def test_missing_detector_keeps_plain_listing_but_fails_closed_for_limited(self):
+        with patch.object(self.module, 'load_limited_ids', side_effect=FileNotFoundError):
+            stdout, stderr = self.run_cli('list', '--json')
+            self.assertTrue(json.loads(stdout))
+            self.assertIn('limit detection unavailable', stderr)
+            stdout, stderr = self.run_cli('list', '--limited', '--json', expect=1)
+            self.assertEqual(stdout, '')
 
     def test_empty_and_orphan_drafts_are_dropped(self) -> None:
         drafts, orphans = self.build()

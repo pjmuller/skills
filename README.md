@@ -8,10 +8,9 @@ Self-contained skills for Claude Code, Codex and other agents. MIT licensed.
 | --- | --- |
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | Spawn, ping, read, hide, rename, settle/delete threads; provider limits |
 | [t3-schedule](skills/t3-schedule/SKILL.md) | macOS launchd recurring jobs; requires thread helpers |
-| [t3-maintenance](skills/t3-maintenance/SKILL.md) | Fleet, drafts, prompt mining, limit recovery and purge; requires thread helpers |
+| [t3-maintenance](skills/t3-maintenance/SKILL.md) | Fleet, drafts, prompt mining and purge; requires thread helpers |
 | [t3-find-thread](skills/t3-find-thread/SKILL.md) | Local transcript search and opening a match |
-| [t3-resume-limited](skills/t3-resume-limited/SKILL.md) | Recovery workflow; requires t3-maintenance and thread helpers |
-| [t3-hello-world](skills/t3-hello-world/SKILL.md) | Usage-window warm-up; **multi-account users only**; requires thread helpers |
+| [t3-usage-windows](skills/t3-usage-windows/SKILL.md) | Start windows, chain daytime top-ups, recover limited threads; requires thread helpers and maintenance |
 
 ## Misc
 
@@ -23,7 +22,7 @@ Self-contained skills for Claude Code, Codex and other agents. MIT licensed.
 ## Install
 
 T3 must be running. Thread helpers support macOS and Linux/WSL; launchd scheduling
-and the hello-world top-up daemon are macOS-only. See each skill's dependency checks.
+and the usage-window top-up daemon are macOS-only. See each skill's dependency checks.
 Put `~/.local/bin` on the login-shell PATH.
 
 Before global installation, merge existing skills into your personal setup repo's
@@ -43,8 +42,8 @@ pnpm dlx skills add pjmuller/skills -s t3-schedule -y
 ```
 
 Replace the skill name for other installs; run each command-shipping skill's
-`scripts/install` and `--check`. Install dependencies first. `t3-resume-limited`
-is documentation only, so install `t3-maintenance` for its commands.
+`scripts/install` and `--check`. Install dependencies first. Usage windows uses
+`t3-maintenance` for read-only store access and draft protection.
 Select named skills: `setup/t3-setup` is a one-time bootstrap, never an installed skill.
 
 Verified with skills CLI **1.5.24 on 2026-09-09**: project installs create
@@ -63,11 +62,11 @@ pnpm dlx skills update t3-schedule -p
 Then rerun each updated skill's `scripts/install` and `scripts/install --check`.
 Updates wipe and replace installed files; keep personal customizations outside them.
 For scheduler updates run `t3-schedule refresh`; for an enabled top-up daemon rerun
-`t3-hello-world-topup install`. These migrate the old personal launchd labels to
+`t3-usage-windows topup install`. These migrate the old personal launchd labels to
 `com.t3-skills.*`; scheduler specs, prompts and daily markers stay in
 `~/.t3/userdata/scheduled/t3-schedule/`. Check `launchctl list` for duplicates.
 The hide keeper already uses neutral `t3-hide.*` labels. Existing one-shot limited
-resume jobs should finish before updating; new ones use `com.t3-skills.t3-limited-resume.*`.
+resume jobs should finish before updating; new ones use `com.t3-skills.t3-usage-windows.limited.*`.
 
 ## One-time machine setup
 
@@ -80,3 +79,8 @@ existing setup, unifies Claude homes, installs helpers and verifies a launchd sm
 and record the source commit in the consumer's SETUP.md and feedback block.
 Tool-free fallback: clone this repository and read `setup/t3-setup/SKILL.md` locally.
 Plugin marketplace packaging and submodules are deferred.
+
+The merged skill replaces `t3-hello-world` and `t3-resume-limited`. Update
+`t3-maintenance` too (draft discovery now uses the merged CLI), run both installers,
+then `t3-usage-windows topup install` to unload the old top-up label before loading
+`com.t3-skills.t3-usage-windows.topup`. `t3-limited` remains a compatibility alias.

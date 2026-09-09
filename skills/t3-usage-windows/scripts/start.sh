@@ -3,7 +3,7 @@ set -uo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: t3-hello-world [--dry-run] [--only id1,id2]
+Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME]
 
 Starts one low-cost hello-world turn on OpenAI and every enabled Claude profile
 registered in T3 Code, then settles all successfully created child threads.
@@ -16,9 +16,11 @@ EOF
 
 dry_run=0
 only=""
+profile_query=""
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=1 ;;
+    --profile) shift; profile_query="${1:-}"; [[ -n "$profile_query" ]] || usage ;;
     --only) shift; only="${1:-}"; [[ -n "$only" ]] || usage ;;
     --only=*) only="${1#*=}" ;;
     -h|--help) usage 0 ;;
@@ -73,6 +75,17 @@ done < <(jq -r '
   echo "No enabled OpenAI or Claude providers found in T3 Code." >&2
   exit 1
 }
+
+if [[ -n "$profile_query" ]]; then
+  only="$(printf '%s\n' "${providers[@]}" | uv run --no-project python -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from profiles import matching
+ids = [line.split("\t")[0] for line in sys.stdin.read().splitlines()]
+print(",".join(i for i in ids if i in matching(sys.argv[2], ids)))
+' "$(dirname "$(readlink -f "$0")")" "$profile_query")"
+  [[ -n "$only" ]] || { echo "No enabled providers matched --profile $profile_query" >&2; exit 1; }
+fi
 
 if [[ -n "$only" ]]; then
   IFS=',' read -ra wanted <<< "$only"

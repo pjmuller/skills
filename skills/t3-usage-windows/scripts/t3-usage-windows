@@ -1,0 +1,77 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Start, chain and recover provider usage windows in T3 Code."""
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+
+def start(argv):
+    parser = argparse.ArgumentParser(prog='t3-usage-windows start')
+    parser.add_argument('--profile', help='exact instance ID, name substring, or comma-separated IDs')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args(argv)
+    command = ['bash', str(HERE / 'start.sh')]
+    if args.profile:
+        # The shell owns enablement discovery; resolve friendly names there too.
+        command += ['--profile', args.profile]
+    if args.dry_run:
+        command += ['--dry-run']
+    result = subprocess.run(command, text=True, check=False, capture_output=args.json)
+    if args.json:
+        print(json.dumps({'ok': result.returncode == 0, 'dry_run': args.dry_run,
+                          'output': result.stdout, 'errors': result.stderr}))
+    return result.returncode
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['start', 'topup', 'limited', 'status'])
+    if not argv or argv[0] in ('-h', '--help'):
+        parser.print_help()
+        return 0
+    args = parser.parse_args(argv[:1])
+    rest = argv[1:]
+    if args.command == 'start':
+        return start(rest)
+    if args.command == 'topup':
+        import topup
+        return topup.main(rest)
+    if args.command == 'limited':
+        import limited
+        return limited.main(rest)
+    status = argparse.ArgumentParser(prog='t3-usage-windows status')
+    status.add_argument('--profile')
+    status.add_argument('--json', action='store_true')
+    opts = status.parse_args(rest)
+    command = ['t3-limits', '--json']
+    if opts.profile:
+        command += ['--profile', opts.profile]
+    windows = subprocess.run(command, text=True, check=False, capture_output=True)
+    if windows.returncode not in (0, 1) or not windows.stdout.strip():
+        raise SystemExit(windows.stderr or 't3-limits returned no data')
+    import limited
+    blocked_args = limited.build_parser().parse_args(['list', '--since', '7d'] + (['--profile', opts.profile] if opts.profile else []))
+    blocked = limited.select(blocked_args, limited.load_limited(blocked_args.store))
+    data = {'windows': json.loads(windows.stdout), 'blocked_threads': len(blocked), 'since': '7d'}
+    if opts.json:
+        print(json.dumps(data, indent=2))
+    else:
+        for row in data['windows']:
+            print(f"{row['instance_id']}: {row.get('window') or 'unknown'} · {row.get('used_percent', '?')}% used · reset {row.get('resets_at') or row.get('resets_in_seconds')} · {row.get('error') or 'ok'}")
+        print(f'Blocked threads (7d): {len(blocked)}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

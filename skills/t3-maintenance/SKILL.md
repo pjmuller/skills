@@ -9,7 +9,7 @@ Five helpers in `scripts/`, symlinked onto PATH by `scripts/install` (`--check` 
 
 - `t3-thread-maintenance` — audit/repair settlement state (`audit`, `list`, `settle-old`, `revive-auto`).
 - `t3-fleet` — orchestrator view of worker threads (`list`, `unsettle`, `ping`).
-- `t3-limited` — threads stuck on a provider rate/usage limit (`list`, `resume`, `schedule` — one-shot LaunchAgent resume at a wall-clock time); see the `t3-resume-limited` skill.
+- Limit recovery: [t3-usage-windows](../t3-usage-windows/SKILL.md).
 - `t3-drafts` — unsent composer text per thread (`list`, `show`); read-only, no sending yet (sending is not implemented).
 - `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
 
@@ -118,3 +118,5 @@ Claude `resume`/`resumeSessionAt`, Codex `threadId`) globbed across every Claude
 transcript predates the cursor era or Claude's 30-day `cleanupPeriodDays` already removed it
 (verified 2026-09-07: every miss was a March–May thread). `--older-than` uses `updated_at`, which a
 bulk settle bumps — conservative (threads look younger, never older).
+
+`t3-drafts --limited` requires `t3-usage-windows` on PATH; plain draft listing still works without it.

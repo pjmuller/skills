@@ -3,11 +3,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 install_dir="${HOME}/.local/bin"
 if [[ "${1:-}" == "--check" ]]; then
-  for dependency in uv jq t3-spawn-thread t3-settle-thread t3-limits; do
+  for dependency in uv jq t3-spawn-thread t3-settle-thread t3-ping-thread t3-limits t3-thread-maintenance t3-drafts; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (thread helpers: skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install)" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done
-  for helper in t3-hello-world t3-hello-world-topup; do
+  for helper in t3-usage-windows t3-limited; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -15,7 +15,15 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 [[ $# == 0 ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
 mkdir -p "$install_dir"
-for helper in t3-hello-world t3-hello-world-topup; do
+for helper in t3-usage-windows t3-limited; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
+done
+# Retire only our obsolete command symlinks; never replace unrelated user binaries.
+for helper in t3-hello-world t3-hello-world-topup; do
+  target="$install_dir/$helper"
+  if [[ -L "$target" && "$(readlink "$target")" == */t3-hello-world/scripts/"$helper" ]]; then
+    rm "$target"
+    echo "removed obsolete alias $target"
+  fi
 done

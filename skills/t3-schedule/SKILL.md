@@ -1,6 +1,6 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) via a macOS LaunchAgent. Use for "schedule a daily/weekly T3 job", "every morning run the fleet report", "list/remove scheduled T3 jobs", "/t3-schedule". Not for one-shot in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-resume-limited).
+description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) via a macOS LaunchAgent. Use for "schedule a daily/weekly T3 job", "every morning run the fleet report", "list/remove scheduled T3 jobs", "/t3-schedule". Not for one-shot in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
 ---
 
 # t3-schedule
@@ -55,6 +55,6 @@ Install: `scripts/install` (symlink into `~/.local/bin`, needs the
   Failures notify once per day (`<name>.failed`); success always notifies. Helpers fall back to
   `~/.t3/userdata/last-server-origin` when `server-runtime.json` is missing but the server answers.
 - **Provider limits / auth** are the thread's problem, same as a manual spawn: a rate-limited
-  thread shows the banner and `t3-limited` handles it; expired `rc`/Claude OAuth surfaces in the
+  thread shows the banner and `t3-usage-windows limited` handles it; expired `rc`/Claude OAuth surfaces in the
   thread. The daily notification + sidebar thread `⏰ name date` is the ack; nothing else pings the user.
 - Never edit `<name>.sh` by hand — `add --force` (one job) or `refresh` (all) regenerates it.

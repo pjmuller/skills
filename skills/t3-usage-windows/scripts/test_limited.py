@@ -21,7 +21,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SCRIPT = Path(__file__).with_name("t3-limited")
+SCRIPT = Path(__file__).with_name("limited.py")
 TZ = ZoneInfo("Europe/Brussels")
 
 
@@ -421,7 +421,7 @@ class ScheduleTest(unittest.TestCase):
         )
         (plist,) = self.plists()
         data = plistlib.loads(plist.read_bytes())
-        label = f"com.t3-skills.t3-limited-resume.work.{target:%Y%m%d-%H%M}"
+        label = f"com.t3-skills.t3-usage-windows.limited.work.{target:%Y%m%d-%H%M}"
         self.assertEqual(data["Label"], label)
         self.assertFalse(data["RunAtLoad"])
         self.assertEqual(
@@ -442,8 +442,8 @@ class ScheduleTest(unittest.TestCase):
             ["zsh", "-n", str(script)], capture_output=True, text=True, check=False
         )
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
-        self.assertIn("t3-limited resume --profile work --since 7d", body)
-        self.assertIn("t3-limited-schedule.log", body)
+        self.assertIn("t3-usage-windows limited resume --profile work --since 7d", body)
+        self.assertIn("t3-usage-windows-limited.log", body)
         self.assertIn(f"launchctl bootout gui/$(id -u)/{label}", body)
         self.assertEqual(self.calls[0][0], "bootstrap")
 

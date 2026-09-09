@@ -31,5 +31,5 @@ noise for pace decisions.
 Tokens are never printed and never refreshed (a refresh would rotate Claude Code's own copy); an
 expired one prints `token expired — run any turn in that profile to refresh` and the rest still report.
 
-Related: [t3-resume-limited](../t3-resume-limited/SKILL.md) — confirm a window really
+Related: [t3-usage-windows](../t3-usage-windows/SKILL.md) — confirm a window really
 reset before resuming blocked threads. GUI views: `cswap list`, the CodexBar menubar.

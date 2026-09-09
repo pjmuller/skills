@@ -1,12 +1,11 @@
-"""uv run --with pytest pytest .agents/skills/t3-hello-world/scripts — pure functions only."""
+"""Top-up decisions and launchd project fallback."""
 from datetime import datetime
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-
 from zoneinfo import ZoneInfo
 
 mod = SourceFileLoader(
-    "t3_hello_world_topup", str(Path(__file__).with_name("t3-hello-world-topup"))
+    "t3_hello_world_topup", str(Path(__file__).with_name("topup.py"))
 ).load_module()
 
 TZ = ZoneInfo("Europe/Brussels")
@@ -64,8 +63,8 @@ def test_hello_from_launchd_root_global_install(tmp_path):
     import subprocess
     scripts = tmp_path / 'installed'
     scripts.mkdir()
-    hello = scripts / 't3-hello-world'
-    shutil.copyfile(Path(__file__).with_name('t3-hello-world'), hello)
+    hello = scripts / 'start.sh'
+    shutil.copyfile(Path(__file__).with_name('start.sh'), hello)
     settings = tmp_path / '.t3/userdata/settings.json'
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({'providers': {'claudeAgent': {'enabled': False}}}))
@@ -80,6 +79,6 @@ def test_hello_from_launchd_root_global_install(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), T3CODE_HOME=str(tmp_path / '.t3'),
                PATH=str(bin_dir) + ':' + os.environ['PATH'])
     result = subprocess.run(['bash', str(hello), '--dry-run', '--only', 'codex'],
-                            cwd='/', env=env, text=True, capture_output=True)
+                            cwd='/', env=env, text=True, check=False, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert '--project ' + str(tmp_path) in result.stdout

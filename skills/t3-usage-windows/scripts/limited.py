@@ -13,6 +13,8 @@ shells out to t3-ping-thread on PATH.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import plistlib
@@ -28,10 +30,15 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Resolve shared read-only store access through the installed maintenance command.
+maintenance = shutil.which("t3-thread-maintenance")
+if not maintenance:
+    raise SystemExit("install t3-maintenance first (t3-thread-maintenance missing)")
+sys.path.insert(0, str(Path(maintenance).resolve().parent))
+from local_timezone import system_timezone
 from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time, parse_time
 
-TZ = ZoneInfo("Europe/Brussels")
+TZ = system_timezone()
 LIMIT_TEXT = re.compile(
     r"^(You've hit your .*limit|You've reached your .*limit"
     r"|API Error: Rate limit reached)"
@@ -41,7 +48,7 @@ RESET_AT = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.IGNORECAS
 MAX_LIMIT_CHARS = 400
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 TITLE_CHARS = 50
-LABEL_PREFIX = "com.t3-skills.t3-limited-resume"
+LABEL_PREFIX = "com.t3-skills.t3-usage-windows.limited"
 SCHEDULE_MAX_DAYS = 7
 SCHEDULE_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RUNTIME_JSON = ".t3/userdata/server-runtime.json"
@@ -83,13 +90,18 @@ def classify(text: str) -> str:
 
 
 def parse_reset(text: str, message_at: datetime) -> datetime | None:
-    """Resolve `resets H[:MM]am/pm` against the message's own Brussels day,
+    """Resolve `resets H[:MM]am/pm` against the message's local day,
     rolling to the next day when that clock time already passed."""
     match = RESET_AT.search(text)
     if not match:
         return None
     hour = int(match.group(1)) % 12 + (12 if match.group(3).lower() == "pm" else 0)
-    local = message_at.astimezone(TZ)
+    zone = re.search(r"\(([^()]+)\)", text[match.end():])
+    try:
+        reset_zone = ZoneInfo(zone.group(1)) if zone else TZ
+    except (KeyError, ValueError):
+        reset_zone = TZ
+    local = message_at.astimezone(reset_zone)
     reset = local.replace(
         hour=hour, minute=int(match.group(2) or 0), second=0, microsecond=0
     )
@@ -376,7 +388,7 @@ def artifacts(label: str) -> tuple[Path, Path, Path]:
     return (
         home / "Library/LaunchAgents" / f"{label}.plist",
         home / ".t3/userdata/scheduled" / f"{label}.sh",
-        home / ".t3/userdata/logs/t3-limited-schedule.log",
+        home / ".t3/userdata/logs/t3-usage-windows-limited.log",
     )
 
 
@@ -470,13 +482,13 @@ def derive_fire(rows: list[Limited], now: datetime) -> tuple[datetime, str] | No
     ]
     if pending:
         latest = max(pending)
-        fire = ceil_minute(latest.astimezone()) + timedelta(minutes=1)
+        fire = ceil_minute(latest.astimezone(TZ)) + timedelta(minutes=1)
         note = (
             f"derived from {len(rows)} blocked thread(s), latest reset "
             f"{latest.astimezone(TZ):%a %H:%M} -> fires {fire:%H:%M}"
         )
     else:
-        fire = ceil_minute(now.astimezone()) + timedelta(minutes=2)
+        fire = ceil_minute(now.astimezone(TZ)) + timedelta(minutes=2)
         note = (
             f"derived from {len(rows)} blocked thread(s); no pending reset "
             f"(model/api limits are resumable already) -> fires {fire:%H:%M}"
@@ -506,14 +518,14 @@ def runner_script(
     quoted = " ".join(
         shlex.quote(part)
         for part in (
-            "t3-limited", "resume", "--profile", args.profile,
+            "t3-usage-windows", "limited", "resume", "--profile", args.profile,
             "--since", args.since_raw, "--timeout", str(args.ping_timeout),
             "--protect-drafts", "--draft-timeout", str(args.draft_timeout),
         )
     )
     listing = " ".join(
         shlex.quote(part)
-        for part in ("t3-limited", "list", "--profile", args.profile, "--since", args.since_raw)
+        for part in ("t3-usage-windows", "limited", "list", "--profile", args.profile, "--since", args.since_raw)
     )
     listing_json = listing + " --json"
     notify = ""
@@ -523,7 +535,7 @@ def runner_script(
             f'"$summary" || true\n'
         )
     return f"""#!/bin/zsh
-# retrying one-shot resume scheduled by `t3-limited schedule`
+# retrying one-shot resume scheduled by `t3-usage-windows limited schedule`
 export PATH="{SCHEDULE_PATH}"
 mkdir -p {shlex.quote(str(log.parent))}
 (( $(date +%s) < {int(fire.timestamp())} )) && exit 0
@@ -539,7 +551,7 @@ mkdir -p {shlex.quote(str(log.parent))}
     (( $(date +%s) < deadline )) && exit 1
     summary="{label}: T3 Code unreachable for {args.wait_max}m; gave up"
     echo "-- $summary"
-{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-limited\\"" || true
+{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-usage-windows\\"" || true
   else
     # Freeze the first real attempt's inventory boundary. A successful ping that
     # immediately re-banners starts a new limit cycle; do not ping it every minute.
@@ -573,7 +585,7 @@ mkdir -p {shlex.quote(str(log.parent))}
     fi
     summary="{label} finished at $(date '+%H:%M'); resumed $n: $ids; still blocked $remaining ($held held for draft)"
     echo "-- $summary"
-{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-limited\\"" || true
+{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-usage-windows\\"" || true
   fi
 }} >> {shlex.quote(str(log))} 2>&1
 kill "$(cat {shlex.quote(str(caffeinate_pid_file(label)))} 2>/dev/null)" 2>/dev/null || true
@@ -600,6 +612,11 @@ def plist_body(label: str, fire: datetime, sh: Path) -> bytes:
 
 def cmd_schedule(args: argparse.Namespace) -> int:
     if args.cancel:
+        if not re.fullmatch(re.escape(LABEL_PREFIX) + r"\.[A-Za-z0-9_-]+\.\d{8}-\d{4}", args.cancel):
+            raise SystemExit("cancel expects a usage-windows limited job label")
+        if args.dry_run:
+            print(f"would cancel {args.cancel}")
+            return 0
         plist, sh, _ = artifacts(args.cancel)
         launchctl("bootout", f"gui/{os.getuid()}/{args.cancel}")
         pid = caffeinate_pid(args.cancel)
@@ -628,7 +645,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     if not args.profile:
         raise SystemExit("schedule needs --profile (--at HH:MM optional; or --list/--cancel)")
 
-    now = datetime.now().astimezone()
+    now = datetime.now(TZ)
     rows = blocked_rows(args)
     if args.at:
         fire = fire_time(args.at, args.date, now)
@@ -646,7 +663,8 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         fire, note = derived
         print(f"note   {note}")
 
-    label = f"{LABEL_PREFIX}.{args.profile}.{fire:%Y%m%d-%H%M}"
+    profile_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", args.profile)
+    label = f"{LABEL_PREFIX}.{profile_slug}.{fire:%Y%m%d-%H%M}"
     plist, sh, log = artifacts(label)
     body = runner_script(args, label, log, plist, sh, fire)
     if args.dry_run:
@@ -670,7 +688,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="t3-usage-windows limited", description=__doc__)
     parser.add_argument(
         "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
     )
@@ -708,6 +726,7 @@ def build_parser() -> argparse.ArgumentParser:
                 help="only limits eligible to resume now (excludes monthly/pending)",
             )
         else:
+            sub.add_argument("--json", action="store_true", help="JSON outcome and audit output")
             sub.add_argument("--message", default="continue", help="user turn to post")
             sub.add_argument(
                 "--force",
@@ -770,6 +789,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not hold the Mac awake until the fire time (default: caffeinate -i)",
     )
     plan.add_argument("--dry-run", action="store_true", help="print plist + script, write nothing")
+    plan.add_argument("--json", action="store_true", help="JSON outcome and audit output")
     plan.add_argument("--list", action="store_true", help="pending scheduled resumes")
     plan.add_argument("--cancel", metavar="LABEL", help="bootout + remove a scheduled resume")
     return parser
@@ -777,15 +797,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "schedule":
-        return cmd_schedule(args)
-    now = datetime.now(timezone.utc)
-    rows = select(args, load_limited(args.store))
-    return (
-        cmd_list(args, rows, now)
-        if args.command == "list"
-        else cmd_resume(args, rows, now)
-    )
+    def dispatch():
+        if args.command == "schedule":
+            return cmd_schedule(args)
+        now = datetime.now(timezone.utc)
+        rows = select(args, load_limited(args.store))
+        return cmd_list(args, rows, now) if args.command == "list" else cmd_resume(args, rows, now)
+
+    if args.json and args.command != "list":
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = dispatch()
+        print(json.dumps({"ok": code == 0, "output": output.getvalue()}))
+        return code
+    return dispatch()
 
 
 if __name__ == "__main__":

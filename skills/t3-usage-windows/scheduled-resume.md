@@ -1,12 +1,11 @@
 # Scheduled resume ("resume rate-limited t3 threads for <profile> [at HH:MM]")
 
-Two-phase: preview now, act on a timer. Times the user gives are Europe/Brussels (machine clock is the
-same zone, so the time is used verbatim).
+Two-phase: preview now, act on a timer. Times use the system timezone. Limit banners with an explicit timezone keep that timezone.
 
 ## Now (preview + arm — two commands)
-1. `t3-limited list --profile <p> --since 7d` → show the user the titles + kind + reset.
-2. `t3-limited schedule --profile <p> [--at HH:MM] --notify-thread <this thread id>`
-   → one-shot LaunchAgent `com.t3-skills.t3-limited-resume.<profile>.<YYYYMMDD-HHMM>`.
+1. `t3-usage-windows limited list --profile <p> --since 7d` → show the user the titles + kind + reset.
+2. `t3-usage-windows limited schedule --profile <p> [--at HH:MM] --notify-thread <this thread id>`
+   → one-shot LaunchAgent `com.t3-skills.t3-usage-windows.limited.<profile>.<YYYYMMDD-HHMM>`.
    **No `--at`** → fire time derived from those same blocked rows: latest pending `reset_at` + 1 min;
    no pending reset (only `model`/`api`) → now + 2 min; nothing blocked → prints so, arms nothing,
    exit 0; only `monthly` → exit 1 (needs credits or `--force`). It prints the derivation.
@@ -14,7 +13,7 @@ same zone, so the time is used verbatim).
    threads would be skipped as "not resumable yet").
    `--dry-run` prints plist + script · `--list` / `--cancel LABEL` manage pending ones ·
    `--wait-max` (default 180 min) · `--ping-timeout` (default 120 s per thread) · log
-   `~/.t3/userdata/logs/t3-limited-schedule.log`.
+   `~/.t3/userdata/logs/t3-usage-windows-limited.log`.
    `t3-limits --json --profile <p>` (skill `t3-manage-thread`) is only a cross-check now.
    - Optional secondary (only if you want the agent to *reason* in-thread at fire time): harness
      `CronCreate` (`recurring: false`, cron `"M H D Mo *"`) with the "On fire" block as prompt.
@@ -29,7 +28,7 @@ same zone, so the time is used verbatim).
      `--list` kill/report it (`awake=yes|no`). Lid closed without an external display still sleeps;
      launchd then runs the missed job at the next wake (2026-09-05: 16:51 job ran 16:57 on a Power
      Nap dark-wake). T3 Code must be running — the runner waits up to 3 h for it.
-3. Immediately re-run `t3-limited list --profile <p> --since 7d` and
+3. Immediately re-run `t3-usage-windows limited list --profile <p> --since 7d` and
    `t3-drafts list --limited`. Report the current—not initial—inventory, draft-held exceptions, and
    timer time/label. You can close the thread; the ping-back arrives later.
 
