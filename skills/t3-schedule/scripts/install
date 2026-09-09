@@ -5,7 +5,14 @@ install_dir="${T3_SCHEDULE_INSTALL_DIR:-$HOME/.local/bin}"
 target="$install_dir/t3-schedule"
 if [[ "${1:-}" == "--check" ]]; then
   [[ -L "$target" && "$(readlink "$target")" == "$script_dir/t3-schedule" ]] || { echo "missing or stale: $target" >&2; exit 1; }
-  command -v t3-spawn-thread >/dev/null || { echo "t3-spawn-thread not on PATH (t3-manage-thread/scripts/install)" >&2; exit 1; }
+  remedy='skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install'
+  for helper in t3-spawn-thread t3-limits; do
+    command -v "$helper" >/dev/null || { echo "missing $helper; run: $remedy" >&2; exit 1; }
+    echo "ok      $helper ($(command -v "$helper"))"
+  done
+  spawn="$(readlink -f "$(command -v t3-spawn-thread)")"
+  [[ -r "$(dirname "$spawn")/lib/t3-common.sh" ]] || { echo "missing lib/t3-common.sh; run: $remedy" >&2; exit 1; }
+  echo 'ok      lib/t3-common.sh' 
   echo "ok      t3-schedule ($target)"; exit 0
 fi
 mkdir -p "$install_dir"

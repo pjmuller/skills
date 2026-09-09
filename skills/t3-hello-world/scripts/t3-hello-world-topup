@@ -30,13 +30,12 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Brussels")
 LABEL = "com.pjmuller.t3-hello-world-topup"
-PATH_ENV = "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH_ENV = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HERE = Path(__file__).resolve()
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / ".t3/userdata/logs/t3-hello-world-topup.log"
 RUNTIME = Path.home() / ".t3/userdata/server-runtime.json"
 HELLO_WORLD = HERE.with_name("t3-hello-world")
-LIMITS_FALLBACK = HERE.parents[4] / "ai/skills/t3-manage-thread/scripts/t3-limits"
 START_HOUR, END_HOUR = 5, 21
 GRACE = 60  # seconds after expiry before a window counts as stale
 DEFAULT_INTERVAL = 600
@@ -125,8 +124,6 @@ def t3_up() -> bool:
 
 def limits_rows() -> list[dict]:
     command = ["t3-limits", "--json"]
-    if not any((Path(d) / "t3-limits").exists() for d in clean_env()["PATH"].split(":")):
-        command[0] = str(LIMITS_FALLBACK)
     result = subprocess.run(command, capture_output=True, text=True, env=clean_env())
     if result.returncode not in (0, 1) or not result.stdout.strip():
         raise RuntimeError((result.stderr or "t3-limits failed").strip()[:160])
