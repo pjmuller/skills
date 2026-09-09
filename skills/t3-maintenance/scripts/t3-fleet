@@ -1,0 +1,415 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Deterministic fleet view over T3 Code threads, plus bulk unsettle/ping wrappers.
+
+Read path is a read-only SQLite snapshot of T3's projection store (never a write).
+Write path shells out to the t3-manage-thread helpers on PATH.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import (
+    DEFAULT_STORE,
+    connect_readonly,
+    iso,
+    maybe_time,
+)
+
+# A worker brief carries its parent's address as a literal ping command.
+BRIEF_PARENT = re.compile(
+    r"t3-ping-thread\s+--thread\s+([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})"
+    r"(?:\s+--from\s+['\"]?([^\s'\"]+))?"
+)
+PING_MARKER = "[ping from"
+DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+PREVIEW_CHARS = 80
+TITLE_CHARS = 40
+PROJECT_CHARS = 18
+
+
+def parse_duration(value: str) -> timedelta:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([mhdw])", value.strip().lower())
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"expected a duration like 90m, 12h, 3d, 2w; got {value!r}"
+        )
+    return timedelta(seconds=float(match.group(1)) * DURATION_UNITS[match.group(2)])
+
+
+def fmt_age(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours:02d}h"
+
+
+def one_line(text: str, limit: int) -> str:
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+@dataclass
+class Thread:
+    thread_id: str
+    project: str
+    workspace_root: str
+    title: str
+    settled: bool
+    session_status: str | None
+    deleted: bool
+    archived: bool
+    created_at: str
+    last_activity_at: str
+    age_seconds: float
+    last_role: str | None
+    last_text: str
+    brief_at: str | None
+    parent_id: str | None = None
+    ping_label: str | None = None
+    parent_known: bool = False
+    pinged_back: bool = False
+    children: list[str] = field(default_factory=list)
+
+    @property
+    def stall_state(self) -> str | None:
+        """Tri-state. `stalled` = a worker we can prove is dead: assistant-last,
+        session stopped, parent resolvable, and that parent never got its ping
+        back. `unknown-parent` = same corpse, but no resolvable parent, so it is
+        just as likely a long-finished ordinary thread. `None` = alive or done."""
+        if self.last_role != "assistant" or self.session_status != "stopped":
+            return None
+        if not self.parent_known:
+            return "unknown-parent"
+        return None if self.pinged_back else "stalled"
+
+    @property
+    def stalled(self) -> bool:
+        return self.stall_state is not None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "thread_id": self.thread_id,
+            "short_id": self.thread_id[:8],
+            "project": self.project,
+            "workspace_root": self.workspace_root,
+            "title": self.title,
+            "settled": self.settled,
+            "session_status": self.session_status,
+            "last_activity_at": self.last_activity_at,
+            "age": fmt_age(self.age_seconds),
+            "age_seconds": round(self.age_seconds),
+            "last_role": self.last_role,
+            "last_text": one_line(self.last_text, 400),
+            "parent_id": self.parent_id,
+            "ping_label": self.ping_label,
+            "pinged_back": self.pinged_back,
+            "stalled": self.stalled,
+            "stall_state": self.stall_state,
+            "children": self.children,
+            "deleted": self.deleted,
+            "archived": self.archived,
+        }
+
+
+def load_fleet(store: Path, now: datetime) -> dict[str, Thread]:
+    threads: dict[str, Thread] = {}
+    with connect_readonly(store) as connection:
+        rows = connection.execute("""
+            SELECT t.thread_id, t.title, t.settled_override, t.created_at,
+                   t.deleted_at, t.archived_at,
+                   p.title AS project, p.workspace_root,
+                   s.status AS session_status
+            FROM projection_threads t
+            JOIN projection_projects p ON p.project_id = t.project_id
+            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+        """).fetchall()
+
+        last: dict[str, tuple[str, str, str]] = {}
+        for row in connection.execute("""
+            SELECT thread_id, role, substr(text, 1, 400) AS text, created_at
+            FROM projection_thread_messages
+            ORDER BY thread_id, created_at, message_id
+        """):
+            last[row["thread_id"]] = (row["created_at"], row["role"], row["text"])
+
+        briefs: dict[str, tuple[str, str]] = {}
+        for row in connection.execute("""
+            SELECT thread_id, text, created_at
+            FROM projection_thread_messages
+            WHERE role = 'user'
+            ORDER BY thread_id, created_at, message_id
+        """):
+            briefs.setdefault(row["thread_id"], (row["created_at"], row["text"]))
+
+        pings: dict[str, list[tuple[str, str]]] = {}
+        for row in connection.execute(
+            """
+            SELECT thread_id, substr(text, 1, 200) AS text, created_at
+            FROM projection_thread_messages
+            WHERE role = 'user' AND text LIKE ?
+            """,
+            (f"%{PING_MARKER}%",),
+        ):
+            pings.setdefault(row["thread_id"], []).append(
+                (row["created_at"], row["text"])
+            )
+
+    for row in rows:
+        thread_id = row["thread_id"]
+        created_at = row["created_at"]
+        last_at, last_role, last_text = last.get(thread_id, (created_at, None, ""))
+        moment = maybe_time(last_at) or maybe_time(created_at) or now
+        brief_at, brief_text = briefs.get(thread_id, (None, ""))
+        threads[thread_id] = Thread(
+            thread_id=thread_id,
+            project=row["project"],
+            workspace_root=row["workspace_root"],
+            title=row["title"],
+            settled=row["settled_override"] == "settled",
+            session_status=row["session_status"],
+            deleted=row["deleted_at"] is not None,
+            archived=row["archived_at"] is not None,
+            created_at=created_at,
+            last_activity_at=iso(moment),
+            age_seconds=(now - moment).total_seconds(),
+            last_role=last_role,
+            last_text=last_text,
+            brief_at=brief_at,
+        )
+        match = BRIEF_PARENT.search(brief_text or "")
+        if match:
+            threads[thread_id].parent_id = match.group(1)
+            threads[thread_id].ping_label = match.group(2)
+
+    resolve_ping_backs(threads, pings)
+    return threads
+
+
+def resolve_ping_backs(
+    threads: dict[str, Thread], pings: dict[str, list[tuple[str, str]]]
+) -> None:
+    """A child counts as pinged back when its parent received a `[ping from …]`
+    user message at/after the child's brief. When the brief named a `--from
+    LABEL`, the marker must be that exact label, so sibling workers pinging the
+    same parent never mask each other."""
+    for thread in threads.values():
+        parent = threads.get(thread.parent_id or "")
+        if parent is None:
+            continue
+        parent.children.append(thread.thread_id)
+        thread.parent_known = True
+        brief = maybe_time(thread.brief_at)
+        marker = (
+            f"{PING_MARKER} {thread.ping_label}]" if thread.ping_label else PING_MARKER
+        )
+        thread.pinged_back = any(
+            marker in text and (brief is None or (maybe_time(at) or brief) >= brief)
+            for at, text in pings.get(parent.thread_id, [])
+        )
+
+
+def git_root() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise SystemExit("--here requires the current directory to be in a git repo")
+    return result.stdout.strip()
+
+
+def resolve_id(threads: dict[str, Thread], needle: str) -> str:
+    if needle in threads:
+        return needle
+    matches = [key for key in threads if key.startswith(needle)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise SystemExit(f"unknown thread id: {needle}")
+    raise SystemExit(f"ambiguous thread id {needle}: {len(matches)} matches")
+
+
+def select(args: argparse.Namespace, threads: dict[str, Thread]) -> list[Thread]:
+    rows = list(threads.values())
+    if not args.all:
+        rows = [item for item in rows if not item.deleted and not item.archived]
+    if args.recent is not None:
+        rows = [
+            item for item in rows if item.age_seconds <= args.recent.total_seconds()
+        ]
+    if args.title_prefix:
+        rows = [
+            item for item in rows if item.title.strip().startswith(args.title_prefix)
+        ]
+    needle = git_root() if args.here else args.project
+    if needle:
+        low = needle.casefold()
+        rows = [
+            item
+            for item in rows
+            if low in item.project.casefold() or low in item.workspace_root.casefold()
+        ]
+    if args.parent:
+        parent = resolve_id(threads, args.parent)
+        rows = [item for item in rows if item.parent_id == parent]
+    if args.status:
+        rows = [item for item in rows if item.session_status == args.status]
+    if args.settled is not None:
+        rows = [item for item in rows if item.settled is args.settled]
+    if args.stalled:
+        rows = [
+            item
+            for item in rows
+            if item.stall_state == "stalled"
+            or (args.stalled != "strict" and item.stall_state is not None)
+        ]
+    return sorted(rows, key=lambda item: (item.age_seconds, item.thread_id))
+
+
+def cmd_list(args: argparse.Namespace, threads: dict[str, Thread]) -> int:
+    rows = select(args, threads)
+    shown = rows[: args.limit]
+    if args.json:
+        print(
+            json.dumps([item.as_dict() for item in shown], ensure_ascii=False, indent=2)
+        )
+        return 0
+    if not shown:
+        print("No matching threads.")
+        return 0
+    for item in shown:
+        preview = one_line(item.last_text, PREVIEW_CHARS)
+        role = (item.last_role or "-")[:9]
+        print(
+            f"{item.thread_id[:8]}  {item.project[:PROJECT_CHARS]:<{PROJECT_CHARS}}  "
+            f"{one_line(item.title, TITLE_CHARS):<{TITLE_CHARS}}  "
+            f"{(item.session_status or '-'):<8}  {'✓' if item.settled else '·'}  "
+            f"{fmt_age(item.age_seconds):>7}  {role}: {preview}"
+        )
+    if len(rows) > len(shown):
+        print(f"... {len(rows) - len(shown)} more (raise --limit)")
+    return 0
+
+
+def cmd_bulk(args: argparse.Namespace, threads: dict[str, Thread]) -> int:
+    helper = "t3-settle-thread" if args.command == "unsettle" else "t3-ping-thread"
+    path = shutil.which(helper)
+    if not path and not args.dry_run:
+        raise SystemExit(f"{helper} is not on PATH; install t3-manage-thread first")
+    failures = 0
+    for needle in args.ids:
+        thread_id = resolve_id(threads, needle)
+        if args.command == "unsettle":
+            command = [path or helper, "--unsettle", thread_id]
+        else:
+            command = [
+                path or helper,
+                "--thread",
+                thread_id,
+                "--from",
+                args.from_label,
+                "--",
+                args.message,
+            ]
+        if args.dry_run:
+            print("DRYRUN " + " ".join(command))
+            continue
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        ok = result.returncode == 0
+        failures += not ok
+        detail = one_line((result.stderr or result.stdout), 120)
+        print(f"{'ok    ' if ok else 'FAILED'} {thread_id[:8]}  {detail}")
+    return 1 if failures else 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    listing = subparsers.add_parser(
+        "list", help="one line per thread, newest activity first"
+    )
+    listing.add_argument(
+        "--recent", type=parse_duration, help="max age, e.g. 12h or 3d"
+    )
+    listing.add_argument("--title-prefix", help="literal title prefix, e.g. 🏓")
+    listing.add_argument("--project", help="project name or workspace-root substring")
+    listing.add_argument(
+        "--here", action="store_true", help="only the current git root"
+    )
+    listing.add_argument("--parent", help="children briefed to ping this thread id")
+    listing.add_argument("--status", help="session status: running|ready|stopped|error")
+    listing.add_argument("--settled", dest="settled", action="store_true", default=None)
+    listing.add_argument("--unsettled", dest="settled", action="store_false")
+    listing.add_argument(
+        "--stalled",
+        nargs="?",
+        const="any",
+        choices=("any", "strict"),
+        help="assistant-last + stopped, no ping back (any: also unknown-parent; "
+        "strict: only threads with a resolvable parent)",
+    )
+    listing.add_argument("--all", action="store_true", help="include deleted/archived")
+    listing.add_argument("--limit", type=int, default=50)
+    listing.add_argument("--json", action="store_true")
+
+    for name, help_text in (
+        ("unsettle", "bulk t3-settle-thread --unsettle"),
+        ("ping", "bulk t3-ping-thread (message after `--`)"),
+    ):
+        bulk = subparsers.add_parser(name, help=help_text)
+        bulk.add_argument(
+            "--ids", nargs="+", required=True, help="thread ids or 8-char prefixes"
+        )
+        bulk.add_argument("--dry-run", action="store_true")
+        if name == "ping":
+            bulk.add_argument("--from", dest="from_label", default="fleet")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    message = None
+    if "--" in argv:
+        cut = argv.index("--")
+        message = " ".join(argv[cut + 1 :])
+        argv = argv[:cut]
+    args = build_parser().parse_args(argv)
+    if args.command == "ping":
+        if not message or not message.strip():
+            raise SystemExit(
+                'ping requires a message after `--`, e.g. ping --ids ID -- "status?"'
+            )
+        args.message = message
+    threads = load_fleet(args.store, datetime.now(timezone.utc))
+    return (
+        cmd_list(args, threads) if args.command == "list" else cmd_bulk(args, threads)
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

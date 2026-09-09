@@ -1,0 +1,4 @@
+interface:
+  display_name: "T3 Hello World"
+  short_description: "Warm OpenAI and every Claude profile cheaply"
+  default_prompt: "Use $t3-hello-world to start my Luna and Claude Haiku provider usage windows, then settle the child and orchestrator threads."

@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Visibility lifecycle for a LIVE T3 thread: snooze it out of the sidebar and
+# keep it there while it works. Nothing here stops a session — that is
+# t3-settle-thread (settle = kill).
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-hide-thread [options] THREAD_ID
+
+Hiding is snooze: visibility only, the agent keeps running. This is how a live
+🏓 worker is kept out of the sidebar. To STOP a thread, use t3-settle-thread.
+
+Options:
+  --hide                  Default. Arm a detached "snooze keeper" for THREAD_ID: re-snoozes
+                          the thread every time a finished turn pops it back into the sidebar
+                          (T3 #6368), and exits when the thread is settled/archived/dead or
+                          needs the user. Idempotent; log /tmp/t3-hide-<ID>.log.
+  --unhide                Stop the keeper and unsnooze
+  --snooze [DURATION]     One-shot snooze, no keeper (7d, 12h, 90m; default 7d)
+  --unsnooze              Clear the snooze, leave any keeper alone
+  --dry-run               Print the plan, change nothing
+  -h, --help
+EOF
+  exit "${1:-2}"
+}
+
+mode="hide"
+thread_id=""
+worker_label=""
+dry_run=0
+snooze_seconds=$((7 * 24 * 3600))
+hide_deadline_seconds=$((12 * 3600))
+hide_poll_seconds=5
+hide_poll_fast_seconds=2 # while T3 refuses the snooze (queued turn start, <=120s after a ping)
+
+parse_duration() { # 7d | 12h | 90m | 3600 -> seconds
+  local raw="$1" number unit
+  [[ "$raw" =~ ^([0-9]+)([smhd]?)$ ]] || return 1
+  number="${BASH_REMATCH[1]}"
+  unit="${BASH_REMATCH[2]}"
+  case "$unit" in
+    d) printf '%s' $((number * 86400)) ;;
+    h) printf '%s' $((number * 3600)) ;;
+    m) printf '%s' $((number * 60)) ;;
+    *) printf '%s' "$number" ;;
+  esac
+}
+
+while (($#)); do
+  case "$1" in
+    --hide) mode="hide"; shift ;;
+    --unhide) mode="unhide"; shift ;;
+    --unsnooze) mode="unsnooze"; shift ;;
+    --snooze)
+      mode="snooze"
+      if [[ ${2-} =~ ^[0-9]+[smhd]?$ ]]; then
+        snooze_seconds="$(parse_duration "$2")"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --hide-worker) # internal: the keeper loop itself
+      [[ -n "${2-}" ]] || usage
+      mode="hide-worker"
+      worker_label="$2"
+      shift 2
+      ;;
+    --dry-run) dry_run=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *) break ;;
+  esac
+done
+
+if [[ $# -ge 1 ]]; then
+  thread_id="$1"
+elif ((dry_run)); then
+  thread_id="<THREAD_ID>"
+else
+  usage
+fi
+if ((! dry_run)) && [[ ! "$thread_id" =~ ^[[:xdigit:]-]{36}$ ]]; then
+  echo "Not a thread ID: $thread_id" >&2
+  exit 2
+fi
+
+t3_base_dir="${T3CODE_HOME:-$HOME/.t3}"
+
+# One label per ARM (pid suffix), not per thread: `launchctl remove` on a shared
+# label let the old keeper's EXIT trap remove the freshly submitted job — the
+# re-armed keeper never ran (2026-09-04). Old keepers are stopped by prefix.
+hide_label_for() { printf 't3-hide.%s.%s' "${1//-/}" "$$"; }
+hide_labels_stop() { # THREAD_ID — stop every keeper job of this thread
+  local prefix="t3-hide.${1//-/}" label
+  if command -v launchctl >/dev/null; then
+    for label in $(launchctl list 2>/dev/null | awk -v p="$prefix" 'index($3,p)==1 {print $3}'); do
+      launchctl remove "$label" >/dev/null 2>&1 || true
+    done
+  elif command -v systemctl >/dev/null; then
+    for label in $(systemctl --user list-units --plain --no-legend "$prefix*" 2>/dev/null | awk '{print $1}'); do
+      systemctl --user stop "$label" >/dev/null 2>&1 || true
+    done
+  fi
+}
+hide_log_for() { printf '/tmp/t3-hide-%s.log' "$1"; }
+
+if ((dry_run)); then
+  printf 'Dry run — nothing changed.\n'
+  case "$mode" in
+    hide)
+      printf 'Would arm the snooze keeper: t3-hide-thread --hide %s\n' "$thread_id"
+      printf 'Keeper: re-snoozes every %ss for up to %ss · log %s\n' \
+        "$hide_poll_seconds" "$hide_deadline_seconds" "$(hide_log_for "$thread_id")"
+      ;;
+    unhide) printf 'Would stop every keeper of %s and dispatch thread.unsnooze\n' "$thread_id" ;;
+    snooze) printf 'Would dispatch thread.snooze for %s (%ss, no keeper)\n' "$thread_id" "$snooze_seconds" ;;
+    unsnooze) printf 'Would dispatch thread.unsnooze for %s (keeper untouched)\n' "$thread_id" ;;
+    *) printf 'Would run the keeper loop in the foreground for %s\n' "$thread_id" ;;
+  esac
+  printf 'Nothing here stops a session; that is t3-settle-thread.\n'
+  exit 0
+fi
+
+# --- --hide: arm the detached keeper ------------------------------------------
+if [[ "$mode" == "hide" ]]; then
+  hide_labels_stop "$thread_id"
+  keeper_label="$(hide_label_for "$thread_id")"
+  keeper_log="$(hide_log_for "$thread_id")"
+  : >"$keeper_log"
+  supervisor="$(t3_supervise "$keeper_label" "$keeper_log" \
+    /usr/bin/env HOME="$HOME" PATH="$PATH" T3CODE_HOME="$t3_base_dir" \
+    "$0" --hide-worker "$keeper_label" "$thread_id")"
+  echo "Hide: keeper armed ($keeper_label, $supervisor; log: $keeper_log)"
+  exit 0
+fi
+
+if [[ "$mode" == "unhide" ]]; then
+  hide_labels_stop "$thread_id"
+  echo "Hide: keeper removed"
+fi
+
+# Only launchd needs the submitted job removed by hand; systemd --collect and
+# setsid clean up after themselves.
+t3_extra_cleanup() {
+  [[ -n "$worker_label" ]] || return 0
+  command -v launchctl >/dev/null || return 0
+  launchctl remove "$worker_label" >/dev/null 2>&1 || true
+}
+trap t3_extra_cleanup EXIT
+
+t3_require jq curl uuidgen
+t3_bootstrap
+
+auth_ttl_seconds=300
+[[ "$mode" == "hide-worker" ]] && auth_ttl_seconds=$((hide_deadline_seconds + 300))
+t3_issue_session t3-hide-thread "${auth_ttl_seconds}s"
+
+# --- --hide-worker: the keeper loop (internal) --------------------------------
+# A snoozed thread pops back into the sidebar on EVERY completed turn (T3 #6368,
+# fix PR #7179 unmerged), so hiding a live worker needs a supervisor that
+# re-snoozes it. It never touches a thread that is done, dead, or waiting on PJ.
+if [[ "$mode" == "hide-worker" ]]; then
+  keeper_log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
+  keeper_log "keeper start thread=$thread_id label=$worker_label deadline=${hide_deadline_seconds}s"
+  keeper_deadline=$((SECONDS + hide_deadline_seconds))
+  last_rejection=""
+  while :; do
+    snapshot="$(t3_thread_snapshot "$thread_id" || true)"
+    if [[ -z "$snapshot" ]]; then
+      keeper_log "exit: thread not found in shell snapshot"
+      exit 0
+    fi
+    decision="$(printf '%s' "$snapshot" | jq -r --argjson now "$(date -u +%s)" '
+      def epoch: if . == null then 0 else (sub("\\.[0-9]+";"") | fromdateiso8601) end;
+      if .archivedAt != null then "exit:archived"
+      elif .settledOverride == "settled" then "exit:settled"
+      elif (.session.status == "stopped" or .session.status == "error")
+        then "exit:session-\(.session.status)"
+      elif ((.hasPendingApprovals // false) or (.hasPendingUserInput // false))
+        then "hold:needs-user"
+      elif (
+        # T3 refuses thread.snooze while the latest user message (a ping) is not yet
+        # adopted by a turn, capped at 120s (threadHasQueuedTurnStart). Same rule,
+        # evaluated locally, so we never dispatch a snooze T3 will reject.
+        ((.latestUserMessageAt // null) | epoch) as $msg
+        | $msg > 0 and (.session.status // "") != "error"
+          and (($now - $msg) | fabs) <= 120
+          and ((.latestTurn == null) or
+               ([.latestTurn.requestedAt, .latestTurn.startedAt, .latestTurn.completedAt]
+                | all(. == null or (epoch < $msg))))
+      ) then "hold:queued-turn"
+      else
+        ((.snoozedUntil // null) | epoch) as $until
+        | ((.snoozedAt // null) | epoch) as $at
+        | ((.latestTurn.completedAt // null) | epoch) as $done
+        | if $until > $now and (((.latestTurn.state // "") != "completed") or $done <= $at)
+          then "hold:snoozed" else "snooze" end
+      end')"
+    poll_seconds="$hide_poll_seconds"
+    case "$decision" in
+      exit:*)
+        keeper_log "exit: ${decision#exit:} (leaving the thread visible unless already settled)"
+        exit 0
+        ;;
+      hold:queued-turn)
+        poll_seconds="$hide_poll_fast_seconds"
+        if [[ "$last_rejection" != "queued-turn" ]]; then
+          keeper_log "hold: T3 refuses snooze until the pinged turn starts (<=120s); polling every ${poll_seconds}s"
+          last_rejection="queued-turn"
+        fi
+        ;;
+      snooze)
+        snoozed_until="$(t3_iso_in "$snooze_seconds")"
+        if t3_dispatch_command thread.snooze "$thread_id" '.snoozedUntil = $snoozedUntil' \
+          "$snoozed_until" 2>/dev/null; then
+          keeper_log "snoozed until $snoozed_until"
+          last_rejection=""
+        elif [[ "$last_rejection" != "snooze" ]]; then
+          # Unexpected (the queued-turn window is handled above) — retry next tick.
+          keeper_log "snooze rejected; retrying"
+          last_rejection="snooze"
+        fi
+        ;;
+    esac
+    ((SECONDS < keeper_deadline)) || {
+      keeper_log "exit: ${hide_deadline_seconds}s deadline reached; thread stays snoozed until its snoozedUntil"
+      exit 0
+    }
+    sleep "$poll_seconds"
+  done
+fi
+
+[[ -n "$(t3_thread_snapshot "$thread_id")" ]] || {
+  echo "T3 thread was not found: $thread_id" >&2
+  exit 1
+}
+
+case "$mode" in
+  snooze)
+    t3_dispatch_command thread.snooze "$thread_id" '.snoozedUntil = $snoozedUntil' \
+      "$(t3_iso_in "$snooze_seconds")"
+    ;;
+  unsnooze|unhide)
+    t3_dispatch_command thread.unsnooze "$thread_id" '.reason = "user"'
+    ;;
+esac
+
+t3_print_thread_state "$thread_id"

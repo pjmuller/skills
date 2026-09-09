@@ -1,0 +1,792 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Find T3 Code threads currently blocked on a provider rate/usage limit, and resume them.
+
+The only signal is the thread's LAST message: a short assistant message saying the
+limit was hit. Read path is a read-only snapshot of T3's projection store; resume
+shells out to t3-ping-thread on PATH.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import plistlib
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time, parse_time
+
+TZ = ZoneInfo("Europe/Brussels")
+LIMIT_TEXT = re.compile(
+    r"^(You've hit your .*limit|You've reached your .*limit"
+    r"|API Error: Rate limit reached)"
+)
+# "resets 8pm (Europe/Brussels)" / "resets 10:10am"
+RESET_AT = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.IGNORECASE)
+MAX_LIMIT_CHARS = 400
+DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+TITLE_CHARS = 50
+LABEL_PREFIX = "com.pjmuller.t3-limited-resume"
+SCHEDULE_MAX_DAYS = 7
+SCHEDULE_PATH = "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+RUNTIME_JSON = ".t3/userdata/server-runtime.json"
+SETTINGS_JSON = ".t3/userdata/settings.json"
+HEALTH_PATH = "/.well-known/t3/environment"
+CAFFEINATE_SLACK = 180  # seconds of margin past the fire moment
+SCHEDULE_RETRY_SECONDS = 60
+PING_KILL_GRACE = 2
+popen = subprocess.Popen  # seam for tests
+
+
+def parse_since(value: str) -> datetime:
+    """`48h`/`3d`/`2w` relative, or an ISO timestamp."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([mhdw])", value.strip().lower())
+    if match:
+        seconds = float(match.group(1)) * DURATION_UNITS[match.group(2)]
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    try:
+        return parse_time(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected 48h/3d or ISO time; got {value!r}"
+        ) from error
+
+
+def classify(text: str) -> str:
+    low = text.lower()
+    if low.startswith("api error"):
+        return "api"
+    if "monthly" in low:
+        # A monthly spend cap only blocks *extra* usage: when the banner also
+        # carries a session reset, the subscription window still refills.
+        return "session" if RESET_AT.search(text) else "monthly"
+    if "session limit" in low:
+        return "session"
+    if low.startswith("you've reached"):
+        return "model"
+    return "session"
+
+
+def parse_reset(text: str, message_at: datetime) -> datetime | None:
+    """Resolve `resets H[:MM]am/pm` against the message's own Brussels day,
+    rolling to the next day when that clock time already passed."""
+    match = RESET_AT.search(text)
+    if not match:
+        return None
+    hour = int(match.group(1)) % 12 + (12 if match.group(3).lower() == "pm" else 0)
+    local = message_at.astimezone(TZ)
+    reset = local.replace(
+        hour=hour, minute=int(match.group(2) or 0), second=0, microsecond=0
+    )
+    if reset < local:
+        reset += timedelta(days=1)
+    return reset
+
+
+@dataclass
+class Limited:
+    thread_id: str
+    profile: str
+    model: str
+    title: str
+    project: str
+    kind: str
+    text: str
+    at: datetime
+    reset_at: datetime | None
+
+    def passed(self, now: datetime) -> bool:
+        return self.reset_at is None or self.reset_at <= now
+
+    def resumable(self, now: datetime, force: bool) -> bool:
+        if force:
+            return True
+        if self.kind == "monthly":
+            return False
+        # No reset time (model/api limits): the operator saying the profile is
+        # healthy again is the reset signal, so resume.
+        return self.reset_at is None or self.reset_at <= now
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "thread_id": self.thread_id,
+            "short_id": self.thread_id[:8],
+            "profile": self.profile,
+            "model": self.model,
+            "title": self.title,
+            "project": self.project,
+            "kind": self.kind,
+            "limited_at": iso(self.at),
+            "reset_at": self.reset_at.isoformat() if self.reset_at else None,
+            "reset_passed": self.passed(datetime.now(timezone.utc)),
+            "text": self.text,
+        }
+
+
+def load_limited(store: Path) -> list[Limited]:
+    with connect_readonly(store) as connection:
+        rows = connection.execute("""
+            SELECT m.thread_id, m.role, m.text, m.created_at,
+                   t.title,
+                   json_extract(t.model_selection_json,'$.instanceId') AS profile,
+                   json_extract(t.model_selection_json,'$.model') AS model,
+                   p.title AS project
+            FROM projection_threads t
+            JOIN projection_thread_messages m ON m.message_id = (
+                SELECT latest.message_id
+                FROM projection_thread_messages latest
+                WHERE latest.thread_id = t.thread_id
+                ORDER BY latest.created_at DESC, latest.message_id DESC
+                LIMIT 1
+            )
+            LEFT JOIN projection_projects p ON p.project_id = t.project_id
+            WHERE t.deleted_at IS NULL AND t.archived_at IS NULL
+        """).fetchall()
+
+    found: list[Limited] = []
+    for row in rows:
+        text = (row["text"] or "").strip()
+        if row["role"] != "assistant" or len(text) >= MAX_LIMIT_CHARS:
+            continue
+        if not LIMIT_TEXT.match(text):
+            continue
+        at = maybe_time(row["created_at"])
+        if at is None:
+            continue
+        found.append(
+            Limited(
+                thread_id=row["thread_id"],
+                profile=row["profile"] or "-",
+                model=row["model"] or "-",
+                title=" ".join((row["title"] or "").split()),
+                project=row["project"] or "-",
+                kind=classify(text),
+                text=" ".join(text.split()),
+                at=at,
+                reset_at=parse_reset(text, at),
+            )
+        )
+    return sorted(found, key=lambda item: item.at, reverse=True)
+
+
+def display_names(path: Path | None = None) -> dict[str, str]:
+    """instanceId -> displayName from T3's settings (missing/broken file = {})."""
+    path = path or Path.home() / SETTINGS_JSON
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    instances = data.get("providerInstances") or {}
+    return {
+        key: (value or {}).get("displayName") or ""
+        for key, value in instances.items()
+        if isinstance(value, (dict, type(None)))
+    }
+
+
+def profile_matches(query: str, profiles: set[str], names: dict[str, str]) -> set[str]:
+    """instanceIds matching `query`: exact id wins, else substring of id or displayName.
+
+    Exact-match precedence is what makes the bare `claudeAgent` addressable at all
+    (every other Claude instanceId has it as a prefix).
+    """
+    low = query.casefold()
+    exact = {name for name in profiles if name.casefold() == low}
+    if exact:
+        return exact
+    return {
+        name
+        for name in profiles
+        if low in name.casefold() or low in names.get(name, "").casefold()
+    }
+
+
+def select(args: argparse.Namespace, rows: list[Limited]) -> list[Limited]:
+    if args.since:
+        rows = [item for item in rows if item.at >= args.since]
+    if getattr(args, "before", None):
+        rows = [item for item in rows if item.at <= args.before]
+    if args.profile:
+        names = display_names()
+        wanted = profile_matches(
+            args.profile, {item.profile for item in rows} | set(names), names
+        )
+        rows = [item for item in rows if item.profile in wanted]
+    if args.project:
+        low = args.project.casefold()
+        rows = [item for item in rows if low in item.project.casefold()]
+    return rows
+
+
+def cmd_list(args: argparse.Namespace, rows: list[Limited], now: datetime) -> int:
+    excluded = tuple(args.exclude or ())
+    if excluded:
+        rows = [
+            item for item in rows
+            if not any(item.thread_id.startswith(prefix) for prefix in excluded)
+        ]
+    if args.resumable:
+        rows = [item for item in rows if item.resumable(now, False)]
+    if args.json:
+        print(
+            json.dumps([item.as_dict() for item in rows], ensure_ascii=False, indent=2)
+        )
+        return 0
+    if not rows:
+        print("No limited threads.")
+        return 0
+    for item in rows:
+        if item.reset_at is None:
+            reset = "-"
+        else:
+            reset = item.reset_at.strftime("%a %H:%M") + (
+                " passed" if item.reset_at <= now else " pending"
+            )
+        print(
+            f"{item.thread_id[:8]}  {item.profile:<22}  "
+            f"{item.at.astimezone(TZ).strftime('%m-%d %H:%M'):<11}  "
+            f"{item.kind:<7}  {reset:<16}  "
+            f"{item.title[:TITLE_CHARS]:<{TITLE_CHARS}}  {item.project}"
+        )
+    return 0
+
+
+def run_ping(command: list[str], timeout: float) -> tuple[subprocess.CompletedProcess, bool]:
+    """Run one helper with a hard timeout, killing its whole process group."""
+    process = subprocess.Popen(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr), False
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=PING_KILL_GRACE)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            stdout or "",
+            stderr or f"timed out after {timeout:g}s",
+        ), True
+
+
+def cmd_resume(args: argparse.Namespace, rows: list[Limited], now: datetime) -> int:
+    path = shutil.which("t3-ping-thread")
+    if not path and not args.dry_run:
+        raise SystemExit(
+            "t3-ping-thread is not on PATH; install t3-manage-thread first"
+        )
+    excluded = list(args.exclude or ())
+    if args.protect_drafts:
+        draft_path = shutil.which("t3-drafts")
+        if not draft_path:
+            print("FAILED draft safety check: t3-drafts is not on PATH")
+            return 1
+        draft_command = [draft_path, "list", "--limited", "--json"]
+        # Query all limited drafts, then intersect naturally with the already
+        # selected rows below. t3-drafts filters only raw instanceIds, whereas
+        # this command also accepts display names such as "ProBackup".
+        draft_result, draft_timed_out = run_ping(draft_command, args.draft_timeout)
+        if draft_timed_out or draft_result.returncode:
+            detail = " ".join((draft_result.stderr or draft_result.stdout).split())[:160]
+            print(f"FAILED draft safety check: {detail}")
+            return 1
+        try:
+            draft_rows = json.loads(draft_result.stdout)
+            excluded.extend(item["thread_id"] for item in draft_rows)
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"FAILED draft safety check: invalid t3-drafts JSON ({error})")
+            return 1
+    excluded = tuple(excluded)
+    todo = [
+        item for item in rows
+        if item.resumable(now, args.force)
+        and not any(item.thread_id.startswith(prefix) for prefix in excluded)
+    ]
+    for item in rows:
+        if item not in todo:
+            reason = "held/excluded" if any(
+                item.thread_id.startswith(prefix) for prefix in excluded
+            ) else f"{item.kind} limit, not resumable yet"
+            print(f"skip   {item.thread_id[:8]}  {reason}")
+    failures = 0
+    for index, item in enumerate(todo):
+        command = [
+            path or "t3-ping-thread",
+            "--thread",
+            item.thread_id,
+            "--allow-cross-project",
+            "--",
+            args.message,
+        ]
+        if args.dry_run:
+            print("DRYRUN " + " ".join(command))
+            continue
+        if index:
+            time.sleep(args.sleep)
+        result, timed_out = run_ping(command, args.timeout)
+        # A helper can time out in auth cleanup after its dispatch already
+        # landed. Re-read the store before treating that as a failed ping.
+        landed = timed_out and not any(
+            current.thread_id == item.thread_id for current in load_limited(args.store)
+        )
+        ok = result.returncode == 0 or landed
+        failures += not ok
+        detail = "ping landed; helper cleanup timed out" if landed else " ".join(
+            (result.stderr or result.stdout).split()
+        )[:120]
+        print(f"{'ok    ' if ok else 'FAILED'} {item.thread_id[:8]}  {detail}")
+    if not todo:
+        print("Nothing to resume.")
+    return 1 if failures else 0
+
+
+def artifacts(label: str) -> tuple[Path, Path, Path]:
+    """plist, shell script, shared log — resolved against $HOME at call time."""
+    home = Path.home()
+    return (
+        home / "Library/LaunchAgents" / f"{label}.plist",
+        home / ".t3/userdata/scheduled" / f"{label}.sh",
+        home / ".t3/userdata/logs/t3-limited-schedule.log",
+    )
+
+
+def caffeinate_pid_file(label: str) -> Path:
+    return Path.home() / ".t3/userdata/scheduled" / f"{label}.caffeinate.pid"
+
+
+def cutoff_file(label: str) -> Path:
+    return Path.home() / ".t3/userdata/scheduled" / f"{label}.cutoff"
+
+
+def caffeinate_pid(label: str) -> int | None:
+    """The pid in the file, if that process is still a live caffeinate."""
+    try:
+        pid = int(caffeinate_pid_file(label).read_text().strip())
+    except (OSError, ValueError):
+        return None
+    probe = subprocess.run(
+        ["ps", "-o", "comm=", "-p", str(pid)], text=True, capture_output=True, check=False
+    )
+    return pid if probe.stdout.strip().endswith("caffeinate") else None
+
+
+def start_caffeinate(label: str, fire: datetime, now: datetime) -> None:
+    """Keep the Mac out of idle sleep until the job fires (no sudo needed).
+
+    `-i` blocks idle *system* sleep only: the display may still sleep, and closing
+    the lid without an external display sleeps anyway.
+    """
+    until = fire + timedelta(seconds=CAFFEINATE_SLACK)
+    seconds = max(1, int((until - now).total_seconds()))
+    process = popen(
+        ["caffeinate", "-i", "-t", str(seconds)],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    caffeinate_pid_file(label).write_text(str(process.pid))
+    print(f"awake    caffeinate -i until {until:%H:%M} (pid {process.pid})")
+
+
+def launchctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["launchctl", *args], text=True, capture_output=True, check=False)
+
+
+def parse_at(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
+        raise argparse.ArgumentTypeError(f"expected HH:MM; got {value!r}")
+    return int(match.group(1)), int(match.group(2))
+
+
+def fire_time(at: tuple[int, int], day: str | None, now: datetime) -> datetime:
+    """Local fire moment; rolls to tomorrow when today's slot already passed."""
+    base = date.fromisoformat(day) if day else now.date()
+    fire = now.replace(
+        year=base.year, month=base.month, day=base.day,
+        hour=at[0], minute=at[1], second=0, microsecond=0,
+    )
+    if fire <= now:
+        if day:
+            raise SystemExit(f"{fire:%Y-%m-%d %H:%M} is in the past")
+        fire += timedelta(days=1)
+        print(f"note   {at[0]:02d}:{at[1]:02d} already passed today -> {fire:%Y-%m-%d}")
+    if fire > now + timedelta(days=SCHEDULE_MAX_DAYS):
+        raise SystemExit(f"refusing: {fire:%Y-%m-%d %H:%M} is more than {SCHEDULE_MAX_DAYS} days out")
+    return fire
+
+
+def ceil_minute(moment: datetime) -> datetime:
+    extra = timedelta(minutes=1) if (moment.second or moment.microsecond) else timedelta()
+    return moment.replace(second=0, microsecond=0) + extra
+
+
+def derive_fire(rows: list[Limited], now: datetime) -> tuple[datetime, str] | None:
+    """Fire moment implied by the blocked threads themselves.
+
+    None = nothing blocked (caller exits 0). Monthly-only is fatal: those never
+    self-reset, so a timer would be a no-op.
+    """
+    if not rows:
+        return None
+    if all(item.kind == "monthly" for item in rows):
+        raise SystemExit(
+            f"only monthly spend limits blocked ({len(rows)}); they never self-reset "
+            "-- raise credits, or resume with --force. Not scheduling."
+        )
+    pending = [
+        item.reset_at for item in rows if item.reset_at and item.reset_at > now
+    ]
+    if pending:
+        latest = max(pending)
+        fire = ceil_minute(latest.astimezone()) + timedelta(minutes=1)
+        note = (
+            f"derived from {len(rows)} blocked thread(s), latest reset "
+            f"{latest.astimezone(TZ):%a %H:%M} -> fires {fire:%H:%M}"
+        )
+    else:
+        fire = ceil_minute(now.astimezone()) + timedelta(minutes=2)
+        note = (
+            f"derived from {len(rows)} blocked thread(s); no pending reset "
+            f"(model/api limits are resumable already) -> fires {fire:%H:%M}"
+        )
+    return fire, note
+
+
+def blocked_rows(args: argparse.Namespace) -> list[Limited]:
+    """The same set `list`/`resume` would show for this profile + window."""
+    if not Path(args.store).exists():
+        print(f"warn   no thread store at {args.store}; cannot derive from blocked threads")
+        return []
+    scope = argparse.Namespace(
+        since=parse_since(args.since_raw), before=None, profile=args.profile, project=None
+    )
+    return select(scope, load_limited(args.store))
+
+
+def runner_script(
+    args: argparse.Namespace,
+    label: str,
+    log: Path,
+    plist: Path,
+    sh: Path,
+    fire: datetime,
+) -> str:
+    quoted = " ".join(
+        shlex.quote(part)
+        for part in (
+            "t3-limited", "resume", "--profile", args.profile,
+            "--since", args.since_raw, "--timeout", str(args.ping_timeout),
+            "--protect-drafts", "--draft-timeout", str(args.draft_timeout),
+        )
+    )
+    listing = " ".join(
+        shlex.quote(part)
+        for part in ("t3-limited", "list", "--profile", args.profile, "--since", args.since_raw)
+    )
+    listing_json = listing + " --json"
+    notify = ""
+    if args.notify_thread:
+        notify = (
+            f'  t3-ping-thread --thread {shlex.quote(args.notify_thread)} --allow-cross-project -- '
+            f'"$summary" || true\n'
+        )
+    return f"""#!/bin/zsh
+# retrying one-shot resume scheduled by `t3-limited schedule`
+export PATH="{SCHEDULE_PATH}"
+mkdir -p {shlex.quote(str(log.parent))}
+(( $(date +%s) < {int(fire.timestamp())} )) && exit 0
+{{
+  echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z')  {label}"
+  t3_up() {{
+    origin=$(sed -n 's/.*"origin":"\\([^"]*\\)".*/\\1/p' "$HOME/{RUNTIME_JSON}" 2>/dev/null)
+    [[ -n "$origin" ]] && curl -sf --max-time 5 "$origin{HEALTH_PATH}" >/dev/null
+  }}
+  deadline=$(({int(fire.timestamp())} + {args.wait_max} * 60))
+  if ! t3_up; then
+    echo "-- T3 Code unreachable; retrying via launchd in {SCHEDULE_RETRY_SECONDS}s"
+    (( $(date +%s) < deadline )) && exit 1
+    summary="{label}: T3 Code unreachable for {args.wait_max}m; gave up"
+    echo "-- $summary"
+{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-limited\\"" || true
+  else
+    # Freeze the first real attempt's inventory boundary. A successful ping that
+    # immediately re-banners starts a new limit cycle; do not ping it every minute.
+    cutoff_file={shlex.quote(str(cutoff_file(label)))}
+    [[ -s "$cutoff_file" ]] || date -u '+%Y-%m-%dT%H:%M:%SZ' > "$cutoff_file"
+    cutoff=$(cat "$cutoff_file")
+    echo "-- blocked immediately before resume"
+    {listing}
+    out=$({quoted} --before "$cutoff" 2>&1)
+    echo "$out"
+    echo "-- blocked after resume"
+    remaining_json=$({listing_json})
+    echo "$remaining_json" | jq -r '.[] | "remain \\(.short_id)  \\(.kind)  \\(.title)"'
+    remaining=$(echo "$remaining_json" | jq 'length')
+    held_ids=("${{(@f)$(echo "$out" | awk '/^skip .*held\\/excluded/{{print $2}}')}}")
+    held_args=()
+    held=0
+    for held_id in "${{held_ids[@]}}"; do
+      if [[ -n "$held_id" ]]; then
+        held_args+=(--exclude "$held_id")
+        held=$((held + 1))
+      fi
+    done
+    eligible_json=$({listing_json} --before "$cutoff" --resumable "${{held_args[@]}}")
+    actionable=$(echo "$eligible_json" | jq 'length')
+    ids=$(echo "$out" | awk '/^ok /{{print $2}}' | sort -u | tr '\\n' ' ')
+    n=$(echo "$ids" | wc -w | tr -d ' ')
+    if (( actionable > 0 && $(date +%s) < deadline )); then
+      echo "-- $actionable actionable thread(s) still blocked; retrying via launchd in {SCHEDULE_RETRY_SECONDS}s"
+      exit 1
+    fi
+    summary="{label} finished at $(date '+%H:%M'); resumed $n: $ids; still blocked $remaining ($held held for draft)"
+    echo "-- $summary"
+{notify}    osascript -e "display notification \\"$summary\\" with title \\"t3-limited\\"" || true
+  fi
+}} >> {shlex.quote(str(log))} 2>&1
+kill "$(cat {shlex.quote(str(caffeinate_pid_file(label)))} 2>/dev/null)" 2>/dev/null || true
+rm -f {shlex.quote(str(sh))} {shlex.quote(str(plist))} {shlex.quote(str(caffeinate_pid_file(label)))} {shlex.quote(str(cutoff_file(label)))} || true
+launchctl bootout gui/$(id -u)/{label} 2>/dev/null || true
+"""
+
+
+def plist_body(label: str, fire: datetime, sh: Path) -> bytes:
+    return plistlib.dumps(
+        {
+            "Label": label,
+            "ProgramArguments": ["/bin/zsh", "-lc", str(sh)],
+            "StartCalendarInterval": {
+                "Month": fire.month, "Day": fire.day,
+                "Hour": fire.hour, "Minute": fire.minute,
+            },
+            "StartInterval": SCHEDULE_RETRY_SECONDS,
+            "RunAtLoad": False,
+            "ProcessType": "Interactive",
+        }
+    )
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    if args.cancel:
+        plist, sh, _ = artifacts(args.cancel)
+        launchctl("bootout", f"gui/{os.getuid()}/{args.cancel}")
+        pid = caffeinate_pid(args.cancel)
+        if pid:
+            os.kill(pid, signal.SIGTERM)
+        for path in (plist, sh, caffeinate_pid_file(args.cancel), cutoff_file(args.cancel)):
+            path.unlink(missing_ok=True)
+        print(f"cancelled {args.cancel}")
+        return 0
+    if args.list:
+        found = sorted((Path.home() / "Library/LaunchAgents").glob(f"{LABEL_PREFIX}.*.plist"))
+        for path in found:
+            data = plistlib.loads(path.read_bytes())
+            when = data.get("StartCalendarInterval", {})
+            label = data["Label"]
+            print(
+                f"{label}  {when.get('Month'):02d}-{when.get('Day'):02d} "
+                f"{when.get('Hour'):02d}:{when.get('Minute'):02d}  "
+                f"profile={label.split('.')[-2]}  "
+                f"awake={'yes' if caffeinate_pid(label) else 'no'}  "
+                f"log={artifacts(label)[2]}"
+            )
+        if not found:
+            print("No scheduled resumes.")
+        return 0
+    if not args.profile:
+        raise SystemExit("schedule needs --profile (--at HH:MM optional; or --list/--cancel)")
+
+    now = datetime.now().astimezone()
+    rows = blocked_rows(args)
+    if args.at:
+        fire = fire_time(args.at, args.date, now)
+        pending = [item.reset_at for item in rows if item.reset_at and item.reset_at > now]
+        if pending and fire < max(pending).astimezone():
+            print(
+                f"warn   {fire:%H:%M} is before the latest pending reset "
+                f"{max(pending).astimezone(TZ):%a %H:%M}; those threads will be skipped. Obeying anyway."
+            )
+    else:
+        derived = derive_fire(rows, now)
+        if derived is None:
+            print(f"nothing blocked for {args.profile} (--since {args.since_raw}); not scheduling")
+            return 0
+        fire, note = derived
+        print(f"note   {note}")
+
+    label = f"{LABEL_PREFIX}.{args.profile}.{fire:%Y%m%d-%H%M}"
+    plist, sh, log = artifacts(label)
+    body = runner_script(args, label, log, plist, sh, fire)
+    if args.dry_run:
+        print(f"--- {plist}\n{plist_body(label, fire, sh).decode()}--- {sh}\n{body}")
+        return 0
+    for directory in (plist.parent, sh.parent, log.parent):
+        directory.mkdir(parents=True, exist_ok=True)
+    sh.write_text(body)
+    sh.chmod(0o755)
+    plist.write_bytes(plist_body(label, fire, sh))
+    result = launchctl("bootstrap", f"gui/{os.getuid()}", str(plist))
+    if result.returncode:
+        fallback = launchctl("load", str(plist))
+        if fallback.returncode:
+            raise SystemExit(f"launchctl failed: {result.stderr.strip()} / {fallback.stderr.strip()}")
+    print(f"scheduled {label}\nfires    {fire:%Y-%m-%d %H:%M %Z}\nlog      {log}")
+    if not args.no_caffeinate:
+        start_caffeinate(label, fire, now)
+    print(f"check    launchctl print gui/{os.getuid()}/{label}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for name, help_text in (
+        ("list", "one line per blocked thread, newest first"),
+        ("resume", "post a user turn into each blocked thread (skips monthly + pending resets)"),
+    ):
+        sub = subparsers.add_parser(name, help=help_text)
+        sub.add_argument(
+            "--profile",
+            help="case-insensitive substring of the instanceId or its T3 displayName "
+            "(dentai, probackup, codex; `claude` matches every Claude profile). "
+            "An exact instanceId wins over substrings: `claudeAgent` = only that one",
+        )
+        sub.add_argument("--project", help="project title substring")
+        sub.add_argument(
+            "--since",
+            type=parse_since,
+            default=parse_since("72h"),
+            help="limit-message age, e.g. 48h, 30d, or an ISO time (default 72h)",
+        )
+        sub.add_argument(
+            "--before", type=parse_time, help=argparse.SUPPRESS
+        )
+        sub.add_argument(
+            "--exclude", action="append", default=[], metavar="THREAD_ID_PREFIX",
+            help="skip a thread by id prefix (repeatable)",
+        )
+        if name == "list":
+            sub.add_argument("--json", action="store_true")
+            sub.add_argument(
+                "--resumable", action="store_true",
+                help="only limits eligible to resume now (excludes monthly/pending)",
+            )
+        else:
+            sub.add_argument("--message", default="continue", help="user turn to post")
+            sub.add_argument(
+                "--force",
+                action="store_true",
+                help="also resume monthly-spend limits and threads whose reset is pending",
+            )
+            sub.add_argument(
+                "--dry-run", action="store_true", help="print commands only"
+            )
+            sub.add_argument(
+                "--sleep", type=float, default=5, help="seconds between pings"
+            )
+            sub.add_argument(
+                "--timeout", type=float, default=120,
+                help="maximum seconds for one ping helper (default 120)",
+            )
+            sub.add_argument(
+                "--protect-drafts", action="store_true",
+                help="fail closed unless current draft-held limited threads can be excluded",
+            )
+            sub.add_argument(
+                "--draft-timeout", type=float, default=30,
+                help="maximum seconds for draft discovery (default 30)",
+            )
+
+    plan = subparsers.add_parser(
+        "schedule", help="one-shot macOS LaunchAgent that runs `resume` at a wall-clock time"
+    )
+    plan.add_argument(
+        "--profile",
+        help="profile filter passed to the scheduled resume: substring of instanceId or "
+        "displayName, or an exact instanceId (e.g. dentai, probackup, claudeAgent)",
+    )
+    plan.add_argument(
+        "--at",
+        type=parse_at,
+        help="local HH:MM (tomorrow if already passed); default: derived from the blocked threads' "
+        "latest pending reset + 1 min",
+    )
+    plan.add_argument(
+        "--wait-max",
+        type=int,
+        default=180,
+        help="minutes the runner waits for T3 Code to be reachable (default 180)",
+    )
+    plan.add_argument("--date", help="YYYY-MM-DD (default: today/tomorrow)")
+    plan.add_argument("--since", dest="since_raw", default="7d", help="window for the scheduled resume")
+    plan.add_argument("--notify-thread", help="T3 thread id to ping with a one-line summary")
+    plan.add_argument(
+        "--ping-timeout", type=float, default=120,
+        help="maximum seconds for each scheduled ping helper (default 120)",
+    )
+    plan.add_argument(
+        "--draft-timeout", type=float, default=30,
+        help="maximum seconds for scheduled draft discovery (default 30)",
+    )
+    plan.add_argument(
+        "--no-caffeinate",
+        action="store_true",
+        help="do not hold the Mac awake until the fire time (default: caffeinate -i)",
+    )
+    plan.add_argument("--dry-run", action="store_true", help="print plist + script, write nothing")
+    plan.add_argument("--list", action="store_true", help="pending scheduled resumes")
+    plan.add_argument("--cancel", metavar="LABEL", help="bootout + remove a scheduled resume")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "schedule":
+        return cmd_schedule(args)
+    now = datetime.now(timezone.utc)
+    rows = select(args, load_limited(args.store))
+    return (
+        cmd_list(args, rows, now)
+        if args.command == "list"
+        else cmd_resume(args, rows, now)
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,531 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Compact PJ's own recent T3 Code prompts for recurring-instruction analysis."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+import sys
+from typing import Iterator
+from urllib.parse import quote, urlsplit
+
+DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
+DEFAULT_STATE = Path.home() / ".local" / "state" / "prompt-patterns" / "last_run"
+URL_RE = re.compile(r"https?://[^\s<>()\[\]{}\"']+", re.I)
+SPAWN_OPENER_RE = re.compile(
+    r"^(?:"
+    r"read\s+(?:/|~|\.?\.?/|(?:[\w.-]+/)+[\w.-]+|(?:AGENTS|CLAUDE|SKILL)\.md\b)|"
+    r".{0,100}\bread\s+(?:/|~|\.?\.?/|(?:[\w.-]+/)+[\w.-]+).{0,120}\bfirst\b|"
+    r"in .{0,80}\(git root\)\.|"
+    r"task:\s|"
+    r"standalone task(?:,\s*no ping-back needed)?\b|"
+    r"round-trip worker task\b|"
+    r"(?:implementation|research-only|review(?:-only| only))\s+(?:worker\s+)?(?:task|investigation)\b|"
+    r"review (?:only|the|current|an? uncommitted)\b|"
+    r"you are\b|"
+    r"act as .{0,80}\bcoding agent\b|"
+    r"reply (?:only|with exactly):"
+    r")",
+    re.I | re.S,
+)
+PING_BACK_RE = re.compile(
+    r"(?:ping (?:back )?(?:to )?(?:the )?(?:orchestrator|parent)(?:\s*thread)?|"
+    r"ping (?:back )?(?:to )?(?:the )?thread id|"
+    r"ping back.{0,80}\bthread id\b)",
+    re.I | re.S,
+)
+
+
+@dataclass(frozen=True)
+class Message:
+    message_id: str
+    thread_id: str
+    thread_title: str
+    project: str
+    project_title: str
+    workspace_root: str
+    created_at: str
+    text: str
+    opener_text: str
+    deleted: bool
+
+
+def parse_time(value: str) -> datetime:
+    value = value.strip()
+    if len(value) == 10:
+        value += "T00:00:00+00:00"
+    elif value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+@contextmanager
+def connect(store: Path) -> Iterator[sqlite3.Connection]:
+    """Use SQLite's WAL snapshot; readers do not block T3's writers."""
+    if not store.exists():
+        sys.exit(f"T3 store not found: {store}")
+    uri = f"file:{quote(str(store), safe='/')}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def project_name(workspace_root: str, title: str) -> str:
+    return Path(workspace_root).name if workspace_root else (title or "unknown-project")
+
+
+def load_messages(store: Path, since: datetime, until: datetime, project_filter: str | None) -> list[Message]:
+    query = """
+        WITH ranked AS (
+          SELECT m.message_id, m.thread_id, m.role, m.text, m.created_at,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY m.thread_id ORDER BY m.created_at, m.message_id
+                 ) AS message_number
+          FROM projection_thread_messages m
+        ), openers AS (
+          SELECT thread_id, text AS opener_text FROM ranked WHERE message_number = 1
+        )
+        SELECT r.message_id, r.thread_id, r.text, r.created_at, r.message_number,
+               o.opener_text, t.title AS thread_title, t.deleted_at,
+               p.title AS project_title, p.workspace_root
+        FROM ranked r
+        JOIN openers o ON o.thread_id = r.thread_id
+        JOIN projection_threads t ON t.thread_id = r.thread_id
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE r.role = 'user' AND r.created_at >= ? AND r.created_at < ?
+        ORDER BY r.created_at, r.message_id
+    """
+    out: list[Message] = []
+    needle = project_filter.casefold() if project_filter else None
+    with connect(store) as conn:
+        for row in conn.execute(query, (iso(since), iso(until))):
+            workspace = row["workspace_root"] or ""
+            project_title = row["project_title"] or ""
+            if needle and needle not in workspace.casefold() and needle not in project_title.casefold():
+                continue
+            out.append(
+                Message(
+                    message_id=str(row["message_id"]),
+                    thread_id=str(row["thread_id"]),
+                    thread_title=row["thread_title"] or "<untitled>",
+                    project=project_name(workspace, project_title),
+                    project_title=project_title,
+                    workspace_root=workspace,
+                    created_at=row["created_at"],
+                    text=row["text"] or "",
+                    opener_text=row["opener_text"] or "",
+                    deleted=row["deleted_at"] is not None,
+                )
+            )
+    return out
+
+
+def agent_thread_signal(msg: Message) -> str | None:
+    """Classify an agent-spawned thread once; all its later user-role rows go too.
+
+    Signals are deliberately high precision, strongest first. Since 2026-09-01
+    round-trip workers are explicitly titled with U+1F3D3. Older workers expose
+    stable spawn-helper opener forms. Title Case versus a hard-set 72-character
+    title was checked against the 2026-09-02 store but did not separate the
+    populations reliably, so it is not a signal.
+    """
+    if msg.thread_title.startswith("🏓"):
+        return "ping-pong title"
+    opener = msg.opener_text.strip()
+    low = opener.casefold()
+    exact_hello = low in {"hello world", "hello world.", "reply only: hello world."}
+    if (
+        SPAWN_OPENER_RE.search(opener)
+        or "t3-ping-thread" in low
+        or PING_BACK_RE.search(opener)
+        or exact_hello
+    ):
+        return "spawn opener"
+    if low.startswith("[ping from "):
+        return "ping opener"
+    return None
+
+
+def is_agent_message_in_manual_thread(msg: Message) -> bool:
+    """Remove cross-thread transport rows without discarding their manual parent thread."""
+    low = msg.text.strip().casefold()
+    return low.startswith("[ping from ") or "t3-ping-thread" in low
+
+
+def strip_blocks(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            start = i
+            marker = fence.group(1)
+            fence_char = marker[0]
+            fence_len = len(marker)
+            i += 1
+            while i < len(lines):
+                closing = lines[i].lstrip().rstrip("\r\n")
+                if re.fullmatch(rf"{re.escape(fence_char)}{{{fence_len},}}[ \t]*", closing):
+                    i += 1
+                    break
+                i += 1
+            block = "".join(lines[start:i])
+            out.append(f"[code {len(block)}c]\n")
+            continue
+        if stripped.startswith(">"):
+            start = i
+            i += 1
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                i += 1
+            block = "".join(lines[start:i])
+            out.append(f"[quote {len(block)}c]\n")
+            continue
+        out.append(lines[i])
+        i += 1
+    return "".join(out)
+
+
+def replace_url(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    clean = raw.rstrip(".,;:!?")
+    tail = raw[len(clean) :]
+    host = urlsplit(clean).hostname or "link"
+    return host.removeprefix("www.") + tail
+
+
+def normalize(text: str) -> str:
+    text = strip_blocks(text)
+    text = URL_RE.sub(replace_url, text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def truncate(text: str, limit: int) -> tuple[str, int]:
+    if len(text) <= limit:
+        return text, 0
+    omitted = len(text) - limit
+    while True:
+        suffix = f"…(+{omitted})"
+        prefix_len = max(0, limit - len(suffix))
+        new_omitted = len(text) - prefix_len
+        if new_omitted == omitted:
+            return text[:prefix_len] + suffix, omitted
+        omitted = new_omitted
+
+
+def clock(value: str) -> str:
+    return parse_time(value).astimezone().strftime("%a %H:%M")
+
+
+def group(messages: list[Message]) -> dict[str, dict[tuple[str, str], list[Message]]]:
+    grouped: dict[str, dict[tuple[str, str], list[Message]]] = defaultdict(lambda: defaultdict(list))
+    for msg in messages:
+        grouped[msg.project][(msg.thread_title, msg.thread_id)].append(msg)
+    return grouped
+
+
+def project_summary(messages: list[Message]) -> str:
+    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for msg in messages:
+        counts[msg.project][0] += 1
+        counts[msg.project][1] += len(msg.text)
+    return "; ".join(f"{name} {n}m/{chars}c" for name, (n, chars) in sorted(counts.items())) or "none"
+
+
+def cut_summary(start_limit: int, limit: int, truncated_count: int, budget_drops: Counter[tuple[str, str]]) -> str:
+    parts: list[str] = []
+    if limit < start_limit:
+        parts.append(f"max-msg {start_limit}→{limit}")
+    if truncated_count:
+        parts.append(f"{truncated_count} message(s) truncated")
+    if budget_drops:
+        detail = ", ".join(
+            f"{project}/{title[:36]} {count}" for (project, title), count in sorted(budget_drops.items())
+        )
+        parts.append(f"budget dropped {sum(budget_drops.values())} oldest message(s): {detail}")
+    return "; ".join(parts) or "none"
+
+
+def signal_summary(signal_counts: Counter[str]) -> str:
+    return ", ".join(f"{name} {count}" for name, count in sorted(signal_counts.items())) or "none"
+
+
+def render_text(
+    messages: list[Message], raw: list[Message], since: datetime, until: datetime,
+    agent_thread_rows_dropped: int, agent_message_rows_dropped: int,
+    signal_counts: Counter[str], deleted_dropped: int, start_limit: int, limit: int,
+    budget_drops: Counter[tuple[str, str]],
+) -> str:
+    prepared: list[Message] = []
+    truncated_count = 0
+    for msg in messages:
+        compact, removed = truncate(msg.text, limit)
+        prepared.append(replace(msg, text=compact))
+        truncated_count += bool(removed)
+    threads = len({m.thread_id for m in prepared})
+    cuts = cut_summary(start_limit, limit, truncated_count, budget_drops)
+    lines = [
+        "# PJ prompt patterns input",
+        f"Window: {iso(since)} → {iso(until)}",
+        f"Totals: {len(prepared)} kept message(s) · {sum(len(m.text) for m in prepared)} compacted chars · "
+        f"{threads} thread(s); selected {len(raw)} raw; dropped {agent_thread_rows_dropped} row(s) from "
+        f"{sum(signal_counts.values())} agent-spawned thread(s) ({signal_summary(signal_counts)}) and "
+        f"{agent_message_rows_dropped} ping row(s) inside manual threads; "
+        f"{deleted_dropped} deleted-thread row(s)",
+        f"Projects: {project_summary(prepared)}",
+        f"Cuts: {cuts}",
+        "",
+    ]
+    for project, thread_map in sorted(group(prepared).items()):
+        lines.append(f"## {project}")
+        for (title, thread_id), thread_messages in sorted(thread_map.items(), key=lambda item: (item[0][0], item[0][1])):
+            lines.append(f"### {title} [{thread_id[:8]}]")
+            lines.extend(f"{clock(msg.created_at)} · {msg.text}" for msg in thread_messages)
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_json(
+    messages: list[Message], raw: list[Message], since: datetime, until: datetime,
+    agent_thread_rows_dropped: int, agent_message_rows_dropped: int,
+    signal_counts: Counter[str], deleted_dropped: int, start_limit: int, limit: int,
+    budget_drops: Counter[tuple[str, str]],
+) -> str:
+    items = []
+    truncated_count = 0
+    for msg in messages:
+        compact, removed = truncate(msg.text, limit)
+        truncated_count += bool(removed)
+        items.append({
+            "project": msg.project, "thread_title": msg.thread_title,
+            "thread_id": msg.thread_id[:8], "created_at": msg.created_at, "text": compact,
+        })
+    payload = {
+        "window": {"since": iso(since), "until": iso(until)},
+        "totals": {
+            "raw_messages": len(raw), "kept_messages": len(items),
+            "threads": len({m.thread_id for m in messages}),
+            "agent_thread_rows_dropped": agent_thread_rows_dropped,
+            "agent_message_rows_dropped_in_manual_threads": agent_message_rows_dropped,
+            "agent_threads_dropped_by_signal": dict(sorted(signal_counts.items())),
+            "deleted_thread_rows_dropped": deleted_dropped,
+        },
+        "projects": project_summary(messages),
+        "cuts": cut_summary(start_limit, limit, truncated_count, budget_drops),
+        "messages": items,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+
+def longest_thread(messages: list[Message]) -> tuple[str, str] | None:
+    sizes: dict[tuple[str, str], int] = defaultdict(int)
+    for msg in messages:
+        sizes[(msg.project, msg.thread_id)] += len(msg.text)
+    if not sizes:
+        return None
+    return min(sizes, key=lambda key: (-sizes[key], key))
+
+
+def compact_output(
+    messages: list[Message], raw: list[Message], since: datetime, until: datetime,
+    agent_thread_rows_dropped: int, agent_message_rows_dropped: int,
+    signal_counts: Counter[str], deleted_dropped: int,
+    max_msg: int, budget: int, as_json: bool,
+) -> str:
+    renderer = render_json if as_json else render_text
+    levels = [max_msg] + [n for n in (300, 200, 120) if n < max_msg]
+    budget_drops: Counter[tuple[str, str]] = Counter()
+    working = list(messages)
+    output = ""
+    chosen = levels[-1]
+    for chosen in levels:
+        output = renderer(
+            working, raw, since, until, agent_thread_rows_dropped, agent_message_rows_dropped, signal_counts,
+            deleted_dropped, max_msg, chosen, budget_drops,
+        )
+        if len(output) <= budget:
+            return output
+    while len(output) > budget and working:
+        key = longest_thread(working)
+        assert key is not None
+        index = next(i for i, msg in enumerate(working) if (msg.project, msg.thread_id) == key)
+        removed = working.pop(index)
+        budget_drops[(removed.project, removed.thread_title)] += 1
+        output = renderer(
+            working, raw, since, until, agent_thread_rows_dropped, agent_message_rows_dropped, signal_counts,
+            deleted_dropped, max_msg, chosen, budget_drops,
+        )
+    if len(output) <= budget:
+        return output
+    cuts = f"output metadata truncated after dropping {sum(budget_drops.values())} message(s)"
+    if as_json:
+        fallback = json.dumps({"cuts": cuts, "truncated": True}, separators=(",", ":")) + "\n"
+    else:
+        fallback = f"# PJ prompt patterns input\nCuts: {cuts}\n"
+    return fallback[:budget]
+
+
+def render_outline(
+    messages: list[Message], raw_count: int, since: datetime, until: datetime,
+    agent_thread_rows_dropped: int,
+    agent_message_rows_dropped: int,
+    signal_counts: Counter[str], deleted_dropped: int, budget: int,
+) -> str:
+    lines = [
+        "# PJ prompt patterns outline",
+        f"Window: {iso(since)} → {iso(until)}",
+        f"Totals: {len(messages)} kept message(s); selected {raw_count} raw; dropped {agent_thread_rows_dropped} row(s) "
+        f"from {sum(signal_counts.values())} agent-spawned thread(s) ({signal_summary(signal_counts)}) "
+        f"and {agent_message_rows_dropped} ping row(s) inside manual threads "
+        f"and {deleted_dropped} deleted-thread row(s)",
+        "Cuts: none",
+    ]
+    for project, thread_map in sorted(group(messages).items()):
+        lines.append(f"## {project} · {sum(len(v) for v in thread_map.values())} message(s) · {len(thread_map)} thread(s)")
+        for (title, thread_id), thread_messages in sorted(thread_map.items()):
+            lines.append(f"- {title} [{thread_id[:8]}] · {len(thread_messages)} message(s)")
+    omitted = 0
+    while len("\n".join(lines) + "\n") > budget and len(lines) > 5:
+        lines.pop()
+        omitted += 1
+    if omitted:
+        lines[3] = f"Cuts: omitted {omitted} outline line(s) for budget"
+    output = "\n".join(lines) + "\n"
+    return output if len(output) <= budget else output[:budget]
+
+
+def render_stats(
+    raw: list[Message], kept: list[Message], agent_thread_rows_dropped: int,
+    agent_message_rows_dropped: int,
+    signal_counts: Counter[str], deleted_dropped: int, max_msg: int,
+) -> str:
+    projected = sum(len(truncate(m.text, max_msg)[0]) for m in kept)
+    return (
+        f"selected_rows={len(raw)} selected_chars={sum(len(m.text) for m in raw)} "
+        f"selected_threads={len({m.thread_id for m in raw})}\n"
+        f"kept_rows={len(kept)} kept_source_chars={sum(len(m.text) for m in kept)} "
+        f"kept_threads={len({m.thread_id for m in kept})}\n"
+        f"agent_thread_rows_dropped={agent_thread_rows_dropped} "
+        f"agent_message_rows_dropped_in_manual_threads={agent_message_rows_dropped} "
+        f"agent_threads_dropped={sum(signal_counts.values())} "
+        f"agent_threads_by_signal={signal_summary(signal_counts)} "
+        f"deleted_thread_rows_dropped={deleted_dropped} "
+        f"projected_message_chars_at_max={projected}\n"
+        f"projects={project_summary(kept)}\n"
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    window = ap.add_mutually_exclusive_group()
+    window.add_argument("--days", type=float, default=7, help="look back N days (default: 7)")
+    window.add_argument("--since", help="ISO timestamp or date")
+    window.add_argument("--since-last-run", action="store_true", help="start at the last explicitly marked run")
+    ap.add_argument("--project", help="case-insensitive substring of workspace root or project title")
+    ap.add_argument("--budget", type=int, default=80_000, help="hard output character cap")
+    ap.add_argument("--max-msg", type=int, default=500, help="initial per-message character cap")
+    ap.add_argument("--outline", action="store_true", help="show per-project/thread counts only")
+    ap.add_argument("--json", action="store_true", help="emit compact JSON")
+    ap.add_argument("--out", type=Path, help="write output to this file")
+    ap.add_argument("--include-agent", action="store_true", help="disable agent-authorship filtering")
+    ap.add_argument("--stats", action="store_true", help="show source/filter/projection sizes only")
+    ap.add_argument("--mark-run", action="store_true", help="record this successful run's end time")
+    ap.add_argument("--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    if args.budget < 200:
+        ap.error("--budget must be at least 200")
+    if args.max_msg < 20:
+        ap.error("--max-msg must be at least 20")
+    if args.days is not None and args.days <= 0:
+        ap.error("--days must be positive")
+    until = datetime.now(timezone.utc)
+    if args.since:
+        since = parse_time(args.since)
+    elif args.since_last_run:
+        if not DEFAULT_STATE.exists():
+            ap.error(f"no prior marked run: {DEFAULT_STATE}")
+        since = parse_time(DEFAULT_STATE.read_text().strip())
+    else:
+        since = until - timedelta(days=args.days)
+    if since >= until:
+        ap.error("window start must be before now")
+
+    raw = load_messages(args.store, since, until, args.project)
+    deleted_dropped = sum(msg.deleted for msg in raw)
+    live = [msg for msg in raw if not msg.deleted]
+    thread_signals: dict[str, str] = {}
+    if not args.include_agent:
+        for msg in live:
+            if msg.thread_id not in thread_signals:
+                signal = agent_thread_signal(msg)
+                if signal:
+                    thread_signals[msg.thread_id] = signal
+    signal_counts = Counter({"ping-pong title": 0, "spawn opener": 0, "ping opener": 0})
+    signal_counts.update(thread_signals.values())
+    agent_thread_rows_dropped = sum(msg.thread_id in thread_signals for msg in live)
+    manual_thread_rows = [msg for msg in live if msg.thread_id not in thread_signals]
+    agent_message_rows_dropped = 0 if args.include_agent else sum(
+        is_agent_message_in_manual_thread(msg) for msg in manual_thread_rows
+    )
+    kept = manual_thread_rows if args.include_agent else [
+        msg for msg in manual_thread_rows if not is_agent_message_in_manual_thread(msg)
+    ]
+    kept = [replace(msg, text=normalize(msg.text)) for msg in kept]
+
+    if args.stats:
+        output = render_stats(
+            raw, kept, agent_thread_rows_dropped, agent_message_rows_dropped,
+            signal_counts, deleted_dropped, args.max_msg,
+        )
+    elif args.outline:
+        output = render_outline(
+            kept, len(raw), since, until, agent_thread_rows_dropped, agent_message_rows_dropped,
+            signal_counts, deleted_dropped, args.budget,
+        )
+    else:
+        output = compact_output(
+            kept, raw, since, until, agent_thread_rows_dropped, agent_message_rows_dropped,
+            signal_counts, deleted_dropped,
+            args.max_msg, args.budget, args.json,
+        )
+    if args.stats and len(output) > args.budget:
+        marker = "\ncuts=stats_truncated_for_budget\n"
+        output = output[: args.budget - len(marker)].rstrip() + marker
+    if len(output) > args.budget:
+        raise RuntimeError("internal error: output exceeds hard budget")
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(output)
+    else:
+        sys.stdout.write(output)
+    if args.mark_run:
+        DEFAULT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        DEFAULT_STATE.write_text(iso(until) + "\n")
+
+
+if __name__ == "__main__":
+    main()

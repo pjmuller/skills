@@ -1,0 +1,674 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-spawn-thread [options] -- "task brief"
+
+Options:
+  --profile auto|codex|claude|NAME                  Default: inherit. NAME is a provider
+                                                    instance id or a unique (case-insensitive)
+                                                    substring of its display name.
+  --provider PROFILE                                Alias for --profile
+  --model auto|sol|astra|haiku|fable|opus|MODEL      Default: inherit
+  --thinking auto|low|med|medium|high                Default: inherit, else high
+  --source-thread THREAD_ID                          Override the detected parent
+  --title TITLE                                     Default: first 72 prompt chars
+  --project PATH                                    Default: current git root
+  --allow-cross-project-source                      Confirm a deliberate source-project -> target-project spawn
+  --hide / --no-hide                                Keep the new thread out of the sidebar with a
+                                                    detached snooze keeper (the agent keeps running).
+                                                    Default: on only when --title starts with 🏓
+                                                    or with --settle-when-done.
+  --settle-when-done                                Fire-and-forget: hide the thread while it runs
+                                                    and append a footer that makes the worker run
+                                                    `t3-settle-thread --self` as its last tool call.
+                                                    Not for 🏓 workers (the orchestrator settles those).
+  --no-open                                         Do not focus the new T3 thread
+  --dry-run                                         Resolve everything, create nothing
+  -h, --help
+
+If no task brief argument is given, the prompt is read from stdin.
+EOF
+  exit "${1:-2}"
+}
+
+provider_choice="${T3_SPAWN_PROVIDER:-auto}"
+model_choice="${T3_SPAWN_MODEL:-auto}"
+thinking_choice="${T3_SPAWN_THINKING:-auto}"
+source_thread_id="${T3_SOURCE_THREAD_ID:-}"
+thread_title=""
+title_is_explicit=0
+project_path=""
+open_thread=1
+dry_run=0
+allow_cross_project_source=0
+hide_choice=auto
+settle_when_done=0
+
+while (($#)); do
+  case "$1" in
+    --profile|--provider)
+      [[ $# -ge 2 ]] || usage
+      provider_choice="$2"
+      shift 2
+      ;;
+    --model)
+      [[ $# -ge 2 ]] || usage
+      model_choice="$2"
+      shift 2
+      ;;
+    --thinking|--effort)
+      [[ $# -ge 2 ]] || usage
+      thinking_choice="$2"
+      shift 2
+      ;;
+    --source-thread)
+      [[ $# -ge 2 ]] || usage
+      source_thread_id="$2"
+      shift 2
+      ;;
+    --title)
+      [[ $# -ge 2 ]] || usage
+      thread_title="$2"
+      title_is_explicit=1
+      shift 2
+      ;;
+    --project)
+      [[ $# -ge 2 ]] || usage
+      project_path="$2"
+      shift 2
+      ;;
+    --allow-cross-project-source)
+      allow_cross_project_source=1
+      shift
+      ;;
+    --hide)
+      hide_choice=on
+      shift
+      ;;
+    --no-hide)
+      hide_choice=off
+      shift
+      ;;
+    --settle-when-done)
+      settle_when_done=1
+      shift
+      ;;
+    --no-open)
+      open_thread=0
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if (($#)); then
+  prompt_text="$*"
+elif [[ ! -t 0 ]]; then
+  prompt_text="$(</dev/stdin)"
+else
+  echo "A task brief is required." >&2
+  usage
+fi
+
+[[ -n "${prompt_text//[[:space:]]/}" ]] || {
+  echo "The task brief cannot be empty." >&2
+  exit 2
+}
+
+t3_require jq curl uuidgen
+t3_bootstrap
+
+if [[ -z "$project_path" ]]; then
+  project_path="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+fi
+project_root="$(cd "$project_path" 2>/dev/null && pwd -P)" || {
+  echo "Project path does not exist: $project_path" >&2
+  exit 1
+}
+# Under launchd cwd is "/" and `git rev-parse` fails silently; registering "/" as a T3
+# project fails ("Project title cannot be empty") AND the CLI's error path deletes
+# server-runtime.json, taking every other helper down (2026-09-08 20:43, 2026-09-09 06:46).
+case "$project_root" in
+  /|"$HOME")
+    echo "Refusing project root $project_root: pass --project <repo> (scheduled runs have no cwd)." >&2
+    exit 1
+    ;;
+esac
+
+t3_issue_session t3-spawn-thread 2m
+
+shell_snapshot="$(t3_shell_snapshot)"
+project_id="$(printf '%s' "$shell_snapshot" | jq -r --arg root "$project_root" \
+  '.projects[] | select(.deletedAt == null and .workspaceRoot == $root) | .id' | head -1)"
+
+project_would_register=0
+if [[ -z "$project_id" ]]; then
+  if ((dry_run)); then
+    project_would_register=1
+    project_id="dry-run-unregistered-project"
+  else
+    project_title="${project_root##*/}"
+    project_add_output="$("${t3_cli[@]}" project add --base-dir "$t3_base_dir" \
+      --title "$project_title" "$project_root" 2>&1)" || {
+      echo "Could not register T3 project: $project_root" >&2
+      printf '%s\n' "$project_add_output" | sed 's/^/stderr: /' >&2
+      exit 1
+    }
+    shell_snapshot="$(t3_shell_snapshot)"
+    project_id="$(printf '%s' "$shell_snapshot" | jq -r --arg root "$project_root" \
+      '.projects[] | select(.deletedAt == null and .workspaceRoot == $root) | .id' | head -1)"
+    [[ -n "$project_id" ]] || {
+      echo "T3 reported that it added the project, but the project is not visible: $project_root" >&2
+      printf '%s\n' "$project_add_output" | sed 's/^/t3: /' >&2
+      exit 1
+    }
+    echo "note: registered T3 project $project_title ($project_id)" >&2
+  fi
+fi
+
+# Resolve --profile NAME against this machine's own provider registry instead of
+# a hard-coded alias list: exact instance id, then claudeAgent_<name>, then a
+# unique case-insensitive substring of a claudeAgent instance's displayName
+# (e.g. "probackup" -> instance "claudeAgent", display name "Claude ProBackup").
+normalize_provider() {
+  local requested="$1"
+  local settings_file="$t3_base_dir/userdata/settings.json"
+  case "$requested" in
+    auto) printf '%s' "auto"; return ;;
+    codex|sol) printf '%s' "codex"; return ;;
+    claude|claudeAgent) printf '%s' "claudeAgent"; return ;;
+  esac
+  [[ -f "$settings_file" ]] || { printf '%s' "$requested"; return; }
+
+  local matches
+  matches="$(jq -r --arg name "$requested" '
+    (.providerInstances // {}) as $instances
+    | if $instances | has($name) then [$name]
+      elif $instances | has("claudeAgent_" + $name) then ["claudeAgent_" + $name]
+      else
+        [ $instances | to_entries[]
+          | select(.value.driver == "claudeAgent")
+          | select(((.value.displayName // .value.config.displayName // "") | ascii_downcase)
+                   | contains($name | ascii_downcase))
+          | .key ]
+      end
+    | .[]' "$settings_file")"
+
+  local match_count
+  match_count="$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)"
+  if [[ "$match_count" -eq 1 ]]; then
+    printf '%s' "$matches"
+    return
+  fi
+  {
+    if [[ "$match_count" -eq 0 ]]; then
+      echo "Unknown --profile: $requested (no provider instance id or display name matches)."
+    else
+      echo "Ambiguous --profile: $requested matches several provider instances."
+    fi
+    echo "Available provider instances:"
+    jq -r '(.providerInstances // {}) | to_entries[]
+      | "  \(.key)\t\(.value.displayName // .value.config.displayName // "-")"' "$settings_file"
+    printf '  %s\t%s\n' codex "OpenAI Codex"
+  } >&2
+  exit 2
+}
+
+normalize_model() {
+  local normalized
+  normalized="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    sol) printf '%s' "gpt-5.6-sol" ;;
+    astra) printf '%s' "gpt-6-astra" ;;
+    haiku) printf '%s' "claude-haiku-4-5" ;;
+    fable) printf '%s' "claude-fable-5-1" ;;
+    opus) printf '%s' "claude-opus-5" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+model_family() {
+  case "$1" in
+    gpt-*|codex-*) printf '%s' "codex" ;;
+    claude-*) printf '%s' "claude" ;;
+    *) printf '%s' "unknown" ;;
+  esac
+}
+
+provider_family() {
+  case "$1" in
+    codex) printf '%s' "codex" ;;
+    claudeAgent*) printf '%s' "claude" ;;
+    *) printf '%s' "unknown" ;;
+  esac
+}
+
+detect_source_thread_id() {
+  local session_marker=""
+  local marker_kind=""
+  local ancestor_pid ancestor_command ancestor_executable parent_pid
+  local provider_logs provider_log provider_log_name candidate
+  local candidate_count=0 detected_candidate=""
+
+  # A Claude tool process can inherit a stale CODEX_THREAD_ID from T3. Prefer
+  # the actual process ancestry whenever it exposes Claude's session id.
+  ancestor_pid="$PPID"
+  while [[ "$ancestor_pid" =~ ^[0-9]+$ && "$ancestor_pid" -gt 1 ]]; do
+    ancestor_command="$(ps -p "$ancestor_pid" -o command= 2>/dev/null || true)"
+    ancestor_executable="${ancestor_command%% *}"
+    if [[ "${ancestor_executable##*/}" == "claude" ]] &&
+       [[ "$ancestor_command" =~ --(session-id|resume)(=|[[:space:]])([[:xdigit:]-]{36}) ]]; then
+      session_marker="${BASH_REMATCH[3]}"
+      marker_kind="claude"
+      break
+    fi
+    parent_pid="$(ps -p "$ancestor_pid" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+    [[ -n "$parent_pid" && "$parent_pid" != "$ancestor_pid" ]] || break
+    ancestor_pid="$parent_pid"
+  done
+
+  if [[ -z "$session_marker" && -n "${T3_MCP_BEARER_TOKEN:-}" && -n "${CODEX_THREAD_ID:-}" ]]; then
+    session_marker="$CODEX_THREAD_ID"
+    marker_kind="codex"
+  fi
+
+  [[ -n "$session_marker" ]] || return 0
+
+  # Match native provider fields, not any occurrence of the UUID. Tool output
+  # often quotes other thread/session ids and previously made `grep | head`
+  # select an unrelated thread.
+  if [[ "$marker_kind" == "claude" ]]; then
+    provider_logs="$(grep -rlF --include='events.*.log' -- \
+      "\"providerThreadId\":\"$session_marker\"" \
+      "$t3_base_dir/userdata/logs/provider" 2>/dev/null || true)"
+    if [[ -z "$provider_logs" ]]; then
+      provider_logs="$(grep -rlF --include='events.*.log' -- \
+        "\"session_id\":\"$session_marker\"" \
+        "$t3_base_dir/userdata/logs/provider" 2>/dev/null || true)"
+    fi
+  else
+    provider_logs="$(grep -rlF --include='events.*.log' -- \
+      "\"threadId\":\"$session_marker\"" \
+      "$t3_base_dir/userdata/logs/provider" 2>/dev/null || true)"
+  fi
+
+  while IFS= read -r provider_log; do
+    [[ -n "$provider_log" ]] || continue
+    provider_log_name="${provider_log##*/}"
+    candidate="${provider_log_name#events.}"
+    candidate="${candidate%.log}"
+    [[ "$candidate" =~ ^[[:xdigit:]-]{36}$ ]] || continue
+    if printf '%s' "$shell_snapshot" | jq -e --arg id "$candidate" \
+      '.threads[] | select(.id == $id)' >/dev/null; then
+      candidate_count=$((candidate_count + 1))
+      detected_candidate="$candidate"
+    fi
+  done <<< "$provider_logs"
+
+  if ((candidate_count == 1)); then
+    printf '%s' "$detected_candidate"
+  elif ((candidate_count > 1)); then
+    echo "Could not safely detect the calling T3 thread: provider session matched $candidate_count threads. Pass --source-thread explicitly." >&2
+    return 1
+  fi
+}
+
+source_thread_json=""
+if [[ -z "$source_thread_id" ]]; then
+  source_thread_id="$(detect_source_thread_id)"
+fi
+if [[ -n "$source_thread_id" ]]; then
+  source_thread_json="$(printf '%s' "$shell_snapshot" | jq -c --arg id "$source_thread_id" \
+    '.threads[] | select(.id == $id)' | head -1)"
+  [[ -n "$source_thread_json" ]] || {
+    echo "T3 source thread was not found: $source_thread_id" >&2
+    exit 1
+  }
+  source_project_id="$(printf '%s' "$source_thread_json" | jq -r '.projectId')"
+  if (( ! allow_cross_project_source )) && [[ "$source_project_id" != "$project_id" ]]; then
+    source_title="$(printf '%s' "$source_thread_json" | jq -r '.title // "<untitled>"')"
+    source_project_title="$(printf '%s' "$shell_snapshot" | jq -r --arg id "$source_project_id" \
+      '.projects[] | select(.id == $id) | .title // .workspaceRoot // "<unknown>"' | head -1)"
+    target_project_title="$(printf '%s' "$shell_snapshot" | jq -r --arg id "$project_id" \
+      '.projects[] | select(.id == $id) | .title // .workspaceRoot // "<unknown>"' | head -1)"
+    echo "Cross-project spawn blocked: $source_project_title -> $target_project_title." >&2
+    echo "Parent thread: $source_title ($source_thread_id)" >&2
+    echo "If intentional, rerun the same command with --allow-cross-project-source." >&2
+    exit 1
+  fi
+fi
+
+if [[ -n "$source_thread_json" ]]; then
+  model_selection_json="$(printf '%s' "$source_thread_json" | jq -c '.modelSelection')"
+  source_thread_id="$(printf '%s' "$source_thread_json" | jq -r '.id')"
+else
+  model_selection_json="$(printf '%s' "$shell_snapshot" | jq -c --arg id "$project_id" \
+    '.projects[] | select(.id == $id) | .defaultModelSelection // empty' | head -1)"
+fi
+
+if [[ -z "$model_selection_json" || "$model_selection_json" == "null" ]]; then
+  model_selection_json='{"instanceId":"claudeAgent","model":"claude-opus-5","options":[]}'
+fi
+model_selection_json="$(printf '%s' "$model_selection_json" | jq -c '
+  {instanceId:(.instanceId // .provider), model:.model, options:(.options // [])}')"
+
+provider_instance_id="$(printf '%s' "$model_selection_json" | jq -r '.instanceId')"
+inherited_provider_instance_id="$provider_instance_id"
+model_name="$(printf '%s' "$model_selection_json" | jq -r '.model')"
+inherited_model_name="$model_name"
+normalized_provider="$(normalize_provider "$provider_choice")"
+if [[ "$normalized_provider" != "auto" ]]; then
+  provider_instance_id="$normalized_provider"
+fi
+
+if [[ "$model_choice" != "auto" ]]; then
+  model_name="$(normalize_model "$model_choice")"
+  requested_family="$(model_family "$model_name")"
+  if [[ "$provider_choice" == "auto" && "$requested_family" == "codex" ]]; then
+    provider_instance_id="codex"
+  elif [[ "$provider_choice" == "auto" && "$requested_family" == "claude" && "$provider_instance_id" != claudeAgent* ]]; then
+    provider_instance_id="claudeAgent"
+  fi
+elif [[ "$(model_family "$model_name")" == "codex" && "$provider_instance_id" != "codex" ]]; then
+  model_name="claude-opus-5"
+elif [[ "$(model_family "$model_name")" == "claude" && "$provider_instance_id" == "codex" ]]; then
+  model_name="gpt-5.6-sol"
+fi
+
+selected_family="$(model_family "$model_name")"
+if [[ "$provider_instance_id" == "codex" && "$selected_family" == "claude" ]] ||
+   [[ "$provider_instance_id" == claudeAgent* && "$selected_family" == "codex" ]]; then
+  echo "Model $model_name is incompatible with provider $provider_instance_id." >&2
+  exit 2
+fi
+
+inherited_provider_family="$(provider_family "$inherited_provider_instance_id")"
+selected_provider_family="$(provider_family "$provider_instance_id")"
+provider_family_changed=0
+if [[ "$selected_provider_family" != "$inherited_provider_family" ]]; then
+  provider_family_changed=1
+  model_selection_json="$(printf '%s' "$model_selection_json" | jq -c '.options = []')"
+elif [[ "$model_name" != "$inherited_model_name" ]]; then
+  model_selection_json="$(printf '%s' "$model_selection_json" | jq -c \
+    '.options = [.options[] | select(.id != "fastMode")]')"
+fi
+
+# An explicitly requested model without an explicit thinking level gets its house
+# default (sol/opus → high, fable/astra → medium, haiku → low) instead of
+# inheriting the caller's level.
+if [[ "$model_choice" != "auto" && "$thinking_choice" == "auto" ]]; then
+  case "$model_name" in
+    gpt-5.6-sol|claude-opus-5) thinking_choice="high" ;;
+    claude-fable-5-1|claude-fable-5|gpt-6-astra) thinking_choice="medium" ;;
+    claude-haiku-4-5) thinking_choice="low" ;;
+  esac
+fi
+
+thinking_choice_normalized="$(printf '%s' "$thinking_choice" | tr '[:upper:]' '[:lower:]')"
+case "$thinking_choice_normalized" in
+  auto)
+    if ((provider_family_changed)); then
+      thinking_level="high"
+    else
+      thinking_level="$(printf '%s' "$model_selection_json" | jq -r \
+        '[.options[] | select(.id == "effort" or .id == "reasoningEffort") | .value][0] // "high"')"
+    fi
+    ;;
+  med|medium) thinking_level="medium" ;;
+  low|high) thinking_level="$thinking_choice_normalized" ;;
+  *)
+    echo "Invalid thinking level: $thinking_choice (use auto, low, med, medium, or high)" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$provider_instance_id" == "codex" ]]; then
+  thinking_option_id="reasoningEffort"
+else
+  thinking_option_id="effort"
+fi
+model_selection_json="$(printf '%s' "$model_selection_json" | jq -c \
+  --arg provider "$provider_instance_id" --arg model "$model_name" \
+  --arg optionId "$thinking_option_id" --arg thinking "$thinking_level" '
+    .instanceId = $provider
+    | .model = $model
+    | .options = ([.options[] | select(.id != "effort" and .id != "reasoningEffort")]
+        + [{id:$optionId,value:$thinking}])')"
+# Mirror T3's own rule (isModelSelectionProviderEnabled in the server bundle):
+# an explicit providerInstances entry wins (explicit false on either the
+# envelope or the config blob disables); a *missing* entry for a built-in
+# driver id falls back to the legacy providers.<id>.enabled flag, which
+# defaults to true for codex/claudeAgent and false for cursor/grok/opencode.
+# "Reset to defaults" in the Providers UI deletes the entry, so the raw
+# `.providerInstances[$id].enabled` check used to report codex as missing.
+provider_enabled="$(jq -r --arg id "$provider_instance_id" '
+  def default_enabled($driver): ($driver == "codex" or $driver == "claudeAgent");
+  (.providerInstances // {})[$id] as $instance
+  | if $instance != null then
+      if ($instance.enabled == false) or ($instance.config.enabled == false) then false
+      else ($instance.enabled // $instance.config.enabled // default_enabled($instance.driver)) end
+    elif ($id | IN("codex","claudeAgent","cursor","grok","opencode")) then
+      ((.providers // {})[$id].enabled // default_enabled($id))
+    else false end' "$t3_base_dir/userdata/settings.json")"
+[[ "$provider_enabled" == "true" ]] || {
+  echo "T3 provider is missing or disabled: $provider_instance_id (check Settings → Providers in T3 Code)" >&2
+  exit 1
+}
+
+if [[ -z "$thread_title" ]]; then
+  thread_title="$(printf '%s' "$prompt_text" | jq -Rrs \
+    'gsub("[[:space:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "") | .[0:72]')"
+fi
+[[ -n "${thread_title//[[:space:]]/}" ]] || {
+  echo "The thread title cannot be empty." >&2
+  exit 2
+}
+
+# Round-trip workers are titled "🏓 ..." by convention: they report back to their
+# parent, so they are hidden (snoozed, still running) instead of cluttering the
+# sidebar. A standalone thread stays visible.
+title_is_roundtrip() {
+  local trimmed="${1#"${1%%[![:space:]]*}"}"
+  [[ "$trimmed" == 🏓* ]]
+}
+
+if ((settle_when_done)) && title_is_roundtrip "$thread_title"; then
+  echo "--settle-when-done is for standalone threads; 🏓 workers are settled by their orchestrator after verification." >&2
+  exit 2
+fi
+
+case "$hide_choice" in
+  on) hide=1 ;;
+  off) hide=0 ;;
+  *)
+    hide=0
+    if ((settle_when_done)) || { ((title_is_explicit)) && title_is_roundtrip "$thread_title"; }; then
+      hide=1
+    fi
+    ;;
+esac
+
+# A worker can only report back if its brief carries the parent thread id and the
+# literal ping command; briefs that merely said "ping back" produced workers that
+# silently ended in their own thread (2026-09-02). Append it mechanically.
+roundtrip_footer=""
+if title_is_roundtrip "$thread_title" && [[ -n "$source_thread_id" ]]; then
+  worker_label="${thread_title#🏓}"
+  worker_label="${worker_label#"${worker_label%%[![:space:]]*}"}"
+  worker_label="${worker_label:0:40}"
+  roundtrip_footer="$(printf '\n---\nRound-trip worker. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: report back to the orchestrator by running (do not just end your turn):\nt3-ping-thread --thread %s --from "%s" -- "<terse report: what changed, what is live, what needs PJ>"\nKeep working (blocking sub-agents are fine) until the task is complete, then ping once.' \
+    "$source_thread_id" "$worker_label")"
+  prompt_text="$prompt_text
+$roundtrip_footer"
+fi
+
+# Fire-and-forget threads settle themselves: the self-settle footer is appended
+# mechanically for the same reason as the ping-back footer (a brief that merely
+# said "settle when done" is not deterministic).
+settle_footer=""
+if ((settle_when_done)); then
+  settle_footer="$(printf '\n---\nFire-and-forget thread. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: once the task is complete and no background work (sub-agents, background shells, monitors) is alive, run `t3-settle-thread --self` as your LAST tool call, then end the turn with the final answer. Do nothing after that call.')"
+  prompt_text="$prompt_text
+$settle_footer"
+fi
+
+thread_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+create_command_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+turn_command_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+message_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+created_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+git_branch="$(git -C "$project_root" branch --show-current 2>/dev/null || true)"
+
+create_payload="$(jq -n \
+  --arg commandId "$create_command_id" \
+  --arg threadId "$thread_id" \
+  --arg projectId "$project_id" \
+  --arg title "$thread_title" \
+  --argjson modelSelection "$model_selection_json" \
+  --arg branch "$git_branch" \
+  --arg createdAt "$created_at" \
+  '{type:"thread.create",commandId:$commandId,threadId:$threadId,projectId:$projectId,title:$title,modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",branch:(if $branch == "" then null else $branch end),worktreePath:null,createdAt:$createdAt}')"
+
+# T3's auto-titler only overwrites a thread title when it still equals the
+# titleSeed we sent (or is literally "New thread") — see canReplaceThreadTitle
+# in the T3 server bundle. So an explicit --title sticks verbatim precisely by
+# NOT sending a titleSeed: the gate then fails and Luna never renames the
+# thread. Without --title we do send the seed, so Luna titles as usual.
+# Images: there is no HTTP path for first-class attachments (upload is a WS RPC:
+# attachment.createUploadUrl → PUT /api/attachments/upload/<token>; a turn.start
+# with a hand-made attachment id is rejected as invalid_command, 2026-09-08).
+# Copy the file to a stable path and reference it in the brief instead.
+turn_payload="$(jq -n \
+  --arg commandId "$turn_command_id" \
+  --arg threadId "$thread_id" \
+  --arg messageId "$message_id" \
+  --arg text "$prompt_text" \
+  --arg title "$thread_title" \
+  --argjson explicitTitle "$title_is_explicit" \
+  --argjson modelSelection "$model_selection_json" \
+  --arg createdAt "$created_at" \
+  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",createdAt:$createdAt}
+   | if $explicitTitle == 1 then . else .titleSeed = $title end')"
+
+# Belt-and-braces: re-assert the exact title after the turn starts. Cheap,
+# idempotent, and keeps the title correct even if T3 changes the seed gate.
+meta_payload="$(jq -n \
+  --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+  --arg threadId "$thread_id" \
+  --arg title "$thread_title" \
+  '{type:"thread.meta.update",commandId:$commandId,threadId:$threadId,title:$title}')"
+
+if ((dry_run)); then
+  printf 'Dry run — no thread created.\n'
+  if ((project_would_register)); then
+    printf 'Project would be registered: %s\n' "$project_root"
+  fi
+  printf 'Provider: %s · Model: %s · Thinking: %s\n' \
+    "$provider_instance_id" "$model_name" "$thinking_level"
+  if [[ -n "$source_thread_id" ]]; then
+    printf 'Inherited from thread: %s\n' "$source_thread_id"
+  fi
+  printf 'Project ID: %s · Title: %s\n' "$project_id" "$thread_title"
+  if [[ -n "$source_thread_id" ]]; then
+    printf 'Ping back (embed in the worker brief so it reports here):\n'
+    printf '  t3-ping-thread --thread %s --from <label> -- "<terse report>"\n' "$source_thread_id"
+  fi
+  if ((title_is_explicit)); then
+    printf 'Title is hard-set (no titleSeed + thread.meta.update); the auto-titler will not rename it.\n'
+  else
+    printf 'Title is only a seed; T3 auto-titles the thread after the first turn.\n'
+  fi
+  if [[ -n "$roundtrip_footer" ]]; then
+    printf 'Round-trip footer appended to the brief:\n%s\n' "$roundtrip_footer"
+  fi
+  if [[ -n "$settle_footer" ]]; then
+    printf 'Self-settle footer appended to the brief:\n%s\n' "$settle_footer"
+  fi
+  if ((hide)); then
+    printf 'Hide: would arm keeper (t3-hide-thread --hide <new thread id>)\n'
+  else
+    printf 'Hide: off\n'
+  fi
+  exit 0
+fi
+
+t3_dispatch "$create_payload"
+turn_response="$(mktemp "${TMPDIR:-/tmp}/t3-spawn-turn.XXXXXX")"
+if ! t3_dispatch "$turn_payload" "$turn_response"; then
+  [[ -s "$turn_response" ]] && { echo "Server response:" >&2; sed 's/^/  /' "$turn_response" >&2; }
+  rm -f -- "$turn_response"
+  delete_payload="$(jq -n --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+    --arg threadId "$thread_id" \
+    '{type:"thread.delete",commandId:$commandId,threadId:$threadId}')"
+  t3_dispatch "$delete_payload" || true
+  echo "T3 created the thread shell but could not start its first turn." >&2
+  exit 1
+fi
+rm -f -- "$turn_response"
+
+if ((title_is_explicit)); then
+  t3_dispatch "$meta_payload" || \
+    echo "Warning: could not hard-set the thread title; T3 may rename it." >&2
+fi
+
+if ((open_thread)); then
+  t3_open_url 't3code://app'
+fi
+
+printf 'Created T3 thread: %s\n' "$thread_title"
+printf 'Provider: %s · Model: %s · Thinking: %s\n' \
+  "$provider_instance_id" "$model_name" "$thinking_level"
+if [[ -n "$source_thread_id" ]]; then
+  printf 'Inherited from thread: %s\n' "$source_thread_id"
+fi
+printf 'Project ID: %s\n' "$project_id"
+printf 'Thread ID: %s\n' "$thread_id"
+
+# Round-trip helper: a worker can only report back if its brief carries the
+# parent (this) thread id + the exact ping command. Print a ready-to-paste line
+# so the orchestrator embeds it verbatim — the #2 miss on 2026-09-02 was a brief
+# that said "ping back" but never gave the id/command.
+if [[ -n "$source_thread_id" ]]; then
+  printf 'Ping back (embed in the worker brief so it reports here):\n'
+  printf '  t3-ping-thread --thread %s --from <label> -- "<terse report>"\n' "$source_thread_id"
+fi
+
+# Hiding is cosmetic: the thread exists and works either way, so a failed arm is
+# a warning, never a failed spawn.
+if ((hide)); then
+  hide_helper="$(dirname "$(readlink -f "$0")")/t3-hide-thread"
+  if armed_output="$("$hide_helper" --hide "$thread_id" 2>&1)"; then
+    printf '%s\n' "$(printf '%s' "$armed_output" | tr '\n' ' ')"
+  else
+    printf 'Hide: FAILED to arm keeper (the thread is fine, it just stays visible)\n' >&2
+    printf '%s\n' "$armed_output" | sed 's/^/  /' >&2
+  fi
+else
+  printf 'Hide: off\n'
+fi
+if ((settle_when_done)); then
+  printf 'Settle when done: on (worker runs t3-settle-thread --self as its last tool call)\n'
+fi

@@ -1,0 +1,173 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Open a T3 thread in the native T3 Code desktop app (no deep link exists upstream).
+
+    t3-open-thread 2ac7596e                       # id or >=8-char prefix
+    t3-open-thread http://127.0.0.1:3773/<env>/<thread>
+
+Strategy: activate "T3 Code (Alpha)" (`open -a`), open its command palette (cmd+k), type the
+thread title, Enter. Needs Accessibility + Automation(System Events) rights for whichever process
+runs the osascript (already granted to T3 Code / the terminal). Archived threads are not in the
+palette. Native only — `--browser` opts into the web client explicitly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
+RUNTIME_FILE = STORE.parent / "server-runtime.json"
+THREAD_URL_TEMPLATE = os.environ.get("T3_THREAD_URL_TEMPLATE", "{origin}/{environment_id}/{thread_id}")
+FALLBACK_ORIGIN = "http://127.0.0.1:3773"
+APP_NAME = "T3 Code (Alpha)"
+LOG_FILE = Path(os.environ.get("T3_FIND_CACHE_DIR", Path.home() / ".cache" / "t3-find-thread")) / "open.log"
+
+UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{8,}", re.I)
+
+
+def parse_ident(arg: str) -> str:
+    """Accept a bare id/prefix or a web URL .../<env>/<thread>."""
+    text = arg.strip().strip("/")
+    if "://" in text:
+        text = text.split("://", 1)[1].strip("/")
+        text = text.split("?", 1)[0].split("#", 1)[0]
+        parts = [p for p in text.split("/") if p]  # http://host/<env>/<thread>
+        text = parts[-1] if parts else ""
+    match = UUID_RE.fullmatch(text) or UUID_RE.match(text)
+    if not match:
+        sys.exit(f"cannot parse a thread id out of {arg!r}")
+    return match.group(0).lower()
+
+
+def lookup(ident: str) -> tuple[str, str]:
+    if len(ident) < 8:
+        sys.exit(f"thread id {ident!r} too short; use at least 8 characters")
+    if not STORE.exists():
+        sys.exit(f"T3 store not found at {STORE}")
+    db = sqlite3.connect(f"file:{STORE}?mode=ro", uri=True)
+    try:
+        rows = db.execute(
+            "SELECT thread_id, title FROM projection_threads WHERE thread_id LIKE ? AND deleted_at IS NULL",
+            (ident + "%",),
+        ).fetchall()
+    finally:
+        db.close()
+    if not rows:
+        sys.exit(f"no thread matching {ident!r}")
+    if len(rows) > 1:
+        sys.exit(f"ambiguous thread id {ident!r}: {', '.join(r[0][:12] for r in rows)}")
+    return rows[0]
+
+
+def web_url(thread_id: str) -> str:
+    try:
+        origin = json.loads(RUNTIME_FILE.read_text())["origin"]
+    except Exception:
+        origin = FALLBACK_ORIGIN
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{origin}/.well-known/t3/environment", timeout=2) as response:
+            environment_id = json.loads(response.read()).get("environmentId")
+    except Exception:
+        environment_id = None
+    if not environment_id:
+        return ""
+    return THREAD_URL_TEMPLATE.format(origin=origin, environment_id=environment_id, thread_id=thread_id)
+
+
+def applescript_quote(text: str) -> str:
+    """AppleScript string literal body: backslashes and double quotes need escaping."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def palette_script(title: str) -> str:
+    """cmd+k, type the title (paste it when non-ASCII — keystroke mangles those), Enter."""
+    if title.isascii():
+        type_step = f'keystroke "{applescript_quote(title)}"'
+    else:
+        subprocess.run(["pbcopy"], input=title.encode(), check=True)
+        type_step = 'keystroke "v" using command down'
+    return (
+        'tell application "System Events"\n'
+        "  delay 0.5\n"
+        '  keystroke "k" using command down\n'
+        "  delay 0.4\n"
+        f"  {type_step}\n"
+        "  delay 0.9\n"
+        "  key code 36\n"
+        "end tell\n"
+    )
+
+
+def log(line: str) -> None:
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with LOG_FILE.open("a") as handle:
+            handle.write(f"{stamp} {line}\n")
+    except Exception:
+        pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Open a T3 thread in the native desktop app.")
+    parser.add_argument("target", help="thread id / prefix, or web URL")
+    parser.add_argument("--browser", action="store_true", help="skip the palette, open the web client")
+    parser.add_argument("--dry-run", action="store_true", help="print what would happen")
+    args = parser.parse_args(argv)
+
+    ident = parse_ident(args.target)
+    thread_id, title = lookup(ident)
+
+    if args.browser:
+        url = web_url(thread_id)
+        if not url:
+            log(f"{thread_id[:8]} browser: no environment id")
+            sys.exit("no web URL available (T3 server unreachable)")
+        if args.dry_run:
+            print(f"would open: {url}")
+            return 0
+        subprocess.run(["open", url], check=False)
+        print(f"opened: {title} ({thread_id[:8]}) via browser")
+        log(f"{thread_id[:8]} browser {url}")
+        return 0
+
+    script = palette_script(title) if not args.dry_run else None
+    if args.dry_run:
+        print(f"would open: {title} ({thread_id[:8]}) via palette in {APP_NAME}")
+        print(f"web fallback: {web_url(thread_id) or '(unavailable)'}")
+        return 0
+
+    # `open -a` avoids needing Automation rights on T3 itself; only System Events is scripted.
+    subprocess.run(["open", "-a", APP_NAME], check=False)
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"opened: {title} ({thread_id[:8]}) via palette")
+        log(f"{thread_id[:8]} palette ok — {title}")
+        return 0
+
+    error = " ".join(result.stderr.split())[:300]
+    print(f"osascript failed: {error}", file=sys.stderr)
+    print(
+        "hint: allow this terminal under System Settings → Privacy & Security → Accessibility "
+        "and → Automation (System Events), or run with --browser",
+        file=sys.stderr,
+    )
+    log(f"{thread_id[:8]} palette FAILED rc={result.returncode} — {error}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

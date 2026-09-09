@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+install_dir="${T3_SCHEDULE_INSTALL_DIR:-$HOME/.local/bin}"
+target="$install_dir/t3-schedule"
+if [[ "${1:-}" == "--check" ]]; then
+  [[ -L "$target" && "$(readlink "$target")" == "$script_dir/t3-schedule" ]] || { echo "missing or stale: $target" >&2; exit 1; }
+  command -v t3-spawn-thread >/dev/null || { echo "t3-spawn-thread not on PATH (t3-manage-thread/scripts/install)" >&2; exit 1; }
+  echo "ok      t3-schedule ($target)"; exit 0
+fi
+mkdir -p "$install_dir"
+ln -sfn "$script_dir/t3-schedule" "$target"
+echo "installed $target"

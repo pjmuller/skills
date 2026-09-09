@@ -1,0 +1,718 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Fuzzy-find a past T3 Code thread: deterministic FTS narrowing, then LLM judging.
+
+Progressive disclosure - each step costs more context than the last:
+
+    t3-find-thread search --project kampadmin --since 30d ahoy stats   # ranked candidates
+    t3-find-thread peek 2ac7596e,9f12ab30                              # headers + first prompts
+    t3-find-thread grep 2ac7596e -k snapshot -k restore                # snippets around hits
+    t3-find-thread read 2ac7596e --msg 3,7-9                           # last resort (t3-read-thread)
+
+Reads T3's store read-only ($T3CODE_HOME/userdata/state.sqlite, default ~/.t3/...) and keeps a
+private FTS5 cache at ~/.cache/t3-find-thread/index.sqlite, refreshed incrementally before every
+command. Nothing is ever written back to T3.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher, get_close_matches
+from pathlib import Path
+import urllib.request
+from urllib.parse import quote
+
+DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
+RUNTIME_FILE = DEFAULT_STORE.parent / "server-runtime.json"
+CACHE_DIR = Path(os.environ.get("T3_FIND_CACHE_DIR", Path.home() / ".cache" / "t3-find-thread"))
+CACHE_DB = CACHE_DIR / "index.sqlite"
+
+# T3's web client route is /<environmentId>/<threadId>, served by the local server.
+THREAD_URL_TEMPLATE = os.environ.get("T3_THREAD_URL_TEMPLATE", "{origin}/{environment_id}/{thread_id}")
+FALLBACK_ORIGIN = "http://127.0.0.1:3773"
+ENVIRONMENT_ID: str | None = None  # resolved from the running server, cached in the index
+
+USER_WEIGHT = 3.0
+ASSISTANT_WEIGHT = 1.0
+TERM_COVERAGE_BONUS = 10.0
+TITLE_BONUS = 15.0
+
+
+# --------------------------------------------------------------------------- store access
+
+
+@contextmanager
+def connect_readonly(store: Path) -> Iterator[sqlite3.Connection]:
+    """SQLite WAL snapshot read; never blocks (or is blocked by) the running T3 server."""
+    if not store.exists():
+        sys.exit(f"T3 store not found: {store}\nIs T3 Code installed? Set T3CODE_HOME if it lives elsewhere.")
+    connection = sqlite3.connect(f"file:{quote(str(store), safe='/')}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only = ON")
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def has_fts5() -> bool:
+    probe = sqlite3.connect(":memory:")
+    try:
+        probe.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        probe.close()
+
+
+FTS5 = has_fts5()
+
+
+def origin() -> str:
+    try:
+        return json.loads(RUNTIME_FILE.read_text())["origin"]
+    except Exception:
+        return FALLBACK_ORIGIN
+
+
+def fetch_environment_id() -> str | None:
+    try:
+        with urllib.request.urlopen(f"{origin()}/.well-known/t3/environment", timeout=2) as response:
+            return json.loads(response.read()).get("environmentId")
+    except Exception:
+        return None
+
+
+def web_link(project_id: str, thread_id: str) -> str:
+    """Empty string when the environment id is unknown (T3 never seen running here)."""
+    if not ENVIRONMENT_ID:
+        return ""
+    return THREAD_URL_TEMPLATE.format(
+        origin=origin(), environment_id=ENVIRONMENT_ID, project_id=project_id, thread_id=thread_id
+    )
+
+
+# --------------------------------------------------------------------------- time helpers
+
+RELATIVE = re.compile(r"^(\d+)\s*([dwmy])$", re.I)
+UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
+
+
+def parse_date(value: str) -> datetime:
+    raw = value.strip()
+    rel = RELATIVE.match(raw)
+    if rel:
+        return datetime.now(timezone.utc) - timedelta(days=int(rel.group(1)) * UNIT_DAYS[rel.group(2).lower()])
+    if len(raw) == 10:
+        raw += "T00:00:00+00:00"
+    elif raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        sys.exit(f"cannot parse date {value!r}; use ISO (2026-08-01) or relative (7d, 3w, 2m)")
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def day(stamp: str | None) -> str:
+    return (stamp or "")[:10]
+
+
+def minute(stamp: str | None) -> str:
+    return (stamp or "").replace("T", " ")[:16]
+
+
+# --------------------------------------------------------------------------- index
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS threads (
+  thread_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  project_title TEXT NOT NULL,
+  workspace_root TEXT NOT NULL,
+  workspace_name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  user_msgs INTEGER NOT NULL DEFAULT 0,
+  assistant_msgs INTEGER NOT NULL DEFAULT 0,
+  last_msg_at TEXT
+);
+"""
+
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  text, text_plain, thread_id UNINDEXED, role UNINDEXED, created_at UNINDEXED,
+  tokenize="unicode61 tokenchars '_'"
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS vocab USING fts5vocab(messages_fts, 'row');
+"""
+
+SEPARATORS = re.compile(r"[_\-/.]+")
+
+
+def open_cache() -> sqlite3.Connection:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache = sqlite3.connect(CACHE_DB)
+    cache.row_factory = sqlite3.Row
+    cache.executescript(SCHEMA)
+    if FTS5:
+        cache.executescript(FTS_SCHEMA)
+    return cache
+
+
+def get_meta(cache: sqlite3.Connection, key: str, default: str = "") -> str:
+    row = cache.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_meta(cache: sqlite3.Connection, key: str, value: str) -> None:
+    cache.execute("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def sync_index(store: Path, rebuild: bool = False, verbose: bool = False) -> dict:
+    if rebuild and CACHE_DB.exists():
+        CACHE_DB.unlink()
+    cache = open_cache()
+    watermark = get_meta(cache, "watermark", "")
+    with connect_readonly(store) as src:
+        threads = {
+            row["thread_id"]: row
+            for row in src.execute(
+                """SELECT t.*, p.title AS project_title, p.workspace_root
+                     FROM projection_threads t JOIN projection_projects p USING (project_id)
+                    WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL"""
+            )
+        }
+        stale = {tid for tid, row in threads.items() if row["updated_at"] > watermark}
+        stale |= {
+            row["thread_id"]
+            for row in src.execute(
+                "SELECT DISTINCT thread_id FROM projection_thread_messages WHERE updated_at > ?", (watermark,)
+            )
+            if row["thread_id"] in threads
+        }
+        max_stamp = watermark
+        for row in threads.values():
+            max_stamp = max(max_stamp, row["updated_at"])
+
+        # Drop index rows for threads that disappeared (deleted in T3).
+        known = {row["thread_id"] for row in cache.execute("SELECT thread_id FROM threads")}
+        for gone in known - threads.keys():
+            cache.execute("DELETE FROM threads WHERE thread_id = ?", (gone,))
+            if FTS5:
+                cache.execute("DELETE FROM messages_fts WHERE thread_id = ?", (gone,))
+
+        for tid in stale:
+            row = threads[tid]
+            messages = src.execute(
+                "SELECT role, text, created_at, updated_at FROM projection_thread_messages "
+                "WHERE thread_id = ? ORDER BY created_at",
+                (tid,),
+            ).fetchall()
+            for message in messages:
+                max_stamp = max(max_stamp, message["updated_at"])
+            cache.execute("DELETE FROM threads WHERE thread_id = ?", (tid,))
+            cache.execute(
+                "INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    tid,
+                    row["project_id"],
+                    row["project_title"],
+                    row["workspace_root"],
+                    Path(row["workspace_root"]).name,
+                    row["title"],
+                    row["created_at"],
+                    row["updated_at"],
+                    row["archived_at"],
+                    sum(1 for m in messages if m["role"] == "user"),
+                    sum(1 for m in messages if m["role"] == "assistant"),
+                    messages[-1]["created_at"] if messages else None,
+                ),
+            )
+            if FTS5:
+                cache.execute("DELETE FROM messages_fts WHERE thread_id = ?", (tid,))
+                cache.executemany(
+                    "INSERT INTO messages_fts(text, text_plain, thread_id, role, created_at) VALUES (?,?,?,?,?)",
+                    [
+                        (m["text"], SEPARATORS.sub(" ", m["text"]), tid, m["role"], m["created_at"])
+                        for m in messages
+                    ],
+                )
+    global ENVIRONMENT_ID
+    fetched = fetch_environment_id()
+    if fetched:
+        set_meta(cache, "environment_id", fetched)
+    ENVIRONMENT_ID = fetched or get_meta(cache, "environment_id") or None
+    if not ENVIRONMENT_ID:
+        print("warning: T3 not reachable and no cached environment id — links omitted", file=sys.stderr)
+    set_meta(cache, "watermark", max_stamp)
+    cache.commit()
+    total = cache.execute("SELECT COUNT(*) FROM threads").fetchone()[0]
+    cache.close()
+    stats = {"threads_indexed": total, "threads_refreshed": len(stale), "watermark": max_stamp, "fts5": FTS5}
+    if verbose:
+        print(f"index: {total} threads, {len(stale)} refreshed, watermark {max_stamp}, fts5={FTS5}")
+    return stats
+
+
+def ensure_index(args) -> sqlite3.Connection:
+    sync_index(Path(args.store))
+    return open_cache()
+
+
+# --------------------------------------------------------------------------- filtering
+
+
+def fuzzy_project_match(needle: str, *fields: str) -> bool:
+    needle = needle.lower()
+    for field in fields:
+        field = (field or "").lower()
+        if not field:
+            continue
+        if needle in field or SequenceMatcher(None, needle, field).ratio() >= 0.6:
+            return True
+    return False
+
+
+def candidate_threads(cache: sqlite3.Connection, args) -> list[sqlite3.Row]:
+    rows = list(cache.execute("SELECT * FROM threads"))
+    if getattr(args, "project", None):
+        rows = [
+            r
+            for r in rows
+            if any(fuzzy_project_match(p, r["project_title"], r["workspace_name"]) for p in args.project)
+        ]
+    if getattr(args, "since", None):
+        since = iso(parse_date(args.since))
+        rows = [r for r in rows if max(r["updated_at"], r["last_msg_at"] or "") >= since]
+    if getattr(args, "until", None):
+        until = iso(parse_date(args.until))
+        rows = [r for r in rows if r["created_at"] <= until]
+    if not getattr(args, "include_archived", True):
+        rows = [r for r in rows if not r["archived_at"]]
+    return rows
+
+
+# --------------------------------------------------------------------------- term matching
+
+
+def fts_phrase(term: str) -> str:
+    return '"' + term.replace('"', '""') + '"'
+
+
+def expand_term(cache: sqlite3.Connection, term: str, fuzzy: bool) -> list[str]:
+    """Exact/prefix always; --fuzzy adds close vocabulary matches for speech-to-text typos."""
+    if not fuzzy or not FTS5 or " " in term:
+        return []
+    lowered = term.lower()
+    vocabulary = [
+        row[0]
+        for row in cache.execute("SELECT term FROM vocab")
+        if abs(len(row[0]) - len(lowered)) <= 2 and row[0][:1] == lowered[:1]
+    ]
+    return [w for w in get_close_matches(lowered, vocabulary, n=5, cutoff=0.8) if w != lowered]
+
+
+def term_hits(cache: sqlite3.Connection, term: str, fuzzy: bool) -> dict[str, dict[str, int]]:
+    """thread_id -> {'user': n, 'assistant': n} for one term."""
+    hits: dict[str, dict[str, int]] = {}
+    if FTS5:
+        clauses = [fts_phrase(term) + ("" if " " in term else "*")]
+        clauses += [fts_phrase(word) for word in expand_term(cache, term, fuzzy)]
+        query = " OR ".join(clauses)
+        try:
+            rows = cache.execute(
+                "SELECT thread_id, role, COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH ? "
+                "GROUP BY thread_id, role",
+                (query,),
+            ).fetchall()
+        except sqlite3.OperationalError as error:
+            sys.exit(f"bad search term {term!r}: {error}")
+    else:  # FTS5 unavailable: LIKE scan straight off the source projection.
+        pattern = f"%{term}%"
+        with connect_readonly(DEFAULT_STORE) as src:
+            rows = src.execute(
+                "SELECT thread_id, role, COUNT(*) AS n FROM projection_thread_messages "
+                "WHERE text LIKE ? GROUP BY thread_id, role",
+                (pattern,),
+            ).fetchall()
+    for row in rows:
+        hits.setdefault(row["thread_id"], {})[row["role"]] = row["n"]
+    return hits
+
+
+def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: list[str], args) -> list[dict]:
+    per_term = {}
+    if terms and not args.title_only:
+        for term in terms:
+            per_term[term] = term_hits(cache, term, args.fuzzy)
+    keep_roles = {"user", "assistant"} if args.role == "any" else {args.role}
+    results = []
+    for row in rows:
+        title_lower = row["title"].lower()
+        matched, user_hits, assistant_hits, score = [], 0, 0, 0.0
+        title_hit = False
+        for term in terms:
+            counts = per_term.get(term, {}).get(row["thread_id"], {})
+            user = counts.get("user", 0) if "user" in keep_roles else 0
+            assistant = counts.get("assistant", 0) if "assistant" in keep_roles else 0
+            in_title = term.lower() in title_lower
+            if not (user or assistant or in_title):
+                continue
+            matched.append(term)
+            user_hits += user
+            assistant_hits += assistant
+            score += TERM_COVERAGE_BONUS
+            if user:
+                score += USER_WEIGHT * (1 + math.log(user))
+            if assistant:
+                score += ASSISTANT_WEIGHT * (1 + math.log(assistant))
+            if in_title:
+                title_hit = True
+        if title_hit:
+            score += TITLE_BONUS
+        if terms:
+            if not matched:
+                continue
+            if args.all and len(matched) < len(terms):
+                continue
+        results.append(
+            {
+                "thread_id": row["thread_id"],
+                "short_id": row["thread_id"][:8],
+                "project_id": row["project_id"],
+                "project": row["project_title"],
+                "workspace": row["workspace_name"],
+                "title": row["title"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "archived": bool(row["archived_at"]),
+                "user_msgs": row["user_msgs"],
+                "assistant_msgs": row["assistant_msgs"],
+                "terms_hit": matched,
+                "terms_total": len(terms),
+                "user_hits": user_hits,
+                "assistant_hits": assistant_hits,
+                "score": round(score, 2),
+                "url": web_link(row["project_id"], row["thread_id"]),
+            }
+        )
+    results.sort(key=lambda r: r["updated_at"], reverse=True)  # recency breaks score ties
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results
+
+
+# --------------------------------------------------------------------------- messages (source db)
+
+
+def resolve_thread(cache: sqlite3.Connection, ident: str) -> sqlite3.Row:
+    if len(ident) < 8:
+        sys.exit(f"thread id {ident!r} too short; use at least 8 characters")
+    rows = cache.execute("SELECT * FROM threads WHERE thread_id LIKE ?", (ident + "%",)).fetchall()
+    if not rows:
+        sys.exit(f"no thread matching {ident!r} (try `t3-find-thread index --rebuild`)")
+    if len(rows) > 1:
+        sys.exit(f"ambiguous thread id {ident!r}: {', '.join(r['thread_id'][:12] for r in rows)}")
+    return rows[0]
+
+
+def thread_messages(store: Path, thread_id: str) -> list[sqlite3.Row]:
+    with connect_readonly(store) as src:
+        return src.execute(
+            "SELECT role, text, created_at FROM projection_thread_messages WHERE thread_id = ? ORDER BY created_at",
+            (thread_id,),
+        ).fetchall()
+
+
+def link_cell(record: dict, web: bool = False) -> str:
+    """Short id, plus the http link with --web-links.
+
+    Links to a thread never work inside T3 chat, so the id + `t3-open-thread <id>` is what the
+    agent shows there.
+    """
+    cell = f"`{record['short_id']}`"
+    if web and record["url"]:
+        cell += f" | [web]({record['url']})"
+    return cell
+
+
+def clip(text: str, limit: int) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+# --------------------------------------------------------------------------- commands
+
+
+def cmd_index(args) -> None:
+    stats = sync_index(Path(args.store), rebuild=args.rebuild, verbose=not args.json)
+    if args.json:
+        print(json.dumps(stats, indent=2))
+
+
+def gather(args) -> tuple[list[dict], list[str]]:
+    cache = ensure_index(args)
+    terms = [t for t in (args.terms or []) + (args.keyword or []) if t.strip()]
+    results = score_threads(cache, candidate_threads(cache, args), terms, args)
+    cache.close()
+    return results, terms
+
+
+def filters_line(args, terms: list[str], total: int) -> str:
+    bits = [f"terms={terms or '—'}", f"project={args.project or 'any'}"]
+    if args.since:
+        bits.append(f"since={day(iso(parse_date(args.since)))}")
+    if args.until:
+        bits.append(f"until={day(iso(parse_date(args.until)))}")
+    bits += [f"role={args.role}", f"match={'all' if args.all else 'any'}"]
+    if args.fuzzy:
+        bits.append("fuzzy=on")
+    if args.title_only:
+        bits.append("title-only")
+    return f"{total} candidate(s) · " + " · ".join(bits)
+
+
+def cmd_search(args) -> None:
+    results, terms = gather(args)
+    shown = results[: args.limit]
+    if args.json or args.format == "json":
+        print(json.dumps({"filters": filters_line(args, terms, len(results)), "results": shown}, indent=2))
+        return
+    if args.format == "ids":
+        print("\n".join(r["short_id"] for r in shown))
+        return
+    print(filters_line(args, terms, len(results)))
+    if not shown:
+        print("\nNo hits. Widen: drop a term, add --fuzzy, extend --since, or relax --project.")
+        return
+    print()
+    web_column = " web |" if args.web_links else ""
+    print("| # | created | project | title | terms | hits u/a | id |" + web_column)
+    print("| --- | --- | --- | --- | --- | --- | --- |" + (" --- |" if args.web_links else ""))
+    for rank, r in enumerate(shown, 1):
+        title = clip(r["title"], 60) + (" _(archived)_" if r["archived"] else "")
+        print(
+            f"| {rank} | {day(r['created_at'])} | {clip(r['project'], 22)} | {title} "
+            f"| {len(r['terms_hit'])}/{r['terms_total']} | {r['user_hits']}/{r['assistant_hits']} "
+            f"| {link_cell(r, args.web_links)} |"
+        )
+    print(f"\nNext: t3-find-thread peek {','.join(r['short_id'] for r in shown[:3])}")
+    print("Open in app: t3-open-thread <id>")
+
+
+def cmd_peek(args) -> None:
+    cache = ensure_index(args)
+    store = Path(args.store)
+    payload = []
+    for ident in [i for chunk in args.ids for i in chunk.split(",") if i]:
+        row = resolve_thread(cache, ident)
+        messages = thread_messages(store, row["thread_id"])
+        prompts = [
+            {"idx": i, "time": minute(m["created_at"]), "text": clip(m["text"], 300)}
+            for i, m in enumerate(messages)
+            if m["role"] == "user"
+        ][: args.prompts]
+        outline = [
+            {
+                "idx": i,
+                "role": m["role"],
+                "time": minute(m["created_at"]),
+                "chars": len(m["text"]),
+                "head": clip(m["text"], 100),
+            }
+            for i, m in enumerate(messages)
+        ]
+        if len(outline) > args.outline:
+            half = args.outline // 2
+            outline = outline[:half] + [{"idx": None}] + outline[-half:]
+        payload.append(
+            {
+                "thread_id": row["thread_id"],
+                "short_id": row["thread_id"][:8],
+                "title": row["title"],
+                "project": row["project_title"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "archived": bool(row["archived_at"]),
+                "user_msgs": row["user_msgs"],
+                "assistant_msgs": row["assistant_msgs"],
+                "url": web_link(row["project_id"], row["thread_id"]),
+                "prompts": prompts,
+                "outline": outline,
+            }
+        )
+    cache.close()
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return
+    for item in payload:
+        print(f"\n## {item['title']}  ({item['short_id']})")
+        print(
+            f"{item['project']} · {day(item['created_at'])} → {day(item['updated_at'])} · "
+            f"{item['user_msgs']}u/{item['assistant_msgs']}a"
+            + (" · archived" if item["archived"] else "")
+        )
+        if args.web_links and item["url"]:
+            print(f"[web]({item['url']})")
+        print("\n**First prompts**")
+        for prompt in item["prompts"] or [{"idx": "-", "time": "", "text": "(none)"}]:
+            print(f"- #{prompt['idx']} {prompt['time']} — {prompt['text']}")
+        print("\n**Outline**")
+        for line in item["outline"]:
+            if line["idx"] is None:
+                print("  …")
+                continue
+            print(f"  #{line['idx']:<3} {line['role'][:1]} {line['time']} {line['chars']:>6}c  {line['head']}")
+
+
+def cmd_grep(args) -> None:
+    cache = ensure_index(args)
+    row = resolve_thread(cache, args.id)
+    cache.close()
+    terms = [t for t in (args.terms or []) + (args.keyword or []) if t.strip()]
+    if not terms:
+        sys.exit("grep needs at least one term (positional or -k)")
+    patterns = [(t, re.compile(re.escape(t), re.I)) for t in terms]
+    snippets = []
+    for idx, message in enumerate(thread_messages(Path(args.store), row["thread_id"])):
+        for term, pattern in patterns:
+            for match in pattern.finditer(message["text"]):
+                start = max(0, match.start() - args.context // 2)
+                snippets.append(
+                    {
+                        "idx": idx,
+                        "role": message["role"],
+                        "time": minute(message["created_at"]),
+                        "term": term,
+                        "text": clip(message["text"][start : match.end() + args.context // 2], args.context + 40),
+                    }
+                )
+                break  # one snippet per message per term keeps context cheap
+        if len(snippets) >= args.limit:
+            break
+    snippets = snippets[: args.limit]
+    if args.json:
+        print(json.dumps({"thread_id": row["thread_id"], "title": row["title"], "snippets": snippets}, indent=2))
+        return
+    print(f"## {row['title']}  ({row['thread_id'][:8]}) — {len(snippets)} snippet(s) for {terms}")
+    for s in snippets:
+        print(f"\n#{s['idx']} {s['role']} {s['time']} [{s['term']}]\n  …{s['text']}…")
+    if not snippets:
+        print("\n(no hits in this thread — try other synonyms)")
+
+
+def cmd_read(args) -> None:
+    cache = ensure_index(args)
+    row = resolve_thread(cache, args.id)
+    cache.close()
+    helper = shutil.which("t3-read-thread")
+    if not helper:
+        print(
+            "t3-read-thread is not on PATH (install the t3-manage-thread skill). Equivalent SQL:\n"
+            f"  sqlite3 'file:{DEFAULT_STORE}?mode=ro' \"SELECT role, created_at, text FROM "
+            f"projection_thread_messages WHERE thread_id='{row['thread_id']}' ORDER BY created_at;\"",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    command = [helper, row["thread_id"]]
+    if args.msg:
+        command += ["--msg", args.msg]
+    if args.full:
+        command.append("--full")
+    if args.json:
+        command.append("--json")
+    raise SystemExit(subprocess.call(command))
+
+
+# --------------------------------------------------------------------------- cli
+
+
+def add_filters(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("terms", nargs="*", help="keywords (quote phrases)")
+    parser.add_argument("-k", "--keyword", action="append", help="extra keyword (repeatable)")
+    parser.add_argument("--project", action="append", help="fuzzy project/workspace name (repeatable)")
+    parser.add_argument("--since", help="ISO date or relative (7d, 3w, 2m)")
+    parser.add_argument("--until", help="ISO date or relative")
+    parser.add_argument("--include-archived", dest="include_archived", action="store_true", default=True)
+    parser.add_argument("--no-archived", dest="include_archived", action="store_false")
+    parser.add_argument("--role", choices=("user", "assistant", "any"), default="any")
+    parser.add_argument("--all", action="store_true", help="require every term")
+    parser.add_argument("--title-only", action="store_true", help="match thread titles only")
+    parser.add_argument("--fuzzy", action="store_true", help="also match close spellings (speech-to-text typos)")
+    parser.add_argument("--limit", type=int, default=15)
+    add_web_links(parser)
+
+
+def add_web_links(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--web-links", action="store_true", help="also show the browser URL next to the id")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="t3-find-thread", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--store", default=str(DEFAULT_STORE), help=argparse.SUPPRESS)
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    index_parser = subparsers.add_parser("index", help="build/refresh the FTS cache")
+    index_parser.add_argument("--rebuild", action="store_true")
+    index_parser.set_defaults(func=cmd_index)
+
+    search_parser = subparsers.add_parser("search", help="ranked candidate threads")
+    add_filters(search_parser)
+    search_parser.add_argument("--format", choices=("md", "json", "ids"), default="md")
+    search_parser.set_defaults(func=cmd_search)
+
+    peek_parser = subparsers.add_parser("peek", help="headers, first prompts, outline")
+    peek_parser.add_argument("ids", nargs="+")
+    peek_parser.add_argument("--prompts", type=int, default=3)
+    peek_parser.add_argument("--outline", type=int, default=40)
+    add_web_links(peek_parser)
+    peek_parser.set_defaults(func=cmd_peek)
+
+    grep_parser = subparsers.add_parser("grep", help="snippets around keyword hits in one thread")
+    grep_parser.add_argument("id")
+    grep_parser.add_argument("terms", nargs="*")
+    grep_parser.add_argument("-k", "--keyword", action="append")
+    grep_parser.add_argument("--context", type=int, default=200)
+    grep_parser.add_argument("--limit", type=int, default=12)
+    grep_parser.set_defaults(func=cmd_grep)
+
+    read_parser = subparsers.add_parser("read", help="delegate to t3-read-thread (last resort)")
+    read_parser.add_argument("id")
+    read_parser.add_argument("--msg", help="e.g. 3,7-9,-1")
+    read_parser.add_argument("--full", action="store_true")
+    read_parser.set_defaults(func=cmd_read)
+
+    args = parser.parse_args(argv)
+    if not FTS5 and args.command != "index":
+        print("warning: this Python's sqlite3 lacks FTS5 — falling back to slow LIKE scans", file=sys.stderr)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

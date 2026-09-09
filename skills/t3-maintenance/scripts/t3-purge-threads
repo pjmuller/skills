@@ -1,0 +1,719 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Bulk-purge old T3 threads from this machine — transcripts hold secrets.
+
+Threads keep every env var, token and pasted secret that ever crossed a turn, in
+SQLite *and* in the provider's own transcript files. `list` (default, always a
+dry run) shows which threads and files a purge would take (`--size` adds bytes). `apply` has
+two modes:
+
+  --mode soft   shells out to `t3-delete-thread` per thread (T3's own
+                thread.delete): sets deleted_at, stops the session, drops
+                attachments; we then unlink the resolved Claude/Codex .jsonl
+                transcripts + provider log — but every row stays in SQLite.
+  --mode hard   deletes the rows and files for real, with T3 closed.
+
+Hard purge is unsupported by T3: the store is event-sourced, and deleting whole
+event streams is only safe with the app closed (T3 rebuilds no aggregate from
+events on boot beyond the projections that already exist, and a live server
+would keep writing to the streams we are deleting). `apply --mode hard`
+therefore refuses unless the server is unreachable, no `T3 Code` process is
+running, and `--yes` is given. It backs up via `VACUUM INTO` first.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import uuid
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time
+
+T3_HOME = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3"))
+USERDATA = T3_HOME / "userdata"
+SETTINGS = USERDATA / "settings.json"
+ATTACHMENTS = USERDATA / "attachments"
+PROVIDER_LOGS = USERDATA / "logs" / "provider"
+SERVER_RUNTIME = USERDATA / "server-runtime.json"
+BACKUP_DIR = T3_HOME / "backups"
+CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+DEFAULT_LOG_DIR = Path(
+    os.environ.get(
+        "T3_MAINTENANCE_STATE_DIR",
+        Path.home() / ".local" / "state" / "t3-maintenance" / "actions",
+    )
+)
+
+DURATION_UNITS = {"h": 3600, "d": 86400}
+BUSY_STATUSES = {"running", "starting"}
+SESSION_ID = re.compile(r'"session_id"\s*:\s*"([0-9a-fA-F-]{36})"')
+TITLE_CHARS = 44
+PROJECT_CHARS = 16
+PROFILE_CHARS = 22
+
+# thread_id-keyed tables the native soft delete leaves behind. Order matters
+# only for readability; all of it happens in one transaction.
+THREAD_KEYED_TABLES = (
+    "projection_thread_messages",
+    "projection_thread_activities",
+    "projection_turns",
+    "projection_thread_sessions",
+    "provider_session_runtime",
+    "projection_pending_approvals",
+    "projection_thread_proposed_plans",
+    "checkpoint_diff_blobs",
+)
+
+
+def parse_duration(value: str) -> timedelta:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([hd])", value.strip().lower())
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"expected a duration like 12h or 3d; got {value!r}"
+        )
+    return timedelta(seconds=float(match.group(1)) * DURATION_UNITS[match.group(2)])
+
+
+def one_line(text: str, limit: int) -> str:
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def mb(byte_count: int) -> float:
+    return round(byte_count / 1_048_576, 1)
+
+
+@dataclass
+class Thread:
+    thread_id: str
+    project: str
+    project_id: str
+    workspace_root: str
+    title: str
+    updated_at: str
+    age_seconds: float
+    archived: bool
+    deleted: bool
+    settled: bool
+    pinned: bool
+    session_status: str | None
+    provider_name: str | None
+    instance_id: str | None
+    blocked: bool
+    cwd: str | None
+    session_ids: list[str] = field(default_factory=list)
+    messages: int = 0
+    events: int = 0
+    rows: dict[str, int] = field(default_factory=dict)
+    payload_bytes: int = 0
+    attachments: list[Path] = field(default_factory=list)
+    provider_log: Path | None = None
+    transcripts: list[Path] = field(default_factory=list)
+    transcript_resolved: bool = False
+
+    @property
+    def state(self) -> str:
+        if self.deleted:
+            return "deleted"
+        if self.archived:
+            return "archived"
+        if self.settled:
+            return "settled"
+        return "active"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "thread_id": self.thread_id,
+            "short_id": self.thread_id[:8],
+            "project": self.project,
+            "title": self.title,
+            "updated_at": self.updated_at,
+            "age_days": round(self.age_seconds / 86400, 1),
+            "state": self.state,
+            "profile": self.instance_id,
+            "provider": self.provider_name,
+            "messages": self.messages,
+            "events": self.events,
+            "rows": self.rows,
+            "payload_mb": mb(self.payload_bytes),
+            "attachments": [str(path) for path in self.attachments],
+            "provider_log": str(self.provider_log) if self.provider_log else None,
+            "transcripts": [str(path) for path in self.transcripts],
+            "transcript_resolved": self.transcript_resolved,
+        }
+
+
+# --- loading -----------------------------------------------------------------
+
+
+def load_threads(store: Path, now: datetime, with_sizes: bool) -> list[Thread]:
+    """One pass per table, grouped by thread_id. The read-only connection is
+    `query_only`, so no temp table can hold the candidate ids — every aggregate
+    is computed for all threads and filtered in Python."""
+    threads: dict[str, Thread] = {}
+    with connect_readonly(store) as connection:
+        for row in connection.execute("""
+            SELECT t.thread_id, t.title, t.updated_at, t.created_at,
+                   t.archived_at, t.deleted_at, t.settled_override, t.pinned_at,
+                   t.pending_approval_count, t.pending_user_input_count,
+                   t.model_selection_json,
+                   p.project_id, p.title AS project, p.workspace_root,
+                   s.status AS session_status, s.provider_name,
+                   s.provider_instance_id AS session_instance,
+                   r.provider_instance_id AS runtime_instance,
+                   r.runtime_payload_json, r.resume_cursor_json
+            FROM projection_threads t
+            JOIN projection_projects p ON p.project_id = t.project_id
+            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+            LEFT JOIN provider_session_runtime r ON r.thread_id = t.thread_id
+        """):
+            thread_id = row["thread_id"]
+            moment = maybe_time(row["updated_at"]) or maybe_time(row["created_at"])
+            threads[thread_id] = Thread(
+                thread_id=thread_id,
+                project=row["project"],
+                project_id=row["project_id"],
+                workspace_root=row["workspace_root"] or "",
+                title=row["title"],
+                updated_at=iso(moment) if moment else "",
+                age_seconds=(now - moment).total_seconds() if moment else 0.0,
+                archived=row["archived_at"] is not None,
+                deleted=row["deleted_at"] is not None,
+                settled=row["settled_override"] == "settled",
+                pinned=row["pinned_at"] is not None,
+                session_status=row["session_status"],
+                provider_name=row["provider_name"],
+                instance_id=(
+                    row["session_instance"]
+                    or row["runtime_instance"]
+                    or json_get(row["model_selection_json"], "instanceId")
+                ),
+                blocked=bool(row["pending_approval_count"])
+                or bool(row["pending_user_input_count"]),
+                cwd=json_get(row["runtime_payload_json"], "cwd"),
+                session_ids=cursor_session_ids(
+                    row["resume_cursor_json"], row["thread_id"]
+                ),
+            )
+
+        for row in connection.execute("""
+            SELECT thread_id, COUNT(*) AS n FROM projection_thread_messages
+            GROUP BY thread_id
+        """):
+            if row["thread_id"] in threads:
+                threads[row["thread_id"]].messages = row["n"]
+                threads[row["thread_id"]].rows["projection_thread_messages"] = row["n"]
+
+        events_size = "SUM(LENGTH(payload_json))" if with_sizes else "0"
+        for row in connection.execute(f"""
+            SELECT stream_id, COUNT(*) AS n, {events_size} AS bytes
+            FROM orchestration_events WHERE aggregate_kind = 'thread'
+            GROUP BY stream_id
+        """):
+            thread = threads.get(row["stream_id"])
+            if thread:
+                thread.events = row["n"]
+                thread.rows["orchestration_events"] = row["n"]
+                thread.payload_bytes += row["bytes"] or 0
+
+        activities_size = "SUM(LENGTH(payload_json))" if with_sizes else "0"
+        for row in connection.execute(f"""
+            SELECT thread_id, COUNT(*) AS n, {activities_size} AS bytes
+            FROM projection_thread_activities GROUP BY thread_id
+        """):
+            thread = threads.get(row["thread_id"])
+            if thread:
+                thread.rows["projection_thread_activities"] = row["n"]
+                thread.payload_bytes += row["bytes"] or 0
+
+        blobs_size = "SUM(LENGTH(diff))" if with_sizes else "0"
+        for row in connection.execute(f"""
+            SELECT thread_id, COUNT(*) AS n, {blobs_size} AS bytes
+            FROM checkpoint_diff_blobs GROUP BY thread_id
+        """):
+            thread = threads.get(row["thread_id"])
+            if thread:
+                thread.rows["checkpoint_diff_blobs"] = row["n"]
+                thread.payload_bytes += row["bytes"] or 0
+
+        for table, column in (
+            ("projection_turns", "thread_id"),
+            ("projection_thread_sessions", "thread_id"),
+            ("provider_session_runtime", "thread_id"),
+            ("projection_pending_approvals", "thread_id"),
+            ("projection_thread_proposed_plans", "thread_id"),
+        ):
+            for row in connection.execute(
+                f"SELECT {column} AS key, COUNT(*) AS n FROM {table} GROUP BY {column}"
+            ):
+                thread = threads.get(row["key"])
+                if thread:
+                    thread.rows[table] = row["n"]
+
+        for row in connection.execute("""
+            SELECT aggregate_id, COUNT(*) AS n FROM orchestration_command_receipts
+            WHERE aggregate_kind = 'thread' GROUP BY aggregate_id
+        """):
+            thread = threads.get(row["aggregate_id"])
+            if thread:
+                thread.rows["orchestration_command_receipts"] = row["n"]
+
+    return list(threads.values())
+
+
+def json_get(raw: str | None, key: str) -> str | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw).get(key)
+    except (ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def cursor_session_ids(raw: str | None, t3_thread_id: str = "") -> list[str]:
+    """T3 records the provider's own session ids in the resume cursor. Claude:
+    `resume` (+ `resumeSessionAt`, the checkpoint it resumed from). Codex: the
+    Codex thread id under `threadId` — distinct from T3's own thread id, which
+    Claude cursors also carry under that key and which must be ignored."""
+    if not raw:
+        return []
+    try:
+        cursor = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(cursor, dict):
+        return []
+    found: list[str] = []
+    for key in ("resume", "resumeSessionAt", "threadId"):
+        value = cursor.get(key)
+        if (
+            isinstance(value, str)
+            and len(value) == 36
+            and value != t3_thread_id
+            and value not in found
+        ):
+            found.append(value)
+    return found
+
+
+def claude_homes() -> list[Path]:
+    """Every Claude home T3 can launch: `homePath` per claudeAgent provider
+    instance, plus ~/.claude (empty homePath). Session ids are UUIDs, so a
+    transcript is looked up by id across all homes — no cwd-slug guessing
+    (Claude slugs every non-alphanumeric char, not just `/`)."""
+    try:
+        instances = json.loads(SETTINGS.read_text()).get("providerInstances", {})
+    except (OSError, ValueError):
+        instances = {}
+    homes = [Path.home() / ".claude"]
+    values = instances.values() if isinstance(instances, dict) else instances
+    for instance in values:
+        config = (instance or {}).get("config", {}) or {}
+        home = (config.get("homePath") or "").strip()
+        if home and (path := Path(home).expanduser()) not in homes:
+            homes.append(path)
+    return homes
+
+
+def attach_files(threads: list[Thread]) -> None:
+    by_prefix: dict[str, list[Path]] = defaultdict(list)
+    if ATTACHMENTS.is_dir():
+        for path in ATTACHMENTS.iterdir():
+            if path.is_file() and len(path.name) > 36:
+                by_prefix[path.name[:36]].append(path)
+    for thread in threads:
+        thread.attachments = by_prefix.get(thread.thread_id, [])
+        log = PROVIDER_LOGS / f"events.{thread.thread_id}.log"
+        thread.provider_log = log if log.is_file() else None
+        resolve_transcripts(thread)
+
+
+def resolve_transcripts(thread: Thread) -> None:
+    """Resolve the provider's own transcript files by session id across every
+    Claude home and the Codex sessions dir. Never guess: a thread with no
+    known session id stays `unresolved`."""
+    session_ids = list(thread.session_ids)
+    if thread.provider_log:
+        try:
+            text = thread.provider_log.read_text(errors="ignore")
+        except OSError:
+            text = ""
+        for found in SESSION_ID.findall(text):
+            if found not in session_ids:
+                session_ids.append(found)
+    if not session_ids:
+        thread.transcript_resolved = False
+        return
+    paths: list[Path] = []
+    for session_id in session_ids:
+        paths += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
+        for home in claude_homes():
+            paths += sorted((home / "projects").glob(f"*/{session_id}.jsonl"))
+    thread.transcript_resolved = True
+    thread.transcripts = [path for path in paths if path.is_file()]
+
+
+def select(args: argparse.Namespace, threads: list[Thread]) -> list[Thread]:
+    cohorts = []
+    if args.archived:
+        cohorts.append(lambda item: item.archived)
+    if args.settled:
+        cohorts.append(lambda item: item.settled)
+    if args.deleted:
+        cohorts.append(lambda item: item.deleted)
+    if not cohorts:
+        raise SystemExit(
+            "pick at least one cohort: --archived / --settled / --deleted"
+        )
+    cutoff = args.older_than.total_seconds()
+    rows = [
+        item
+        for item in threads
+        if any(match(item) for match in cohorts)
+        and item.age_seconds >= cutoff
+        and not item.pinned
+        and item.session_status not in BUSY_STATUSES
+        and not item.blocked
+    ]
+    if args.project:
+        needle = args.project.casefold()
+        rows = [
+            item
+            for item in rows
+            if needle in item.project.casefold()
+            or needle in item.project_id.casefold()
+            or needle in item.workspace_root.casefold()
+        ]
+    return sorted(rows, key=lambda item: item.updated_at)
+
+
+# --- list --------------------------------------------------------------------
+
+
+def cmd_list(args: argparse.Namespace, rows: list[Thread]) -> int:
+    if args.json:
+        print(json.dumps(summary(rows) | {"threads": [r.as_dict() for r in rows]},
+                         ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("No matching threads.")
+        return 0
+    for item in rows:
+        print(
+            f"{item.updated_at[:16]}  {item.state:<8}  "
+            f"{one_line(item.instance_id or '-', PROFILE_CHARS):<{PROFILE_CHARS}}  "
+            f"{one_line(item.project, PROJECT_CHARS):<{PROJECT_CHARS}}  "
+            f"{one_line(item.title, TITLE_CHARS):<{TITLE_CHARS}}  "
+            f"{item.messages:>5} msg  {item.events:>6} ev  "
+            f"{mb(item.payload_bytes):>7} MB"
+        )
+    totals = summary(rows)
+    print(f"\n{totals['threads']} threads · {totals['payload_mb']} MB reclaimable")
+    for table, count in sorted(totals["rows"].items()):
+        print(f"  {count:>8}  {table}")
+    files = totals["files"]
+    print(
+        f"  files: {files['attachments']} attachments · "
+        f"{files['provider_logs']} provider logs · "
+        f"{files['transcripts']} transcripts "
+        f"({files['unresolved']} threads unresolved)"
+    )
+    print("\nDry run. `apply --mode soft` for T3's own delete, "
+          "`apply --mode hard` (T3 closed) to purge the bytes.")
+    return 0
+
+
+def summary(rows: list[Thread]) -> dict[str, object]:
+    tables: dict[str, int] = defaultdict(int)
+    for item in rows:
+        for table, count in item.rows.items():
+            tables[table] += count
+        tables["projection_threads"] += 1
+    return {
+        "threads": len(rows),
+        "payload_mb": mb(sum(item.payload_bytes for item in rows)),
+        "rows": dict(tables),
+        "files": {
+            "attachments": sum(len(item.attachments) for item in rows),
+            "provider_logs": sum(1 for item in rows if item.provider_log),
+            "transcripts": sum(len(item.transcripts) for item in rows),
+            "unresolved": sum(1 for item in rows if not item.transcript_resolved),
+        },
+    }
+
+
+# --- apply -------------------------------------------------------------------
+
+
+def action_log(operation: str, args: argparse.Namespace, rows: list[Thread]) -> Path:
+    DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    path = (
+        DEFAULT_LOG_DIR
+        / f"{now.strftime('%Y%m%dT%H%M%S.%fZ')}-purge-{operation}-{uuid.uuid4().hex[:8]}.json"
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "started_at": iso(now),
+                "operation": f"purge-{operation}",
+                "store": str(args.store),
+                "filters": {
+                    key: str(value)
+                    for key, value in vars(args).items()
+                    if key not in {"func", "store"}
+                },
+                "threads": [item.as_dict() for item in rows],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return path
+
+
+def cmd_apply_soft(args: argparse.Namespace, rows: list[Thread]) -> int:
+    helper = shutil.which("t3-delete-thread")
+    if not helper:
+        raise SystemExit(
+            "t3-delete-thread is not on PATH; install t3-manage-thread first"
+        )
+    log_path = action_log("soft", args, rows)
+    # One helper call for the whole batch: a single auth session, one
+    # dispatch per id, one `ok ID` / `FAILED ID reason` line each.
+    result = subprocess.run(
+        [helper, "--yes", *(item.thread_id for item in rows)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    outcome: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) >= 2 and parts[0] in {"ok", "FAILED"}:
+            outcome[parts[1]] = "" if parts[0] == "ok" else (parts[2:] or ["?"])[0]
+    if not outcome:
+        raise SystemExit(
+            f"t3-delete-thread produced no results: {one_line(result.stderr, 300)}"
+        )
+    failures = 0
+    for item in rows:
+        detail = outcome.get(item.thread_id, "no result line from helper")
+        ok = item.thread_id in outcome and detail == ""
+        failures += not ok
+        files = 0
+        if ok:
+            # Provider transcripts + T3's provider log live outside SQLite and
+            # T3 never resumes a deleted thread, so they go now. Attachments
+            # are removed by T3's own delete reactor.
+            for path in [*item.transcripts] + (
+                [item.provider_log] if item.provider_log else []
+            ):
+                try:
+                    path.unlink()
+                    files += 1
+                except OSError as error:
+                    print(f"keep {path}: {error}")
+        print(
+            f"{'ok    ' if ok else 'FAILED'} {item.thread_id[:8]}  "
+            f"{files} files  {one_line(detail, 120)}"
+        )
+    unresolved = sum(1 for item in rows if not item.transcript_resolved)
+    print(f"\n{len(rows)} soft deletes, {failures} failed · log {log_path}")
+    if unresolved:
+        print(f"{unresolved} threads had no resolvable transcript (nothing removed).")
+    print("Rows still in SQLite — run `apply --mode hard` with T3 closed to purge.")
+    return 1 if failures else 0
+
+
+def t3_is_running() -> str | None:
+    """Reason T3 looks alive, or None when it is safe to touch the store."""
+    origin = None
+    try:
+        origin = json.loads(SERVER_RUNTIME.read_text()).get("origin")
+    except (OSError, ValueError):
+        origin = None
+    if origin:
+        probe = subprocess.run(
+            ["curl", "-fsS", "-m", "3", f"{origin}/.well-known/t3/environment"],
+            capture_output=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return f"T3 server is reachable at {origin}"
+    process = subprocess.run(
+        ["pgrep", "-f", "T3 Code"], capture_output=True, text=True, check=False
+    )
+    if process.returncode == 0 and process.stdout.strip():
+        return f"a 'T3 Code' process is running (pid {process.stdout.split()[0]})"
+    return None
+
+
+def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
+    blocker = t3_is_running()
+    if blocker:
+        raise SystemExit(
+            f"Refusing hard purge: {blocker}.\n"
+            "Quit T3 Code entirely (the store is event-sourced; a live server "
+            "keeps writing to the streams being deleted), then retry."
+        )
+    if not args.yes:
+        raise SystemExit("Refusing hard purge without --yes.")
+    store = Path(args.store)
+    before = store.stat().st_size
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = BACKUP_DIR / f"state-before-purge-{stamp}.sqlite"
+    log_path = action_log("hard", args, rows)
+
+    connection = sqlite3.connect(str(store))
+    try:
+        connection.execute("VACUUM INTO ?", (str(backup),))
+        print(f"backup {backup} ({mb(backup.stat().st_size)} MB)")
+        ids = [(item.thread_id,) for item in rows]
+        with connection:
+            for table in THREAD_KEYED_TABLES:
+                connection.executemany(f"DELETE FROM {table} WHERE thread_id = ?", ids)
+            connection.executemany(
+                "DELETE FROM orchestration_events "
+                "WHERE aggregate_kind = 'thread' AND stream_id = ?",
+                ids,
+            )
+            connection.executemany(
+                "DELETE FROM orchestration_command_receipts "
+                "WHERE aggregate_kind = 'thread' AND aggregate_id = ?",
+                ids,
+            )
+            connection.executemany(
+                "DELETE FROM projection_threads WHERE thread_id = ?", ids
+            )
+        removed = 0
+        for item in rows:
+            for path in [*item.attachments, *item.transcripts] + (
+                [item.provider_log] if item.provider_log else []
+            ):
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError as error:
+                    print(f"keep {path}: {error}")
+        print(f"removed {removed} files")
+        connection.execute("VACUUM")
+    finally:
+        connection.close()
+    after = store.stat().st_size
+    print(
+        f"{len(rows)} threads purged · store {mb(before)} MB → {mb(after)} MB "
+        f"(-{mb(before - after)} MB) · log {log_path}"
+    )
+    return 0
+
+
+def cmd_apply(args: argparse.Namespace, rows: list[Thread]) -> int:
+    if not rows:
+        print("No matching threads.")
+        return 0
+    if len(rows) > args.max:
+        print(f"Batch: oldest {args.max} of {len(rows)} matching threads (--max).")
+        rows = rows[: args.max]
+    return (
+        cmd_apply_soft(args, rows)
+        if args.mode == "soft"
+        else cmd_apply_hard(args, rows)
+    )
+
+
+# --- cli ---------------------------------------------------------------------
+
+
+def add_filters(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
+    )
+    parser.add_argument("--archived", action="store_true", help="cohort: archived")
+    parser.add_argument("--settled", action="store_true", help="cohort: settled")
+    parser.add_argument("--deleted", action="store_true", help="cohort: soft-deleted")
+    parser.add_argument(
+        "--older-than",
+        type=parse_duration,
+        default=parse_duration("3d"),
+        help="minimum age of updated_at, e.g. 3d or 12h (default 3d)",
+    )
+    parser.add_argument("--project", help="project name, id or workspace-root substring")
+    parser.add_argument(
+        "--all-projects",
+        action="store_true",
+        default=True,
+        help="every project (default; --project narrows it)",
+    )
+    parser.add_argument(
+        "--exclude-pinned",
+        action="store_true",
+        default=True,
+        help="always on: pinned threads are never purged",
+    )
+    parser.add_argument(
+        "--size",
+        action="store_true",
+        help="also sum bytes per thread (full scan of the event store, ~20s on "
+        "a multi-GB store); the default listing is row/file counts only",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    listing = subparsers.add_parser("list", help="dry run (default)")
+    add_filters(listing)
+    listing.add_argument("--json", action="store_true")
+
+    apply_parser = subparsers.add_parser("apply", help="soft delete or hard purge")
+    add_filters(apply_parser)
+    apply_parser.add_argument(
+        "--mode", choices=("soft", "hard"), required=True,
+        help="soft: t3-delete-thread per thread · hard: delete rows+files (T3 closed)",
+    )
+    apply_parser.add_argument(
+        "--max", type=int, default=50, help="batch cap: oldest N of the matches (default 50)"
+    )
+    apply_parser.add_argument("--yes", action="store_true", help="required by --mode hard")
+    apply_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `list` is the default verb, so bare filters work: `t3-purge-threads --settled`.
+    if not argv or argv[0] not in ("list", "apply", "-h", "--help"):
+        argv.insert(0, "list")
+    args = build_parser().parse_args(argv)
+    if args.command is None:
+        build_parser().print_help()
+        return 2
+    now = datetime.now(timezone.utc)
+    threads = load_threads(args.store, now, with_sizes=args.size)
+    rows = select(args, threads)
+    attach_files(rows)
+    return cmd_list(args, rows) if args.command == "list" else cmd_apply(args, rows)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

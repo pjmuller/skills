@@ -1,0 +1,184 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Read a T3 Code thread's transcript (user + assistant messages) without touching the live DB.
+
+Sibling of t3-spawn-thread / t3-ping-thread. T3 has no public "read thread" API for agents yet,
+but every message is projected into the local SQLite store (`projection_thread_messages`). This
+script copies the SQLite file (+ WAL) to a temp dir first, so the running T3 server is never
+locked, then prints the transcript in chronological order.
+
+Note: the projection trails the live inbox by a moment. A ping that just woke a thread
+(role:user) can be absent from an immediate read; verify fresh pings from the inbox, not
+here. Settled/idle threads have caught up and read reliably.
+
+    t3-read-thread THREAD_ID                 # markdown transcript, tool output truncated
+    t3-read-thread THREAD_ID --outline       # one line per message (#index, role, time, size, first line)
+    t3-read-thread THREAD_ID --msg 3,7-9,-1  # only those messages (0-based, negatives from end), full text
+    t3-read-thread THREAD_ID --last 5        # only the last 5 messages
+    t3-read-thread THREAD_ID --role user     # only what was typed/pinged into the thread
+    t3-read-thread THREAD_ID --full          # no truncation
+    t3-read-thread THREAD_ID --json          # raw rows
+    t3-read-thread --list [--project-root .] # recent threads (id, title, updated_at, project)
+
+THREAD_ID may be a prefix (>= 8 chars). Store: $T3CODE_HOME/userdata/state.sqlite, default
+~/.t3/userdata/state.sqlite. Read-only; nothing is written back.
+"""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+import json
+import os
+import re
+import shutil
+import sqlite3
+import sys
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+
+DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
+TRUNCATE = 1500
+OUTLINE_SNIPPET = 90
+
+
+def parse_spec(spec: str, total: int) -> list[int]:
+    """'3', '3,7', '7-9', '-1', mixed -> ordered unique 0-based indices (negatives from end)."""
+
+    def one(tok: str) -> int:
+        i = int(tok)
+        i = i + total if i < 0 else i
+        if not 0 <= i < total:
+            sys.exit(f"--msg index out of range: {tok} (thread has {total} message(s))")
+        return i
+
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.fullmatch(r"(-?\d+)-(-?\d+)", part)
+        if m:
+            lo, hi = one(m.group(1)), one(m.group(2))
+            out.extend(range(lo, hi + 1) if lo <= hi else range(lo, hi - 1, -1))
+        else:
+            out.append(one(part))
+    seen: set[int] = set()
+    return [i for i in out if not (i in seen or seen.add(i))]
+
+
+def snapshot(store: Path, tmp: Path) -> Path:
+    if not store.exists():
+        sys.exit(f"T3 store not found: {store}")
+    for suffix in ("", "-wal", "-shm"):
+        src = Path(str(store) + suffix)
+        if src.exists():
+            shutil.copy2(src, tmp / ("state.sqlite" + suffix))
+    return tmp / "state.sqlite"
+
+
+@contextmanager
+def connect(store: Path) -> Iterator[sqlite3.Connection]:
+    with tempfile.TemporaryDirectory(prefix="t3-read-thread.") as tmp_dir:
+        conn = sqlite3.connect(f"file:{snapshot(store, Path(tmp_dir))}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def resolve_thread(conn: sqlite3.Connection, thread_id: str) -> sqlite3.Row:
+    if len(thread_id) < 8:
+        sys.exit("THREAD_ID prefix must be at least 8 characters")
+    rows = conn.execute(
+        "SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, p.title AS project_title, "
+        "p.workspace_root FROM projection_threads t LEFT JOIN projection_projects p ON p.project_id = t.project_id "
+        "WHERE t.thread_id LIKE ? ORDER BY t.updated_at DESC",
+        (thread_id + "%",),
+    ).fetchall()
+    if not rows:
+        sys.exit(f"No T3 thread matches {thread_id}")
+    if len(rows) > 1 and not any(r["thread_id"] == thread_id for r in rows):
+        sys.exit("Ambiguous prefix: " + ", ".join(r["thread_id"] for r in rows))
+    return next((r for r in rows if r["thread_id"] == thread_id), rows[0])
+
+
+def list_threads(conn: sqlite3.Connection, project_root: str | None, limit: int) -> None:
+    sql = (
+        "SELECT t.thread_id, t.title, t.updated_at, p.title AS project_title, p.workspace_root "
+        "FROM projection_threads t LEFT JOIN projection_projects p ON p.project_id = t.project_id "
+        "WHERE t.deleted_at IS NULL"
+    )
+    args: list[object] = []
+    if project_root:
+        sql += " AND p.workspace_root = ?"
+        args.append(str(Path(project_root).resolve()))
+    sql += " ORDER BY t.updated_at DESC LIMIT ?"
+    args.append(limit)
+    for r in conn.execute(sql, args):
+        print(f"{r['thread_id']}  {r['updated_at'][:16]}  [{r['project_title'] or r['workspace_root']}]  {r['title'] or '<untitled>'}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("thread_id", nargs="?")
+    ap.add_argument("--list", action="store_true", help="list recent threads instead of reading one")
+    ap.add_argument("--project-root", help="with --list: only threads of this git root")
+    ap.add_argument("--limit", type=int, default=30, help="with --list: max rows")
+    ap.add_argument("--outline", action="store_true", help="one line per message: #index, role, time, size, first line")
+    ap.add_argument("--msg", help="only these messages: '3', '3,7', '7-9', '-1' (0-based, negatives from end)")
+    ap.add_argument("--last", type=int, help="only the last N messages")
+    ap.add_argument("--role", choices=["user", "assistant"], help="filter by role")
+    ap.add_argument("--full", action="store_true", help="do not truncate long messages")
+    ap.add_argument("--json", action="store_true", help="raw rows as JSON")
+    ap.add_argument("--store", type=Path, default=DEFAULT_STORE)
+    a = ap.parse_args(argv)
+
+    with connect(a.store) as conn:
+        if a.list:
+            list_threads(conn, a.project_root, a.limit)
+            return
+        if not a.thread_id:
+            ap.error("THREAD_ID required (or --list)")
+        thread = resolve_thread(conn, a.thread_id)
+        sql = "SELECT role, created_at, text FROM projection_thread_messages WHERE thread_id = ?"
+        args: list[object] = [thread["thread_id"]]
+        if a.role:
+            sql += " AND role = ?"
+            args.append(a.role)
+        sql += " ORDER BY created_at"
+        rows = conn.execute(sql, args).fetchall()
+        if a.msg and a.last:
+            ap.error("--msg and --last are mutually exclusive")
+        picked = list(enumerate(rows))  # index = position in the chronological, role-filtered list
+        if a.msg:
+            picked = [(i, rows[i]) for i in parse_spec(a.msg, len(rows))]
+        elif a.last:
+            picked = picked[-a.last :]
+        if a.json:
+            print(json.dumps({"thread": dict(thread), "messages": [dict(r) for _, r in picked]}, indent=1, ensure_ascii=False))
+            return
+        print(f"# {thread['title'] or '<untitled>'}")
+        shown = f"{len(picked)} of {len(rows)}" if len(picked) != len(rows) else str(len(rows))
+        print(f"thread {thread['thread_id']} · project {thread['project_title'] or thread['workspace_root']} · "
+              f"updated {thread['updated_at'][:19]} · {shown} message(s){' (archived)' if thread['archived_at'] else ''}\n")
+        for i, r in picked:
+            text = r["text"] or ""
+            if a.outline:
+                first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+                if len(first) > OUTLINE_SNIPPET:
+                    first = first[: OUTLINE_SNIPPET - 1] + "…"
+                print(f"#{i}  {r['role']:<9}  {r['created_at'][:16]}  {len(text)}c  {first}")
+                continue
+            if not a.full and not a.msg and len(text) > TRUNCATE:
+                text = text[:TRUNCATE] + f"\n…[{len(r['text']) - TRUNCATE} more chars; --full]"
+            print(f"## #{i} {r['role']} · {r['created_at'][:19]}\n{text}\n")
+
+
+if __name__ == "__main__":
+    main()

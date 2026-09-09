@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+install_dir="${T3_MAINTENANCE_INSTALL_DIR:-$HOME/.local/bin}"
+
+if [[ "${1:-}" == "--check" ]]; then
+  for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-limited t3-drafts t3-purge-threads; do
+    target="$install_dir/$name"
+    [[ -L "$target" && "$(readlink "$target")" == "$script_dir/$name" ]] || {
+      echo "missing or stale: $target" >&2
+      exit 1
+    }
+    echo "ok      $name ($target)"
+  done
+  exit 0
+fi
+
+if (($#)); then
+  echo "Usage: install [--check]" >&2
+  exit 2
+fi
+
+mkdir -p "$install_dir"
+for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-limited t3-drafts t3-purge-threads; do
+  ln -sfn "$script_dir/$name" "$install_dir/$name"
+  echo "installed $install_dir/$name"
+done

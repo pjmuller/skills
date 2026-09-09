@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# Post a user-message into an EXISTING T3 thread (cross-thread ping).
+# Sibling of t3-spawn-thread: shares lib/t3-common.sh plumbing, but targets a live
+# thread with a thread.turn.start instead of creating a new one. The message
+# arrives as a normal user turn in the target thread, using that thread's own
+# model selection, so its agent wakes up and processes it.
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-ping-thread [options] --thread THREAD_ID -- "message"
+
+Options:
+  --thread THREAD_ID   Target T3 thread (36-char uuid). Required.
+  --from LABEL         Optional sender label, prefixed as "[ping from LABEL]".
+  --retries N          Dispatch retries if the target is busy (default 3, 20s apart).
+  --allow-cross-project
+                       Confirm a deliberate current-project -> target-project ping.
+  --hide / --no-hide   Keep (or stop keeping) the target out of the sidebar with a detached
+                       snooze keeper; the agent keeps running. Default: preserve the target's
+                       current state — re-arm iff it is snoozed right now (T3 clears a snooze
+                       on every incoming turn), never hide a visible thread.
+  --dry-run            Resolve auth + target thread, send nothing.
+  -h, --help
+
+If no message argument is given, the message is read from stdin.
+EOF
+  exit "${1:-2}"
+}
+
+target_thread_id=""
+from_label=""
+retries=3
+dry_run=0
+allow_cross_project=0
+hide_choice=auto
+
+while (($#)); do
+  case "$1" in
+    --thread) [[ $# -ge 2 ]] || usage; target_thread_id="$2"; shift 2 ;;
+    --from)   [[ $# -ge 2 ]] || usage; from_label="$2"; shift 2 ;;
+    --retries) [[ $# -ge 2 ]] || usage; retries="$2"; shift 2 ;;
+    --allow-cross-project) allow_cross_project=1; shift ;;
+    --hide) hide_choice=on; shift ;;
+    --no-hide) hide_choice=off; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *) break ;;
+  esac
+done
+
+[[ "$target_thread_id" =~ ^[[:xdigit:]-]{36}$ ]] || {
+  echo "--thread requires a 36-char thread id, got: ${target_thread_id:-<empty>}" >&2
+  exit 2
+}
+
+if (($#)); then
+  message_text="$*"
+elif [[ ! -t 0 ]]; then
+  message_text="$(</dev/stdin)"
+else
+  echo "A message is required." >&2
+  usage
+fi
+[[ -n "${message_text//[[:space:]]/}" ]] || { echo "The message cannot be empty." >&2; exit 2; }
+if [[ -n "$from_label" ]]; then
+  message_text="[ping from $from_label] $message_text"
+fi
+
+t3_require jq curl uuidgen
+t3_bootstrap
+t3_issue_session t3-ping-thread 2m
+
+shell_snapshot="$(t3_shell_snapshot)"
+target_thread_json="$(printf '%s' "$shell_snapshot" | jq -c --arg id "$target_thread_id" \
+  '.threads[] | select(.id == $id)' | head -1)"
+[[ -n "$target_thread_json" ]] || {
+  echo "Target T3 thread was not found: $target_thread_id" >&2
+  exit 1
+}
+target_title="$(printf '%s' "$target_thread_json" | jq -r '.title // "<untitled>"')"
+target_project_id="$(printf '%s' "$target_thread_json" | jq -r '.projectId')"
+target_project_json="$(printf '%s' "$shell_snapshot" | jq -c --arg id "$target_project_id" \
+  '.projects[] | select(.id == $id)' | head -1)"
+target_project_title="$(printf '%s' "$target_project_json" | jq -r '.title // .workspaceRoot // "<unknown>"')"
+
+# Most pings are worker -> parent inside one repo. Fail closed when a stale UUID
+# resolves to another project; this is cheap to override when truly intentional.
+caller_project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+caller_project_root="$(cd "$caller_project_root" 2>/dev/null && pwd -P || true)"
+caller_project_json="$(printf '%s' "$shell_snapshot" | jq -c --arg root "$caller_project_root" \
+  '.projects[] | select(.deletedAt == null and .workspaceRoot == $root)' | head -1)"
+caller_project_id="$(printf '%s' "$caller_project_json" | jq -r '.id // empty')"
+caller_project_title="$(printf '%s' "$caller_project_json" | jq -r '.title // .workspaceRoot // "<unknown>"')"
+if (( ! allow_cross_project )) && [[ -n "$caller_project_id" && "$target_project_id" != "$caller_project_id" ]]; then
+  echo "Cross-project ping blocked: $caller_project_title -> $target_project_title." >&2
+  echo "Target thread: $target_title ($target_thread_id)" >&2
+  echo "If intentional, rerun the same command with --allow-cross-project." >&2
+  exit 1
+fi
+
+# Reuse the target thread's own model selection so the ping never switches its model.
+model_selection_json="$(printf '%s' "$target_thread_json" | jq -c \
+  '.modelSelection | {instanceId:(.instanceId // .provider), model:.model, options:(.options // [])}')"
+[[ -n "$model_selection_json" && "$model_selection_json" != "null" ]] || {
+  echo "Target thread has no model selection; refusing to guess." >&2
+  exit 1
+}
+
+# Preserve the target's visibility: T3 clears a snooze on every incoming turn, so a
+# thread that is snoozed NOW (raw snoozedUntil — even if a completed turn popped it,
+# the intent was "hidden") gets its keeper re-armed after the ping; a visible thread
+# (orchestrator, standalone) is never hidden by a ping. State comes from T3's own
+# shell API, not from the title and not from anything the caller remembers.
+target_snoozed="$(printf '%s' "$target_thread_json" | jq -r 'if .snoozedUntil != null then "yes" else "no" end')"
+case "$hide_choice" in
+  on) hide=1 ;;
+  off) hide=0 ;;
+  *) hide=0; [[ "$target_snoozed" == "yes" ]] && hide=1 ;;
+esac
+
+if ((dry_run)); then
+  printf 'Dry run — nothing sent.\n'
+  printf 'Target thread: %s (%s) · Project: %s\n' "$target_thread_id" "$target_title" "$target_project_title"
+  printf 'Model selection: %s\n' "$model_selection_json"
+  if ((hide)); then
+    printf 'Hide: would arm keeper (t3-hide-thread --hide %s)\n' "$target_thread_id"
+  else
+    printf 'Hide: off\n'
+  fi
+  exit 0
+fi
+
+printf 'Resolved target: %s (%s) · Project: %s\n' "$target_thread_id" "$target_title" "$target_project_title"
+
+# Arm the keeper BEFORE the turn.start: its startup (supervisor + auth session,
+# ~10-30s) then overlaps the ping instead of following it, and it is already
+# polling when T3's queued-turn-start window closes (see hide-thread.md). Arming
+# is idempotent, and an early arm on a failed ping is harmless: the thread is
+# snoozed already, the keeper just idles on it.
+if ((hide)); then
+  hide_helper="$(dirname "$(readlink -f "$0")")/t3-hide-thread"
+  if armed_output="$("$hide_helper" --hide "$target_thread_id" 2>&1)"; then
+    printf '%s\n' "$(printf '%s' "$armed_output" | tr '\n' ' ')"
+  else
+    printf 'Hide: FAILED to arm keeper (the thread will stay visible after the ping)\n' >&2
+    printf '%s\n' "$armed_output" | sed 's/^/  /' >&2
+  fi
+else
+  printf 'Hide: off\n'
+fi
+
+turn_payload="$(jq -n \
+  --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+  --arg threadId "$target_thread_id" \
+  --arg messageId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+  --arg text "$message_text" \
+  --argjson modelSelection "$model_selection_json" \
+  --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",createdAt:$createdAt}')"
+
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  if t3_dispatch "$turn_payload"; then
+    printf 'Pinged T3 thread: %s (%s)\n' "$target_thread_id" "$target_title"
+    exit 0
+  fi
+  if ((attempt > retries)); then
+    echo "Could not dispatch the ping after $attempt attempts (target busy or rejecting turns)." >&2
+    exit 1
+  fi
+  echo "note: dispatch failed (attempt $attempt), target may be mid-turn; retrying in 20s" >&2
+  sleep 20
+done

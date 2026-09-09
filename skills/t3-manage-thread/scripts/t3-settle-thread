@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+# Settle lifecycle for a T3 thread. Settle = STOP: thread.settle always stops the
+# thread's session, killing the provider process and every in-process sub-agent.
+# Visibility (hide/snooze) is a different lifecycle and lives in t3-hide-thread.
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-settle-thread [options] THREAD_ID
+
+settle = STOP. thread.settle always stops the thread's session, which kills the
+provider process (and every in-process sub-agent). Terminal: use it only once a
+worker's final report is in. To hide a LIVE worker instead, use t3-hide-thread.
+
+Options:
+  --wait [SECONDS]        Poll until the session is idle, then settle (default 120s)
+  --unsettle              Undo a settle: pin the thread back to active
+  --only-settled-at ISO   Refuse the unsettle unless the live thread still has this settledAt
+  --self                  Settle the CALLING thread once its current turn ends (resolves
+                          the thread from CODEX_THREAD_ID / CLAUDE_CODE_SESSION_ID, then
+                          --detach). Make it the LAST tool call, with no background
+                          tasks / sub-agents / monitors alive, then end the turn.
+  --detach                Pre-arm a detached SETTLE bound to the thread's CURRENT turn
+                          (implies --wait 21600). Accepts T3's thread ID, the provider
+                          ID exported as CODEX_THREAD_ID, or CLAUDE_CODE_SESSION_ID.
+                          Kills the session when that turn ends — only on the user's
+                          explicit "settle this thread" request.
+  --dry-run               Print the plan, dispatch nothing
+  -h, --help
+
+Settle is rejected while the session is starting/running, while an approval or
+user-input request is open, or while a turn start is queued.
+EOF
+  exit "${1:-2}"
+}
+
+# The visibility verbs moved out of this CLI (2026-09-05). Fail loudly with the
+# replacement rather than aliasing: settle and hide have opposite blast radii.
+moved() {
+  echo "$1 moved to t3-hide-thread (hiding is visibility-only; settling stops the session)." >&2
+  echo "Use: t3-hide-thread $2" >&2
+  exit 2
+}
+
+mode="settle"
+wait_seconds=0
+thread_id=""
+worker_label=""
+expected_turn_id=""
+expected_settled_at=""
+dry_run=0
+self_mode=0
+
+while (($#)); do
+  case "$1" in
+    --unsettle)
+      mode="unsettle"
+      shift
+      ;;
+    --wait)
+      if [[ ${2-} =~ ^[0-9]+$ ]]; then
+        wait_seconds="$2"
+        shift 2
+      else
+        wait_seconds=120
+        shift
+      fi
+      ;;
+    --hide) moved --hide "--hide THREAD_ID" ;;
+    --unhide) moved --unhide "--unhide THREAD_ID" ;;
+    --snooze) moved --snooze "--snooze [DURATION] THREAD_ID" ;;
+    --unsnooze) moved --unsnooze "--unsnooze THREAD_ID" ;;
+    --hide-worker) moved --hide-worker "--hide THREAD_ID" ;;
+    --detach)
+      mode="detach"
+      shift
+      ;;
+    --self)
+      mode="detach"
+      self_mode=1
+      shift
+      ;;
+    --launchd-worker|--detached-worker)
+      [[ -n "${2-}" ]] || usage
+      worker_label="$2"
+      shift 2
+      ;;
+    --only-turn)
+      [[ -n "${2-}" ]] || usage
+      expected_turn_id="$2"
+      shift 2
+      ;;
+    --only-settled-at)
+      [[ -n "${2-}" ]] || usage
+      expected_settled_at="$2"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if ((self_mode)); then
+  [[ $# -eq 0 ]] || {
+    echo "--self takes no THREAD_ID (it resolves the calling thread)" >&2
+    exit 2
+  }
+  thread_id="${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+  [[ -n "$thread_id" ]] || {
+    echo "--self: neither CODEX_THREAD_ID nor CLAUDE_CODE_SESSION_ID is set (not running inside a T3 thread?)" >&2
+    exit 1
+  }
+elif [[ $# -ge 1 ]]; then
+  thread_id="$1"
+elif ((dry_run)); then
+  thread_id="<THREAD_ID>"
+else
+  usage
+fi
+if ((! dry_run)); then
+  [[ "$thread_id" =~ ^[[:xdigit:]-]{36}$ ]] || {
+    echo "Not a thread ID: $thread_id" >&2
+    exit 2
+  }
+  [[ -z "$expected_turn_id" || "$expected_turn_id" =~ ^[[:xdigit:]-]{36}$ ]] || {
+    echo "Not a turn ID: $expected_turn_id" >&2
+    exit 2
+  }
+fi
+[[ -z "$expected_settled_at" || "$mode" == "unsettle" ]] || {
+  echo "--only-settled-at is valid only with --unsettle" >&2
+  exit 2
+}
+
+t3_base_dir="${T3CODE_HOME:-$HOME/.t3}"
+state_db="$t3_base_dir/userdata/state.sqlite"
+
+# T3 thread that owns the calling process (empty outside a T3 thread). Codex
+# exports its provider thread ID; Claude exports its session ID, which T3 keeps
+# in resume_cursor_json.resume.
+t3_own_thread_id() {
+  local own="${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+  [[ -n "$own" && -f "$state_db" ]] || return 0
+  sqlite3 "$state_db" \
+    "SELECT thread_id FROM provider_session_runtime
+     WHERE json_valid(resume_cursor_json)
+       AND (json_extract(resume_cursor_json, '\$.threadId') = '$own'
+            OR json_extract(resume_cursor_json, '\$.resume') = '$own')
+     ORDER BY last_seen_at DESC LIMIT 1;" 2>/dev/null || true
+}
+
+# A synchronous settle of the caller's own thread deadlocks: the server refuses
+# while the session is running, and the caller's turn IS the running session.
+if [[ "$mode" == "settle" ]] && ((! dry_run)) && command -v sqlite3 >/dev/null; then
+  own_thread_id="$(t3_own_thread_id)"
+  if [[ -n "$own_thread_id" && "$own_thread_id" == "$thread_id" ]]; then
+    echo "Refusing: $thread_id is the calling thread; a synchronous settle can't complete while this turn runs." >&2
+    echo "Use: t3-settle-thread --self   (as the LAST tool call, then end the turn)" >&2
+    exit 2
+  fi
+fi
+
+if ((dry_run)); then
+  printf 'Dry run — nothing dispatched.\n'
+  case "$mode" in
+    unsettle) printf 'Would dispatch thread.unsettle for %s\n' "$thread_id" ;;
+    detach) printf 'Would arm a detached settle bound to the current turn of %s\n' "$thread_id" ;;
+    *) printf 'Would dispatch thread.settle for %s (wait %ss)\n' "$thread_id" "$wait_seconds" ;;
+  esac
+  printf 'Settle STOPS the session and its sub-agents. To hide a live worker: t3-hide-thread --hide %s\n' \
+    "$thread_id"
+  exit 0
+fi
+
+# --- --detach: pre-armed self-settle for the current turn ---------------------
+# Kept for the "settle this thread when its current turn ends" request (the
+# t3-hello-world warm-up uses it). Settle stops the session, so this is only
+# correct when the user explicitly asked for it.
+if [[ "$mode" == "detach" ]]; then
+  t3_require sqlite3
+  requested_thread_id="$thread_id"
+  # T3 owns the visible thread ID; Codex/Claude export their provider thread ID.
+  # Resolve the latter through T3's provider runtime projection, and return the
+  # active turn with it: a pre-armed worker must be bound to THIS turn so it
+  # cannot settle an unrequested follow-up turn.
+  resolve_thread_projection() {
+    [[ -f "$state_db" ]] || return 1
+    local row
+    row="$(sqlite3 -separator '|' "$state_db" \
+      "SELECT thread.thread_id, COALESCE(session.active_turn_id, ''), COALESCE(session.status, '')
+       FROM projection_threads AS thread
+       LEFT JOIN projection_thread_sessions AS session ON session.thread_id = thread.thread_id
+       WHERE thread.thread_id = '$requested_thread_id' LIMIT 1;" 2>/dev/null || true)"
+    if [[ -z "$row" ]]; then
+      row="$(sqlite3 -separator '|' "$state_db" \
+        "SELECT runtime.thread_id, COALESCE(session.active_turn_id, ''), COALESCE(session.status, '')
+         FROM provider_session_runtime AS runtime
+         JOIN projection_threads AS thread ON thread.thread_id = runtime.thread_id
+         LEFT JOIN projection_thread_sessions AS session ON session.thread_id = runtime.thread_id
+         WHERE json_valid(runtime.resume_cursor_json)
+           AND (json_extract(runtime.resume_cursor_json, '\$.threadId') = '$requested_thread_id'
+                OR json_extract(runtime.resume_cursor_json, '\$.resume') = '$requested_thread_id')
+         ORDER BY runtime.last_seen_at DESC LIMIT 1;" 2>/dev/null || true)"
+    fi
+    [[ -n "$row" ]] || return 1
+    printf '%s\n' "$row"
+  }
+
+  # The first tool call can race T3's provider-runtime projection by a few
+  # milliseconds. Require this session's active turn, not the previous latest
+  # turn, before launching; never arm a guessed or stale T3 UUID/turn pair.
+  projection_row="$(resolve_thread_projection || true)"
+  projection_deadline=$((SECONDS + 30))
+  while :; do
+    IFS='|' read -r resolved_thread_id active_turn_id session_status <<<"$projection_row"
+    if [[ -n "$resolved_thread_id" && -n "$active_turn_id" && \
+      ("$session_status" == "starting" || "$session_status" == "running") ]]; then
+      break
+    fi
+    ((SECONDS < projection_deadline)) || {
+      echo "Could not resolve active T3 thread/turn for provider thread $requested_thread_id" >&2
+      exit 1
+    }
+    sleep 1
+    projection_row="$(resolve_thread_projection || true)"
+  done
+  thread_id="$resolved_thread_id"
+  expected_turn_id="$active_turn_id"
+  [[ "$thread_id" == "$requested_thread_id" ]] || \
+    echo "Resolved provider thread $requested_thread_id to T3 thread $thread_id" >&2
+  # Background work left in the session (sub-agents, backgrounded Bash, monitors)
+  # emits task.completed after the turn ends, which re-wakes and unsettles the
+  # thread. This very call is one open local_bash task; anything beyond it is a
+  # hazard worth flagging.
+  open_tasks="$(sqlite3 "$state_db" \
+    "SELECT COUNT(*) FROM projection_thread_activities s
+     WHERE s.thread_id = '$thread_id' AND s.kind = 'task.started'
+       AND NOT EXISTS (SELECT 1 FROM projection_thread_activities c
+                       WHERE c.thread_id = s.thread_id AND c.kind = 'task.completed'
+                         AND json_extract(c.payload_json, '\$.taskId') = json_extract(s.payload_json, '\$.taskId'));" \
+    2>/dev/null || echo 0)"
+  if ((open_tasks > 1)); then
+    echo "warning: $((open_tasks - 1)) background task(s) still open in $thread_id — their completion will unsettle the thread. Finish them before settling." >&2
+  fi
+  (( wait_seconds > 0 )) || wait_seconds=21600
+  detach_log="/tmp/t3-settle-${thread_id}.log"
+  detach_label="t3-settle.${thread_id//-/}.$$"
+  : >"$detach_log"
+  supervisor="$(t3_supervise "$detach_label" "$detach_log" \
+    /usr/bin/env HOME="$HOME" PATH="$PATH" T3CODE_HOME="$t3_base_dir" \
+    "$0" --detached-worker "$detach_label" \
+    --only-turn "$expected_turn_id" --wait "$wait_seconds" "$thread_id")"
+  echo "Armed settle for $thread_id turn $expected_turn_id ($supervisor; log: $detach_log)"
+  exit 0
+fi
+
+# Only launchd needs the submitted job removed by hand; systemd --collect and
+# setsid clean up after themselves.
+t3_extra_cleanup() {
+  [[ -n "$worker_label" ]] || return 0
+  command -v launchctl >/dev/null || return 0
+  launchctl remove "$worker_label" >/dev/null 2>&1 || true
+}
+trap t3_extra_cleanup EXIT
+
+t3_require jq curl uuidgen
+t3_bootstrap
+
+# Outlive the poll loop: token TTL = work window + 5 min of slack.
+auth_ttl_seconds=300
+((wait_seconds > 0)) && auth_ttl_seconds=$((wait_seconds + 300))
+t3_issue_session t3-settle-thread "${auth_ttl_seconds}s"
+
+snapshot="$(t3_thread_snapshot "$thread_id")"
+[[ -n "$snapshot" ]] || {
+  echo "T3 thread was not found: $thread_id" >&2
+  exit 1
+}
+
+# The server refuses a settle while the thread is still working; polling here
+# keeps callers from having to reimplement the retry loop.
+if ((wait_seconds > 0)) && [[ "$mode" == "settle" ]]; then
+  deadline=$((SECONDS + wait_seconds))
+  while :; do
+    latest_turn_id="$(printf '%s' "$snapshot" | jq -r '.latestTurn.turnId // empty')"
+    if [[ -n "$expected_turn_id" && "$latest_turn_id" != "$expected_turn_id" ]]; then
+      echo "Canceled settle: thread $thread_id advanced from turn $expected_turn_id to ${latest_turn_id:-none}."
+      exit 0
+    fi
+    session_status="$(printf '%s' "$snapshot" | jq -r '.session.status // "none"')"
+    blocked="$(printf '%s' "$snapshot" | jq -r \
+      'if (.hasPendingApprovals // false) or (.hasPendingUserInput // false) then "yes" else "no" end')"
+    if [[ "$session_status" != "starting" && "$session_status" != "running" && "$blocked" == "no" ]]; then
+      break
+    fi
+    ((SECONDS < deadline)) || {
+      echo "Timed out after ${wait_seconds}s waiting for thread $thread_id to go idle (session: $session_status)." >&2
+      exit 1
+    }
+    sleep 2
+    snapshot="$(t3_thread_snapshot "$thread_id")"
+  done
+fi
+
+if [[ -n "$expected_settled_at" ]]; then
+  live_override="$(printf '%s' "$snapshot" | jq -r '.settledOverride // empty')"
+  live_settled_at="$(printf '%s' "$snapshot" | jq -r '.settledAt // empty')"
+  if [[ "$live_override" != "settled" || "$live_settled_at" != "$expected_settled_at" ]]; then
+    echo "Canceled unsettle: thread $thread_id settlement changed since selection." >&2
+    exit 3
+  fi
+fi
+
+case "$mode" in
+  unsettle) t3_dispatch_command thread.unsettle "$thread_id" '.reason = "user"' ;;
+  *) t3_dispatch_command thread.settle "$thread_id" ;;
+esac
+
+t3_print_thread_state "$thread_id"

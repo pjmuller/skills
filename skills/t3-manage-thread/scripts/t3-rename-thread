@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-rename-thread [options] THREAD_ID -- "New title"
+       t3-rename-thread [options] --title "New title" THREAD_ID
+
+Hard-sets a thread's title via thread.meta.update. T3's auto-titler only
+replaces a title that still equals the seed it was given, so a renamed thread
+keeps its name (emoji included). Prefix ids (>= 8 chars) resolve.
+
+Options:
+  --title TEXT      New title (alternative to the trailing -- "title")
+  --prefix TEXT     Prepend TEXT to the CURRENT title instead (no-op if already prefixed)
+  --wait SECONDS    Wait until the thread has a non-placeholder title first
+                    (auto-titler done), max SECONDS; then apply --prefix/--title
+  --dry-run         Resolve everything, change nothing
+  -h, --help
+EOF
+  exit "${1:-2}"
+}
+
+thread_ref=""
+new_title=""
+prefix=""
+wait_seconds=0
+dry_run=0
+
+while (($#)); do
+  case "$1" in
+    --title) new_title="${2-}"; shift 2 ;;
+    --prefix) prefix="${2-}"; shift 2 ;;
+    --wait) wait_seconds="${2-}"; shift 2 ;;
+    --dry-run) dry_run=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; new_title="${*-}"; break ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *)
+      [[ -z "$thread_ref" ]] || { echo "Only one THREAD_ID allowed" >&2; usage; }
+      thread_ref="$1"; shift ;;
+  esac
+done
+
+[[ -n "$thread_ref" ]] || usage
+if [[ -n "$new_title" && -n "$prefix" ]]; then
+  echo "--title and --prefix are mutually exclusive" >&2
+  usage
+fi
+[[ -n "$new_title" || -n "$prefix" ]] || usage
+[[ "$wait_seconds" =~ ^[0-9]+$ ]] || { echo "--wait needs seconds" >&2; usage; }
+
+t3_require jq curl uuidgen sqlite3
+t3_bootstrap
+
+store="$t3_base_dir/userdata/state.sqlite"
+lookup() { # -> "thread_id|title" (read-only; the projection is eventually consistent)
+  sqlite3 -readonly -separator '|' "$store" \
+    "SELECT thread_id, COALESCE(title,'') FROM projection_threads
+     WHERE thread_id LIKE '$(printf '%s' "$thread_ref" | sed "s/'/''/g")%'
+       AND deleted_at IS NULL LIMIT 2;"
+}
+
+rows="$(lookup)"
+[[ -n "$rows" ]] || { echo "No thread matches: $thread_ref" >&2; exit 1; }
+[[ "$(printf '%s\n' "$rows" | wc -l | tr -d ' ')" == 1 ]] || {
+  echo "Ambiguous thread id: $thread_ref" >&2
+  printf '%s\n' "$rows" >&2
+  exit 1
+}
+thread_id="${rows%%|*}"
+current_title="${rows#*|}"
+
+is_placeholder() { [[ -z "$1" || "$1" == "New thread" ]]; }
+if ((wait_seconds > 0)); then
+  deadline=$((SECONDS + wait_seconds))
+  while is_placeholder "$current_title" && ((SECONDS < deadline)); do
+    sleep 2
+    rows="$(lookup)"; current_title="${rows#*|}"
+  done
+  if is_placeholder "$current_title"; then
+    echo "note: auto-titler did not name the thread within ${wait_seconds}s; continuing" >&2
+  fi
+fi
+
+if [[ -n "$prefix" ]]; then
+  if [[ "$current_title" == "$prefix"* ]]; then
+    printf 'Already prefixed: %s\n' "$current_title"
+    exit 0
+  fi
+  new_title="$prefix$current_title"
+fi
+
+printf 'Thread: %s\n  from: %s\n    to: %s\n' "$thread_id" "$current_title" "$new_title"
+if ((dry_run)); then
+  echo "Dry run — nothing changed."
+  exit 0
+fi
+
+t3_issue_session t3-rename-thread
+payload="$(jq -n \
+  --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+  --arg threadId "$thread_id" \
+  --arg title "$new_title" \
+  '{type:"thread.meta.update",commandId:$commandId,threadId:$threadId,title:$title}')"
+response="$(mktemp "${TMPDIR:-/tmp}/t3-rename.XXXXXX")"
+trap 'rm -f -- "$response"; t3_cleanup' EXIT
+if ! t3_dispatch "$payload" "$response"; then
+  echo "thread.meta.update rejected:" >&2
+  cat "$response" >&2
+  exit 1
+fi
+echo "Renamed."

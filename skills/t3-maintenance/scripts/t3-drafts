@@ -1,0 +1,346 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["ccl-chromium-reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader"]
+# ///
+"""List T3 Code composer drafts: the unsent text sitting in a thread's input box.
+
+Read-only. Drafts are not in T3's SQLite store; they live in the Electron
+renderer's localStorage (Chromium LevelDB, key `t3code:composer-drafts:v1`),
+which this copies to a temp dir before reading. Thread title/profile/project
+come from the projection store.
+
+There is no per-draft timestamp in localStorage, so the `updated` column and
+`--since` use the thread's own `updated_at` from the store.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import importlib.util
+import json
+import re
+import shutil
+import sys
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time, parse_time
+
+TZ = ZoneInfo("Europe/Brussels")
+DEFAULT_LEVELDB = (
+    Path.home() / "Library/Application Support/t3code/Local Storage/leveldb"
+)
+DRAFT_KEY = "t3code:composer-drafts:v1"
+DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+PROMPT_CHARS = 70
+TITLE_CHARS = 40
+MIN_PREFIX = 8
+
+
+def parse_since(value: str) -> datetime:
+    """`48h`/`7d`/`2w` relative, or an ISO timestamp."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([mhdw])", value.strip().lower())
+    if match:
+        seconds = float(match.group(1)) * DURATION_UNITS[match.group(2)]
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    try:
+        return parse_time(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected 7d/48h or ISO time; got {value!r}"
+        ) from error
+
+
+def load_state(leveldb: Path = DEFAULT_LEVELDB) -> dict:
+    """Newest `composer-drafts` record across all storage hosts.
+
+    Swappable: tests inject a state dict instead of calling this.
+    """
+    from ccl_chromium_reader import ccl_chromium_localstorage as ls
+
+    if not leveldb.is_dir():
+        raise SystemExit(f"T3 localStorage not found: {leveldb}")
+    temp = Path(tempfile.mkdtemp(prefix="t3-drafts-"))
+    try:
+        # The live DB is locked and written by the running app; read a copy.
+        shutil.copytree(leveldb, temp / "leveldb")
+        database = ls.LocalStoreDb(temp / "leveldb")
+        best = None
+        for host in database.iter_storage_keys():
+            for record in database.iter_records_for_storage_key(host):
+                if record.script_key != DRAFT_KEY:
+                    continue
+                if best is None or record.leveldb_seq_number > best.leveldb_seq_number:
+                    best = record
+        if best is None:
+            raise SystemExit(f"no {DRAFT_KEY} record in {leveldb}")
+        return json.loads(best.value).get("state", {})
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
+@dataclass
+class Draft:
+    thread_id: str
+    prompt: str
+    attachments: list[dict]
+    profile: str = "-"
+    title: str = ""
+    project: str = "-"
+    archived: bool = False
+    limited: bool = False
+    updated: datetime | None = None
+
+    @property
+    def first_line(self) -> str:
+        return next((line for line in self.prompt.splitlines() if line.strip()), "")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "thread_id": self.thread_id,
+            "short_id": self.thread_id[:MIN_PREFIX],
+            "profile": self.profile,
+            "title": self.title,
+            "project": self.project,
+            "archived": self.archived,
+            "limited": self.limited,
+            "updated": iso(self.updated) if self.updated else None,
+            "attachments": [
+                {"name": item.get("name", "?"), "size_bytes": size_of(item)}
+                for item in self.attachments
+            ],
+            "prompt": self.prompt,
+        }
+
+
+def size_of(attachment: dict) -> int:
+    try:
+        return int(attachment.get("sizeBytes") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def extract_drafts(state: dict) -> list[Draft]:
+    """Non-empty drafts from the `<environmentId>:<threadId>` keyed map."""
+    drafts = []
+    for key, value in (state.get("draftsByThreadKey") or {}).items():
+        prompt = (value.get("prompt") or "").strip()
+        attachments = value.get("attachments") or []
+        if not prompt and not attachments:
+            continue
+        drafts.append(Draft(key.rsplit(":", 1)[-1], prompt, attachments))
+    return drafts
+
+
+def load_threads(store: Path) -> dict[str, dict]:
+    with connect_readonly(store) as connection:
+        rows = connection.execute("""
+            SELECT t.thread_id, t.title, t.updated_at, t.archived_at, t.deleted_at,
+                   json_extract(t.model_selection_json,'$.instanceId') AS profile,
+                   p.title AS project
+            FROM projection_threads t
+            LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        """).fetchall()
+    return {row["thread_id"]: dict(row) for row in rows}
+
+
+def load_limited_ids(store: Path) -> set[str]:
+    """Reuse the sibling t3-limited CLI (no .py suffix, so import by path)."""
+    loader = SourceFileLoader("t3limited", str(Path(__file__).with_name("t3-limited")))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return {item.thread_id for item in module.load_limited(store)}
+
+
+def enrich(
+    drafts: list[Draft], threads: dict[str, dict], limited: set[str]
+) -> tuple[list[Draft], int]:
+    kept, orphans = [], 0
+    for draft in drafts:
+        row = threads.get(draft.thread_id)
+        if row is None or row.get("deleted_at"):
+            orphans += 1
+            continue
+        draft.profile = row.get("profile") or "-"
+        draft.title = " ".join((row.get("title") or "").split())
+        draft.project = row.get("project") or "-"
+        draft.archived = bool(row.get("archived_at"))
+        draft.limited = draft.thread_id in limited
+        draft.updated = maybe_time(row.get("updated_at"))
+        kept.append(draft)
+    kept.sort(key=lambda d: (d.updated is not None, d.updated or 0), reverse=True)
+    return kept, orphans
+
+
+def select(args: argparse.Namespace, drafts: list[Draft]) -> list[Draft]:
+    if not args.include_archived:
+        drafts = [d for d in drafts if not d.archived]
+    if args.limited:
+        drafts = [d for d in drafts if d.limited]
+    if args.since:
+        drafts = [d for d in drafts if d.updated is None or d.updated >= args.since]
+    if args.profile:
+        low = args.profile.casefold()
+        drafts = [d for d in drafts if low in d.profile.casefold()]
+    if args.project:
+        low = args.project.casefold()
+        drafts = [d for d in drafts if low in d.project.casefold()]
+    return drafts
+
+
+def cmd_list(args: argparse.Namespace, drafts: list[Draft], orphans: int) -> int:
+    drafts = select(args, drafts)
+    if orphans:
+        print(
+            f"note: {orphans} draft(s) for threads missing from the store",
+            file=sys.stderr,
+        )
+    if args.json:
+        print(json.dumps([d.as_dict() for d in drafts], ensure_ascii=False, indent=2))
+        return 0
+    if not drafts:
+        print("No drafts.")
+        return 0
+    for draft in drafts:
+        updated = (
+            draft.updated.astimezone(TZ).strftime("%m-%d %H:%M")
+            if draft.updated
+            else "-"
+        )
+        attachments = str(len(draft.attachments)) if draft.attachments else " "
+        print(
+            f"{draft.thread_id[:MIN_PREFIX]}  {draft.profile:<22}  {updated:<11}  "
+            f"{'L' if draft.limited else ' '}  {attachments:<2}  "
+            f"{draft.first_line[:PROMPT_CHARS]:<{PROMPT_CHARS}}  "
+            f"{draft.title[:TITLE_CHARS]}"
+        )
+    return 0
+
+
+def cmd_show(args: argparse.Namespace, drafts: list[Draft], orphans: int) -> int:
+    prefix = args.thread_id.strip()
+    if len(prefix) < MIN_PREFIX:
+        raise SystemExit(f"give at least {MIN_PREFIX} characters of the thread id")
+    matches = [d for d in drafts if d.thread_id.startswith(prefix)]
+    if not matches:
+        raise SystemExit(f"no draft for a thread starting with {prefix}")
+    if len(matches) > 1:
+        raise SystemExit(
+            "ambiguous prefix; matches " + ", ".join(d.thread_id for d in matches[:5])
+        )
+    draft = matches[0]
+    print(f"thread   {draft.thread_id}")
+    print(f"title    {draft.title}")
+    print(f"profile  {draft.profile}   project {draft.project}")
+    print(
+        f"updated  {draft.updated.astimezone(TZ).isoformat() if draft.updated else '-'}"
+        f"{'   ARCHIVED' if draft.archived else ''}"
+        f"{'   RATE-LIMITED' if draft.limited else ''}"
+    )
+    print()
+    print(draft.prompt)
+    if draft.attachments:
+        print()
+        for item in draft.attachments:
+            print(f"attachment  {item.get('name', '?')}  {size_of(item)} bytes")
+    if args.save_attachments:
+        save_attachments(draft, args.save_attachments)
+    return 0
+
+
+def save_attachments(draft: Draft, directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for item in draft.attachments:
+        url = item.get("dataUrl") or ""
+        _, _, payload = url.partition("base64,")
+        if not payload:
+            print(
+                f"skip  {item.get('name', '?')}: not a base64 data URL", file=sys.stderr
+            )
+            continue
+        name = Path(item.get("name") or "attachment").name
+        target = directory / f"{draft.thread_id[:MIN_PREFIX]}-{name}"
+        try:
+            target.write_bytes(base64.b64decode(payload))
+        except (binascii.Error, ValueError) as error:
+            print(f"skip  {name}: {error}", file=sys.stderr)
+            continue
+        print(f"saved {target}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--leveldb", type=Path, default=DEFAULT_LEVELDB, help=argparse.SUPPRESS
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    listing = subparsers.add_parser(
+        "list", help="one line per non-empty draft, newest thread first"
+    )
+    listing.add_argument(
+        "--profile", help="instanceId substring (dentai, kampkompas, codex, claude)"
+    )
+    listing.add_argument("--project", help="project title substring")
+    listing.add_argument(
+        "--since",
+        type=parse_since,
+        help="thread updated_at window, e.g. 7d, 30d, ISO time",
+    )
+    listing.add_argument(
+        "--limited",
+        action="store_true",
+        help="only threads currently blocked on a provider limit",
+    )
+    listing.add_argument(
+        "--include-archived",
+        action="store_true",
+        help="also archived threads (deleted are never shown)",
+    )
+    listing.add_argument("--json", action="store_true")
+
+    show = subparsers.add_parser(
+        "show", help="full draft text + attachments for one thread"
+    )
+    show.add_argument(
+        "thread_id",
+        metavar="THREAD_ID_PREFIX",
+        help=f"at least {MIN_PREFIX} characters",
+    )
+    show.add_argument(
+        "--save-attachments",
+        type=Path,
+        metavar="DIR",
+        help="decode attachments to DIR/<short_id>-<name>",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    limited = load_limited_ids(args.store)
+    drafts, orphans = enrich(
+        extract_drafts(load_state(args.leveldb)), load_threads(args.store), limited
+    )
+    if args.command == "show":
+        return cmd_show(args, drafts, orphans)
+    return cmd_list(args, drafts, orphans)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

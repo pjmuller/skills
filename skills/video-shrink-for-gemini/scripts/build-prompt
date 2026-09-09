@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Assemble a Gemini prompt: a filled-in header + reference files appended verbatim, each in its own
+# fenced block headed by its path (so PJ can delete one block/line by hand).
+# Usage: build-prompt --header FILLED_HEADER.md --out PROMPT.md FILE...
+set -euo pipefail
+header=""; out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --header) header=$2; shift 2 ;;
+    --out) out=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+[[ -f $header && -n $out ]] || { echo "usage: build-prompt --header H.md --out OUT.md FILE..." >&2; exit 1; }
+{
+  cat "$header"
+  for f in "$@"; do
+    [[ -f $f ]] || { echo "missing: $f" >&2; exit 1; }
+    printf '\n### %s\n`````\n' "$f"
+    cat "$f"
+    printf '\n`````\n'
+  done
+} > "$out"
+printf '%s  (%s words)\n' "$out" "$(wc -w < "$out" | tr -d ' ')"

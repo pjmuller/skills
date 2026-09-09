@@ -1,0 +1,4 @@
+interface:
+  display_name: "T3 Manage Thread"
+  short_description: "Spawn, ping, read or settle a visible T3 Code thread"
+  default_prompt: "Use $t3-manage-thread to start this task in a separate visible T3 Code thread, ping or read another thread, or settle a finished one."

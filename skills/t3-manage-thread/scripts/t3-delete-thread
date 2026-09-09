@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Soft-delete a T3 thread (dispatch thread.delete). The thread leaves every list,
+# its session is stopped and its attachments are removed — but its rows stay in
+# SQLite. For an actual purge of the bytes, see t3-purge-threads (t3-maintenance).
+set -euo pipefail
+[[ -n "${T3_SPAWN_DEBUG:-}" ]] && set -x
+
+# shellcheck source=lib/t3-common.sh
+source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: t3-delete-thread [--yes] [--dry-run] THREAD_ID [THREAD_ID...]
+
+SOFT delete. thread.delete stops the session, closes its terminals, deletes the
+thread's attachments and stamps projection_threads.deleted_at. Every message,
+event, activity and turn row stays in the SQLite store, and the provider's own
+transcript file (Claude/Codex) is untouched — so secrets pasted into the thread
+are still on disk. Use `t3-purge-threads` (t3-maintenance skill) to bulk-select
+old threads and to hard-purge rows + transcript files with T3 closed.
+
+Several ids share one auth session; one result line per id (`ok ID` /
+`FAILED ID reason`), continue on failure, exit 1 if any failed. No shell-
+snapshot lookup (it omits settled/archived threads and serialises every thread):
+the server validates the id itself.
+
+Options:
+  --yes       required; deletion is not undoable from the UI
+  --dry-run   print the plan, dispatch nothing
+  -h, --help
+EOF
+  exit "${1:-2}"
+}
+
+confirmed=0
+dry_run=0
+thread_id=""
+
+while (($#)); do
+  case "$1" in
+    --yes) confirmed=1; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage ;;
+    *) break ;;
+  esac
+done
+
+thread_ids=("$@")
+if ((${#thread_ids[@]} == 0)); then
+  ((dry_run)) && thread_ids=("<THREAD_ID>") || usage
+fi
+
+if ((! dry_run)); then
+  for thread_id in "${thread_ids[@]}"; do
+    [[ "$thread_id" =~ ^[[:xdigit:]-]{36}$ ]] || {
+      echo "Not a thread ID: $thread_id" >&2
+      exit 2
+    }
+  done
+  ((confirmed)) || {
+    echo "Refusing to delete ${#thread_ids[@]} thread(s) without --yes." >&2
+    exit 2
+  }
+fi
+
+if ((dry_run)); then
+  printf 'Dry run — nothing dispatched.\n'
+  printf 'Would dispatch thread.delete for %s (soft: rows stay in SQLite)\n' "${thread_ids[@]}"
+  exit 0
+fi
+
+t3_require jq curl uuidgen
+t3_bootstrap
+t3_issue_session t3-delete-thread 3600s
+
+failed=0
+for thread_id in "${thread_ids[@]}"; do
+  if reason="$(t3_dispatch_command thread.delete "$thread_id" 2>&1)"; then
+    echo "ok $thread_id"
+  else
+    failed=1
+    echo "FAILED $thread_id $(printf '%s' "$reason" | tr '\n' ' ')"
+  fi
+done
+exit "$failed"

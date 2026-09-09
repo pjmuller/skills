@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Put the t3-manage-thread helpers on PATH. Idempotent; run once per machine.
+#
+#   scripts/install            symlink the eight helpers into ~/.local/bin
+#   scripts/install --check    verify dependencies + that T3 Code is reachable
+#
+# Override the target dir with T3_MANAGE_BIN.
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
+bin_dir="${T3_MANAGE_BIN:-$HOME/.local/bin}"
+helpers=(t3-spawn-thread t3-ping-thread t3-read-thread t3-settle-thread t3-hide-thread t3-rename-thread t3-limits t3-delete-thread)
+
+check() {
+  local status=0 dependency
+  for dependency in jq curl uuidgen sqlite3 pnpm uv git; do
+    if command -v "$dependency" >/dev/null; then
+      printf 'ok      %s (%s)\n' "$dependency" "$(command -v "$dependency")"
+    else
+      printf 'MISSING %s\n' "$dependency"
+      status=1
+    fi
+  done
+
+  local base_dir="${T3CODE_HOME:-$HOME/.t3}"
+  local runtime_file="$base_dir/userdata/server-runtime.json"
+  if [[ -f "$runtime_file" ]]; then
+    local origin
+    origin="$(jq -er '.origin' "$runtime_file" 2>/dev/null || true)"
+    if [[ -n "$origin" ]] && curl -fsS "$origin/.well-known/t3/environment" >/dev/null 2>&1; then
+      printf 'ok      T3 Code reachable at %s (server %s)\n' "$origin" \
+        "$(curl -fsS "$origin/.well-known/t3/environment" | jq -r '.serverVersion')"
+    else
+      printf 'MISSING T3 Code is not reachable at %s\n' "${origin:-<no origin in $runtime_file>}"
+      status=1
+    fi
+  else
+    printf 'MISSING T3 Code is not running (%s)\n' "$runtime_file"
+    status=1
+  fi
+
+  local helper
+  for helper in "${helpers[@]}"; do
+    if [[ "$(command -v "$helper" 2>/dev/null || true)" == "$bin_dir/$helper" ]] &&
+       [[ "$(readlink -f "$bin_dir/$helper")" == "$script_dir/$helper" ]]; then
+      printf 'ok      %s on PATH\n' "$helper"
+    else
+      printf 'MISSING %s is not linked from %s (run scripts/install)\n' "$helper" "$bin_dir"
+      status=1
+    fi
+  done
+  return "$status"
+}
+
+if [[ "${1-}" == "--check" ]]; then
+  check
+  exit
+fi
+if [[ -n "${1-}" ]]; then
+  echo "Usage: install [--check]" >&2
+  exit 2
+fi
+
+mkdir -p "$bin_dir"
+for helper in "${helpers[@]}"; do
+  source_path="$script_dir/$helper"
+  target_path="$bin_dir/$helper"
+  chmod +x "$source_path"
+  if [[ -e "$target_path" && ! -L "$target_path" ]]; then
+    echo "SKIP $target_path (exists and is not a symlink)" >&2
+    continue
+  fi
+  if [[ -L "$target_path" && "$(readlink "$target_path")" == "$source_path" ]]; then
+    echo "OK   $target_path -> $source_path"
+    continue
+  fi
+  ln -sfn "$source_path" "$target_path"
+  echo "LINK $target_path -> $source_path"
+done
+
+case ":$PATH:" in
+  *":$bin_dir:"*) ;;
+  *) echo "note: $bin_dir is not on your PATH; add it to your shell profile." >&2 ;;
+esac
