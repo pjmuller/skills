@@ -14,7 +14,7 @@ Options:
                                                     instance id or a unique (case-insensitive)
                                                     substring of its display name.
   --provider PROFILE                                Alias for --profile
-  --model auto|sol|astra|haiku|fable|opus|MODEL      Default: inherit
+  --model auto|sol|astra|haiku|fable|opus|gemini|MODEL  Default: inherit
   --thinking auto|low|med|medium|high                Default: inherit, else high
   --source-thread THREAD_ID                          Override the detected parent
   --title TITLE                                     Default: first 72 prompt chars
@@ -246,6 +246,7 @@ normalize_model() {
     haiku) printf '%s' "claude-haiku-4-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
     opus) printf '%s' "claude-opus-5" ;;
+    gemini) printf '%s' "gemini-3.8-flash-high" ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -254,6 +255,7 @@ model_family() {
   case "$1" in
     gpt-*|codex-*) printf '%s' "codex" ;;
     claude-*) printf '%s' "claude" ;;
+    gemini-*) printf '%s' "antigravity" ;;
     *) printf '%s' "unknown" ;;
   esac
 }
@@ -262,6 +264,7 @@ provider_family() {
   case "$1" in
     codex) printf '%s' "codex" ;;
     claudeAgent*) printf '%s' "claude" ;;
+    antigravity*) printf '%s' "antigravity" ;;
     *) printf '%s' "unknown" ;;
   esac
 }
@@ -391,7 +394,15 @@ if [[ "$model_choice" != "auto" ]]; then
     provider_instance_id="codex"
   elif [[ "$provider_choice" == "auto" && "$requested_family" == "claude" && "$provider_instance_id" != claudeAgent* ]]; then
     provider_instance_id="claudeAgent"
+  elif [[ "$provider_choice" == "auto" && "$requested_family" == "antigravity" ]]; then
+    provider_instance_id="antigravity"
   fi
+elif [[ "$(provider_family "$provider_instance_id")" == "antigravity" && "$(model_family "$model_name")" != "antigravity" ]]; then
+  model_name="gemini-3.8-flash-high"
+elif [[ "$(model_family "$model_name")" == "antigravity" && "$provider_instance_id" == "codex" ]]; then
+  model_name="gpt-5.6-sol"
+elif [[ "$(model_family "$model_name")" == "antigravity" && "$provider_instance_id" == claudeAgent* ]]; then
+  model_name="claude-opus-5"
 elif [[ "$(model_family "$model_name")" == "codex" && "$provider_instance_id" != "codex" ]]; then
   model_name="claude-opus-5"
 elif [[ "$(model_family "$model_name")" == "claude" && "$provider_instance_id" == "codex" ]]; then
@@ -450,6 +461,30 @@ if [[ "$provider_instance_id" == "codex" ]]; then
 else
   thinking_option_id="effort"
 fi
+if [[ "$(provider_family "$provider_instance_id")" == "antigravity" ]]; then
+  # ACP exposes thinking variants as model IDs, not an effort option.
+  case "$model_name" in
+    gemini-*-flash-high|gemini-*-flash-medium|gemini-*-flash-low|gemini-*-flash)
+      if [[ "$thinking_choice" == "auto" ]]; then
+        case "$model_name" in
+          *-medium) thinking_level="medium" ;;
+          *-low) thinking_level="low" ;;
+          *) thinking_level="high" ;;
+        esac
+      fi
+      model_name="${model_name%-high}"
+      model_name="${model_name%-medium}"
+      model_name="${model_name%-low}"
+      model_name="$model_name-$thinking_level"
+      ;;
+    *)
+      if [[ "$thinking_choice" != "auto" ]]; then
+        echo "Antigravity thinking is encoded in the model ID; select the desired model variant without --thinking." >&2
+        exit 2
+      fi
+      ;;
+  esac
+fi
 model_selection_json="$(printf '%s' "$model_selection_json" | jq -c \
   --arg provider "$provider_instance_id" --arg model "$model_name" \
   --arg optionId "$thinking_option_id" --arg thinking "$thinking_level" '
@@ -457,6 +492,9 @@ model_selection_json="$(printf '%s' "$model_selection_json" | jq -c \
     | .model = $model
     | .options = ([.options[] | select(.id != "effort" and .id != "reasoningEffort")]
         + [{id:$optionId,value:$thinking}])')"
+if [[ "$(provider_family "$provider_instance_id")" == "antigravity" ]]; then
+  model_selection_json="$(printf '%s' "$model_selection_json" | jq -c '.options = []')"
+fi
 # Mirror T3's own rule (isModelSelectionProviderEnabled in the server bundle):
 # an explicit providerInstances entry wins (explicit false on either the
 # envelope or the config blob disables); a *missing* entry for a built-in

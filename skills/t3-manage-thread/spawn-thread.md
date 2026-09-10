@@ -39,6 +39,12 @@ Luna auto-titles from the first 72 chars.
 
 ## Profiles, models, briefs
 
+Antigravity: `--model gemini` selects provider `antigravity` and
+`gemini-3.8-flash-high`. `--profile antigravity` also defaults to Flash High when
+switching from another provider. Flash thinking lives in the model ID:
+`--thinking low|medium|high` selects its suffix; no separate effort option is sent.
+Explicit full model IDs work too. T3's Google login is separate from native `agy` login.
+
 `--profile` / `--model` / `--thinking` and their aliases: `--help`. When limits are
 tight, `t3-limits` ([limits.md](limits.md)) shows which profile still has room. Pass
 `--thinking` **only when the user names a level** — an explicitly chosen model

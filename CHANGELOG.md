@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Antigravity spawns: Gemini 3.8 Flash High default, model-encoded thinking; video skill delegates locally and requires verified Markdown output.
 - t3-setup: `migrate-claude-routines.md` — Claude Desktop local routines → t3-schedule (registry + prompt locations, mapping, disable step).
 
 ## v0.2.1 — 2026-09-09

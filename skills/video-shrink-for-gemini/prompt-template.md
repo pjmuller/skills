@@ -4,6 +4,8 @@ You get {{COUNT}} recording(s), {{DURATIONS}}, showing {{SITUATION}}.
 Mode: {{MODE}}. Spoken language: {{LANGUAGE}}; do not translate.
 Speakers: {{SPEAKERS}}; uncertain identity → Unknown.
 Deliver one markdown document per recording, following the applicable blocks below.
+Local execution: write each document to its specified absolute output path;
+return only paths and coverage gaps. Do not leave the transcript only in chat.
 Mixed mode requires both sections, aligned by timestamps.
 
 ## Visual-first rules (visual-first and mixed)
