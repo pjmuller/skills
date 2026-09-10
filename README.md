@@ -18,6 +18,7 @@ global for tools you call from any repo, repo-local for everything else.
 | [t3-usage-windows](skills/t3-usage-windows/SKILL.md) | you juggle several Claude/Codex accounts: warm five-hour windows, top up during the day, resume rate-limited threads | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y` |
 | [video-shrink-for-gemini](skills/video-shrink-for-gemini/SKILL.md) | a screen recording must be small enough for Gemini and come with a context-rich prompt | setup repo | `pnpm dlx skills add pjmuller/skills -s video-shrink-for-gemini -y` |
 | [disk-audit](skills/disk-audit/SKILL.md) | the Mac is filling up; deterministic audit, cleanup only of self-regenerating caches | setup repo | `pnpm dlx skills add pjmuller/skills -s disk-audit -y` |
+| [resource-audit](skills/resource-audit/SKILL.md) | the Mac is slow or hot; CPU/RAM pressure, process ownership, targeted stopping and recovery | setup repo | `pnpm dlx skills add pjmuller/skills -s resource-audit -y` |
 | [clickup-core](skills/clickup-core/SKILL.md) | agents in a product repo read/write ClickUp tasks (rich comments, attachments) against that repo's workspace config | product repo | `pnpm dlx skills add pjmuller/skills -s clickup-core -y` + a thin `clickup` skill holding `clickup.toml` |
 
 Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance.

@@ -1,12 +1,9 @@
 ---
 name: disk-audit
-description: macOS disk-usage audit, safe-cache cleanup, and CPU troubleshooting. Use for disk filling up, a slow or hot Mac, runaway processes, "what's eating my resources", or cleanup checks.
+description: Deterministic macOS disk-usage audit and safe-cache cleanup. Use for disk filling up, "what's eating my disk", the monthly check, or before/after cleanup. For CPU or RAM pressure, use resource-audit.
 ---
 
 # Disk audit
-
-For high CPU, heat, or runaway processes, use [CPU troubleshooting](cpu.md).
-For disk space, follow the audit below.
 
 Split of labour: the **script** measures, the **LLM** interprets and digs into anomalies.
 Never guess sizes — run the script. Both live at this skill’s `scripts/`, run from there.
