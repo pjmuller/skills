@@ -79,8 +79,8 @@ env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
 
 Substitute the account's home/email; verify intended identity and subscription.
 Never set global token variables or change `HOME` to isolate accounts. In T3,
-use the standard Claude binary, a distinct provider ID/colour (e.g. “Claude Work”),
-its own `CLAUDE_CONFIG_DIR`, and no token environment rows. Refresh until healthy.
+use the standard Claude binary, a distinct provider ID (e.g. “Claude Work”), its own
+`config.homePath`, and no environment rows. Refresh until healthy.
 
 Keychain gotcha: the claude CLI derives its Keychain item from the **value** of
 `CLAUDE_CONFIG_DIR` (`Claude Code-credentials-<sha256(abs path)[:8]>`; see
@@ -91,14 +91,13 @@ account's provider carries **no** `CLAUDE_CONFIG_DIR` row — setting it to
 string used at `claude auth login`.
 
 There is no T3 settings UI/CLI to add a Claude provider instance. Working path: quit
-T3 Code, back up `~/.t3/userdata/settings.json`, add a `providerInstances` entry
-(`driver: "claudeAgent"`, `displayName`, `accentColor`, `enabled`, plus the config the
-**existing** instances use — copy their shape, do not assume field names: older builds
-carry `config.homePath`, newer ones an `environment: [{name, value, sensitive}]` row),
-then start T3 and verify with `t3-limits` and
-`t3-spawn-thread --profile <name> --dry-run`. `t3-limits::claude_profiles()` reads
-`driver`, `enabled`, `displayName` and `config.homePath`; if the instance is invisible
-there, the shape is wrong.
+T3 Code, back up `~/.t3/userdata/settings.json`, add a `providerInstances` entry shaped
+like the existing `claudeAgent` one: `driver: "claudeAgent"`, `displayName`, `enabled: true`,
+`config: {binaryPath: <same claude binary>, homePath: "~/.claude_<slug>_home"}`. The
+default account keeps `homePath: ""`. **Never** add an `environment` row for
+`CLAUDE_CONFIG_DIR`: the driver and `t3-limits` key on `config.homePath`, and an env row
+makes the Keychain lookup miss ("Not logged in"). Start T3, verify with `t3-limits`
+(the instance must appear with its plan) and `t3-spawn-thread --profile <slug> --dry-run`.
 Skip CodexBar, cswap, and keychain-sync. If Codex is installed, verify its T3
 provider too; do not add Codex when absent. Start T3 and verify its runtime/server.
 
