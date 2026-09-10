@@ -64,6 +64,19 @@ Do this **before** `skills add -g`: it writes to the active
    If Codex is present, also link `~/.codex/AGENTS.md`; otherwise skip silently.
    Do not commit credentials or backups containing secrets.
 
+## Antigravity (when requested)
+
+- macOS CLI: `brew install --cask antigravity-cli`; run `agy` to sign in and finish
+  onboarding. Verify intended account/Starter quota; optional interaction-data sharing can be disabled.
+- T3: Providers → Antigravity → Enable → Install Antigravity → Sign in with Google.
+  This installs a separate ACP runtime and uses separate authentication. Leave binary path automatic.
+- Expired localhost callback: start a fresh T3 sign-in; if needed paste the final
+  redirect URL into T3's fallback field while that attempt is still active.
+- `t3-spawn-thread --model gemini` selects Gemini 3.8 Flash High. Verify a real file write.
+- Video: native CLI clipboard attachment works; T3 ACP 1.1.1 did not ingest media.
+  Follow [video execution](../../skills/video-shrink-for-gemini/SKILL.md#execute-and-verify);
+  require a verified Markdown transcript on disk.
+
 ## Accounts and providers
 
 Keep already healthy accounts. For each requested extra account, create

@@ -53,35 +53,32 @@ long recordings may need chunks or lower media resolution.
 
 ## Execute and verify
 
-Prefer an authenticated T3 Antigravity provider with `t3-spawn-thread` (see the
-`t3-manage-thread` skill) when its media-reading tools are available. T3 0.0.40 /
-ACP 1.1.1 failed the local video probe: no video or image inspection tool was
-available. For that runtime, use another media-capable route below, not a blind
-transcription spawn. Recheck when the runtime changes.
-Spawn from the source project with `--model gemini`
-(Gemini 3.8 Flash High), a `🏓` title, and a brief naming absolute video, prompt,
-context and output Markdown paths. The worker must read the brief, process the
-media, write the transcript to that path, and report the path plus any gaps.
-Read the file and verify it before settling the worker. Never delegate recursively.
+**Verified: native `agy` 1.2.0, Gemini 3.8 Flash High, Starter quota (2026-09-10).**
+A clipboard MP4 produced correct spoken words and visual changes in a Markdown file.
 
-If only `agy` is available, check its authentication and run locally with
-`--model gemini-3.8-flash-high --effort high`; request the same output file.
-T3 and native CLI authentication are separate; binary presence alone is insufficient.
+1. Check native authentication with `agy models`; T3 login is separate.
+2. Start interactive `agy --model gemini-3.8-flash-high --effort high` in the task folder.
+3. Copy the **video file** in Finder, then send Ctrl+V to the CLI. Verify the attachment
+   indicator shows `video/mp4` (or its actual type) and nonzero bytes before submission.
+   Pasting a pathname as text does not attach media. The submitted message may label
+   video as “image(s)” and later show 0 B; the pre-submit MIME/size is the useful check.
+4. Send the prepared brief with an absolute `<name>.transcript.md` output path.
+   Require direct media perception; prohibit deriving contents from logs or source code.
+   Approve the requested file write within the authorized task, then read it yourself.
+5. Verify spoken words, visual changes, timestamps and coverage against the recording;
+   report gaps. Return the Markdown path, preserve inputs, then exit the CLI.
 
-A filename in a prompt is not a video attachment. Require evidence of actual media
-ingestion: native video read/attachment, or extracted frames inspected with image
-tools plus audio transcription when needed. Label sampled visual narration and
-its gaps; frame inspection alone cannot produce a spoken transcript. Native CLI
-supports video paste in its interactive prompt; headless stream-json accepts only
-text blocks. Do not invent video attachment JSON. If a route cannot read media,
-try another available automated route; report a concrete blocker before falling
-back to user upload in AI Studio with the prepared video and prompt.
+Automate the interactive terminal and file clipboard when computer tools allow;
+do not hand the user a copy/paste prompt when this local route works. Headless
+stream-json accepts text blocks only; do not invent video attachment JSON.
+[Official media-paste docs](https://antigravity.google/docs/cli/prompting/).
 
-Check output is nonempty Markdown with timestamps, requested language/mode and
-coverage of the recording. Return the transcript path and relevant gaps; preserve
-source, prepared video and prompt for reuse. Never treat successful spawning or
-a chat-only transcript as completion. Never use other agents' logs or test-fixture
-generation commands as evidence of what the recording shows.
+T3 0.0.40 / ACP 1.1.1 failed the media probe: no video/image inspection tool.
+A T3 orchestrator can run the native CLI workflow above. If a future T3 runtime
+supports media, use `t3-spawn-thread --model gemini` with a `🏓` title and absolute
+input/output paths; verify the file before settling the worker. Never recursively
+delegate. If all automated media-capable routes fail, report the concrete blocker
+and provide the prepared video/prompt for AI Studio. Chat-only output is incomplete.
 
 ## PJ's local examples (optional context only)
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Antigravity: concise colleague setup; verified native CLI video-paste → Markdown transcript workflow.
 - resource-audit: incorporate compressed-memory, worker-swarm, and stale-server investigation recipes from existing operator guardrails.
 - resource-audit: separate macOS CPU/RAM diagnosis, process ownership, and recovery recipes; keep disk-audit focused on storage.
 - Antigravity spawns: Gemini 3.8 Flash High default, model-encoded thinking; video skill delegates locally and requires verified Markdown output.
