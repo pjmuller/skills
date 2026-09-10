@@ -26,11 +26,13 @@ could be transient.
 memory_pressure
 sysctl vm.swapusage
 vm_stat
+top -l 1 -o mem -n 20 -stats pid,command,mem,cmprs
 ps -axo pid,ppid,rss,etime,comm | sort -k3,3nr | head -25
 ```
 
 Use memory pressure to judge whether RAM is constrained; low free RAM alone is
-normal with caching. RSS is in KiB and helps rank candidates, but shared pages
+normal with caching. Prefer `top` MEM (physical footprint, including compressed
+memory); RSS alone can hide the largest offender. RSS is in KiB, and shared pages
 mean summing RSS overstates physical usage. Activity Monitor's Memory tab helps
 confirm pressure and group app helpers. Repeat measurements to distinguish
 stable large allocations from growth; swap already allocated does not prove
@@ -41,6 +43,9 @@ For a suspicious process, `vmmap -summary "$target_pid"` gives a memory breakdow
 once the PID below is set; access may be restricted. A single snapshot cannot
 establish a leak. Recheck pressure and growth after stopping the confirmed owner;
 swap usage need not immediately return to zero.
+
+For compressed-memory discrepancies, process swarms, or abandoned dev servers,
+see [RAM investigation recipes](ram.md).
 
 ## Identify the owner and work
 
