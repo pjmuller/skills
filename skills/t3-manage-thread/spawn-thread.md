@@ -5,7 +5,8 @@ t3-spawn-thread --title "Short title" -- "<task brief>"
 ```
 
 Uses the current git root (registers it as a T3 project if needed), inherits the
-calling thread's profile/model/thinking (terminal fallback: project default,
+calling thread's model/thinking and uses capacity-aware Claude profile selection
+(terminal fallback: project default,
 high), full-access in the local checkout, focuses T3 Code. Refuses to inherit
 from a thread in another T3 project unless `--allow-cross-project-source` — an
 accidental inherit silently runs the work under the wrong project/provider.
@@ -46,7 +47,7 @@ switching from another provider. Flash thinking lives in the model ID:
 Explicit full model IDs work too. T3's Google login is separate from native `agy` login.
 
 `--profile` / `--model` / `--thinking` and their aliases: `--help`. When limits are
-tight, `t3-limits` ([limits.md](limits.md)) shows which profile still has room. Pass
+tight, `t3-limits` ([limits.md](limits.md)) shows the same cached usage used by routing. Pass
 `--thinking` **only when the user names a level** — an explicitly chosen model
 otherwise gets its house default (sol/opus high · fable/astra medium · haiku low),
 which is the policy we want.
@@ -68,3 +69,27 @@ No first-class attachments: the composer uploads via a WebSocket RPC, and a
 `/tmp/<topic>-<date>.jpg`, not `~/.t3/userdata/attachments/` which the user may
 clear) and put the path in the brief; every harness can `Read` it. Verified:
 workers do open the file when the brief names it.
+
+## Automatic profile routing
+
+Omitted `--profile` (or `auto`) selects among enabled Claude accounts after resolving
+the requested/inherited model. Explicit profiles, including `T3_SPAWN_PROVIDER`,
+win unchanged (`--profile claude` still means the built-in `claudeAgent` account).
+Model, thinking and cross-project checks retain their existing rules.
+
+With multiple Claude accounts, reuse `t3-limits` reads/cache; no extra setup.
+Exclude exhausted session, weekly and matching model-only caps. Rank fresh accounts
+by their worst window's pace room, then minimum headroom. Ties prefer the inherited
+account, then instance ID. Paid overage never adds capacity or changes billing settings.
+
+Fresh capacity beats unknown/stale usage. With only unknown candidates, prefer the
+inherited account, then instance ID, and print that capacity is unverified. A stale
+exhausted cap remains excluded until its reset; a past reset is unknown, not proof
+of replenishment. If every candidate is exhausted, stop before creating a thread;
+`--profile NAME` is an intentional override. Usage can change after selection.
+
+A single Claude profile skips polling. Other providers retain existing selection:
+CodexBar cannot attribute quota to multiple T3 instances. Monthly overage spend caps
+are not subscription windows and are not a routing signal. Missing model caps cannot
+be inferred. Implementation: `scripts/lib/profile_routing.py`; shared collection,
+parsing and cache: `scripts/lib/t3_limits.py` (also used by the `t3-limits` CLI).

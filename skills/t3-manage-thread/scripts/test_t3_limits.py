@@ -19,7 +19,7 @@ from pathlib import Path
 SPEC = importlib.util.spec_from_loader(
     "t3_limits",
     importlib.machinery.SourceFileLoader(
-        "t3_limits", str(Path(__file__).resolve().parent / "t3-limits")
+        "t3_limits", str(Path(__file__).resolve().parent / "lib" / "t3_limits.py")
     ),
 )
 t3_limits = importlib.util.module_from_spec(SPEC)
@@ -140,7 +140,7 @@ class ClaudeRowsTest(unittest.TestCase):
                 t3_limits.USAGE_URL, 401, "unauthorized", {}, None
             )
 
-        accounts = t3_limits.claude_accounts(fetch=fetch, settings_path=settings)
+        accounts = t3_limits.claude_accounts(fetch=fetch, settings_path=settings, cache_path=settings.parent / "cache.json")
         self.assertEqual(
             [account.error for account in accounts], [t3_limits.EXPIRED_HINT]
         )
@@ -153,6 +153,7 @@ def settings_fixture() -> Path:
         json.dumps(
             {
                 "providerInstances": {
+                    "claudeAgent": {"driver": "claudeAgent", "enabled": False},
                     "grok": {"driver": "grok", "enabled": False},
                     "claudeAgent_work": {
                         "driver": "claudeAgent",

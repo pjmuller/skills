@@ -10,7 +10,7 @@ usage() {
 Usage: t3-spawn-thread [options] -- "task brief"
 
 Options:
-  --profile auto|codex|claude|NAME                  Default: inherit. NAME is a provider
+  --profile auto|codex|claude|NAME                  Default: capacity-aware. NAME is a provider
                                                     instance id or a unique (case-insensitive)
                                                     substring of its display name.
   --provider PROFILE                                Alias for --profile
@@ -265,7 +265,12 @@ provider_family() {
     codex) printf '%s' "codex" ;;
     claudeAgent*) printf '%s' "claude" ;;
     antigravity*) printf '%s' "antigravity" ;;
-    *) printf '%s' "unknown" ;;
+    *)
+      local driver
+      driver="$(jq -r --arg id "$1" '.providerInstances[$id].driver // "unknown"' "$t3_base_dir/userdata/settings.json")"
+      [[ "$driver" != "claudeAgent" ]] || driver="claude"
+      printf '%s' "$driver"
+      ;;
   esac
 }
 
@@ -407,6 +412,13 @@ elif [[ "$(model_family "$model_name")" == "codex" && "$provider_instance_id" !=
   model_name="claude-opus-5"
 elif [[ "$(model_family "$model_name")" == "claude" && "$provider_instance_id" == "codex" ]]; then
   model_name="gpt-5.6-sol"
+fi
+
+# Resolve capacity only after model intent and source-project safety are fixed.
+# Explicit profile/environment overrides never poll or switch accounts.
+if [[ "$provider_choice" == "auto" ]]; then
+  provider_instance_id="$(uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_routing.py" \
+    "$model_name" "$provider_instance_id" "$t3_base_dir/userdata/settings.json")"
 fi
 
 selected_family="$(model_family "$model_name")"

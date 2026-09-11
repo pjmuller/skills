@@ -10,7 +10,8 @@ t3-spawn-thread --title "Short title" -- "<task brief>"
 ```
 
 Use the helpers before touching T3's raw API, cookies or SQLite. Spawn uses the
-current git root, inherits the caller's profile/model/thinking, runs full-access
+current git root, inherits model/thinking, selects a Claude profile by capacity
+([routing policy](spawn-thread.md#automatic-profile-routing)), runs full-access
 in the local checkout, and prints the project + thread IDs — report those.
 
 ## 🏓 round-trip workers

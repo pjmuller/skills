@@ -31,9 +31,9 @@ Max account just shows `max_20x`. Both come from the local
 credential written at `claude auth login`, not from the API: if the tier looks wrong, re-login
 that home.
 
-Extra usage (paid overage) is never shown and never a routing input. It's off by default; when the user
-enables it on a profile it is a deliberate decision to keep code running there, so the spend is
-noise for pace decisions.
+Extra usage (paid overage) is never shown or counted as subscription capacity.
+[Automatic spawn routing](spawn-thread.md#automatic-profile-routing) excludes exhausted
+subscription windows regardless of overage settings; explicit profiles bypass routing.
 
 Cached: the usage endpoint is shared with other pollers (CodexBar, `t3-usage-windows topup`), so
 it answers 429 often. Each profile's last good payload is kept in `~/.t3/userdata/t3-limits-cache.json`
@@ -47,3 +47,6 @@ expired one prints `token expired — run any turn in that profile to refresh` a
 
 Related: [t3-usage-windows](../t3-usage-windows/SKILL.md) — confirm a window really
 reset before resuming blocked threads. GUI views: `cswap list`, the CodexBar menubar.
+
+Collection and cache live in `scripts/lib/t3_limits.py`, shared with spawn routing.
+`T3CODE_HOME` selects both settings and cache (default `~/.t3`).
