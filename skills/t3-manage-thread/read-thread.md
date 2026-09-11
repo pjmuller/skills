@@ -9,12 +9,15 @@ running server is never locked and nothing is written back. Keep that invariant 
 t3-read-thread THREAD_ID              # markdown transcript (long messages truncated)
 t3-read-thread THREAD_ID --outline    # one line per message: #index, role, time, size, first line
 t3-read-thread THREAD_ID --msg 3,7-9,-1   # only those messages, full text
+t3-read-thread THREAD_ID --grep 'placeholder|sms'   # outline of matching messages, showing the matching line
 ```
 
 Everything else (`--last`, `--role`, `--full`, `--json`, `--list --project-root`): `--help`.
 
-- **Progressive disclosure on huge threads**: `--outline` first, then `--msg N` for the few messages
-  that matter; `--full` only as a last resort. `--json` composes with `jq` for anything else.
+- **Progressive disclosure on huge threads**: `--outline` first (or `--grep REGEX` when you know
+  the keyword), then `--msg N` for the few messages that matter; `--full` only as a last resort.
+  `--json` composes with `jq` for anything else. `#index` numbers are positions in the
+  role-filtered list: `--role user` renumbers, so take indices from the same filter you read with.
 - The projection holds only the visible user/assistant messages — **not** tool calls or
   assistant reasoning. Don't conclude "the worker did nothing" from a quiet transcript.
 - Hand-rolled queries: projection columns are **snake_case** (`thread_id`, `settled_at`,

@@ -17,6 +17,7 @@ here. Settled/idle threads have caught up and read reliably.
     t3-read-thread THREAD_ID                 # markdown transcript, tool output truncated
     t3-read-thread THREAD_ID --outline       # one line per message (#index, role, time, size, first line)
     t3-read-thread THREAD_ID --msg 3,7-9,-1  # only those messages (0-based, negatives from end), full text
+    t3-read-thread THREAD_ID --grep placeholder  # outline of messages matching a regex (case-insensitive), with the hit
     t3-read-thread THREAD_ID --last 5        # only the last 5 messages
     t3-read-thread THREAD_ID --role user     # only what was typed/pinged into the thread
     t3-read-thread THREAD_ID --full          # no truncation
@@ -133,6 +134,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--outline", action="store_true", help="one line per message: #index, role, time, size, first line")
     ap.add_argument("--msg", help="only these messages: '3', '3,7', '7-9', '-1' (0-based, negatives from end)")
     ap.add_argument("--last", type=int, help="only the last N messages")
+    ap.add_argument("--grep", metavar="REGEX", help="only messages matching this case-insensitive regex; prints an outline "
+                    "with the first matching line (add --full for the whole messages)")
     ap.add_argument("--role", choices=["user", "assistant"], help="filter by role")
     ap.add_argument("--full", action="store_true", help="do not truncate long messages")
     ap.add_argument("--json", action="store_true", help="raw rows as JSON")
@@ -160,6 +163,11 @@ def main(argv: list[str] | None = None) -> None:
             picked = [(i, rows[i]) for i in parse_spec(a.msg, len(rows))]
         elif a.last:
             picked = picked[-a.last :]
+        pattern = re.compile(a.grep, re.IGNORECASE) if a.grep else None
+        if pattern:
+            picked = [(i, r) for i, r in picked if pattern.search(r["text"] or "")]
+            if not a.full and not a.json:
+                a.outline = True  # a grep answers "which messages"; open them with --msg / --full
         if a.json:
             print(json.dumps({"thread": dict(thread), "messages": [dict(r) for _, r in picked]}, indent=1, ensure_ascii=False))
             return
@@ -170,7 +178,8 @@ def main(argv: list[str] | None = None) -> None:
         for i, r in picked:
             text = r["text"] or ""
             if a.outline:
-                first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+                lines = (ln.strip() for ln in text.splitlines() if ln.strip())
+                first = next((ln for ln in lines if not pattern or pattern.search(ln)), "") if pattern else next(lines, "")
                 if len(first) > OUTLINE_SNIPPET:
                     first = first[: OUTLINE_SNIPPET - 1] + "…"
                 print(f"#{i}  {r['role']:<9}  {r['created_at'][:16]}  {len(text)}c  {first}")
