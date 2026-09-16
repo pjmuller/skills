@@ -48,6 +48,21 @@ comments/downloads; create/update return the raw task. Explicit `--description[-
 the body; `--append-description[-file]` preserves native content. Update assignees with repeated
 `--add-assignee` / `--rem-assignee`. Priority names come from config plus urgent/high/normal/low.
 
+## Comment discipline
+
+Humans reading ClickUp are the bottleneck; every write costs them attention. Defaults unless the
+project skill says otherwise:
+
+- Two writes per ticket: status at the start, one handoff/review at the end. No progress notes,
+  findings, plans or "still investigating" in between.
+- ≤ 5 short lines, in the reader's language and vocabulary. Lead with what the reader must do or
+  check, then what changed as they would see it. No file, function, column, commit or component
+  names when the reader is not an engineer.
+- Open with a native mention of the one person who must act (`--mention`). Don't ping the ticket's
+  author for their own ticket unless it is urgent.
+- Shipped facts only. Never post a pending decision, an open question or a "waiting for approval";
+  decide in the chat thread, then write the outcome as one line. In limbo → write nothing.
+
 ## Rich content and media
 
 Descriptions and comments share Markdown parsing: headings, inline emphasis/code/links,
