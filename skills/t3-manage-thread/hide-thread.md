@@ -11,8 +11,11 @@ session; that is [settle-thread.md](settle-thread.md).
 `thread.snooze` is visibility-only (collapsed Snoozed shelf; allowed while
 running), but T3 pops a snoozed thread back on every completed turn
 ([#6368](https://github.com/pingdotgg/t3code/issues/6368), fix PR #7179
-unmerged), on a pending approval/user-input, and on a fresh session error; any
-`thread.turn.start` (a ping) clears it. `--hide` therefore arms a detached
+unmerged; v0.0.42 source: the server keeps `snoozedUntil`, the client and the
+settlement policy derive a "raised hand" from activity newer than the snooze),
+on a pending approval/user-input, and on a fresh session error; any
+`thread.turn.start` (a ping) clears it. Custom snooze durations (#11800, v0.0.42)
+are UI sugar and change none of this. `--hide` therefore arms a detached
 **keeper** (launchd / `systemd-run --user` / `setsid`) that re-snoozes the thread.
 
 **After a ping** the thread is visible until the pinged turn starts, or at most
@@ -35,5 +38,8 @@ The invariant the keeper exists to hold: **a hidden worker stays hidden only
 while it is alive and unblocked** — the moment it dies, is settled/archived, or
 needs the user, it must become visible again. Poll interval, snooze horizon and the
 keeper's own deadline are tuning, not contract: see the `hide-worker` loop in
-`scripts/t3-hide-thread`. Re-arming is idempotent (🏓 spawn arms it; a ping to
+`scripts/t3-hide-thread`. Upstream caveat
+[#11788](https://github.com/pingdotgg/t3code/issues/11788): a derived snooze wake makes
+the thread an auto-settle candidate (default 3 idle days, per-project setting) — an
+idle hidden worker older than that gets killed by T3, not by us. Re-arming is idempotent (🏓 spawn arms it; a ping to
 an already-snoozed thread re-arms it). Log: `/tmp/t3-hide-<THREAD_ID>.log`.

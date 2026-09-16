@@ -14,7 +14,7 @@ here now exit non-zero pointing there.
 ## Hard rule: settle = stop (data loss)
 
 `thread.settle` always chains `thread.session.stop` for any session not already
-stopped, including `ready` (verified in T3 source, v0.0.38). The adapter closes
+stopped, including `ready` (verified in T3 source, v0.0.38; unchanged in v0.0.42). The adapter closes
 the query: SIGTERM/SIGKILL of the `claude`/`codex` process **and every background
 sub-agent inside it**. Settling a working thread destroys unreported work. So:
 settle only after a worker's final report is in and verified. The server refuses
@@ -43,5 +43,5 @@ the turn ends. Same kill semantics, so only on the user's explicit request. Rule
 and the caller's turn *is* the running session — it used to time out after 120 s).
 Related: [spawn-thread.md](spawn-thread.md), [cross-thread-ping.md](cross-thread-ping.md),
 fleet audits in `.agents/skills/t3-maintenance`. Upstream: no provider-facing
-settle/snooze tool as of v0.0.38 — see the
+settle/snooze tool as of v0.0.42 (backport #11303 open) — see the
 [upstream checkpoint](upstream-checkpoint.md) before extending.

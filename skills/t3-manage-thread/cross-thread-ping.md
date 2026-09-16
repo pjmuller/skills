@@ -7,7 +7,7 @@ t3-ping-thread --thread TARGET_THREAD_ID --from "sender label" -- "status messag
 Dispatches a `thread.turn.start` into the target (T3's own local orchestration
 API, same call as the UI composer): it arrives as a normal **user turn** and
 wakes that agent, using the target's own model. No provider-facing send tool
-exists as of v0.0.38. Flags (retries, cross-project, hide overrides): `--help`.
+exists as of v0.0.42. Flags (retries, cross-project, hide overrides): `--help`.
 
 - **Quoting trap (one home for this rule):** never put backticks or `$(...)` in
   a message or brief — the calling shell expands them first (2026-08-31). Long

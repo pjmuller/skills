@@ -1,11 +1,20 @@
 # Upstream replacement checkpoint
 
-Before extending these helpers, check upstream native orchestration. Orchestrator V2
-[PR #2829](https://github.com/pingdotgg/t3code/pull/2829) is unmerged but already
-contains native `create_threads`, `t3_thread_start`, `t3_thread_send`,
-`t3_thread_wait/read/list/interrupt`, and `delegate_task` MCP tools. Follow-up
-[PR #8678](https://github.com/pingdotgg/t3code/pull/8678) adds cross-project and
-worktree launch strategies.
+Before extending these helpers, check upstream native orchestration (last checked
+2026-09-16, T3 v0.0.42: nothing on stable; no `t3 thread` CLI, no thread MCP tools).
+Orchestrator V2 [PR #2829](https://github.com/pingdotgg/t3code/pull/2829) is unmerged but
+already contains native `create_threads`, `t3_thread_start`, `t3_thread_send`,
+`t3_thread_wait/read/list/interrupt`, `delegate_task` and scheduled tasks; its
+`agents/mcp-*` stack (#10554–#10566) adds launch-by-project, organize, metadata,
+attachments and forks — all merged into stack bases only. Open main-branch backports:
+[#11303](https://github.com/pingdotgg/t3code/pull/11303) (create/list/read/send/wait/
+interrupt/settle), [#11360](https://github.com/pingdotgg/t3code/pull/11360),
+[#11795](https://github.com/pingdotgg/t3code/pull/11795), [#11864](https://github.com/pingdotgg/t3code/pull/11864),
+rename [#12018](https://github.com/pingdotgg/t3code/pull/12018), auto-settle opt-out
+[#11846](https://github.com/pingdotgg/t3code/pull/11846). Tracker: Ideas
+[#8433](https://github.com/pingdotgg/t3code/discussions/8433). V2's blocking
+`delegate_task mode:"wait"` hits the 300 s HTTP ceiling ([#11168](https://github.com/pingdotgg/t3code/issues/11168)):
+keep the async 🏓 ping-back shape.
 
 Switch only after they ship on stable *and* appear in the active tool list, and
 only once the behaviours these helpers were built to guarantee still hold:
