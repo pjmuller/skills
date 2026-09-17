@@ -35,6 +35,13 @@ For visual-first or mixed, rapid actions may disappear at 0.5 fps: retain the or
 or produce a higher-frame-rate, source-resolution copy with ffmpeg when needed.
 Check sampled output frames before delivery. Keep the original.
 
+Native `agy` 1.2.5 has a **50 MiB per-attachment limit** (observed 2026-09-17:
+`media too large`, max 52,428,800 bytes). This is separate from Gemini API limits.
+For long screen recordings, retain readable resolution and split into overlapping
+clips below that limit; measure each file. Ten-minute clips with ten-second overlaps
+worked for a 720p / 1 fps recording. Give each clip its absolute recording offset,
+write separate transcript parts, then verify coverage and deduplicate overlaps.
+
 ## Prompt
 
 Fill [prompt-template.md](prompt-template.md): `MODE` = visual-first, transcript-first,
