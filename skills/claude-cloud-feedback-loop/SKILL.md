@@ -38,7 +38,8 @@ is a separate check when testing a deployed service.
 4. Inspect the rendered conversation every 30–60 seconds. A finished assistant message can
    still have running background tasks. Wait for terminal task results and a final report;
    nudge an idle session if completion notifications fail. If a prompt queues behind a stuck
-   run, the visible **Send now** control can deliver it promptly.
+   run, **Send now** interrupts the pending tool and delivers it promptly. Use that deliberately
+   to stop a stuck/out-of-scope check; let useful running checks finish normally.
 5. Read the response directly into the local session, or use its **Copy** button when clipboard
    access is available. Expand relevant tool failures; inspect screenshots when layout matters.
    Keep the session URL and actual tested SHA. Never claim a pass from a plan or partial reply.
