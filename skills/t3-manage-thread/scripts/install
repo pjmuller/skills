@@ -24,9 +24,14 @@ check() {
 
   local base_dir="${T3CODE_HOME:-$HOME/.t3}"
   local runtime_file="$base_dir/userdata/server-runtime.json"
+  local last_origin_file="$base_dir/userdata/last-server-origin"
+  local origin=""
   if [[ -f "$runtime_file" ]]; then
-    local origin
     origin="$(jq -er '.origin' "$runtime_file" 2>/dev/null || true)"
+  elif [[ -f "$last_origin_file" ]]; then
+    origin="$(tr -d '[:space:]' < "$last_origin_file")"
+  fi
+  if [[ -n "$origin" ]]; then
     if [[ -n "$origin" ]] && curl -fsS "$origin/.well-known/t3/environment" >/dev/null 2>&1; then
       printf 'ok      T3 Code reachable at %s (server %s)\n' "$origin" \
         "$(curl -fsS "$origin/.well-known/t3/environment" | jq -r '.serverVersion')"
@@ -35,7 +40,7 @@ check() {
       status=1
     fi
   else
-    printf 'MISSING T3 Code is not running (%s)\n' "$runtime_file"
+    printf 'MISSING T3 Code origin unavailable (%s or %s)\n' "$runtime_file" "$last_origin_file"
     status=1
   fi
 
