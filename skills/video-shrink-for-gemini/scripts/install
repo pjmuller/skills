@@ -3,11 +3,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 install_dir="${HOME}/.local/bin"
 if [[ "${1:-}" == "--check" ]]; then
-  for dependency in ffmpeg ffprobe; do
+  for dependency in ffmpeg ffprobe uv yt-dlp; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install this prerequisite with your package manager, then rerun scripts/install --check" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done
-  for helper in shrink-video build-prompt; do
+  for helper in shrink-video build-prompt download-fathom; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -15,7 +15,7 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 [[ $# == 0 ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
 mkdir -p "$install_dir"
-for helper in shrink-video build-prompt; do
+for helper in shrink-video build-prompt download-fathom; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
 done

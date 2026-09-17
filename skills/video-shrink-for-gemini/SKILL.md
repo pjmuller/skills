@@ -10,6 +10,12 @@ When Antigravity is available locally or through T3, run the transcription yours
 deliver `<name>.transcript.md` on disk, not just an LLM response or a copy/paste prompt.
 Install commands with `scripts/install`; verify dependencies with `scripts/install --check`.
 
+## Fathom input
+
+For a Fathom URL, use [the API download flow](fathom.md) before media inspection.
+It resolves private call URLs without browser/cookie automation and optionally saves
+transcript timings for verification. Never change sharing permissions.
+
 ## Inspect and choose mode
 
 Inspect 3–4 frames across each clip and measure duration with `ffprobe`.
@@ -28,19 +34,19 @@ Infer available context first; use your project's context files and `AGENTS.md`.
 scripts/shrink-video --preset normal "recording.mp4"
 ```
 
-Bare filenames resolve in `~/screenshots`, then `~/Downloads`. Output audio is mono
-16 kHz AAC. Presets: normal = 0.5 fps / 1280px cap; heavy = 0.25 fps / 1280px;
-extreme = 0.2 fps / 854px. Never choose a preset that makes screen text unreadable.
-For visual-first or mixed, rapid actions may disappear at 0.5 fps: retain the original
-or produce a higher-frame-rate, source-resolution copy with ffmpeg when needed.
-Check sampled output frames before delivery. Keep the original.
+Bare filenames resolve in `~/screenshots`, then `~/Downloads`. Keep the original.
+Output uses H.264 slow encoding and mono 16 kHz AAC at 32 kb/s for meeting speech.
+Normal = 0.5 fps / CRF 24 / 1280px cap; compact = same cadence / CRF 28;
+heavy = 0.25 fps / CRF 26 / 1280px; extreme = 0.2 fps / CRF 30 / 854px.
+For 720p screen shares, preserve 720p: try normal, compact, then heavy before chunking.
+Never use extreme when small screen text matters. Rapid actions may require source
+frames or higher fps; inspect output speech and small text before accepting a recipe.
 
-Native `agy` 1.2.5 has a **50 MiB per-attachment limit** (observed 2026-09-17:
-`media too large`, max 52,428,800 bytes). This is separate from Gemini API limits.
-For long screen recordings, retain readable resolution and split into overlapping
-clips below that limit; measure each file. Ten-minute clips with ten-second overlaps
-worked for a 720p / 1 fps recording. Give each clip its absolute recording offset,
-write separate transcript parts, then verify coverage and deduplicate overlaps.
+Native `agy` 1.2.5 rejects files over **50 MiB (52,428,800 bytes)**, separately from
+Gemini API limits. A tested 46-minute 720p meeting fit in one file: normal 38.6 MiB,
+compact 29.3 MiB, heavy 24.4 MiB. These are examples, not size guarantees.
+Read [size fitting and chunk fallback](compression.md) when output exceeds the limit.
+Prefer the fewest measured-to-fit clips; do not default to arbitrary ten-minute chunks.
 
 ## Prompt
 

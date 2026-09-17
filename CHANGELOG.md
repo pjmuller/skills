@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- video-shrink-for-gemini: browser-free Fathom API download and timing references; smaller readable 720p presets, measured 50 MiB fitting and minimal-chunk fallback.
 - codexbar-setup: standalone macOS guide and Python helper for shared native profiles, bidirectional Claude credential sync and expiry alerts; linked from T3 setup.
 - t3-manage-thread: clarify standalone/no-ping scope for parent tasks versus round-trip reviewers.
 - t3-spawn-thread: model-aware Claude account routing from shared cached quota/pace data; explicit profiles win, known exhausted accounts are excluded, unknown capacity is reported.

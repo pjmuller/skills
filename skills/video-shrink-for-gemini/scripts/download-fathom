@@ -1,0 +1,79 @@
+#!/usr/bin/env -S uv run python
+"""Resolve a Fathom call with its API, then download the existing share recording."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
+
+
+def resolve(url, timings=False):
+    parsed = urlparse(url)
+    match = re.fullmatch(r"/calls/(\d+)/?", parsed.path)
+    if parsed.scheme != "https" or parsed.hostname != "fathom.video":
+        raise ValueError("Expected an https://fathom.video URL")
+    share_input = bool(re.fullmatch(r"/share/[A-Za-z0-9_-]+/?", parsed.path))
+    if share_input and not timings:
+        return {"source_url": url, "share_url": url}
+    if share_input:
+        match = True
+    if not match:
+        raise ValueError("Expected /calls/ID or /share/TOKEN")
+    key = os.environ.get("FATHOM_API_KEY", "").strip()
+    if not key:
+        raise ValueError("FATHOM_API_KEY missing; load your existing Fathom API environment")
+    endpoint = "https://api.fathom.ai/external/v1/meetings"
+    seen = set()
+    while endpoint:
+        with urlopen(Request(endpoint, headers={"X-Api-Key": key}), timeout=60) as response:
+            data = json.load(response)
+        for meeting in data.get("items", []):
+            if (share_input and meeting.get("share_url", "").rstrip("/") == url.rstrip("/")) or (not share_input and urlparse(meeting.get("url", "")).path.rstrip("/") == f"/calls/{match[1]}"):
+                share = meeting.get("share_url", "")
+                p = urlparse(share)
+                if p.scheme != "https" or p.hostname != "fathom.video" or not p.path.startswith("/share/"):
+                    raise ValueError("Recording has no valid existing Fathom share URL")
+                return {"source_url": url, "share_url": share, "recording_id": meeting["recording_id"]}
+        cursor = data.get("next_cursor")
+        if cursor in seen:
+            raise ValueError("Fathom repeated a pagination cursor")
+        if cursor:
+            seen.add(cursor)
+        endpoint = "https://api.fathom.ai/external/v1/meetings?" + urlencode({"cursor": cursor}) if cursor else None
+    raise ValueError("Call not found in the configured Fathom account")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("url")
+    parser.add_argument("--out", type=Path, required=True, help="Private output directory; must be ignored when inside git")
+    parser.add_argument("--resolve-only", action="store_true", help="Save source metadata without downloading")
+    parser.add_argument("--timings", action="store_true", help="Also save Fathom transcript timing reference")
+    args = parser.parse_args()
+    out = args.out.expanduser().resolve()
+    os.umask(0o077)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    in_git = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=out, capture_output=True).returncode == 0
+    if in_git and subprocess.run(["git", "check-ignore", "-q", str(out / "source.json")], cwd=out).returncode:
+        parser.error("Output must be git-ignored; add the run directory to git info/exclude first")
+    try:
+        source = resolve(args.url, args.timings)
+        (out / "source.json").write_text(json.dumps(source, indent=2) + "\n")
+        if args.timings:
+            endpoint = f"https://api.fathom.ai/external/v1/recordings/{source['recording_id']}/transcript"
+            with urlopen(Request(endpoint, headers={"X-Api-Key": os.environ["FATHOM_API_KEY"].strip()}), timeout=60) as response:
+                reference = json.load(response).get("transcript", [])
+            (out / "fathom-timings.json").write_text(json.dumps(reference, indent=2) + "\n")
+        if not args.resolve_only:
+            subprocess.run(["yt-dlp", "--no-playlist", "--no-overwrites", "--no-progress", "--abort-on-unavailable-fragments",
+                            "--concurrent-fragments", "4", "-o", str(out / "source.%(ext)s"), source["share_url"]], check=True)
+        print(f"Saved recording artifacts in {out}")
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"Fathom download failed: {exc}\n")
+
+
+if __name__ == "__main__":
+    main()
