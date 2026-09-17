@@ -12,6 +12,7 @@ global for tools you call from any repo, repo-local for everything else.
 | Skill | You need it when… | Scope | Install (then `scripts/install` + `--check`) |
 | --- | --- | --- | --- |
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
+| [codexbar-setup](skills/codexbar-setup/SKILL.md) | CodexBar should share native profiles with T3/Codex and keep Claude credentials fresh (macOS) | global | `pnpm dlx skills add pjmuller/skills -s codexbar-setup -g -y` |
 | [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-schedule -y` |
 | [t3-maintenance](skills/t3-maintenance/SKILL.md) | you orchestrate many worker threads: fleet view, stalled workers, unsent drafts, purge, prompt mining | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-maintenance -y` |
 | [t3-find-thread](skills/t3-find-thread/SKILL.md) | "which thread did we discuss X in?"; full-text search over local transcripts, jump to it | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-find-thread -y` |

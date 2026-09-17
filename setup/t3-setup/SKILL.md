@@ -111,7 +111,8 @@ default account keeps `homePath: ""`. **Never** add an `environment` row for
 `CLAUDE_CONFIG_DIR`: the driver and `t3-limits` key on `config.homePath`, and an env row
 makes the Keychain lookup miss ("Not logged in"). Start T3, verify with `t3-limits`
 (the instance must appear with its plan) and `t3-spawn-thread --profile <slug> --dry-run`.
-Skip CodexBar, cswap, and keychain-sync. If Codex is installed, verify its T3
+For CodexBar, follow [the optional quota/profile setup](codexbar.md) when requested.
+If Codex is installed, verify its T3
 provider too; do not add Codex when absent. Start T3 and verify its runtime/server.
 
 ## Install in dependency order

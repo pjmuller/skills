@@ -1,0 +1,255 @@
+#!/usr/bin/env -S uv run --script
+"""Maintain explicit Claude live/stash mappings; never perform OAuth refreshes."""
+import argparse
+import fcntl
+import getpass
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+import sys
+import time
+
+CONFIG = Path.home() / '.config/codexbar-profiles.json'
+LABEL = 'com.t3-skills.codexbar-profiles'
+
+
+def profiles(path):
+    rows = json.loads(path.read_text())['profiles']
+    names, homes, slots = set(), set(), set()
+    for row in rows:
+        name, home = row['name'], row['home']
+        if not isinstance(name, str) or not name or name in names:
+            raise ValueError('profile names must be unique nonempty strings')
+        names.add(name)
+        if home is not None:
+            home = os.path.expanduser(home)
+            if not os.path.isabs(home):
+                raise ValueError('home must be absolute, ~/..., or null for default')
+        row['home'] = home
+        if home in homes:
+            raise ValueError('duplicate profile home')
+        homes.add(home)
+        slot = row.get('slot')
+        if slot is not None:
+            if type(slot) is not int or slot < 1 or slot in slots or not row.get('email'):
+                raise ValueError('stash mapping needs unique positive slot and email')
+            slots.add(slot)
+    return rows
+
+
+def service(home):
+    return 'Claude Code-credentials' + ('-' + hashlib.sha256(home.encode()).hexdigest()[:8] if home else '')
+
+
+def read_item(item):
+    result = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', item[0],
+                             '-a', item[1], '-w'], capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise RuntimeError('Keychain item unreadable; no write (unlock/login/check mapping)')
+    return result.stdout.strip()
+
+
+def oauth(raw):
+    try:
+        value = json.loads(raw)['claudeAiOauth']
+        if not isinstance(value, dict):
+            return {}
+        return value
+    except (ValueError, KeyError, TypeError):
+        return {}
+
+
+def valid(value):
+    return (isinstance(value.get('expiresAt'), (int, float))
+            and value['expiresAt'] > 0 and bool(value.get('refreshToken'))
+            and bool(value.get('accessToken')))
+
+
+def direction(live, stash):
+    left, right = oauth(live), oauth(stash)
+    if not valid(left) and not valid(right):
+        return None, 'both credentials invalid; re-login'
+    if valid(left) and valid(right):
+        if left['expiresAt'] == right['expiresAt']:
+            if left.get('refreshToken') != right.get('refreshToken'):
+                return None, 'equal expiry with different tokens; inspect/re-login'
+            return None, 'aligned'
+        chosen = 'live->stash' if left['expiresAt'] > right['expiresAt'] else 'stash->live'
+    else:
+        chosen = 'live->stash' if valid(left) else 'stash->live'
+    source = left if chosen == 'live->stash' else right
+    expiry = source.get('refreshTokenExpiresAt')
+    if isinstance(expiry, (int, float)) and expiry <= time.time() * 1000:
+        return None, 'refresh token expired; re-login'
+    return chosen, chosen
+
+
+def verify_mapping(row):
+    identity_path = (Path(row['home']) if row['home'] else Path.home()) / '.claude.json'
+    try:
+        email = json.loads(identity_path.read_text())['oauthAccount']['emailAddress']
+    except (OSError, ValueError, KeyError, TypeError):
+        raise RuntimeError('home identity unreadable; verify native login') from None
+    if email != row['email']:
+        raise RuntimeError('home email differs from stash mapping; no sync')
+    fallback = Path.home() / '.claude-swap-backup/credentials' / f".creds-{row['slot']}-{row['email']}.enc"
+    if fallback.exists():
+        raise RuntimeError('cswap fallback .enc shadows Keychain; reconcile through cswap first')
+
+
+def merge_oauth(target, source):
+    try:
+        value = json.loads(target)
+    except ValueError:
+        raise RuntimeError('target JSON malformed; refusing to replace unrelated fields') from None
+    if not isinstance(value, dict):
+        raise RuntimeError('target JSON is not an object')
+    value['claudeAiOauth'] = oauth(source)
+    return json.dumps(value, separators=(',', ':'))
+
+
+def write_item(item, value):
+    def quote(text):
+        if any(c in text for c in '\r\n\0'):
+            raise RuntimeError('invalid Keychain item name')
+        return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    command = f'add-generic-password -U -s {quote(item[0])} -a {quote(item[1])} -X {value.encode().hex()}\n'
+    # security -i has a 4096-byte line buffer. Refuse rather than truncate or
+    # expose oversized secrets through argv. Native login remains the fallback.
+    if len(command.encode()) > 4032:
+        raise RuntimeError('credential exceeds safe stdin size; use native login/cswap reconciliation')
+    result = subprocess.run(['/usr/bin/security', '-i'], input=command,
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode or read_item(item) != value:
+        raise RuntimeError('Keychain write/verification failed')
+
+
+def sync(row, apply=False):
+    live_item = (service(row['home']), row.get('keychain_account', getpass.getuser()))
+    if row.get('slot') is None:
+        if not valid(oauth(read_item(live_item))):
+            raise RuntimeError('native credential invalid; verify login')
+        return 'native credential readable; no stash mapping'
+    verify_mapping(row)
+    stash_item = ('claude-swap', f"account-{row['slot']}-{row['email']}")
+    live, stash = read_item(live_item), read_item(stash_item)
+    choice, message = direction(live, stash)
+    if not choice or not apply:
+        return message
+    target, old, source = (stash_item, stash, live) if choice == 'live->stash' else (live_item, live, stash)
+    merged = merge_oauth(old, source)
+    # A fresh read reduces races with other writers; Keychain offers no CAS.
+    verify_mapping(row)
+    if read_item(live_item) != live or read_item(stash_item) != stash:
+        return 'changed during read; deferred'
+    write_item(target, merged)
+    return 'SYNC ' + choice
+
+
+def expiry(row):
+    value = oauth(read_item((service(row['home']), row.get('keychain_account', getpass.getuser()))))
+    end = value.get('refreshTokenExpiresAt')
+    if not isinstance(end, (int, float)) or end <= 0:
+        return 'refresh expiry unavailable; verify login', True
+    days = (end / 1000 - time.time()) / 86400
+    return f'{days:.1f} days until refresh expiry', days < 5
+
+
+def launch_uv():
+    # A shell-visible mise shim may fail under launchd without an active version.
+    env = {'HOME': str(Path.home()), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}
+    for directory in os.get_exec_path() + ['/opt/homebrew/bin', '/usr/local/bin']:
+        candidate = Path(directory) / 'uv'
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            probe = subprocess.run([str(candidate), '--version'], env=env,
+                                   cwd=Path.home(), capture_output=True, timeout=10)
+            if probe.returncode == 0:
+                return str(candidate.absolute())
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    raise ValueError('no uv executable works without interactive shell setup')
+
+
+def jobs(config, remove=False):
+    domain = f'gui/{os.getuid()}'
+    directory = Path.home() / 'Library/LaunchAgents'
+    logs = Path.home() / 'Library/Logs'
+    directory.mkdir(parents=True, exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    uv = None if remove else launch_uv()
+    for suffix, arguments, schedule in [
+        ('sync', ['sync', '--apply'], {'StartInterval': 60, 'RunAtLoad': True}),
+        ('expiry', ['expiry', '--notify'], {'StartCalendarInterval': {'Hour': 9, 'Minute': 5}}),
+    ]:
+        label = f'{LABEL}.{suffix}'
+        path = directory / f'{label}.plist'
+        subprocess.run(['launchctl', 'bootout', f'{domain}/{label}'], capture_output=True)
+        if remove:
+            path.unlink(missing_ok=True)
+            continue
+        payload = {'Label': label, 'ProgramArguments': [uv, 'run', '--script',
+                   str(Path(__file__).resolve()), '--config', str(config.resolve()), *arguments],
+                   'StandardOutPath': str(logs / f'{label}.log'),
+                   'StandardErrorPath': str(logs / f'{label}.err'), **schedule}
+        path.write_bytes(plistlib.dumps(payload))
+        subprocess.run(['launchctl', 'bootstrap', domain, str(path)], check=True, capture_output=True)
+        subprocess.run(['launchctl', 'print', f'{domain}/{label}'], check=True, capture_output=True)
+    print('jobs removed' if remove else 'sync every 60s; expiry daily 09:05; launchd verified')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, default=CONFIG)
+    parser.add_argument('command', choices=['check', 'sync', 'expiry', 'install-jobs', 'remove-jobs'])
+    parser.add_argument('--apply', action='store_true', help='sync writes; otherwise read-only')
+    parser.add_argument('--notify', action='store_true', help='expiry: notify if <5 days or unknown')
+    args = parser.parse_args()
+    if sys.platform != 'darwin':
+        parser.error('macOS Keychain/launchd required')
+    if args.command == 'remove-jobs':
+        jobs(args.config, remove=True)
+        return
+    rows = profiles(args.config)
+    if args.command == 'install-jobs':
+        jobs(args.config)
+        return
+    # Only serialize our own processes. External refreshers do not share this lock.
+    lockdir = Path.home() / 'Library/Caches/codexbar-profiles'
+    lockdir.mkdir(parents=True, exist_ok=True)
+    with (lockdir / 'sync.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        warnings, failed = [], False
+        for row in rows:
+            try:
+                if args.command == 'expiry':
+                    message, warn = expiry(row)
+                    if warn:
+                        warnings.append(row['name'])
+                else:
+                    message = sync(row, args.command == 'sync' and args.apply)
+                if args.command != 'sync' or message != 'aligned':
+                    print(f"{row['name']}: {message}", flush=True)
+            except (RuntimeError, subprocess.TimeoutExpired) as error:
+                # Never render subprocess argv/stdout: they may contain credentials.
+                print(f"{row['name']}: {error if isinstance(error, RuntimeError) else 'Keychain timeout'}", file=sys.stderr)
+                warnings.append(row['name'])
+                failed = True
+        if args.notify and warnings:
+            message = 'Check Claude login/refresh expiry: ' + ', '.join(warnings)
+            subprocess.run(['osascript', '-e', 'on run argv\ndisplay notification (item 1 of argv) with title "Claude token expiry"\nend run', message], check=True, capture_output=True)
+        if failed:
+            sys.exit(1)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, KeyError, OSError) as error:
+        sys.exit(f'Configuration/filesystem error: {error}')
+    except subprocess.SubprocessError:
+        sys.exit('System command failed; check Keychain and launchd.')
