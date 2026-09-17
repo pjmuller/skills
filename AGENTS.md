@@ -18,3 +18,18 @@ Commit logical changes to main; update CHANGELOG and tag only verified releases.
 
 Tested: macOS arm64, T3 Code 0.0.42, skills CLI 1.5.24 (2026-09-16).
 Linux/WSL thread helpers are supported by code paths but not live-tested here.
+
+## Domain vocabulary
+
+| Term | Meaning here |
+| --- | --- |
+| **Skill** | Discoverable instructions in `SKILL.md`, optionally bundled with scripts/docs; not itself a CLI command. [Distribution](README.md). |
+| **Global / repo-local install** | Machine-wide availability versus a tracked project copy and lockfile. Both are replaceable installs; this repo owns the source. [Scope](README.md#agent-skills). |
+| **Bootstrap** | One-time machine setup consumed from `setup/`; not an installed skill. [T3 setup](setup/t3-setup/SKILL.md). |
+| **Helper / installer** | A helper performs work; `scripts/install` exposes its commands and `--check` verifies readiness. Installing instructions alone does not install commands. |
+| **T3 project** | T3's repository/workspace entry, selected when spawning a thread. [Spawn](skills/t3-manage-thread/spawn-thread.md). |
+| **Thread / session / turn** | T3 task conversation / its provider runtime / one agent response cycle. A finished turn can leave the session alive. [Lifecycle](skills/t3-manage-thread/settle-thread.md). |
+| **Profile** | A provider instance/account used to run a thread; distinct from the model and thinking effort. [Routing](skills/t3-manage-thread/spawn-thread.md#automatic-profile-routing). |
+| **Round-trip worker / ping-back** | A separate T3 thread marked 🏓 / its report to the orchestrator. Not an in-session sub-agent. [Worker contract](skills/t3-manage-thread/SKILL.md). |
+| **Hide / settle** | Hide removes a live thread from the sidebar; settle stops its session and sub-agents. Neither means deleting its history. [Hide](skills/t3-manage-thread/hide-thread.md), [settle](skills/t3-manage-thread/settle-thread.md). |
+| **Scheduled job** | A wall-clock launcher that spawns a T3 thread; distinct from that thread's work or an in-session timer. [Scheduling](skills/t3-schedule/SKILL.md). |
