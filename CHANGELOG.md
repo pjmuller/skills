@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-manage-thread: clarify standalone/no-ping scope for parent tasks versus round-trip reviewers.
 - t3-spawn-thread: model-aware Claude account routing from shared cached quota/pace data; explicit profiles win, known exhausted accounts are excluded, unknown capacity is reported.
 - Antigravity: concise colleague setup; verified native CLI video-paste → Markdown transcript workflow.
 - resource-audit: incorporate compressed-memory, worker-swarm, and stale-server investigation recipes from existing operator guardrails.

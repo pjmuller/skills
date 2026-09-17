@@ -16,6 +16,10 @@ in the local checkout, and prints the project + thread IDs — report those.
 
 ## 🏓 round-trip workers
 
+Scope “standalone / no ping-back” to the task it addresses, unless the user
+explicitly includes its child threads. A standalone task can still spawn 🏓
+reviewers that report to it; keep their briefs consistent with that return path.
+
 | Step | Command / effect |
 | --- | --- |
 | spawn | `t3-spawn-thread --title "🏓 <task>" -- "<brief>"` — ping-back footer appended to the brief; thread **hidden** (snoozed, still running) |
