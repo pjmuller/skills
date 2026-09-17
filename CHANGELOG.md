@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-read-thread: expose parsed thread model selection in JSON for post-spawn route attestation.
 - agents-md: concise guidance for creating and simplifying canonical agent entrypoints, grounded in intent, domain language, ownership and verification.
 - t3-manage-thread: installer check recognizes T3 Code's `last-server-origin` fallback when the runtime descriptor is absent.
 - claude-cloud-feedback-loop: browser-driven cloud dry runs, SHA freshness gate, autonomous feedback and bounded re-testing from T3 Code.

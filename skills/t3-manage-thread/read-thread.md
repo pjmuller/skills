@@ -18,6 +18,8 @@ Everything else (`--last`, `--role`, `--full`, `--json`, `--list --project-root`
   the keyword), then `--msg N` for the few messages that matter; `--full` only as a last resort.
   `--json` composes with `jq` for anything else. `#index` numbers are positions in the
   role-filtered list: `--role user` renumbers, so take indices from the same filter you read with.
+- `--json` includes the thread's parsed `model_selection`, so orchestrators can attest the actual
+  provider, model and reasoning effort after spawn instead of trusting the requested command.
 - The projection holds only the visible user/assistant messages — **not** tool calls or
   assistant reasoning. Don't conclude "the worker did nothing" from a quiet transcript.
 - Hand-rolled queries: projection columns are **snake_case** (`thread_id`, `settled_at`,

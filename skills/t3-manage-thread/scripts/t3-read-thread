@@ -31,7 +31,6 @@ THREAD_ID may be a prefix (>= 8 chars). Store: $T3CODE_HOME/userdata/state.sqlit
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import json
 import os
 import re
@@ -40,6 +39,7 @@ import sqlite3
 import sys
 import tempfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
@@ -97,7 +97,8 @@ def resolve_thread(conn: sqlite3.Connection, thread_id: str) -> sqlite3.Row:
     if len(thread_id) < 8:
         sys.exit("THREAD_ID prefix must be at least 8 characters")
     rows = conn.execute(
-        "SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, p.title AS project_title, "
+        "SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, "
+        "t.model_selection_json, p.title AS project_title, "
         "p.workspace_root FROM projection_threads t LEFT JOIN projection_projects p ON p.project_id = t.project_id "
         "WHERE t.thread_id LIKE ? ORDER BY t.updated_at DESC",
         (thread_id + "%",),
@@ -169,7 +170,10 @@ def main(argv: list[str] | None = None) -> None:
             if not a.full and not a.json:
                 a.outline = True  # a grep answers "which messages"; open them with --msg / --full
         if a.json:
-            print(json.dumps({"thread": dict(thread), "messages": [dict(r) for _, r in picked]}, indent=1, ensure_ascii=False))
+            thread_data = dict(thread)
+            raw_selection = thread_data.pop("model_selection_json", None)
+            thread_data["model_selection"] = json.loads(raw_selection) if raw_selection else None
+            print(json.dumps({"thread": thread_data, "messages": [dict(r) for _, r in picked]}, indent=1, ensure_ascii=False))
             return
         print(f"# {thread['title'] or '<untitled>'}")
         shown = f"{len(picked)} of {len(rows)}" if len(picked) != len(rows) else str(len(rows))
