@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- agents-md: concise guidance for creating and simplifying canonical agent entrypoints, grounded in intent, domain language, ownership and verification.
 - t3-manage-thread: installer check recognizes T3 Code's `last-server-origin` fallback when the runtime descriptor is absent.
 - claude-cloud-feedback-loop: browser-driven cloud dry runs, SHA freshness gate, autonomous feedback and bounded re-testing from T3 Code.
 - video-shrink-for-gemini: browser-free Fathom API download and timing references; smaller readable 720p presets, measured 50 MiB fitting and minimal-chunk fallback.
