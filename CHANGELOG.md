@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- video-shrink-for-gemini: bounded native drafts, candidate provenance and targeted original-frame verification for opaque identifiers.
 - t3-read-thread: expose parsed thread model selection in JSON for post-spawn route attestation.
 - agents-md: concise guidance for creating and simplifying canonical agent entrypoints, grounded in intent, domain language, ownership and verification.
 - t3-manage-thread: installer check recognizes T3 Code's `last-server-origin` fallback when the runtime descriptor is absent.

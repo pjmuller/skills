@@ -60,6 +60,8 @@ scripts/build-prompt --header /tmp/header.md --out session.gemini-prompt.md \
 ```
 
 Reference files are appended verbatim in separate fences. Use the execution path below.
+For opaque URLs/record IDs, read [exact-identifiers.md](exact-identifiers.md):
+candidate-assisted identification is not visual verification.
 For API use, load `GEMINI_API_KEY` from your own environment.
 Check current Gemini video/file limits before choosing upload/chunking settings;
 long recordings may need chunks or lower media resolution.
@@ -80,6 +82,12 @@ A clipboard MP4 produced correct spoken words and visual changes in a Markdown f
    Approve the requested file write within the authorized task, then read it yourself.
 5. Verify spoken words, visual changes, timestamps and coverage against the recording;
    report gaps. Return the Markdown path, preserve inputs, then exit the CLI.
+
+Run directly in native `agy` when it works; a T3 worker is optional, not a media
+prerequisite. For model comparisons, use fresh conversations, identical media and
+held-out reference evidence. Discover model IDs with `agy models`; never silently
+substitute models or change billing. `gemini-3.1-pro-high` was authenticated in
+1.2.5, but did not improve small opaque-ID recognition in a two-ticket comparison.
 
 Automate the interactive terminal and file clipboard when computer tools allow;
 do not hand the user a copy/paste prompt when this local route works. Headless

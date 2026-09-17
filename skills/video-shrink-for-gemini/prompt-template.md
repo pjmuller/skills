@@ -19,6 +19,10 @@ bug or unexpected state using the visible evidence, without diagnosing causes.
 No interpretation beyond what is visible. Mark unreadable text and gaps in sampled
 frames; never invent clicks, hidden state or URLs. Include meaningful unchanged
 states once rather than repeating them. Preserve action order.
+For opaque IDs, use UNREADABLE when any character is uncertain. Label inventory
+matches candidate-assisted and links assembled from IDs constructed, not observed.
+Do not extract frames or run tools to chase small text during the first draft;
+return its time/title for independent source-frame verification afterward.
 
 ## Transcript-first rules (transcript-first and mixed)
 
