@@ -60,6 +60,9 @@ Example prompt, replacing every placeholder:
   `HTTPS_PROXY`, localhost bypass and trust for the proxy CA. An isolated test context can use
   `ignoreHTTPSErrors` when needed for that CA; don't weaken app TLS. HTTP-relative CDN URLs
   can fail on a local HTTP preview even when HTTPS works. Mocked assets are diagnosis, not a pass.
+  If localhost unexpectedly returns proxy HTTP 405, use Chromium's `--proxy-server` and
+  `--proxy-bypass-list=localhost;127.0.0.1` directly instead of Playwright's proxy option.
+  `<-loopback>` removes Chromium's implicit loopback bypass; it does not enable that bypass.
 - Use `domcontentloaded` plus bounded waits for the relevant DOM, images and fonts. Don't wait
   for `networkidle` when excluded analytics/maps can hang. Report excluded integrations separately.
 - A stop hook can mistake a fetched upstream commit for unpushed work. Check
