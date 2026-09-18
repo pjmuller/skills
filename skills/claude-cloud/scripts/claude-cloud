@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -118,14 +119,16 @@ class API:
         if expires and expires <= (time.time() + 600) * 1000 and not self.refresh_attempted:
             self.refresh_attempted = True
             env = os.environ.copy()
-            env.pop("CLAUDE_CONFIG_DIR", None)
+            for variable in ("CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+                env.pop(variable, None)
             if not self.default_home:
                 env["CLAUDE_CONFIG_DIR"] = str(self.home)
             print("OAuth expiring: refreshing once with official Claude CLI", file=sys.stderr)
             try:
-                subprocess.run(["claude", "-p", "reply with ok", "--model", "haiku",
-                                "--max-turns", "1"], env=env, capture_output=True,
-                               text=True, timeout=120)
+                with tempfile.TemporaryDirectory(prefix="claude-cloud-refresh-") as scratch:
+                    subprocess.run(["claude", "-p", "reply with ok", "--model", "haiku",
+                                    "--max-turns", "1"], env=env, cwd=scratch, capture_output=True,
+                                   text=True, timeout=120)
             except (OSError, subprocess.TimeoutExpired):
                 pass
             token, expires = self.stored_credentials()
@@ -330,8 +333,9 @@ def session_rows(api, since=None, limit=None):
             query["cursor"] = cursor
         page = api.call("/v1/code/sessions?" + urllib.parse.urlencode(query))
         for session in page["data"]:
+            # Live lists are not creation-sorted: an old active session can precede newer ones.
             if cutoff and datetime.datetime.fromisoformat(session["created_at"].replace("Z", "+00:00")) < cutoff:
-                return rows
+                continue
             config = session.get("config") or {}
             meta = session.get("external_metadata") or {}
             usage = meta.get("usage") or {}
@@ -343,7 +347,7 @@ def session_rows(api, since=None, limit=None):
                 "branches": [branch for outcome in config.get("outcomes", [])
                              for branch in (outcome.get("git_info") or {}).get("branches", [])],
                 "title": session.get("title"), "status": state(session),
-                "user_message_count": session.get("user_message_count", 0),
+                "user_message_count": int(session.get("user_message_count") or 0),
                 "model": config.get("model") or meta.get("last_served_model"),
                 "cost_usd": usage.get("cost_usd"),
                 "tokens": {key: value for key, value in usage.items() if "token" in key},
@@ -419,19 +423,32 @@ def redact(value):
     return value
 
 
+def write_export(path, text):
+    # Private, atomic snapshots: an interrupted write must not become a cache hit.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temporary:
+        temporary.write(text)
+        name = temporary.name
+    os.replace(name, path)
+
+
 def export_sessions(api, since, directory):
     directory = Path(directory).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     index_path = directory / "index.json"
-    previous = {row["id"]: row for row in json.loads(index_path.read_text())} if index_path.exists() else {}
-    index, written, skipped = [], 0, 0
+    index = {row["id"]: row for row in json.loads(index_path.read_text())} if index_path.exists() else {}
+    written = skipped = 0
     for session in session_rows(api, since):
         sid = session["id"]
-        session_id(sid)  # Server IDs must also be safe filenames.
+        try:
+            session_id(sid)  # Server IDs must also be safe filenames.
+        except argparse.ArgumentTypeError:
+            raise Failure("Invalid session ID in API response") from None
         path = directory / f"{sid}.md"
-        if path.exists():
-            old = previous.get(sid, {})
-            session.update({key: old.get(key) for key in ("turns", "tool_errors", "first_prompt")})
+        old = index.get(sid, {})
+        counts = ("turns", "tool_errors", "first_prompt")
+        text = None
+        if path.exists() and all(old.get(key) is not None for key in counts):
+            session.update({key: old[key] for key in counts})
             skipped += 1
         else:
             rows, _ = api.events(sid)
@@ -441,10 +458,14 @@ def export_sessions(api, since, directory):
                            first_prompt=next((turn["text"][:300] for turn in turns
                                               if turn["role"] == "user" and turn["text"]), ""))
             text = f"# {session.get('title') or sid}\n\n{session['url']}\n\n" + review_markdown(turns)
-            path.write_text(redact(text))
             written += 1
-        index.append(session)
-    index_path.write_text(json.dumps(redact(index), ensure_ascii=False, indent=2) + "\n")
+        index[sid] = session
+        # Checkpoint metadata before the Markdown cache marker; preserve older windows.
+        write_export(index_path, json.dumps(redact(list(index.values())), ensure_ascii=False, indent=2) + "\n")
+        if text is not None:
+            write_export(path, redact(text))
+    if not index_path.exists():
+        write_export(index_path, "[]\n")
     print(f"Exported {written}; skipped {skipped}; total {len(index)}; index {index_path}")
 
 
@@ -502,7 +523,11 @@ def main():
     elif args.command == "export":
         export_sessions(api, args.since, args.dir)
     elif args.command == "create":
-        environments = api.environments()
+        try:
+            environments = api.environments()
+        except Failure:
+            print(api.resolved, file=sys.stderr)
+            raise
         wanted = args.env if args.env is not None else os.environ.get("CLAUDE_CLOUD_ENV")
         source = "--env" if args.env is not None else "CLAUDE_CLOUD_ENV"
         matches = [e for e in environments if wanted in (e["environment_id"], e["name"])] if wanted is not None else environments

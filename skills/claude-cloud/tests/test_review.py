@@ -41,10 +41,10 @@ def test_pagination_since_limit_and_metadata():
             self.calls.append(path)
             if len(self.calls) == 1:
                 return {"data": [session("cse_a")], "next_cursor": "next value"}
-            return {"data": [session("cse_b", "2026-09-01T00:00:00Z")], "next_cursor": None}
+            return {"data": [session("cse_b", "2026-09-01T00:00:00Z"), session("cse_c")], "next_cursor": None}
     api = API()
     rows = cli["session_rows"](api, "2026-09-02")
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert "cursor=next+value" in api.calls[1]
     assert rows[0]["tokens"] == {"input_tokens": 5}
     assert rows[0]["branches"] == ["main"]
@@ -120,3 +120,30 @@ def test_redaction_preserves_json_schema_and_escaping():
     result = json.loads(encoded)
     assert result["tokens"] == {"input_tokens": 42}
     assert result["text"] == "[REDACTED]\nsecond [REDACTED] [REDACTED]"
+
+
+def test_export_recovers_interruption_and_preserves_older_index(tmp_path):
+    import json
+    class API:
+        fail = True
+        calls = []
+        rows = [session('cse_a'), session('cse_b')]
+        def call(self, path):
+            return {'data': self.rows}
+        def events(self, sid):
+            self.calls.append(sid)
+            if sid == 'cse_b' and self.fail:
+                raise cli['Failure']('network failure')
+            return events(), None
+    api = API()
+    with pytest.raises(cli['Failure']):
+        cli['export_sessions'](api, None, tmp_path)
+    assert (tmp_path / 'cse_a.md').stat().st_mode & 0o777 == 0o600
+    api.fail = False
+    cli['export_sessions'](api, None, tmp_path)
+    assert api.calls == ['cse_a', 'cse_b', 'cse_b']
+    api.rows = [session('cse_b')]
+    cli['export_sessions'](api, None, tmp_path)
+    index = json.loads((tmp_path / 'index.json').read_text())
+    assert len(index) == 2
+    assert all(row['turns'] == 3 for row in index)
