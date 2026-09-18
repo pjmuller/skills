@@ -18,6 +18,7 @@ Artifacts: `source.json`, `source.<ext>`, optionally `fathom-timings.json` from
 `GET /external/v1/recordings/{recording_id}/transcript`. Treat all as private. Inspect
 video/audio streams and duration using ffprobe after download.
 
-The timestamped text helps align chunks and audit timing. It can have wrong words
-and speakers: it is a reference, not a substitute for Gemini audiovisual perception.
-Keep its provenance distinct, and preserve Gemini drafts when correcting timings.
+The timestamped text is the default speech layer when it exists: measured as literal as local
+Whisper, with speakers and timestamps ([local route](local-route.md)). It can still have wrong
+words and speakers, and it sees no screen: it does not replace Gemini audiovisual perception or
+frame reading. Keep its provenance distinct, and preserve Gemini drafts when correcting timings.

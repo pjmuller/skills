@@ -26,7 +26,14 @@ Dutch two-speaker meeting audio, 3-minute spans, reference = a vendor transcript
   143 times) and disagreement rose to 44%.
 - `parakeet-tdt-0.6b-v3`: faster (~4 s) but 26–36%, with many deletions.
 - The shrink preset's 32 kb/s mono audio transcribed as well as the original (16.7% vs 16.2%).
-- No speaker labels from local ASR. [Fathom timings](fathom.md) supply speakers when available.
+- No speaker labels from local ASR.
+- **If the call has a Fathom transcript, use it as the speech layer and skip local ASR.** Three-way
+  check on the same recording: Fathom–Whisper 17%, Fathom–Gemini 31%, Whisper–Gemini 33% word
+  disagreement, and a hand-read sample of Fathom/Whisper substitutions split roughly evenly (Whisper
+  makes more nonsense-word errors, Fathom more domain-term errors). Fathom is as literal as local
+  Whisper, adds speakers and timestamps, costs nothing, and `download-fathom --timings` already
+  fetches it. Local ASR is for recordings without a vendor transcript (raw screen captures, Loom,
+  exports) or as a tie-breaker on a disputed passage.
 
 Frames: scene threshold 0.1 gave 41 frames for a 42-minute meeting with screen share (0.05 → 94,
 0.2 → 32). At 1280×720 that is ≈1.2k Claude visual tokens per frame; a blind Opus narration of all
@@ -67,7 +74,7 @@ held-out verification.
 ## Recipe
 
 ```sh
-transcribe-local --language nl recording.mp4
+transcribe-local --language nl recording.mp4   # skip when fathom-timings.json exists
 scene-frames --threshold 0.1 recording.mp4
 ```
 
