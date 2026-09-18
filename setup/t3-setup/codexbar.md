@@ -5,7 +5,7 @@ and Codex. Follow the self-contained [codexbar-setup skill](../../skills/codexba
 and its [installation guide](../../skills/codexbar-setup/install.md).
 
 It includes isolated Claude account registration, shared Codex homes,
-five-minute/menu-open refresh, bidirectional Claude credential sync, and daily
-expiry alerts. Personal mappings stay outside installed skill files. Detect
+five-minute/menu-open refresh, bidirectional Claude credential sync, daily
+expiry alerts, and Antigravity (Gemini) weekly quota via the signed-in `agy` CLI. Personal mappings stay outside installed skill files. Detect
 existing watchers and avoid scheduling duplicates; verify identities and a
 fresh quota read before recording the setup as complete.

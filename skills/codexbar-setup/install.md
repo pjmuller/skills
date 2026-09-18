@@ -1,6 +1,6 @@
 # Install CodexBar alongside T3 Code
 
-macOS recipe extracted from a working machine on 2026-09-17: CodexBar 0.55.0,
+macOS recipe extracted from a working machine on 2026-09-18: CodexBar 0.60.4,
 claude-swap 0.26.0, isolated Claude homes, five-minute polling, refresh on menu
 open, bidirectional Keychain sync and daily refresh-expiry reminders.
 Inspect installed versions before adapting; upstream behavior changes.
@@ -60,6 +60,21 @@ blindly assume a slot number or use `cswap switch`, automatic switching, or
 CodexBar's Switch/Re-authenticate action for these shared Claude accounts.
 Enable Claude Swap in CodexBar and select the absolute path from `command -v cswap`.
 [Upstream Claude integration](https://github.com/steipete/CodexBar/blob/main/docs/claude.md).
+
+**Antigravity (Gemini):** needs CodexBar 0.60.2+ and a signed-in `agy`
+(`brew install --cask antigravity-cli`, run `agy` once). `agy` 1.2.2+ rejects
+CodexBar's local HTTPS probe, so CodexBar runs `agy -p /usage` instead; older
+CodexBar shows "Offline". Enable with `codexbar config enable --provider
+antigravity` (same toggle as Settings), verify with
+`codexbar usage --provider antigravity`. Shows the two weekly pools (Gemini,
+Claude/GPT) with reset time, whichever Google account `agy` is signed into; the
+report carries no account email and no five-hour bucket. Each refresh writes an
+`agy` log under `~/.gemini/antigravity-cli/log/`. Antigravity.app is not needed.
+[Upstream Antigravity notes](https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md).
+
+Diagnose only the provider you are working on: `codexbar usage --provider claude`
+or `--status` from a shell runs the Claude probe under the CLI helper and can
+raise Keychain/login prompts in the app; the menu itself is unaffected.
 
 ## Keep Claude credentials and quota fresh
 
@@ -130,8 +145,8 @@ use native login/cswap reconciliation (large default-home MCP stores can hit thi
 - `codexbar-profiles check` / `expiry`: correct mapping and expiry, no secrets.
 - `cswap list --json`: correct distinct accounts, no duplicate warnings or login
   errors. Check before/after sync; this probe may rotate tokens.
-- `claude auth status --json` under every home; `t3-limits` and a small real T3
-  turn per provider. For Codex, verify intended workspace and a fresh usage
+- `claude auth status --json` under every home; `t3-limits` (Claude/Codex only,
+  not Antigravity) and a small real T3 turn per provider. For Codex, verify intended workspace and a fresh usage
   timestamp in CodexBar. A successful cached quota read alone isn't proof of login.
 - `launchctl print gui/$(id -u)/com.t3-skills.codexbar-profiles.sync`, then
   `launchctl kickstart gui/$(id -u)/com.t3-skills.codexbar-profiles.sync`; inspect
