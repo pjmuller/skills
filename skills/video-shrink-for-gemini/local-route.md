@@ -52,6 +52,18 @@ Put the prompt **before** `-i`: the variadic `-i` swallows a trailing prompt. Cl
 `tokens used` at the end; one 1280×720 frame round trip cost ~12–34k tokens including system
 overhead.
 
+## Gemini versus the local route (same 42-minute recording, 2026-09-18)
+
+Native Gemini 3.8 Flash High wrote a 9.4k-word aligned transcript plus visual timeline in ~150 s
+(thinking 2m17s / 16.9k tokens; input tokens are not exposed by the CLI). Speech disagreement with
+the vendor transcript was 31% (20% early, 56% late): Gemini paraphrases and merges short exchanges,
+so it reads fluently but is not literal. Local Whisper was 17% and literal. Gemini labelled speakers
+(67% agreement with the vendor's labels); Whisper cannot. Gemini quoted no UUIDs at all (honest
+UNREADABLE, but it also missed an editor URL that Opus read exactly from a frame). Gemini's real
+advantage is continuous coverage and one aligned narrative. Use Gemini for the narrative draft when
+quota allows, the local route for the literal transcript and exact on-screen text, and both need
+held-out verification.
+
 ## Recipe
 
 ```sh

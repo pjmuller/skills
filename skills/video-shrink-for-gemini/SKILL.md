@@ -68,8 +68,12 @@ long recordings may need chunks or lower media resolution.
 
 ## Execute and verify
 
-**Verified: native `agy` 1.2.0, Gemini 3.8 Flash High, Starter quota (2026-09-10).**
-A clipboard MP4 produced correct spoken words and visual changes in a Markdown file.
+**Verified: native `agy` 1.2.5, Gemini 3.8 Flash High, paid plan (2026-09-18); 1.2.0 Starter (2026-09-10).**
+A clipboard MP4 produced an aligned speech + visual Markdown file; a 42-minute 720p meeting
+took ~150 s. Driving it headlessly works: `osascript -e 'set the clipboard to (POSIX file "…")'`,
+`agy` inside `tmux`, `tmux send-keys C-v`, confirm `Clipboard file URL read … video/mp4` in the
+latest `~/.gemini/antigravity-cli/log/cli-*.log`, then `tmux load-buffer` + `paste-buffer -p` the
+prompt. The ancillary `media_summary_generation` 503 is harmless; only a main-run 429 is a blocker.
 
 1. Check native authentication with `agy models`; T3 login is separate.
 2. Start interactive `agy --model gemini-3.8-flash-high --effort high` in the task folder.
