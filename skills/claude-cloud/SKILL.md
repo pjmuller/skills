@@ -1,6 +1,6 @@
 ---
 name: claude-cloud
-description: Drive Claude Code cloud sessions headlessly from a local agent (discover environments, create, send, wait, read, archive). Personal-account experiment over an undocumented API; no native T3 integration.
+description: Drive Claude Code cloud sessions headlessly from a local agent (discover environments, create, send, wait, read, archive, export). Verify cloud dry runs or review past sessions; browser fallback for interactive work. Personal-account experiment over an undocumented API; no native T3 integration.
 ---
 
 # claude-cloud
@@ -28,12 +28,24 @@ Keychain service name come from its `t3-limits` lib. Add or inspect Claude profi
 
 `--profile NAME` = case-insensitive substring of a T3 Claude provider instance id or display
 name (same rule as `t3-spawn-thread --profile`); ambiguous or unknown → exit 2 listing candidates.
-Omitted: `$CLAUDE_CONFIG_DIR` if set, else T3's default Claude profile (`~/.claude`).
+Resolution: `--profile` → `CLAUDE_CLOUD_PROFILE` → `CLAUDE_CONFIG_DIR` → only T3 Claude
+profile; otherwise exit 2 with candidates. Create resolves `--env` → `CLAUDE_CLOUD_ENV`
+→ only account environment; names/IDs match exactly. Stderr discloses each choice and source.
+Repo/branch flags override `CLAUDE_CLOUD_REPO`/`CLAUDE_CLOUD_BRANCH` (defaults: no repo / main).
+Set repository defaults in `mise.toml`:
+
+```toml
+[env]
+CLAUDE_CLOUD_PROFILE = "work"
+CLAUDE_CLOUD_ENV = "Cloud verification"
+CLAUDE_CLOUD_REPO = "example/project"
+CLAUDE_CLOUD_BRANCH = "main"
+```
 
 ```sh
 claude-cloud --profile <profile> envs
 claude-cloud --profile <profile> sessions
-claude-cloud --profile <profile> create --env '<env name>' --repo owner/repo --branch main 'List top-level directories; no changes, commits, pushes or PRs.'
+claude-cloud --profile <profile> create --wait --title 'Cloud check' --env '<env name>' --repo owner/repo --branch main 'List top-level directories; no changes, commits, pushes or PRs.'
 claude-cloud wait cse_ID --timeout 1800
 claude-cloud read cse_ID
 claude-cloud send cse_ID 'reply with the single word pong'
@@ -41,11 +53,13 @@ claude-cloud archive cse_ID
 ```
 
 `create` prints ID + URL and needs no local checkout; environment records carry no repo default,
-so without `--repo` the session starts with no git source. `sessions` lists the latest 20.
+so without a repo flag/default the session starts with no git source. `create --wait` waits then
+reads the full transcript (`--timeout 1800`); ID/URL print first. `sessions` paginates all sessions.
 `wait` polls every 2s, prints assistant messages/tool names for the latest user turn and exits on
 its result/end-turn; repeated waits replay that turn. `send` confirms its UUID is readable (up to
-10s). `read` renders the whole transcript, skipping thinking, tool output and lifecycle noise.
-No local state or credential writes. Timeout/Ctrl-C leave cloud work running; interaction
+10s). `read` renders text/tools and failed-tool excerpts, skipping thinking and lifecycle noise.
+[Session review/export](review.md) covers date filters, JSON schemas and redacted local snapshots.
+[Dry runs](dry-run.md) require a SHA gate; [browser fallback](browser-fallback.md) handles interactive checks. Timeout/Ctrl-C leave cloud work running; interaction
 requests require the web UI. Cloud startup hooks run before the prompt — read-only wording is not
 a sandbox, keep cloud instructions in scope.
 
@@ -57,8 +71,9 @@ Mutations are never retried: after an uncertain POST, inspect `sessions`/`read` 
 
 Reads the macOS Keychain item for the profile's config dir (`Claude Code-credentials[-hash]`,
 hashed by t3-manage-thread's `keychain_service`), falling back to the profile's
-`.credentials.json`; uses `claudeAiOauth.accessToken`, never logs it. No refresh-token rotation
-here: an expired or denied token needs a login/turn with the official CLI for that profile.
+`.credentials.json`; uses `claudeAiOauth.accessToken`, never logs it.
+Within 10 minutes of expiry, runs one official CLI Haiku turn for that profile, then rereads credentials.
+Still expired → exit 3 with login guidance; the helper never rotates refresh tokens itself.
 
 ## API surface
 
@@ -68,7 +83,7 @@ Base `https://api.anthropic.com`; headers `Authorization: Bearer …`, `Content-
 | Method / endpoint | Shape / purpose |
 |---|---|
 | GET `/v1/environment_providers` | Add `x-organization-uuid` from the profile's `.claude.json`; response `environments[]` with `environment_id,name,kind,state`. |
-| GET `/v1/code/sessions?limit=20` | Recent `data[]`; `status` + `worker_status`. |
+| GET `/v1/code/sessions?limit=50&cursor=…` | Paginated `data[]` + `next_cursor`; session metadata/usage. |
 | POST `/v1/code/sessions` | `{title,environment_id,events:[{payload:USER}],config:{sources:[{type:"git_repository",url,revision}],outcomes:[]}}` → `session.id`. |
 | GET `/v1/code/sessions/{id}` | `session` (CLI also accepts `response_shape`); lifecycle + worker state. |
 | POST `/v1/code/sessions/{id}/events` | `{events:[{payload:USER}]}`; accepted asynchronously. |

@@ -49,29 +49,38 @@ def t3_lib():
 
 
 def resolve_profile(needle):
-    """(config dir, Keychain service) for a T3 Claude provider instance."""
+    """Return home, Keychain service, default-home flag and provenance."""
     settings, claude_profiles, keychain_service = t3_lib()
     profiles = claude_profiles(settings)
+    source = "--profile"
     if needle is None:
-        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            home = Path(config_dir).expanduser()
-            return home, keychain_service(str(home))
-        matches = [p for p in profiles if not p[2]]
-        if len(matches) != 1:
-            raise Failure("No single default Claude profile (empty homePath) in "
-                          f"{settings}; pass --profile", 2)
-    else:
+        needle = os.environ.get("CLAUDE_CLOUD_PROFILE")
+        source = "CLAUDE_CLOUD_PROFILE"
+    if needle is not None:
         lowered = needle.casefold()
         matches = [p for p in profiles
                    if lowered in p[0].casefold() or lowered in p[1].casefold()]
         if len(matches) != 1:
             names = ", ".join(f"{label} ({instance})" for instance, label, _ in matches or profiles)
             kind = "Ambiguous" if matches else "Unknown"
-            raise Failure(f"{kind} --profile {needle!r}; candidates: {names or 'none'}", 2)
-    home_path = matches[0][2]
+            raise Failure(f"{kind} {source} {needle!r}; candidates: {names or 'none'}", 2)
+        profile = matches[0]
+    elif os.environ.get("CLAUDE_CONFIG_DIR"):
+        home = Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser()
+        matches = [p for p in profiles if p[2] and Path(p[2]).expanduser() == home]
+        label = f"{matches[0][1]} ({matches[0][0]})" if matches else str(home)
+        return home, keychain_service(str(home)), False, f"profile: {label} via CLAUDE_CONFIG_DIR"
+    elif len(profiles) == 1:
+        profile = profiles[0]
+        source = "only profile"
+    else:
+        names = ", ".join(f"{label} ({instance})" for instance, label, _ in profiles)
+        raise Failure("Neither --profile nor CLAUDE_CLOUD_PROFILE set and "
+                      f"{len(profiles)} Claude profiles exist ({names}); pass one.", 2)
+    instance, label, home_path = profile
     return (Path(home_path).expanduser() if home_path else Path.home() / ".claude",
-            keychain_service(home_path))
+            keychain_service(home_path), not bool(home_path),
+            f"profile: {label} ({instance}) via {source}")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -81,10 +90,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class API:
     def __init__(self, profile):
-        self.home, self.service = resolve_profile(profile)
+        self.home, self.service, self.default_home, self.resolved = resolve_profile(profile)
+        self.refresh_attempted = False
         self.opener = urllib.request.build_opener(NoRedirect())
 
-    def credentials(self):
+    def stored_credentials(self):
         # Read afresh: the official CLI may refresh the shared token during wait.
         result = subprocess.run(["security", "find-generic-password", "-s",
                                  self.service, "-w"], capture_output=True, text=True)
@@ -101,9 +111,28 @@ class API:
             expires = credential.get("expiresAt", 0)
         except (KeyError, TypeError, ValueError):
             raise Failure("Invalid stored Claude OAuth credentials", 3) from None
+        return token, expires
+
+    def credentials(self):
+        token, expires = self.stored_credentials()
+        if expires and expires <= (time.time() + 600) * 1000 and not self.refresh_attempted:
+            self.refresh_attempted = True
+            env = os.environ.copy()
+            env.pop("CLAUDE_CONFIG_DIR", None)
+            if not self.default_home:
+                env["CLAUDE_CONFIG_DIR"] = str(self.home)
+            print("OAuth expiring: refreshing once with official Claude CLI", file=sys.stderr)
+            try:
+                subprocess.run(["claude", "-p", "reply with ok", "--model", "haiku",
+                                "--max-turns", "1"], env=env, capture_output=True,
+                               text=True, timeout=120)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            token, expires = self.stored_credentials()
         if expires and expires <= time.time() * 1000:
+            hint = "the default profile" if self.default_home else f"CLAUDE_CONFIG_DIR={self.home}"
             raise Failure("OAuth expired: refresh/login with the official Claude CLI "
-                          f"using CLAUDE_CONFIG_DIR={self.home}, then retry", 3)
+                          f"using {hint}, then retry", 3)
         return token
 
     def call(self, path, body=None, timeout=30):
@@ -201,17 +230,17 @@ def state(session):
     return session.get("worker_status") or session.get("status", "unknown")
 
 
-def wait(api, sid, timeout):
+def wait(api, sid, timeout, quiet=False):
     deadline = time.monotonic() + timeout
     try:
-        wait_turn(api, sid, deadline)
+        wait_turn(api, sid, deadline, quiet=quiet)
     except Failure as exc:
         if exc.code == 1 and time.monotonic() >= deadline:
             raise Failure("Timed out; session was not cancelled", 124) from None
         raise
 
 
-def wait_turn(api, sid, deadline):
+def wait_turn(api, sid, deadline, quiet=False):
     rows, cursor = api.events(sid, deadline=deadline)
     # Start at the latest user turn, never mistake an earlier result for its reply.
     start = 0
@@ -233,7 +262,7 @@ def wait_turn(api, sid, deadline):
             kind = payload.get("type")
             if kind == "assistant":
                 text = markdown(payload)
-                if text:
+                if text and not quiet:
                     print(text, flush=True)
                 finished = payload.get("message", {}).get("stop_reason") == "end_turn"
                 error |= bool(payload.get("isApiErrorMessage") and not payload.get("apiErrorIsTransient"))
@@ -279,40 +308,225 @@ def wait_turn(api, sid, deadline):
         rows, cursor = api.events(sid, cursor, deadline=deadline)
 
 
+def since_time(value):
+    if value is None:
+        return None
+    if re.fullmatch(r"\d+d", value):
+        return datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=int(value[:-1]))
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        raise Failure("--since expects Nd or YYYY-MM-DD", 2) from None
+
+
+def session_rows(api, since=None, limit=None):
+    cutoff = since_time(since)
+    if limit is not None and limit < 1:
+        raise Failure("--limit must be positive", 2)
+    rows, cursor = [], None
+    while True:
+        query = {"limit": 50}
+        if cursor:
+            query["cursor"] = cursor
+        page = api.call("/v1/code/sessions?" + urllib.parse.urlencode(query))
+        for session in page["data"]:
+            if cutoff and datetime.datetime.fromisoformat(session["created_at"].replace("Z", "+00:00")) < cutoff:
+                return rows
+            config = session.get("config") or {}
+            meta = session.get("external_metadata") or {}
+            usage = meta.get("usage") or {}
+            sources = config.get("sources") or []
+            rows.append({
+                "id": session["id"], "url": "https://claude.ai/code/" + session["id"],
+                "created_at": session.get("created_at"), "last_event_at": session.get("last_event_at"),
+                "origin": config.get("origin"), "repo": sources[0].get("url") if sources else None,
+                "branches": [branch for outcome in config.get("outcomes", [])
+                             for branch in (outcome.get("git_info") or {}).get("branches", [])],
+                "title": session.get("title"), "status": state(session),
+                "user_message_count": session.get("user_message_count", 0),
+                "model": config.get("model") or meta.get("last_served_model"),
+                "cost_usd": usage.get("cost_usd"),
+                "tokens": {key: value for key, value in usage.items() if "token" in key},
+                "task_summary": meta.get("task_summary") or meta.get("post_turn_summary"),
+                "cc_version": meta.get("container_cc_version"),
+            })
+            if limit and len(rows) >= limit:
+                return rows
+        next_cursor = page.get("next_cursor")
+        if not next_cursor:
+            return rows
+        if str(next_cursor) == str(cursor):
+            raise Failure("Sessions pagination cursor did not advance")
+        cursor = next_cursor
+
+
+def content_text(content):
+    if isinstance(content, str):
+        return content
+    return "\n".join(block.get("text", "") for block in (content or [])
+                     if block.get("type") == "text")
+
+
+def review_turns(rows):
+    turns, tools = [], {}
+    for row in sorted(rows, key=lambda row: int(row.get("sequence_num", 0))):
+        payload = row["payload"]
+        role = payload.get("type")
+        if role not in ("user", "assistant") or payload.get("isMeta"):
+            continue
+        content = payload.get("message", {}).get("content", [])
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+        turn = {"role": role, "text": content_text(blocks), "tools": [],
+                "ts": row.get("created_at") or payload.get("timestamp")}
+        for block in blocks:
+            if block.get("type") == "tool_use":
+                tool = {"name": block.get("name", "unknown"),
+                        "input_summary": json.dumps(block.get("input", {}), ensure_ascii=False)[:120],
+                        "is_error": False, "error_excerpt": ""}
+                tools[block.get("id")] = tool
+                turn["tools"].append(tool)
+            elif block.get("type") == "tool_result" and block.get("is_error"):
+                tool = tools.get(block.get("tool_use_id"))
+                if tool is None:
+                    tool = {"name": "unknown", "input_summary": "", "is_error": False, "error_excerpt": ""}
+                    turn["tools"].append(tool)
+                tool["is_error"] = True
+                tool["error_excerpt"] = content_text(block.get("content", ""))[:300]
+        if turn["text"] or turn["tools"]:
+            turns.append(turn)
+    return turns
+
+
+def review_markdown(turns):
+    parts = []
+    for turn in turns:
+        lines = [turn["text"]] if turn["text"] else []
+        for tool in turn["tools"]:
+            lines.append(f"*Tool: {tool['name']}*")
+            if tool["is_error"]:
+                lines.append(f"⚠ tool error ({tool['name']}): {tool['error_excerpt']}")
+        parts.append(f"### {turn['role'].capitalize()}\n\n" + "\n\n".join(lines))
+    return "\n\n".join(parts) + ("\n" if parts else "")
+
+
+def redact(value):
+    if isinstance(value, str):
+        return re.sub(r"(sk-|token|Bearer )\S+", "[REDACTED]", value)
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact(item) for key, item in value.items()}
+    return value
+
+
+def export_sessions(api, since, directory):
+    directory = Path(directory).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    index_path = directory / "index.json"
+    previous = {row["id"]: row for row in json.loads(index_path.read_text())} if index_path.exists() else {}
+    index, written, skipped = [], 0, 0
+    for session in session_rows(api, since):
+        sid = session["id"]
+        session_id(sid)  # Server IDs must also be safe filenames.
+        path = directory / f"{sid}.md"
+        if path.exists():
+            old = previous.get(sid, {})
+            session.update({key: old.get(key) for key in ("turns", "tool_errors", "first_prompt")})
+            skipped += 1
+        else:
+            rows, _ = api.events(sid)
+            turns = review_turns(rows)
+            session.update(turns=len(turns),
+                           tool_errors=sum(tool["is_error"] for turn in turns for tool in turn["tools"]),
+                           first_prompt=next((turn["text"][:300] for turn in turns
+                                              if turn["role"] == "user" and turn["text"]), ""))
+            text = f"# {session.get('title') or sid}\n\n{session['url']}\n\n" + review_markdown(turns)
+            path.write_text(redact(text))
+            written += 1
+        index.append(session)
+    index_path.write_text(json.dumps(redact(index), ensure_ascii=False, indent=2) + "\n")
+    print(f"Exported {written}; skipped {skipped}; total {len(index)}; index {index_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", help="substring of a T3 Claude instance id or "
-                                          "display name; default = $CLAUDE_CONFIG_DIR "
-                                          "or T3's default Claude profile")
+    parser.add_argument("--profile", help="T3 Claude profile; then CLAUDE_CLOUD_PROFILE, "
+                                          "CLAUDE_CONFIG_DIR, or the only profile")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("envs")
-    commands.add_parser("sessions")
+    sessions = commands.add_parser("sessions")
+    sessions.add_argument("--since")
+    sessions.add_argument("--limit", type=int)
+    sessions.add_argument("--json", action="store_true")
+    export = commands.add_parser("export")
+    export.add_argument("--since", default="7d")
+    export.add_argument("--dir", required=True)
     create = commands.add_parser("create")
-    create.add_argument("--env", required=True)
+    create.add_argument("--env")
     create.add_argument("--repo", help="GitHub owner/repo or https://github.com/owner/repo")
-    create.add_argument("--branch", default="main")
+    create.add_argument("--branch")
+    create.add_argument("--title")
+    create.add_argument("--wait", action="store_true")
+    create.add_argument("--timeout", type=float, default=1800)
     create.add_argument("prompt")
     for name in ("send", "wait", "read", "archive"):
         sub = commands.add_parser(name)
         sub.add_argument("id", type=session_id)
+        if name == "read":
+            sub.add_argument("--json", action="store_true")
         if name == "send":
             sub.add_argument("message")
         if name == "wait":
             sub.add_argument("--timeout", type=float, default=1800)
+    # Accept profile before or after the subcommand.
+    for sub in commands.choices.values():
+        sub.add_argument("--profile", default=argparse.SUPPRESS)
     args = parser.parse_args()
+    if hasattr(args, "timeout") and (not math.isfinite(args.timeout) or args.timeout <= 0):
+        raise Failure("--timeout must be positive", 2)
     api = API(args.profile)
+    if args.command != "create":
+        print(api.resolved, file=sys.stderr)
     if args.command == "envs":
         for env in api.environments():
             print(f"{env['environment_id']}\t{env['name']}\t{env.get('kind', '')}\t{env.get('state', '')}")
     elif args.command == "sessions":
-        for session in api.call("/v1/code/sessions?limit=20")["data"]:
-            print(f"{session['id']}\t{state(session)}\t{session.get('title', '')}")
+        rows = session_rows(api, args.since, args.limit)
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            print("created\torigin\trepo\tmsgs\tstatus\ttitle")
+            for row in rows:
+                print("\t".join(str(row.get(key) if row.get(key) is not None else "") for key in
+                                ("created_at", "origin", "repo", "user_message_count", "status", "title")))
+    elif args.command == "export":
+        export_sessions(api, args.since, args.dir)
     elif args.command == "create":
-        matches = [e for e in api.environments()
-                   if args.env in (e["environment_id"], e["name"])]
+        environments = api.environments()
+        wanted = args.env if args.env is not None else os.environ.get("CLAUDE_CLOUD_ENV")
+        source = "--env" if args.env is not None else "CLAUDE_CLOUD_ENV"
+        matches = [e for e in environments if wanted in (e["environment_id"], e["name"])] if wanted is not None else environments
         if len(matches) != 1:
-            raise Failure("Environment name/id must match exactly one entry", 2)
+            print(api.resolved, file=sys.stderr)
+            names = ", ".join(f"{e['name']} ({e['environment_id']})" for e in environments)
+            raise Failure(f"Environment must resolve to one entry via --env or CLAUDE_CLOUD_ENV; "
+                          f"candidates: {names or 'none'}", 2)
         env = matches[0]
+        if wanted is None:
+            source = "only environment"
+        resolved = [api.resolved, f"env: {env['name']} via {source}"]
+        for key, fallback in (("repo", None), ("branch", "main")):
+            value = getattr(args, key)
+            variable = "CLAUDE_CLOUD_" + key.upper()
+            origin = "--" + key
+            if value is None:
+                value = os.environ.get(variable)
+                origin = variable
+            if value is None:
+                value, origin = fallback, "default"
+            setattr(args, key, value)
+            resolved.append(f"{key}: {value or '(none)'} via {origin}")
+        print(" · ".join(resolved), file=sys.stderr)
         if env.get("kind") != "anthropic_cloud":
             raise Failure("This prototype supports Anthropic-hosted cloud environments only", 2)
         sources = []
@@ -322,12 +536,16 @@ def main():
                 raise Failure("Expected GitHub owner/repo or HTTPS repository URL", 2)
             sources = [{"type": "git_repository", "url": "https://github.com/" + repo,
                         "revision": args.branch}]
-        body = {"title": args.prompt[:120], "environment_id": env["environment_id"],
+        body = {"title": args.title if args.title is not None else args.prompt[:120], "environment_id": env["environment_id"],
                 "events": [user_event(args.prompt)],
                 "config": {"sources": sources, "outcomes": []}}
         created = api.call("/v1/code/sessions", body)["session"]
-        print(created["id"])
-        print("https://claude.ai/code/" + created["id"])
+        print(created["id"], flush=True)
+        print("https://claude.ai/code/" + created["id"], flush=True)
+        if args.wait:
+            wait(api, created["id"], args.timeout, quiet=True)
+            rows, _ = api.events(created["id"])
+            print(review_markdown(review_turns(rows)))
     elif args.command == "send":
         latest = api.call(f"/v1/code/sessions/{args.id}/events?sort_order=desc&limit=1")["data"]
         cursor = str(latest[0]["sequence_num"]) if latest else None
@@ -348,13 +566,9 @@ def main():
             raise Failure("Send accepted, visibility unconfirmed. Retry read/wait; do not resend.") from None
     elif args.command == "read":
         rows, _ = api.events(args.id)
-        for row in rows:
-            text = markdown(row["payload"])
-            if text:
-                print(text)
+        turns = review_turns(rows)
+        print(json.dumps(turns, ensure_ascii=False, indent=2) if args.json else review_markdown(turns))
     elif args.command == "wait":
-        if not math.isfinite(args.timeout) or args.timeout <= 0:
-            raise Failure("--timeout must be positive", 2)
         wait(api, args.id, args.timeout)
     elif args.command == "archive":
         try:
