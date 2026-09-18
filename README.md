@@ -12,6 +12,7 @@ global for tools you call from any repo, repo-local for everything else.
 
 | Skill | You need it when… | Scope | Install (then `scripts/install` + `--check`) |
 | --- | --- | --- | --- |
+| [migration-parity](skills/migration-parity/SKILL.md) | migrate a working system with independent old/new data, UI and side-effect verification | global | `pnpm dlx skills add pjmuller/skills -s migration-parity -g -y` (no command installer) |
 | [agents-md](skills/agents-md/SKILL.md) | create or simplify AGENTS.md / canonical CLAUDE.md: intent, boundaries, vocabulary and verification | global | `pnpm dlx skills add pjmuller/skills -s agents-md -g -y` (no command installer) |
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
 | [claude-cloud](skills/claude-cloud/SKILL.md) | a local agent must drive Claude Code **cloud** sessions headlessly: create, send, wait, read, archive; cloud dry runs and browser fallback (undocumented API experiment) | global | `pnpm dlx skills add pjmuller/skills -s claude-cloud -g -y` |
