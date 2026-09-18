@@ -37,8 +37,9 @@ in the local checkout, and prints the project + thread IDs — report those.
 
 Hidden ≠ stopped: hiding is a snooze that a keeper maintains, and a hidden
 worker must resurface the moment it dies or needs the user
-([hide-thread.md](hide-thread.md)); settling kills it
-([settle-thread.md](settle-thread.md)). Threads without 🏓 (standalone, 📤
+([hide-thread.md](hide-thread.md)). **Neither settle nor archive can hide a live
+worker: both stop its session. Use snooze instead.** See
+[settle-thread.md](settle-thread.md). Threads without 🏓 (standalone, 📤
 hand-offs, orchestrators) are never hidden or settled by the helpers — except
 fire-and-forget spawns (`--settle-when-done`: hidden while running, the worker
 settles itself at the end; [spawn-thread.md](spawn-thread.md#fire-and-forget---settle-when-done)). Fleet
