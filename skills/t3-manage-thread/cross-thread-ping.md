@@ -16,6 +16,11 @@ exists as of v0.0.42. Flags (retries, cross-project, hide overrides): `--help`.
   gets its keeper re-armed ([hide-thread.md](hide-thread.md) — T3 clears the
   snooze on the incoming turn), a visible target stays visible. A ping never
   settles anything.
+- Batch routine updates; prefer worker milestone reports over status-check pings.
+  On a running Codex turn, a received ping can leave turn timestamps unchanged:
+  T3 treats the newer message as queued and disables Snooze (UI and API) for
+  up to 120s. Each new ping restarts that window. Send urgent corrections anyway;
+  do not delay delivery or interrupt work just to keep the sidebar quiet.
 - Cross-project pings are refused by default (`--allow-cross-project`): a ping
   is indistinguishable from a typed message, so a wrong target silently
   derails someone else's work. Resolve one exact id; never ping guesses.
