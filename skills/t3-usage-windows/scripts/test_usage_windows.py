@@ -8,9 +8,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import local_timezone
+import reset_credit
 import topup
 
 HERE = Path(__file__).parent
+
+
+def test_reset_selects_earliest_available_credit():
+    snapshot = {'rateLimitResetCredits': {'credits': [
+        {'id': 'later', 'status': 'available', 'expiresAt': 20},
+        {'id': 'used', 'status': 'consumed', 'expiresAt': 1},
+        {'id': 'first', 'status': 'available', 'expiresAt': 10},
+    ]}}
+    assert reset_credit.earliest_credit(snapshot)['id'] == 'first'
 
 
 def test_system_timezone_dst_and_banner(monkeypatch):

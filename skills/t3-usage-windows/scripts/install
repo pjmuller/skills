@@ -5,7 +5,7 @@ install_dir="${HOME}/.local/bin"
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
 [[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
-  for dependency in uv jq t3-spawn-thread t3-settle-thread t3-ping-thread t3-limits t3-thread-maintenance t3-drafts; do
+  for dependency in uv jq codex t3-spawn-thread t3-settle-thread t3-ping-thread t3-limits t3-thread-maintenance t3-drafts; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (thread helpers: skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install)" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done

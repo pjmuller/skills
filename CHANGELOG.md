@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-usage-windows: preview or consume the earliest-expiring Codex banked reset through the native app-server protocol.
 - video-shrink-for-gemini: explicit `download-fathom --transcript-only` exports raw API JSON and speaker/timestamp Markdown without video or ASR.
 - claude-cloud: disclosed profile/environment/repository defaults, create --wait/--title, official-CLI token refresh, paginated session review and redacted idempotent export.
 - Command installers guard against switching checkouts accidentally; `--relink` opts in, project copies warn, and `--check` identifies the source.

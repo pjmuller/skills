@@ -21,3 +21,8 @@
 - Logs: `~/.t3/userdata/logs/t3-usage-windows-{topup,limited}.log`.
   Old logs are retained during migration. Retire recovery when T3 supports it
   natively; upstream quota failover issue #2471 was closed not-planned.
+- Banked-reset automation uses Codex CLI's experimental app-server methods
+  `account/rateLimits/read` and `account/rateLimitResetCredit/consume` (verified
+  with 0.155.0). OpenAI documents redemption through desktop, CLI or web, but no
+  public HTTP API; keep the helper on the native protocol and fail if credit
+  details are unavailable rather than consuming an unspecified reset.
