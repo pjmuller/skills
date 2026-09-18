@@ -2,6 +2,8 @@
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 install_dir="${HOME}/.local/bin"
+[[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
+[[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
   for dependency in uv security t3-limits; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; uv and security are prerequisites, t3-limits comes from the t3-manage-thread skill (its scripts/install), then rerun scripts/install --check" >&2; exit 1; }
@@ -11,7 +13,28 @@ if [[ "${1:-}" == "--check" ]]; then
   echo "ok      claude-cloud"
   exit 0
 fi
-[[ $# == 0 ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
+# Preflight every link before changing any command.
+project_copy=false
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+esac
+warn_project=false
+[[ ! -d "$HOME/.agents/skills/claude-cloud" ]] || warn_project=true
+for command_name in claude-cloud; do
+  existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    warn_project=true
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+  fi
+done
+if $project_copy && $warn_project; then
+  echo "warning: project copy $script_dir is being made global" >&2
+fi
+
 mkdir -p "$install_dir"
 ln -sfn "$script_dir/claude-cloud" "$install_dir/claude-cloud"
 echo "installed $install_dir/claude-cloud"

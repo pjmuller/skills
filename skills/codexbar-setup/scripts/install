@@ -2,7 +2,8 @@
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 target="$HOME/.local/bin/codexbar-profiles"
-[[ $# == 0 || ( $# == 1 && "$1" == --check ) ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
+[[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
+[[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == --check ]]; then
   [[ "$(uname)" == Darwin ]] || { echo 'macOS required' >&2; exit 1; }
   for dependency in uv cswap security launchctl; do
@@ -13,9 +14,31 @@ if [[ "${1:-}" == --check ]]; then
   echo 'ok: app, dependencies, command link (run codexbar-profiles check for account mappings)'
   exit
 fi
+# Preflight every link before changing any command.
+project_copy=false
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+esac
+warn_project=false
+[[ ! -d "$HOME/.agents/skills/codexbar-setup" ]] || warn_project=true
+for command_name in codexbar-profiles; do
+  existing="$(readlink -f "$HOME/.local/bin/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    warn_project=true
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+  fi
+done
+if $project_copy && $warn_project; then
+  echo "warning: project copy $script_dir is being made global" >&2
+fi
+
 mkdir -p "$HOME/.local/bin"
 if [[ -e "$target" || -L "$target" ]]; then
-  [[ -L "$target" && "$(readlink -f "$target")" == "$script_dir/codexbar-profiles" ]] || { echo "refusing to replace $target" >&2; exit 1; }
+  [[ -L "$target" ]] || { echo "refusing to replace non-symlink $target" >&2; exit 1; }
 fi
 ln -sfn "$script_dir/codexbar-profiles" "$target"
 echo "installed $target; jobs require explicit install-jobs"

@@ -4,6 +4,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 install_dir="${T3_MAINTENANCE_INSTALL_DIR:-$HOME/.local/bin}"
 
+[[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
+[[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
   for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads; do
     target="$install_dir/$name"
@@ -20,9 +22,27 @@ if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
 
-if (($#)); then
-  echo "Usage: install [--check]" >&2
-  exit 2
+
+# Preflight every link before changing any command.
+project_copy=false
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+esac
+warn_project=false
+[[ ! -d "$HOME/.agents/skills/t3-maintenance" ]] || warn_project=true
+for command_name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads; do
+  existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    warn_project=true
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+  fi
+done
+if $project_copy && $warn_project; then
+  echo "warning: project copy $script_dir is being made global" >&2
 fi
 
 mkdir -p "$install_dir"
