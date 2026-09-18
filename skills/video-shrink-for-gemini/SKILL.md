@@ -1,6 +1,6 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
+description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
 ---
 
 # Video → Gemini
@@ -13,8 +13,11 @@ Install commands with `scripts/install`; verify dependencies with `scripts/insta
 ## Fathom input
 
 For a Fathom URL, use [the API download flow](fathom.md) before media inspection.
-It resolves private call URLs without browser/cookie automation and optionally saves
-transcript timings for verification. Never change sharing permissions.
+For transcript-only requests, run `download-fathom URL --out PRIVATE_DIR --transcript-only`
+and stop before media inspection: it saves raw API JSON and speaker/timestamp Markdown,
+without downloading video, calling Gemini, or running ASR. It needs only `uv` and
+`FATHOM_API_KEY`. Other Fathom requests can download media and optional transcript timings.
+Never change sharing permissions.
 
 ## Inspect and choose mode
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run python
-"""Resolve a Fathom call with its API, then download the existing share recording."""
+"""Retrieve a Fathom transcript or download the existing share recording."""
 import argparse
 import json
 import os
@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
-def resolve(url, timings=False):
+def resolve(url, timings=False, require_share=True):
     parsed = urlparse(url)
     match = re.fullmatch(r"/calls/(\d+)/?", parsed.path)
     if parsed.scheme != "https" or parsed.hostname != "fathom.video":
@@ -34,7 +34,7 @@ def resolve(url, timings=False):
             if (share_input and meeting.get("share_url", "").rstrip("/") == url.rstrip("/")) or (not share_input and urlparse(meeting.get("url", "")).path.rstrip("/") == f"/calls/{match[1]}"):
                 share = meeting.get("share_url", "")
                 p = urlparse(share)
-                if p.scheme != "https" or p.hostname != "fathom.video" or not p.path.startswith("/share/"):
+                if require_share and (p.scheme != "https" or p.hostname != "fathom.video" or not p.path.startswith("/share/")):
                     raise ValueError("Recording has no valid existing Fathom share URL")
                 return {"source_url": url, "share_url": share, "recording_id": meeting["recording_id"]}
         cursor = data.get("next_cursor")
@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True, help="Private output directory; must be ignored when inside git")
     parser.add_argument("--resolve-only", action="store_true", help="Save source metadata without downloading")
     parser.add_argument("--timings", action="store_true", help="Also save Fathom transcript timing reference")
+    parser.add_argument("--transcript-only", action="store_true", help="Save raw transcript JSON and readable Markdown; no media tools or video analysis")
     args = parser.parse_args()
     out = args.out.expanduser().resolve()
     os.umask(0o077)
@@ -60,14 +61,25 @@ def main():
     if in_git and subprocess.run(["git", "check-ignore", "-q", str(out / "source.json")], cwd=out).returncode:
         parser.error("Output must be git-ignored; add the run directory to git info/exclude first")
     try:
-        source = resolve(args.url, args.timings)
+        source = resolve(args.url, args.timings or args.transcript_only, require_share=not args.transcript_only)
         (out / "source.json").write_text(json.dumps(source, indent=2) + "\n")
-        if args.timings:
+        if args.timings or args.transcript_only:
             endpoint = f"https://api.fathom.ai/external/v1/recordings/{source['recording_id']}/transcript"
             with urlopen(Request(endpoint, headers={"X-Api-Key": os.environ["FATHOM_API_KEY"].strip()}), timeout=60) as response:
-                reference = json.load(response).get("transcript", [])
+                payload = json.load(response)
+                reference = payload.get("transcript", [])
+            if args.transcript_only:
+                (out / "fathom-transcript.json").write_text(json.dumps(payload, indent=2) + "\n")
+                if not reference:
+                    raise ValueError("Fathom returned no transcript segments; raw response saved")
+                text = "# Fathom transcript\n\nSource: " + args.url + "\n\nRaw Fathom speech transcript; not verified against audio or video.\n\n"
+                text += "\n\n".join(
+                    f"{item.get('timestamp', '')} {item.get('speaker', {}).get('display_name', 'Unknown')}\n{item.get('text', '')}"
+                    for item in reference
+                )
+                (out / "transcript.md").write_text(text + "\n")
             (out / "fathom-timings.json").write_text(json.dumps(reference, indent=2) + "\n")
-        if not args.resolve_only:
+        if not (args.resolve_only or args.transcript_only):
             subprocess.run(["yt-dlp", "--no-playlist", "--no-overwrites", "--no-progress", "--abort-on-unavailable-fragments",
                             "--concurrent-fragments", "4", "-o", str(out / "source.%(ext)s"), source["share_url"]], check=True)
         print(f"Saved recording artifacts in {out}")

@@ -1,6 +1,13 @@
-# Fathom URL → local media
+# Fathom URL → transcript or media
 
-Use `download-fathom 'https://fathom.video/calls/123456' --out /private/run --timings`.
+For speech-only work, use `download-fathom URL --out /private/run --transcript-only`.
+Outputs: the unedited API response in `fathom-transcript.json`, its segment array in
+`fathom-timings.json`, source metadata, and `transcript.md` (speaker/timestamp/text).
+No media download, yt-dlp, ffmpeg, Gemini, or ASR is involved; stop here. This mode
+also works for an accessible call with no share URL. Preserve speaker labels and
+wording; label interpretations separately because Fathom can misattribute speakers.
+
+For audiovisual work, use `download-fathom 'https://fathom.video/calls/123456' --out /private/run --timings`.
 Load `FATHOM_API_KEY` from the operator's existing environment/secrets setup; for a
 mise-managed project, run via `mise exec -- download-fathom ...`. Do not ask for a
 share link until checking the existing project's Fathom integration/environment.
