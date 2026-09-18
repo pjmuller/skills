@@ -101,6 +101,14 @@ input/output paths; verify the file before settling the worker. Never recursivel
 delegate. If all automated media-capable routes fail, report the concrete blocker
 and provide the prepared video/prompt for AI Studio. Chat-only output is incomplete.
 
+## No Gemini available
+
+Seen blockers: native `agy` weekly quota 429, and video-summary 503. When Gemini is exhausted or
+existing Claude/OpenAI subscriptions are preferred, take the measured
+[local route](local-route.md): `scripts/transcribe-local` for local ASR and `scripts/scene-frames`
+for scene-sampled original-resolution frames, read by Claude Code or Codex. It is sampled, not
+continuous, perception — weaker than Gemini on anything between frames; say so in the output.
+
 ## PJ's local examples (optional context only)
 
 - Project notes: `~/code/pjmuller/pjcoach/3_business/<n>_<project>.md`.

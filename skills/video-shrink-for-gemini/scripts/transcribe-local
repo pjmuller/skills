@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Transcribe speech locally with mlx-whisper: no audio leaves the machine and no Gemini quota is used.
+# Usage: transcribe-local [--language nl] [--model mlx-community/whisper-large-v3-turbo] [--out DIR] FILE...
+#   FILE may be a bare name; it is looked up in ~/screenshots and ~/Downloads.
+# Output: <name>.whisper.{txt,srt,vtt,json,tsv} next to the source (or in --out DIR).
+set -euo pipefail
+
+language=""; model="mlx-community/whisper-large-v3-turbo"; outdir=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --language) language=$2; shift 2 ;;
+    --model) model=$2; shift 2 ;;
+    --out) outdir=$2; shift 2 ;;
+    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+    *) break ;;
+  esac
+done
+[[ $# -gt 0 ]] || { echo "no input files" >&2; exit 1; }
+command -v mlx_whisper >/dev/null || { echo "missing mlx_whisper; install it with: uv tool install mlx-whisper" >&2; exit 1; }
+
+resolve() {
+  local f=$1
+  [[ -f $f ]] && { echo "$f"; return; }
+  for d in "$HOME/screenshots" "$HOME/Downloads"; do
+    [[ -f "$d/$f" ]] && { echo "$d/$f"; return; }
+  done
+  echo "not found: $f" >&2; return 1
+}
+
+for arg in "$@"; do
+  in=$(resolve "$arg")
+  base=$(basename "${in%.*}")
+  dir=${outdir:-$(dirname "$in")}
+  mkdir -p "$dir"
+  # Whisper wants mono 16 kHz PCM. Decoding once here keeps container parsing out of the model loader,
+  # and a scratch directory keeps whisper's own output naming from colliding with anything beside the source.
+  tmp=$(mktemp -d -t transcribe-local)
+  trap 'rm -rf "$tmp"' EXIT
+  wav="$tmp/audio.wav"
+  echo "→ $in  [$model${language:+ lang=$language}]"
+  ffmpeg -hide_banner -loglevel error -y -i "$in" -vn -ac 1 -ar 16000 -c:a pcm_s16le "$wav"
+  # Conditioning on previous text makes long recordings drift into repetition loops after ~25 min
+  # (a 42-minute meeting went from 44% to 17% word disagreement without it).
+  mlx_whisper --model "$model" ${language:+--language "$language"} \
+    --output-dir "$tmp" --output-format all --word-timestamps True \
+    --condition-on-previous-text False "$wav"
+  rm -f "$wav"
+  for produced in "$tmp"/*; do
+    [[ -f $produced ]] || continue
+    ext=${produced##*.}
+    out="$dir/$base.whisper.$ext"
+    mv -f "$produced" "$out"
+    printf '   %s\n' "$out"
+  done
+  rm -rf "$tmp"
+  trap - EXIT
+done
