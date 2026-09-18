@@ -18,11 +18,14 @@ in the local checkout, and prints the project + thread IDs — report those.
 
 **Return path is decided per spawn, from what the user asked for that spawn:**
 
-- 🏓 round-trip — the parent needs the result back: a code review by the
-  opposite model, a >200 LOC delegation to an Astra worker, any sub-task the
-  parent verifies. The default for delegated work.
+- 🏓 round-trip — the parent needs the result back (a review, a delegated
+  implementation, any sub-task the parent verifies). Hidden while it runs, so
+  the sidebar stays focused.
 - 📤 standalone — the user said "standalone / separate thread / hand off": it
   lives on its own, nobody pings back, never hidden or settled by helpers.
+- Not clearly said? **Default to 🏓.** It keeps the sidebar clean and the user
+  can always promote it. Pick 📤 only when the task is a topic of its own that
+  the parent has no further use for.
 - A thread's own mode never propagates. A standalone thread is a clean slate:
   each thread it spawns gets 🏓 or 📤 on its own merits.
 
