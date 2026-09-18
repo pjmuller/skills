@@ -16,13 +16,9 @@ in the local checkout, and prints the project + thread IDs — report those.
 
 ## 🏓 round-trip workers
 
-**Default is 🏓.** A spawn whose result the parent must act on — investigation,
-review, "figure out how", anything with a deliverable — is a round-trip worker.
-Spawn 📤 (no ping-back) only when the user says the result need not come back
-("fire-and-forget", "hand off", "I'll pick it up there"). "Stand alone on the
-X profile" is profile routing, not a return-path choice (misread 2026-09-18).
-Scope "no ping-back" to the task it addresses, unless the user explicitly
-includes its child threads; a standalone task can still spawn 🏓 reviewers.
+Scope “standalone / no ping-back” to the task it addresses, unless the user
+explicitly includes its child threads. A standalone task can still spawn 🏓
+reviewers that report to it; keep their briefs consistent with that return path.
 
 | Step | Command / effect |
 | --- | --- |
