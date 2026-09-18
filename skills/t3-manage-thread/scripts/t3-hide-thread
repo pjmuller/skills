@@ -178,7 +178,13 @@ if [[ "$mode" == "hide-worker" ]]; then
       exit 0
     fi
     decision="$(printf '%s' "$snapshot" | jq -r --argjson now "$(date -u +%s)" '
-      def epoch: if . == null then 0 else (sub("\\.[0-9]+";"") | fromdateiso8601) end;
+      # T3 compares millisecond timestamps: rounding can hide a completion that
+      # happened just AFTER snoozing, leaving the worker permanently "Woke".
+      def epoch:
+        if . == null then 0 else
+          capture("^(?<seconds>[^.]+)(?<fraction>\\.[0-9]+)?Z$")
+          | ((.seconds + "Z" | fromdateiso8601) + ((.fraction // "0") | tonumber))
+        end;
       if .archivedAt != null then "exit:archived"
       elif .settledOverride == "settled" then "exit:settled"
       elif (.session.status == "stopped" or .session.status == "error")

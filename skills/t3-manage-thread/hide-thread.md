@@ -41,5 +41,15 @@ keeper's own deadline are tuning, not contract: see the `hide-worker` loop in
 `scripts/t3-hide-thread`. Upstream caveat
 [#11788](https://github.com/pingdotgg/t3code/issues/11788): a derived snooze wake makes
 the thread an auto-settle candidate (default 3 idle days, per-project setting) — an
-idle hidden worker older than that gets killed by T3, not by us. Re-arming is idempotent (🏓 spawn arms it; a ping to
+active keeper re-snoozes completion wakes, preventing candidacy. If the keeper
+is gone and the thread wakes, T3 can eventually stop it under that policy. Re-arming is idempotent (🏓 spawn arms it; a ping to
 an already-snoozed thread re-arms it). Log: `/tmp/t3-hide-<THREAD_ID>.log`.
+
+Keep this wrapper small: T3 owns thread/session/attention state; the keeper only
+reconciles visibility. No worker registry or cached lifecycle state. Preserve
+fractional timestamps when comparing completion with `snoozedAt` (see
+`scripts/test_hide_thread.py`): a completion even 1 ms later wakes the UI.
+A ping to a busy worker can still expose it for 120s; fixing that requires native
+T3 send/snooze semantics, not faster polling or falsified message timestamps.
+After verifying a worker report, settle it instead of pinging a "thanks/stand by"
+acknowledgement that starts another turn and clears its snooze.
