@@ -20,7 +20,27 @@ def test_reset_selects_earliest_available_credit():
         {'id': 'used', 'status': 'consumed', 'expiresAt': 1},
         {'id': 'first', 'status': 'available', 'expiresAt': 10},
     ]}}
-    assert reset_credit.earliest_credit(snapshot)['id'] == 'first'
+    assert [row['id'] for row in reset_credit.available_credits(snapshot)] == ['first', 'later']
+
+
+def test_reset_inventory_renders_markdown(monkeypatch):
+    monkeypatch.setattr(reset_credit, 'datetime', SimpleNamespace(
+        fromtimestamp=lambda value: SimpleNamespace(
+            astimezone=lambda: SimpleNamespace(
+                isoformat=lambda: f'time-{value}',
+                strftime=lambda _: f'local-{value}',
+            )
+        )
+    ))
+    inventory = reset_credit.credit_inventory({'accountId': 'account', 'rateLimitResetCredits': {
+        'availableCount': 1,
+        'credits': [{'id': 'one', 'title': 'Full reset', 'status': 'available', 'expiresAt': 10}],
+    }})
+    assert inventory['resets'][0]['expires_at'] == 'time-10'
+    assert reset_credit.format_markdown(inventory) == (
+        '### Codex banked resets\n\n**1 available.**\n\n'
+        '| Reset | Expires |\n|---|---|\n| Full reset | local-10 |'
+    )
 
 
 def test_system_timezone_dst_and_banner(monkeypatch):

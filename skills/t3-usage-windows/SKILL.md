@@ -20,7 +20,7 @@ t3-usage-windows topup remove
 t3-usage-windows limited list --since 7d [--profile NAME_OR_ID] [--json]
 t3-usage-windows limited resume [--profile NAME_OR_ID] --dry-run
 t3-usage-windows limited schedule --profile NAME_OR_ID [--at HH:MM] [--dry-run]
-t3-usage-windows reset [--apply] [--json]
+t3-usage-windows reset [--markdown|--json] [--apply]
 t3-usage-windows status [--profile NAME_OR_ID] [--json]
 ```
 
@@ -48,10 +48,11 @@ Mutation commands accept `--dry-run`; `limited resume|schedule --json` returns a
 outcome plus audit output. `limited list --json` returns structured thread rows.
 
 `reset` uses Codex's native app-server protocol for the currently logged-in
-Codex account. It previews the earliest-expiring banked reset by default;
-`--apply` consumes that exact credit and verifies the remaining count and weekly
-usage. This resets both eligible five-hour and weekly windows. Do not apply it
-without explicit user authorization. It is unrelated to Luna Reserve or API credits.
+Codex account. It lists every banked reset and expiry as Markdown by default;
+`--json` returns the same inventory structurally. `--apply` consumes the earliest
+expiry and verifies the remaining count and weekly usage. This resets both
+eligible five-hour and weekly windows. Do not apply it without explicit user
+authorization. It is unrelated to Luna Reserve or API credits.
 
 ## Install and migration
 

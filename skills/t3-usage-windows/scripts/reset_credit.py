@@ -1,4 +1,4 @@
-"""Preview or consume the earliest-expiring Codex banked rate-limit reset."""
+"""List Codex banked rate-limit resets or consume the earliest expiry."""
 
 from __future__ import annotations
 
@@ -60,14 +60,50 @@ class AppServer:
         self.process.wait(timeout=5)
 
 
-def earliest_credit(snapshot: dict) -> dict | None:
+def available_credits(snapshot: dict) -> list[dict]:
     inventory = snapshot.get("rateLimitResetCredits") or {}
-    available = [
-        credit
-        for credit in inventory.get("credits") or []
-        if credit.get("status") == "available" and credit.get("expiresAt") is not None
-    ]
-    return min(available, key=lambda credit: credit["expiresAt"], default=None)
+    return sorted(
+        [
+            credit
+            for credit in inventory.get("credits") or []
+            if credit.get("status") == "available"
+            and credit.get("expiresAt") is not None
+        ],
+        key=lambda credit: credit["expiresAt"],
+    )
+
+
+def present_credit(credit: dict) -> dict:
+    expiry = datetime.fromtimestamp(credit["expiresAt"]).astimezone()
+    return {
+        "id": credit["id"],
+        "title": credit.get("title") or "Reset",
+        "expires_at": expiry.isoformat(),
+        "expires_local": expiry.strftime("%a %d %b %Y %H:%M %Z"),
+    }
+
+
+def credit_inventory(snapshot: dict) -> dict:
+    raw = snapshot.get("rateLimitResetCredits") or {}
+    return {
+        "account_id": snapshot.get("accountId"),
+        "available_count": raw.get("availableCount", 0),
+        "resets": [present_credit(credit) for credit in available_credits(snapshot)],
+    }
+
+
+def format_markdown(inventory: dict) -> str:
+    count = inventory["available_count"]
+    lines = ["### Codex banked resets", "", f"**{count} available.**"]
+    if inventory["resets"]:
+        lines += ["", "| Reset | Expires |", "|---|---|"]
+        lines += [
+            f"| {reset['title']} | {reset['expires_local']} |"
+            for reset in inventory["resets"]
+        ]
+    elif count:
+        lines += ["", "Expiration details are unavailable for this account."]
+    return "\n".join(lines)
 
 
 def read_limits(server: AppServer) -> dict:
@@ -79,36 +115,33 @@ def read_limits(server: AppServer) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="t3-usage-windows reset",
-        description="Preview the earliest Codex reset credit; --apply consumes it.",
+        description="List Codex reset credits; --apply consumes the earliest expiry.",
     )
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--json", action="store_true")
+    formats = parser.add_mutually_exclusive_group()
+    formats.add_argument("--json", action="store_true")
+    formats.add_argument("--markdown", action="store_true")
     args = parser.parse_args(argv)
+    if args.apply and args.markdown:
+        parser.error("--markdown is read-only; use --apply alone or with --json")
 
     server = AppServer()
     try:
         before = read_limits(server)
-        credit = earliest_credit(before)
-        if not credit:
+        inventory = credit_inventory(before)
+        credits = available_credits(before)
+        if args.apply and not credits:
             raise SystemExit("no detailed, available Codex reset credit found")
-        output = {
-            "applied": False,
-            "account_id": before.get("accountId"),
-            "available_before": (before.get("rateLimitResetCredits") or {}).get(
-                "availableCount"
-            ),
-            "credit_id": credit["id"],
-            "expires_at": datetime.fromtimestamp(credit["expiresAt"])
-            .astimezone()
-            .isoformat(),
-        }
+        output = {**inventory, "applied": False}
         if args.apply:
+            credit = credits[0]
             response = server.request(
                 "account/rateLimitResetCredit/consume",
                 {"creditId": credit["id"], "idempotencyKey": str(uuid.uuid4())},
             )
             output["outcome"] = response["outcome"]
             output["applied"] = response["outcome"] in {"reset", "alreadyRedeemed"}
+            output["consumed_credit_id"] = credit["id"]
             after = read_limits(server)
             output["available_after"] = (
                 after.get("rateLimitResetCredits") or {}
@@ -119,17 +152,16 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.close()
 
-    if args.json:
+    if args.markdown:
+        print(format_markdown(inventory))
+    elif args.json:
         print(json.dumps(output, indent=2))
     elif args.apply:
         print(
-            f"{output['outcome']}: {output['available_before']} -> "
+            f"{output['outcome']}: {output['available_count']} -> "
             f"{output['available_after']} resets; weekly usage "
             f"{output['weekly_used_percent_after']}%"
         )
     else:
-        print(
-            f"earliest reset expires {output['expires_at']} "
-            f"({output['available_before']} available); pass --apply to consume"
-        )
+        print(format_markdown(inventory))
     return 0
