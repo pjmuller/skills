@@ -16,9 +16,15 @@ in the local checkout, and prints the project + thread IDs — report those.
 
 ## 🏓 round-trip workers
 
-Scope “standalone / no ping-back” to the task it addresses, unless the user
-explicitly includes its child threads. A standalone task can still spawn 🏓
-reviewers that report to it; keep their briefs consistent with that return path.
+**Return path is decided per spawn, from what the user asked for that spawn:**
+
+- 🏓 round-trip — the parent needs the result back: a code review by the
+  opposite model, a >200 LOC delegation to an Astra worker, any sub-task the
+  parent verifies. The default for delegated work.
+- 📤 standalone — the user said "standalone / separate thread / hand off": it
+  lives on its own, nobody pings back, never hidden or settled by helpers.
+- A thread's own mode never propagates. A standalone thread is a clean slate:
+  each thread it spawns gets 🏓 or 📤 on its own merits.
 
 | Step | Command / effect |
 | --- | --- |
