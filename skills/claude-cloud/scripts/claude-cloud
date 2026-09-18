@@ -1,0 +1,378 @@
+#!/usr/bin/env -S uv run --script --python 3.12
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Personal Claude Code cloud API experiment; no credential writes or local checkout."""
+import argparse
+import datetime
+import json
+import math
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+BASE = "https://api.anthropic.com"
+# Observed in Claude CLI 2.1.276; /v1/code needs no anthropic-beta header.
+API_VERSION = "2023-06-01"
+
+
+class Failure(Exception):
+    def __init__(self, message, code=1, status=None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def t3_lib():
+    """Profile → Keychain mapping is owned by the t3-manage-thread skill; resolve its
+    lib through the installed command so both stay on one hashing rule."""
+    command = shutil.which("t3-limits")
+    if not command:
+        raise Failure("t3-limits not on PATH: install the t3-manage-thread skill "
+                      "(its scripts/install), then retry", 2)
+    sys.path.insert(0, str(Path(command).resolve().parent / "lib"))
+    try:
+        from t3_limits import SETTINGS, claude_profiles, keychain_service
+    except ImportError:
+        raise Failure("t3-limits found but its lib/t3_limits.py is missing or "
+                      "incompatible; rerun the t3-manage-thread scripts/install", 2) from None
+    return SETTINGS, claude_profiles, keychain_service
+
+
+def resolve_profile(needle):
+    """(config dir, Keychain service) for a T3 Claude provider instance."""
+    settings, claude_profiles, keychain_service = t3_lib()
+    profiles = claude_profiles(settings)
+    if needle is None:
+        config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+        if config_dir:
+            home = Path(config_dir).expanduser()
+            return home, keychain_service(str(home))
+        matches = [p for p in profiles if not p[2]]
+        if len(matches) != 1:
+            raise Failure("No single default Claude profile (empty homePath) in "
+                          f"{settings}; pass --profile", 2)
+    else:
+        lowered = needle.casefold()
+        matches = [p for p in profiles
+                   if lowered in p[0].casefold() or lowered in p[1].casefold()]
+        if len(matches) != 1:
+            names = ", ".join(f"{label} ({instance})" for instance, label, _ in matches or profiles)
+            kind = "Ambiguous" if matches else "Unknown"
+            raise Failure(f"{kind} --profile {needle!r}; candidates: {names or 'none'}", 2)
+    home_path = matches[0][2]
+    return (Path(home_path).expanduser() if home_path else Path.home() / ".claude",
+            keychain_service(home_path))
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise Failure("Unexpected API redirect; refusing to forward credentials")
+
+
+class API:
+    def __init__(self, profile):
+        self.home, self.service = resolve_profile(profile)
+        self.opener = urllib.request.build_opener(NoRedirect())
+
+    def credentials(self):
+        # Read afresh: the official CLI may refresh the shared token during wait.
+        result = subprocess.run(["security", "find-generic-password", "-s",
+                                 self.service, "-w"], capture_output=True, text=True)
+        raw = result.stdout if result.returncode == 0 else None
+        if raw is None:
+            path = self.home / ".credentials.json"
+            if path.exists():
+                raw = path.read_text()
+        if not raw:
+            raise Failure(f"No Claude OAuth credentials for {self.home}", 3)
+        try:
+            credential = json.loads(raw)["claudeAiOauth"]
+            token = credential["accessToken"]
+            expires = credential.get("expiresAt", 0)
+        except (KeyError, TypeError, ValueError):
+            raise Failure("Invalid stored Claude OAuth credentials", 3) from None
+        if expires and expires <= time.time() * 1000:
+            raise Failure("OAuth expired: refresh/login with the official Claude CLI "
+                          f"using CLAUDE_CONFIG_DIR={self.home}, then retry", 3)
+        return token
+
+    def call(self, path, body=None, timeout=30):
+        headers = {"Authorization": "Bearer " + self.credentials(),
+                   "Content-Type": "application/json", "anthropic-version": API_VERSION,
+                   "anthropic-client-platform": "claude_code_cli"}
+        if path == "/v1/environment_providers":
+            config = (Path.home() / ".claude.json" if self.home.name == ".claude"
+                      else self.home / ".claude.json")
+            try:
+                org = json.loads(config.read_text())["oauthAccount"]["organizationUuid"]
+            except (OSError, ValueError, KeyError, TypeError):
+                raise Failure(f"Missing organization UUID in {config}", 3) from None
+            headers["x-organization-uuid"] = org
+        request = urllib.request.Request(BASE + path, headers=headers,
+                                         data=None if body is None else json.dumps(body).encode())
+        try:
+            with self.opener.open(request, timeout=timeout) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            # Never echo bodies: they may reflect credentials or submitted content.
+            code = 3 if exc.code in (401, 403) else 4 if exc.code == 404 else 1
+            hint = " Check official CLI login/device requirements." if code == 3 else ""
+            raise Failure(f"HTTP {exc.code}: {request.get_method()} {path}.{hint}", code, exc.code) from None
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            hint = " Outcome unknown; inspect sessions/read before retrying." if body is not None else ""
+            raise Failure(f"API {type(exc).__name__}: {request.get_method()} {path}.{hint}") from None
+
+    def environments(self):
+        return self.call("/v1/environment_providers")["environments"]
+
+    def session(self, sid, timeout=30):
+        result = self.call(f"/v1/code/sessions/{sid}", timeout=timeout)
+        return result.get("session") or result["response_shape"]
+
+    def events(self, sid, cursor=None, timeout=30, deadline=None):
+        rows = []
+        while True:
+            if deadline is not None:
+                timeout = min(timeout, deadline - time.monotonic())
+                if timeout <= 0:
+                    raise Failure("Timed out; session was not cancelled", 124)
+            query = {"sort_order": "asc"}
+            if cursor is not None:
+                query["cursor"] = cursor
+            page = self.call(f"/v1/code/sessions/{sid}/events?" +
+                             urllib.parse.urlencode(query), timeout=timeout)
+            rows.extend(page["data"])
+            next_cursor = page.get("next_cursor")
+            if not next_cursor:
+                return rows, str(rows[-1]["sequence_num"]) if rows else cursor
+            if str(next_cursor) == str(cursor):
+                raise Failure("Events pagination cursor did not advance")
+            cursor = next_cursor
+
+
+def session_id(value):
+    if not re.fullmatch(r"(?:session|cse)_[A-Za-z0-9_-]+", value):
+        raise argparse.ArgumentTypeError("Expected session_… or cse_… ID")
+    return value
+
+
+def user_event(message, sid=""):
+    return {"payload": {"uuid": str(uuid.uuid4()), "session_id": sid, "type": "user",
+                        "parent_tool_use_id": None,
+                        "message": {"role": "user", "content": message}}}
+
+
+def real_user(payload):
+    if payload.get("type") != "user" or payload.get("parent_tool_use_id") or payload.get("isMeta"):
+        return False
+    content = payload.get("message", {}).get("content", [])
+    return isinstance(content, str) or any(b.get("type") == "text" for b in content)
+
+
+def markdown(payload):
+    kind = payload.get("type")
+    if kind not in ("user", "assistant") or payload.get("isMeta"):
+        return ""
+    content = payload.get("message", {}).get("content", [])
+    if isinstance(content, str):
+        content = [{"type": "text", "text": content}]
+    lines = []
+    for block in content:
+        if block.get("type") == "text":
+            lines.append(block["text"])
+        elif block.get("type") == "tool_use":
+            lines.append(f"*Tool: {block['name']}*")
+    return f"### {kind.capitalize()}\n\n" + "\n\n".join(lines) + "\n" if lines else ""
+
+
+def state(session):
+    if session.get("status") in ("archived", "failed", "cancelled", "rejected"):
+        return session["status"]
+    return session.get("worker_status") or session.get("status", "unknown")
+
+
+def wait(api, sid, timeout):
+    deadline = time.monotonic() + timeout
+    try:
+        wait_turn(api, sid, deadline)
+    except Failure as exc:
+        if exc.code == 1 and time.monotonic() >= deadline:
+            raise Failure("Timed out; session was not cancelled", 124) from None
+        raise
+
+
+def wait_turn(api, sid, deadline):
+    rows, cursor = api.events(sid, deadline=deadline)
+    # Start at the latest user turn, never mistake an earlier result for its reply.
+    start = 0
+    for i, row in enumerate(rows):
+        if real_user(row["payload"]):
+            start = i
+    rows = rows[start:]
+    finished = False
+    error = False
+    pending_controls = set()
+    while True:
+        for row in rows:
+            payload = row["payload"]
+            if real_user(payload):
+                finished = error = False
+                pending_controls.clear()
+            if payload.get("parent_tool_use_id"):
+                continue
+            kind = payload.get("type")
+            if kind == "assistant":
+                text = markdown(payload)
+                if text:
+                    print(text, flush=True)
+                finished = payload.get("message", {}).get("stop_reason") == "end_turn"
+                error |= bool(payload.get("isApiErrorMessage") and not payload.get("apiErrorIsTransient"))
+            elif kind == "result":
+                finished = True
+                error |= bool(payload.get("is_error"))
+            elif kind == "control_request" and payload.get("request", {}).get("subtype") == "can_use_tool":
+                pending_controls.add(payload["request_id"])
+            elif kind == "control_response":
+                pending_controls.discard(payload.get("response", {}).get("request_id"))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failure("Timed out; session was not cancelled", 124)
+        current = api.session(sid, timeout=min(30, remaining))
+        status = state(current)
+        if status in ("failed", "cancelled", "rejected", "archived"):
+            raise Failure(f"Session {status}", 5)
+        init_error = current.get("external_metadata", {}).get("last_init_error")
+        if init_error:
+            try:
+                age = time.time() - datetime.datetime.fromisoformat(init_error["at"]).timestamp()
+            except (KeyError, TypeError, ValueError):
+                age = 0
+            # CLI 2.1.276 gives recoverable provisioning failures two minutes.
+            fatal = str(init_error.get("recoverable")).lower() != "true" or age > 120
+            healthy = current.get("worker_status") in ("running", "idle", "requires_action")
+            if init_error.get("error_kind") == "environment_deleted" or (fatal and not healthy):
+                raise Failure(f"Cloud startup failed; inspect https://claude.ai/code/{sid}", 5)
+        if status == "requires_action" or pending_controls:
+            raise Failure(f"Session needs interaction: https://claude.ai/code/{sid}", 5)
+        if error:
+            raise Failure("Cloud turn reported an error; inspect read/session URL", 5)
+        if finished:
+            print(f"Turn complete ({status})", file=sys.stderr)
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failure("Timed out; session was not cancelled", 124)
+        time.sleep(min(2, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise Failure("Timed out; session was not cancelled", 124)
+        rows, cursor = api.events(sid, cursor, deadline=deadline)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", help="substring of a T3 Claude instance id or "
+                                          "display name; default = $CLAUDE_CONFIG_DIR "
+                                          "or T3's default Claude profile")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("envs")
+    commands.add_parser("sessions")
+    create = commands.add_parser("create")
+    create.add_argument("--env", required=True)
+    create.add_argument("--repo", help="GitHub owner/repo or https://github.com/owner/repo")
+    create.add_argument("--branch", default="main")
+    create.add_argument("prompt")
+    for name in ("send", "wait", "read", "archive"):
+        sub = commands.add_parser(name)
+        sub.add_argument("id", type=session_id)
+        if name == "send":
+            sub.add_argument("message")
+        if name == "wait":
+            sub.add_argument("--timeout", type=float, default=1800)
+    args = parser.parse_args()
+    api = API(args.profile)
+    if args.command == "envs":
+        for env in api.environments():
+            print(f"{env['environment_id']}\t{env['name']}\t{env.get('kind', '')}\t{env.get('state', '')}")
+    elif args.command == "sessions":
+        for session in api.call("/v1/code/sessions?limit=20")["data"]:
+            print(f"{session['id']}\t{state(session)}\t{session.get('title', '')}")
+    elif args.command == "create":
+        matches = [e for e in api.environments()
+                   if args.env in (e["environment_id"], e["name"])]
+        if len(matches) != 1:
+            raise Failure("Environment name/id must match exactly one entry", 2)
+        env = matches[0]
+        if env.get("kind") != "anthropic_cloud":
+            raise Failure("This prototype supports Anthropic-hosted cloud environments only", 2)
+        sources = []
+        if args.repo:
+            repo = args.repo.removeprefix("https://github.com/").removesuffix(".git")
+            if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+                raise Failure("Expected GitHub owner/repo or HTTPS repository URL", 2)
+            sources = [{"type": "git_repository", "url": "https://github.com/" + repo,
+                        "revision": args.branch}]
+        body = {"title": args.prompt[:120], "environment_id": env["environment_id"],
+                "events": [user_event(args.prompt)],
+                "config": {"sources": sources, "outcomes": []}}
+        created = api.call("/v1/code/sessions", body)["session"]
+        print(created["id"])
+        print("https://claude.ai/code/" + created["id"])
+    elif args.command == "send":
+        latest = api.call(f"/v1/code/sessions/{args.id}/events?sort_order=desc&limit=1")["data"]
+        cursor = str(latest[0]["sequence_num"]) if latest else None
+        event = user_event(args.message, args.id)
+        api.call(f"/v1/code/sessions/{args.id}/events", {"events": [event]})
+        print(args.id, flush=True)
+        print("https://claude.ai/code/" + args.id, flush=True)
+        deadline = time.monotonic() + 10
+        try:
+            while True:
+                rows, cursor = api.events(args.id, cursor, deadline=deadline)
+                if any(r["payload"].get("uuid") == event["payload"]["uuid"] for r in rows):
+                    break
+                if time.monotonic() >= deadline:
+                    raise Failure("Event visibility deadline")
+                time.sleep(max(0, min(1, deadline - time.monotonic())))
+        except Failure:
+            raise Failure("Send accepted, visibility unconfirmed. Retry read/wait; do not resend.") from None
+    elif args.command == "read":
+        rows, _ = api.events(args.id)
+        for row in rows:
+            text = markdown(row["payload"])
+            if text:
+                print(text)
+    elif args.command == "wait":
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise Failure("--timeout must be positive", 2)
+        wait(api, args.id, args.timeout)
+    elif args.command == "archive":
+        try:
+            api.call(f"/v1/code/sessions/{args.id}/archive", {})
+        except Failure as exc:
+            if exc.status != 409 or api.session(args.id).get("status") != "archived":
+                raise
+        print(f"Archived {args.id}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Failure as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(exc.code)
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except (OSError, KeyError, TypeError, ValueError):
+        print("Local I/O or unexpected API schema; inspect CLI compatibility", file=sys.stderr)
+        sys.exit(1)

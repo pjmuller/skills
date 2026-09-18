@@ -14,6 +14,7 @@ global for tools you call from any repo, repo-local for everything else.
 | --- | --- | --- | --- |
 | [agents-md](skills/agents-md/SKILL.md) | create or simplify AGENTS.md / canonical CLAUDE.md: intent, boundaries, vocabulary and verification | global | `pnpm dlx skills add pjmuller/skills -s agents-md -g -y` (no command installer) |
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
+| [claude-cloud](skills/claude-cloud/SKILL.md) | a local agent must drive Claude Code **cloud** sessions headlessly: create, send, wait, read, archive (undocumented API experiment) | global | `pnpm dlx skills add pjmuller/skills -s claude-cloud -g -y` |
 | [codexbar-setup](skills/codexbar-setup/SKILL.md) | CodexBar should share native profiles with T3/Codex and keep Claude credentials fresh (macOS) | global | `pnpm dlx skills add pjmuller/skills -s codexbar-setup -g -y` |
 | [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-schedule -y` |
 | [t3-maintenance](skills/t3-maintenance/SKILL.md) | you orchestrate many worker threads: fleet view, stalled workers, unsent drafts, purge, prompt mining | setup repo | `pnpm dlx skills add pjmuller/skills -s t3-maintenance -y` |
@@ -24,7 +25,8 @@ global for tools you call from any repo, repo-local for everything else.
 | [resource-audit](skills/resource-audit/SKILL.md) | the Mac is slow or hot; CPU/RAM pressure, process ownership, targeted stopping and recovery | setup repo | `pnpm dlx skills add pjmuller/skills -s resource-audit -y` |
 | [clickup-core](skills/clickup-core/SKILL.md) | agents in a product repo read/write ClickUp tasks (rich comments, attachments) against that repo's workspace config | product repo | `pnpm dlx skills add pjmuller/skills -s clickup-core -y` + a thin `clickup` skill holding `clickup.toml` |
 
-Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance.
+Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance;
+claude-cloud needs t3-manage-thread for profile → Keychain resolution (macOS only).
 T3 Code must be running for the T3 skills. Thread helpers work on macOS and Linux/WSL; launchd scheduling and the top-up daemon are macOS-only.
 `~/.local/bin` must be on the login-shell PATH.
 

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_dir="${HOME}/.local/bin"
+if [[ "${1:-}" == "--check" ]]; then
+  for dependency in uv security t3-limits; do
+    command -v "$dependency" >/dev/null || { echo "missing $dependency; uv and security are prerequisites, t3-limits comes from the t3-manage-thread skill (its scripts/install), then rerun scripts/install --check" >&2; exit 1; }
+    echo "ok      $dependency ($(command -v "$dependency"))"
+  done
+  [[ "$(readlink -f "$install_dir/claude-cloud")" == "$script_dir/claude-cloud" ]] || { echo "missing or stale claude-cloud; run $script_dir/install" >&2; exit 1; }
+  echo "ok      claude-cloud"
+  exit 0
+fi
+[[ $# == 0 ]] || { echo 'Usage: install [--check]' >&2; exit 2; }
+mkdir -p "$install_dir"
+ln -sfn "$script_dir/claude-cloud" "$install_dir/claude-cloud"
+echo "installed $install_dir/claude-cloud"
