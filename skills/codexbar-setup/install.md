@@ -76,6 +76,22 @@ Diagnose only the provider you are working on: `codexbar usage --provider claude
 or `--status` from a shell runs the Claude probe under the CLI helper and can
 raise Keychain/login prompts in the app; the menu itself is unaffected.
 
+**Quota-only Claude view:** Settings → Menu → Multi-account layout → **Stacked**
+shows all three accounts vertically (four or more use compact rows). This global
+preference replaces account chips; Overview and menu-bar metric choices are separate.
+Since [0.57.0 / #3498](https://github.com/steipete/CodexBar/pull/3498), Claude Swap
+honors the default Segmented layout. Its inactive-account chips **activate
+credentials**, not merely inspect quota. Avoid them, Switch Account and
+Re-authenticate when preserving native account state.
+
+In 0.60.4, activation disabled every chip and left the previous account highlighted
+beside the target's “Details for” / “Loading…” for over a minute. Refresh/reopen
+eventually recovered; waiting alone was inconclusive. No relevant fix in 0.60.5
+or main's 0.60.6 snapshot on 2026-09-18. [Report #3736](https://github.com/steipete/CodexBar/issues/3736).
+For read-only diagnostics, inspect `~/Library/Application Support/CodexBar/claude-swap-retained-usage.json`
+and `~/Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json`;
+cached quota does not prove current authentication.
+
 ## Keep Claude credentials and quota fresh
 
 `cswap list` can refresh OAuth tokens; it is not a read-only inventory. A refresh
