@@ -44,6 +44,10 @@ symlink differently. The exact string determines its Keychain service hash.
 Leave `CLAUDE_SECURESTORAGE_CONFIG_DIR` unset for this recipe; custom secure-store
 overrides need their own mapping support.
 
+A T3 Claude provider with empty `config.homePath` still uses the default login;
+its display name and model selection do not bind an account. Treat default-account
+switches as irrelevant only after every used Claude provider has an isolated home.
+
 Register existing Claude logins in cswap, without switching the default:
 
 ```bash
