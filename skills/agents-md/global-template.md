@@ -2,8 +2,8 @@
 
 Merge base for a developer's cross-project file; procedure in [global.md](global.md).
 Replace every `{…}` from evidence on the machine, delete sections for tools you
-lack, keep your own facts. Model names in the delegation blocks are examples:
-follow your subscriptions. The file starts below the rule.
+lack, keep your own facts. Model names are explicit and refreshed here when new
+models ship; pull the update. The file starts below the rule.
 
 ---
 
@@ -39,19 +39,21 @@ AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by 
 Same for my numbers/mechanisms and other models' reviews: proxies for an intent, not orders. Restate the intent, pick the better mechanism, push back when I'm wrong. Not up for reinterpretation: safety limits and account/token routing.
 
 ## Coding: implementing complex specs (>100 loc)
-- Bigger features only (not small fixes; trust the builder): code review by the **opposite model family** (Claude-built → GPT reviews; GPT-built → Claude reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons.
+- Bigger features only (not small fixes; trust the builder): code review by the **opposite model** (Claude-built → Astra Med reviews; OpenAI-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons.
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
-### Delegation: Claude Code + {top Claude model} (Codex sessions: skip this block)
-{Top model} = planning, critical thinking, taste, judgement, verification; rarely the implementer. Think first, delegate once the plan/decision is clear.
-- Coding ≤200 LOC → {Opus} sub-agent in-harness (Agent tool).
-- Coding >200 LOC → a worker thread: `t3-spawn-thread --profile codex --model {sol} --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; worker pings back; verify here, then settle the worker.
-- Effort defaults: {top model medium · Opus high}.
+### Delegation: Claude Code + Fable (Codex/GPT Sol & Astra: skip this block)
+Fable = planning, critical thinking, taste, judgement, verification; rarely the implementer. Think first, delegate once the plan/decision is clear.
+- Coding ≤200 LOC → Opus sub-agent in-harness (Agent tool).
+- Coding >200 LOC → **always** a Sol high worker thread: `t3-spawn-thread --profile codex --model sol --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; worker pings back (🏓); verify here, then settle the worker.
+- (Sub)tasks whose core work is computer use → Astra Low.
+- Effort defaults: Fable medium · Opus high.
 
-### Delegation: Codex CLI (Claude sessions: skip this block)
-- Coding ≤200 LOC → sub-agent, high effort.
-- Coding >200 LOC → `t3-spawn-thread --profile {claude-profile} --model opus --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; verify the report, then settle the worker.
+### Delegation: Codex CLI, session started in Astra (Claude sessions: skip this block)
+- Coding ≤200 LOC → Sol high sub-agent.
+- Coding >200 LOC → `t3-spawn-thread --profile {claude-profile} --model opus --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; verify the report, then settle the worker. Little usage left in the Claude profiles → Sol high sub-agents instead.
+- Effort defaults: Sol high · Astra med (`--model astra` = gpt-6-astra).
 
 ## T3 threads (skill `t3-manage-thread`; helpers on PATH)
 `t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread`.

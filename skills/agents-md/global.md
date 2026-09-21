@@ -84,7 +84,7 @@ Their facts and preferences survive; the template adds behaviour they lack.
    machine cannot tell you.
 3. Same rule in both → the tighter wording. Conflict → theirs wins; list it.
 4. Drop template sections for tools they lack (T3 threads, a second harness,
-   deploy rights). Delegation models follow their subscriptions.
+   deploy rights). Keep the template's model names; they are refreshed upstream.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
 6. Show the human: conflicts, dropped sections, token count. Commit in their setup repo.
