@@ -1,34 +1,55 @@
 ---
 name: google-workspace-core
-description: Reusable Google Workspace auth, REST commands and Python clients for Drive, Docs, Sheets, Slides and Gmail. Read the repository's account wrapper first for credentials, enabled commands and mutation policy.
+description: One Google Workspace CLI and Python client for Drive, Docs, Sheets, Slides and Gmail. Every repository gets the same commands; its wrapper's workspace.json supplies the account, scopes and credential locations. Read that wrapper first for local policy.
 ---
 
-Use the repository’s Google Workspace wrapper. It selects the account, scopes, credential
-locations and compatibility interface; this replaceable core contains no account defaults.
-Never borrow a personal token for a team account or copy credentials into this directory.
+Read the repository's Google Workspace wrapper first: it owns the account, scopes, credential
+locations and the local rules about what may be written or sent. This core owns loading that
+configuration, authentication, the command surface and the generic implementations. It contains
+no account defaults. Never borrow one account's token for another account.
 
-Wrappers and this committed core work without global skills or sibling checkouts. Python ≥3.11
-and uv required. `scripts/install --check` verifies dependencies without Google access; each
-wrapper’s PEP 723 header supports direct `uv run --script <wrapper> --help` execution.
+```sh
+uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json --help
+uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json whoami
+```
 
-## Choose the existing interface
+`--config` may also come from `$GWS_CONFIG`. `--help` works without credentials or config, and
+every account gets the identical command set: Drive, Docs, Sheets (including native Tables),
+Slides and Gmail, plus `api` for anything without a dedicated command. Availability is not
+authorization: a command still needs the account's scopes, the user's request and the wrapper's
+policy. Narrow accounts simply get a permission error.
 
-| Wrapper interface | Core implementation | Contract |
-| --- | --- | --- |
-| `gws.py`, `gws_auth.py` | `scripts/gws.py`, `scripts/gws_auth.py` | Compact REST commands, separate explicit consent; cloud `GWS_*` token env supported |
-| `google_workspace.py` / `gmail_cli.py`, imported client modules | `scripts/modular/` | Local argparse surface; preserved Python methods and signatures |
-| Read-only `google_workspace.py` | `scripts/readonly.py` | JSON reads, Markdown export, protected local outputs; authenticated client available for authorized custom work |
+- Reads and writes refresh an existing offline token and verify the account first; they never
+  open browser consent. Only `auth mint` does, explicitly.
+- `auth mint [--force] [--port N]` · `auth configure --client-env PATH` (import a desktop client)
+  · `auth export-env` and `auth export-token` print secrets for provisioning only: never log,
+  paste or commit their output.
+- `doctor [--live]` diagnoses credential problems without printing secrets. Never cat or grep
+  `token.json`, `client.json` or a `.env`.
+- Output is compact text; `--json` (before or after the command) gives the raw API payload.
+  Machine callers should always pass `--json`. Commands accept a Google URL or a bare id.
+- Only perform requested writes, preserve unrelated content, read the result back. Drive deletion
+  is trash; `slides-delete` needs `--yes`; Gmail sending is not idempotent.
 
-Use `--help` on the wrapper for its command set. Reads require existing offline credentials;
-missing credentials require explicit `auth`/mint, never implicit browser consent. Account checks
-precede client use; refreshing preserves extra scopes. Writes require the user’s requested
-operation and local policy; a broad token or raw API method is not authorization.
+Python callers import the same implementations instead of re-implementing OAuth:
 
+```python
+sys.path.insert(0, "<core>/scripts")
+from gws_core import Workspace, credentials, load_config
+
+config = load_config("<wrapper>/workspace.json")
+with Workspace(config) as ws:
+    ws.gmail.search("newer_than:1d")   # also ws.drive / ws.docs / ws.sheets / ws.slides
+    ws.api("GET", "https://www.googleapis.com/drive/v3/about", params={"fields": "user"})
+creds = credentials(config)            # google.oauth2 Credentials for a Google SDK client
+```
+
+- [Wrapper configuration and migration](references/integration.md): `workspace.json`, install
+  contract, importable API.
 - [REST details](references/rest.md): compact reads, batch indexes, Slides/Drive workarounds.
-- [Draft preservation and access checks](references/drafts.md): existing drafts, MIME and races.
-- [Integration contract](references/integration.md): configuration, compatibility and verification.
-- [Troubleshooting](references/troubleshooting.md): secret-safe doctor and first-machine setup.
+- [Draft preservation and access checks](references/drafts.md): existing drafts, MIME, races.
+- [Troubleshooting](references/troubleshooting.md): the doctor and first-machine setup.
 
-For offline tests: `uv run --project <core-dir> pytest <core-dir>/scripts/tests -q`.
-Live verification should use identity and bounded reads, never send mail or edit documents just
-to prove access. Keep account, refreshability, scopes and resource access separate in reports.
+Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`. Live verification uses
+identity and bounded reads: never send mail or edit a document just to prove access. Keep account,
+refreshability, scopes and resource access separate when reporting.

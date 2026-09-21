@@ -4,4 +4,5 @@ case "${1:-}" in ""|--check) ;; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
 command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 uv run --project "$root" --no-dev python -c 'import google.auth, google_auth_oauthlib, httpx, dotenv, requests'
-printf '%s\n' 'google-workspace-core ready; use the repository account wrapper (no global command links)'
+uv run --project "$root" --no-dev python "$root/scripts/gws.py" --help >/dev/null
+printf '%s\n' 'google-workspace-core ready; run scripts/gws.py --config <wrapper>/workspace.json (no global command links)'

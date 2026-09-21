@@ -1,6 +1,6 @@
 # REST workflow details
 
-Use the account wrapper’s `gws.py --help` for its enabled commands. Read structure first:
+Run `gws.py --config <wrapper>/workspace.json --help` for the full command set. Read structure first:
 `slides-outline` → `slides-slide`; `doc-outline` → `doc-read`; `sheet-meta` → bounded `sheet-read`.
 `--json` is raw except documented compact summaries; text exports remain text.
 
