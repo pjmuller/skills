@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from t3_limits import SETTINGS, claude_accounts, claude_profiles
+from profile_registry import registry, compatible
 
 
 def relevant(window, model):
@@ -61,7 +62,11 @@ def route(model, preferred, settings_path=SETTINGS, collect=claude_accounts):
     # Other providers lack per-instance usage attribution; never apply one
     # CodexBar account's quota to arbitrary Codex instances.
     if not model.startswith("claude-"):
-        return preferred, ""
+        model_family = ("codex" if model.startswith(("gpt-", "codex-")) else
+                        "antigravity" if model.startswith("gemini-") else "unknown")
+        if model_family == "unknown":
+            return preferred, ""
+        return compatible(registry(settings_path), preferred, model_family), ""
     ids = [p[0] for p in claude_profiles(settings_path)]
     if len(ids) < 2:
         return (ids[0] if ids else preferred), "single compatible profile; usage not polled"

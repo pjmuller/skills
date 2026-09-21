@@ -189,52 +189,14 @@ if [[ -z "$project_id" ]]; then
   fi
 fi
 
-# Resolve --profile NAME against this machine's own provider registry instead of
-# a hard-coded alias list: exact instance id, then claudeAgent_<name>, then a
-# unique case-insensitive substring of a claudeAgent instance's displayName
-# (e.g. "personal" -> instance "claudeAgent", display name "Claude Personal").
+# Native registry lookup: explicit model intent disambiguates account names.
 normalize_provider() {
-  local requested="$1"
-  local settings_file="$t3_base_dir/userdata/settings.json"
-  case "$requested" in
-    auto) printf '%s' "auto"; return ;;
-    codex|sol) printf '%s' "codex"; return ;;
-    claude|claudeAgent) printf '%s' "claudeAgent"; return ;;
-  esac
-  [[ -f "$settings_file" ]] || { printf '%s' "$requested"; return; }
-
-  local matches
-  matches="$(jq -r --arg name "$requested" '
-    (.providerInstances // {}) as $instances
-    | if $instances | has($name) then [$name]
-      elif $instances | has("claudeAgent_" + $name) then ["claudeAgent_" + $name]
-      else
-        [ $instances | to_entries[]
-          | select(.value.driver == "claudeAgent")
-          | select(((.value.displayName // .value.config.displayName // "") | ascii_downcase)
-                   | contains($name | ascii_downcase))
-          | .key ]
-      end
-    | .[]' "$settings_file")"
-
-  local match_count
-  match_count="$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)"
-  if [[ "$match_count" -eq 1 ]]; then
-    printf '%s' "$matches"
-    return
+  local requested_family=unknown
+  if [[ "$model_choice" != "auto" ]]; then
+    requested_family="$(model_family "$(normalize_model "$model_choice")")"
   fi
-  {
-    if [[ "$match_count" -eq 0 ]]; then
-      echo "Unknown --profile: $requested (no provider instance id or display name matches)."
-    else
-      echo "Ambiguous --profile: $requested matches several provider instances."
-    fi
-    echo "Available provider instances:"
-    jq -r '(.providerInstances // {}) | to_entries[]
-      | "  \(.key)\t\(.value.displayName // .value.config.displayName // "-")"' "$settings_file"
-    printf '  %s\t%s\n' codex "OpenAI Codex"
-  } >&2
-  exit 2
+  uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_registry.py" \
+    resolve "$t3_base_dir/userdata/settings.json" "$1" "$requested_family"
 }
 
 normalize_model() {
@@ -261,17 +223,8 @@ model_family() {
 }
 
 provider_family() {
-  case "$1" in
-    codex) printf '%s' "codex" ;;
-    claudeAgent*) printf '%s' "claude" ;;
-    antigravity*) printf '%s' "antigravity" ;;
-    *)
-      local driver
-      driver="$(jq -r --arg id "$1" '.providerInstances[$id].driver // "unknown"' "$t3_base_dir/userdata/settings.json")"
-      [[ "$driver" != "claudeAgent" ]] || driver="claude"
-      printf '%s' "$driver"
-      ;;
-  esac
+  uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_registry.py" \
+    family "$t3_base_dir/userdata/settings.json" "$1"
 }
 
 detect_source_thread_id() {
@@ -394,24 +347,14 @@ fi
 
 if [[ "$model_choice" != "auto" ]]; then
   model_name="$(normalize_model "$model_choice")"
-  requested_family="$(model_family "$model_name")"
-  if [[ "$provider_choice" == "auto" && "$requested_family" == "codex" ]]; then
-    provider_instance_id="codex"
-  elif [[ "$provider_choice" == "auto" && "$requested_family" == "claude" && "$provider_instance_id" != claudeAgent* ]]; then
-    provider_instance_id="claudeAgent"
-  elif [[ "$provider_choice" == "auto" && "$requested_family" == "antigravity" ]]; then
-    provider_instance_id="antigravity"
-  fi
-elif [[ "$(provider_family "$provider_instance_id")" == "antigravity" && "$(model_family "$model_name")" != "antigravity" ]]; then
-  model_name="gemini-3.8-flash-high"
-elif [[ "$(model_family "$model_name")" == "antigravity" && "$provider_instance_id" == "codex" ]]; then
-  model_name="gpt-5.6-sol"
-elif [[ "$(model_family "$model_name")" == "antigravity" && "$provider_instance_id" == claudeAgent* ]]; then
-  model_name="claude-opus-5"
-elif [[ "$(model_family "$model_name")" == "codex" && "$provider_instance_id" != "codex" ]]; then
-  model_name="claude-opus-5"
-elif [[ "$(model_family "$model_name")" == "claude" && "$provider_instance_id" == "codex" ]]; then
-  model_name="gpt-5.6-sol"
+elif [[ "$(provider_family "$provider_instance_id")" != "$(provider_family "$inherited_provider_instance_id")" &&
+        "$(provider_family "$provider_instance_id")" != "$(model_family "$model_name")" ]]; then
+  case "$(provider_family "$provider_instance_id")" in
+    codex) model_name="gpt-5.6-sol" ;;
+    claude) model_name="claude-opus-5" ;;
+    antigravity) model_name="gemini-3.8-flash-high" ;;
+    *) echo "Select --model explicitly for provider $provider_instance_id." >&2; exit 2 ;;
+  esac
 fi
 
 # Resolve capacity only after model intent and source-project safety are fixed.
@@ -422,8 +365,7 @@ if [[ "$provider_choice" == "auto" ]]; then
 fi
 
 selected_family="$(model_family "$model_name")"
-if [[ "$provider_instance_id" == "codex" && "$selected_family" == "claude" ]] ||
-   [[ "$provider_instance_id" == claudeAgent* && "$selected_family" == "codex" ]]; then
+if [[ "$selected_family" != "unknown" && "$(provider_family "$provider_instance_id")" != "$selected_family" ]]; then
   echo "Model $model_name is incompatible with provider $provider_instance_id." >&2
   exit 2
 fi
@@ -468,7 +410,7 @@ case "$thinking_choice_normalized" in
     ;;
 esac
 
-if [[ "$provider_instance_id" == "codex" ]]; then
+if [[ "$selected_provider_family" == "codex" ]]; then
   thinking_option_id="reasoningEffort"
 else
   thinking_option_id="effort"
@@ -507,22 +449,9 @@ model_selection_json="$(printf '%s' "$model_selection_json" | jq -c \
 if [[ "$(provider_family "$provider_instance_id")" == "antigravity" ]]; then
   model_selection_json="$(printf '%s' "$model_selection_json" | jq -c '.options = []')"
 fi
-# Mirror T3's own rule (isModelSelectionProviderEnabled in the server bundle):
-# an explicit providerInstances entry wins (explicit false on either the
-# envelope or the config blob disables); a *missing* entry for a built-in
-# driver id falls back to the legacy providers.<id>.enabled flag, which
-# defaults to true for codex/claudeAgent and false for cursor/grok/opencode.
-# "Reset to defaults" in the Providers UI deletes the entry, so the raw
-# `.providerInstances[$id].enabled` check used to report codex as missing.
-provider_enabled="$(jq -r --arg id "$provider_instance_id" '
-  def default_enabled($driver): ($driver == "codex" or $driver == "claudeAgent");
-  (.providerInstances // {})[$id] as $instance
-  | if $instance != null then
-      if ($instance.enabled == false) or ($instance.config.enabled == false) then false
-      else ($instance.enabled // $instance.config.enabled // default_enabled($instance.driver)) end
-    elif ($id | IN("codex","claudeAgent","cursor","grok","opencode")) then
-      ((.providers // {})[$id].enabled // default_enabled($id))
-    else false end' "$t3_base_dir/userdata/settings.json")"
+# Validate inherited selections too, using the same native enablement rules.
+provider_enabled="$(uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_registry.py" \
+  enabled "$t3_base_dir/userdata/settings.json" "$provider_instance_id")"
 [[ "$provider_enabled" == "true" ]] || {
   echo "T3 provider is missing or disabled: $provider_instance_id (check Settings → Providers in T3 Code)" >&2
   exit 1

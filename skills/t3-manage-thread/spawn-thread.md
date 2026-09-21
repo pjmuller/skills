@@ -88,7 +88,17 @@ exhausted cap remains excluded until its reset; a past reset is unknown, not pro
 of replenishment. If every candidate is exhausted, stop before creating a thread;
 `--profile NAME` is an intentional override. Usage can change after selection.
 
-A single Claude profile skips polling. Other providers retain existing selection:
+Profile names come from T3's native registry on every invocation: exact instance
+ID first, then a unique case-insensitive ID/display-name match. An explicit model
+narrows name matches to its driver (`--profile beta --model astra` selects Codex
+Beta even when Claude Beta exists). Disabled profiles are excluded. Ambiguous
+names fail; use an exact ID. Adding accounts in T3 needs no helper maintenance.
+Existing threads are separate: changing their instance restarts the session, and
+T3 rejects Codex continuation across different shared homes. Do not patch thread
+metadata to migrate running work.
+
+A single Claude profile skips polling. Other providers retain a compatible
+inherited account; a driver switch with multiple candidates requires `--profile`.
 CodexBar cannot attribute quota to multiple T3 instances. Monthly overage spend caps
 are not subscription windows and are not a routing signal. Missing model caps cannot
 be inferred. Implementation: `scripts/lib/profile_routing.py`; shared collection,

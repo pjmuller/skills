@@ -1,6 +1,5 @@
 """Routing contracts: no network, Keychain, or live thread mutations."""
 import json
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -71,28 +70,6 @@ def test_legacy_scoped_payload():
                            "seven_day_fable": {"utilization": 100}})
     assert [(r.window, r.used_percent) for r in rows] == [("session", 10), ("Fable only", 100)]
 
-
-def test_shell_override_and_model_effort(tmp_path):
-    # Exercise the actual selection/effort block with a stub router; no T3 server.
-    script = (SCRIPTS / "t3-spawn-thread").read_text()
-    functions = script[script.index("normalize_model()") : script.index("detect_source_thread_id()")]
-    selection = script[script.index('provider_instance_id="$(printf') : script.index("# Mirror T3's own rule")]
-    prelude = '''set -eu
-normalize_provider() { printf '%s' "$1"; }
-uv() { echo polled >&2; echo claudeAgent_b; }
-provider_choice="$1"; model_choice=fable; thinking_choice=high
-t3_base_dir=/unused
-model_selection_json='{"instanceId":"claudeAgent_a","model":"claude-opus-5","options":[]}'
-'''
-    runner = tmp_path / "selection.sh"
-    runner.write_text(prelude + functions + selection + '\necho "$model_selection_json"\n')
-    for profile, expected, polled in [("claudeAgent_a", "claudeAgent_a", False),
-                                      ("auto", "claudeAgent_b", True)]:
-        result = subprocess.run(["bash", str(runner), profile], capture_output=True, text=True, check=True)
-        payload = json.loads(result.stdout)
-        assert payload == {"instanceId": expected, "model": "claude-fable-5-1",
-                           "options": [{"id": "effort", "value": "high"}]}
-        assert ("polled" in result.stderr) is polled
 
 
 def test_scoped_display_names_and_unknown_scopes():

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-spawn-thread: discover accounts across native provider drivers; model-aware name matching, ambiguity rejection, and preserved Codex account/effort inheritance.
 - migration-parity: concise autonomous migration guidance with independent baselines, data/effect comparisons and end-to-end user workflows.
 - t3-hide-thread: preserve fractional timestamps so same-second turn completion is re-snoozed; regression coverage for queued pings and attention requests.
 - t3-usage-windows: list banked Codex resets as Markdown/JSON or consume the earliest expiry through the native app-server protocol.
