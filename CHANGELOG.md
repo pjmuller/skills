@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- video-shrink-for-gemini: `download-leexi` fetches a Leexi call's transcript, summary, follow-up tasks and presigned recording through the public API (Basic auth, scoped keys, 403 on Python's default User-Agent); `leexi.md` condenses the API reference.
 - google-workspace-core: neutral Workspace REST/read-only facades and modular clients; explicit account configuration, preserved compatibility interfaces, offline auth and request tests.
 - slides: default to committed repo-local installs, so colleagues/cloud agents need no global skill.
 - slides: reusable presentation craft, concise speaker notes, visual verification and curated MIT-attributed Slidev guidance; thin project wrappers retain local brand and delivery context.

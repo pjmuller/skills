@@ -1,6 +1,6 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
+description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom or Leexi raw transcript retrieval without video analysis, Leexi recording download, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
 ---
 
 # Video → Gemini
@@ -18,6 +18,15 @@ and stop before media inspection: it saves raw API JSON and speaker/timestamp Ma
 without downloading video, calling Gemini, or running ASR. It needs only `uv` and
 `FATHOM_API_KEY`. Other Fathom requests can download media and optional transcript timings.
 Never change sharing permissions.
+
+## Leexi input
+
+For an `app.leexi.ai/.../calls/UUID` URL, use [the Leexi API flow](leexi.md):
+`download-leexi URL --out PRIVATE_DIR [--transcript-only]`. It needs `uv`, `LEEXI_KEY_ID`
+and `LEEXI_KEY_SECRET`; it saves the raw call JSON, `transcript.md` (Leexi summary, its
+follow-up tasks, speaker/timestamp paragraphs) and, unless transcript-only, the presigned
+`recording_url` as `source.webm`. Leexi's timestamped transcript is the speech layer; use
+Gemini for what happened on screen and to check what Leexi heard.
 
 ## Inspect and choose mode
 
