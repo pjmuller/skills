@@ -66,19 +66,28 @@ def token_from_env():
     name = auth.get("env_var", "CLICKUP_API_PERSONAL_TOKEN")
     tok = os.environ.get(name, "").strip()
     filename = auth.get("env_file")
+    path = None
+    file_state = "not configured"
     if not tok and filename:
         path = Path(filename).expanduser()
         if not path.is_absolute() and CONFIG_PATH:
             path = CONFIG_PATH.parent / path
+        path = path.resolve()
+        file_state = "missing"
         if path.is_file():
+            file_state = f"exists but lacks {name}"
             for line in path.read_text().splitlines():
                 match = re.match(r"^(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*)$", line.strip())
                 if match:
                     values = shlex.split(match[1], comments=True)
                     tok = values[0] if len(values) == 1 else ""
+                    if tok:
+                        file_state = f"contains {name}"
                     break
     if not tok:
-        sys.exit(f"{name} is empty; set your personal token in the environment or configured auth.env_file")
+        config_path = str(CONFIG_PATH.resolve()) if CONFIG_PATH else "not resolved"
+        env_path = str(path) if path else "not configured"
+        sys.exit(f"{name} is empty; config: {config_path}; auth.env_file: {env_path} ({file_state})")
     return tok
 
 

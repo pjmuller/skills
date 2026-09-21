@@ -27,6 +27,7 @@ operation and local policy; a broad token or raw API method is not authorization
 - [REST details](references/rest.md): compact reads, batch indexes, Slides/Drive workarounds.
 - [Draft preservation and access checks](references/drafts.md): existing drafts, MIME and races.
 - [Integration contract](references/integration.md): configuration, compatibility and verification.
+- [Troubleshooting](references/troubleshooting.md): secret-safe doctor and first-machine setup.
 
 For offline tests: `uv run --project <core-dir> pytest <core-dir>/scripts/tests -q`.
 Live verification should use identity and bounded reads, never send mail or edit documents just

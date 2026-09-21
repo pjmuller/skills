@@ -6,6 +6,7 @@ refreshes go to the configured external cache, never to an installed core copy.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -31,11 +32,29 @@ OFFLINE_TOKEN_FILE = Path(os.environ.get("GOOGLE_WORKSPACE_OFFLINE_TOKEN_FILE") 
 
 def _client_credentials() -> tuple[str, str]:
     values = dotenv_values(_ENV_PATH) if _ENV_PATH.exists() else {}
-    client_id = os.environ.get("GOOGLE_WORKSPACE_CLIENT_ID") or values.get("GOOGLE_WORKSPACE_CLIENT_ID")
-    secret = os.environ.get("GOOGLE_WORKSPACE_CLIENT_SECRET") or values.get("GOOGLE_WORKSPACE_CLIENT_SECRET")
-    if not client_id or not secret:
-        sys.exit("error: GOOGLE_WORKSPACE_CLIENT_ID / GOOGLE_WORKSPACE_CLIENT_SECRET must be set (environment or wrapper .env)")
-    return client_id, secret
+    for source in (os.environ, values):
+        client_id = source.get("GOOGLE_WORKSPACE_CLIENT_ID")
+        secret = source.get("GOOGLE_WORKSPACE_CLIENT_SECRET")
+        if client_id and secret:
+            return str(client_id), str(secret)
+    client_path = CONFIG_DIR / "client.json"
+    _check_path(client_path)
+    if client_path.exists():
+        try:
+            document = json.loads(client_path.read_text(encoding="utf-8"))
+            client = document.get("installed") or document.get("web")
+            client_id, secret = client["client_id"], client["client_secret"]
+            if not isinstance(client_id, str) or not isinstance(secret, str):
+                raise TypeError
+            return client_id, secret
+        except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+    doctor = Path(_client_credentials.__code__.co_filename).resolve().parents[1] / "doctor.py"
+    sys.exit(
+        "error: GOOGLE_WORKSPACE_CLIENT_ID and GOOGLE_WORKSPACE_CLIENT_SECRET must "
+        f"come from one source; checked {_ENV_PATH} and {client_path}; "
+        f"run uv run --script {doctor} {_LOCAL_SCRIPTS.parent}"
+    )
 
 
 _client_creds = _client_credentials

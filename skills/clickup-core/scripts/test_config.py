@@ -77,6 +77,20 @@ def test_auth_relative_file_quoted_export_and_environment_precedence(cli, config
     assert cli.token_from_env() == "env-wins"
 
 
+def test_missing_token_error_names_paths_without_contents(cli, config, monkeypatch):
+    config.write_text(config.read_text() + '\n[auth]\nenv_var = "TEST_CLICKUP_TOKEN"\nenv_file = "auth.env"\n')
+    env_file = config.with_name("auth.env")
+    env_file.write_text("SERVICE_ACCOUNT_KEY=UNRELATED_SECRET_SENTINEL\nOTHER_TOKEN=TOKEN_SENTINEL\n")
+    cli.configure(config)
+    monkeypatch.delenv("TEST_CLICKUP_TOKEN", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        cli.token_from_env()
+    message = str(exc.value)
+    assert "TEST_CLICKUP_TOKEN" in message and str(config.resolve()) in message
+    assert str(env_file.resolve()) in message and "exists but lacks" in message
+    assert "UNRELATED_SECRET_SENTINEL" not in message and "TOKEN_SENTINEL" not in message
+
+
 @pytest.mark.parametrize("flags", [["--json", "workspaces"], ["workspaces", "--json"]])
 def test_json_flag_positions(cli, config, monkeypatch, capsys, flags):
     monkeypatch.setattr(cli, "api", lambda *args, **kw: {"teams": [{"id": "10"}]})

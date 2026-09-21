@@ -26,7 +26,8 @@ Use the operator's raw personal token, without `Bearer`. `auth.env_var` defaults
 `CLICKUP_API_PERSONAL_TOKEN`; a nonempty environment value wins over `auth.env_file`.
 The optional env file accepts quoted assignments and `export`, is parsed without execution,
 and resolves relative paths beside the TOML. Never commit tokens. `whoami` also verifies default
-list access. Platform OAuth/client credentials are unrelated to personal API identity.
+list access. Missing-token errors name the resolved config and env-file state without showing
+contents. Platform OAuth/client credentials are unrelated to personal API identity.
 
 ## CLI
 

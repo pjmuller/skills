@@ -23,6 +23,8 @@ Configuration is a plain Python dict owned by the wrapper:
   `GWS_CLIENT_ID`, `GWS_CLIENT_SECRET`. Mint uses `client.json` beside `token.json`.
 - Read-only: `scopes`; `configure --client-env` imports a desktop client, explicit `auth` consents.
 - Modular: `scopes`, local client-env and legacy-cache settings documented by `modular/auth.py`.
+  Client resolution is environment, one wrapper/repo `.env`, then external `config_dir/client.json`;
+  an ID and secret always come from the same source.
   Legacy caches are read in place; successful refresh writes only the configured external cache.
   Offline-file import/export is retained where the wrapper enables it. No account substitution.
 
@@ -43,3 +45,6 @@ indexes so `--to N` means final position N.
 A scripts-free skill documenting application SDK clients need not install this runtime. Keep one
 owned auth path and record that exception in the consumer registry; account/scopes and app methods
 still need review during a migration.
+
+Use the [secret-safe doctor and setup guide](troubleshooting.md) instead of inspecting credential
+files or broadly grepping environment files.

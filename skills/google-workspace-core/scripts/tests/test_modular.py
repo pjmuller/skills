@@ -4,6 +4,7 @@ Run: uv run --no-project --with pytest --with httpx --with python-dotenv
      --with google-auth --with google-auth-oauthlib --with requests pytest <this-file>
 """
 import base64
+import json
 from email import message_from_bytes
 from pathlib import Path
 import sys
@@ -195,3 +196,41 @@ assert callable(namespace["get_credentials"])
 '''
     script = "SOURCE = " + repr(str(CORE / "auth.py")) + "\nWRAPPER = " + repr(str(tmp_path / "repo/.agents/skills/w/scripts/auth.py")) + "\nCONFIG = " + repr(str(tmp_path / "config")) + "\n" + script
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+
+
+def test_client_sources_are_atomic_and_client_json_is_last_fallback(monkeypatch, tmp_path):
+    wrapper = tmp_path / "repo/.agents/skills/workspace/scripts/auth.py"
+    wrapper.parent.mkdir(parents=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config = {"expected_email": "team@example.org", "config_dir": str(config_dir),
+              "scopes": [], "env_file": ".env"}
+    env_file = wrapper.parent / ".env"
+    env_file.write_text("GOOGLE_WORKSPACE_CLIENT_ID=file-id\nGOOGLE_WORKSPACE_CLIENT_SECRET=file-secret\nSERVICE_ACCOUNT_KEY=unrelated-secret\n")
+    (config_dir / "client.json").write_text(json.dumps({"web": {"client_id": "json-id", "client_secret": "json-secret"}}))
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_ID", "env-id")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_SECRET", "env-secret")
+    ns = load("auth.py", monkeypatch, __file__=str(wrapper), WORKSPACE_CONFIG=config)
+    assert ns["_client_credentials"]() == ("env-id", "env-secret")
+    monkeypatch.delenv("GOOGLE_WORKSPACE_CLIENT_SECRET")
+    assert ns["_client_credentials"]() == ("file-id", "file-secret")
+    env_file.write_text("GOOGLE_WORKSPACE_CLIENT_SECRET=file-secret\nSERVICE_ACCOUNT_KEY=unrelated-secret\n")
+    assert ns["_client_credentials"]() == ("json-id", "json-secret")
+
+
+def test_missing_client_error_is_secret_safe(monkeypatch, tmp_path):
+    wrapper = tmp_path / "repo/.agents/skills/workspace/scripts/auth.py"
+    wrapper.parent.mkdir(parents=True)
+    env_file = wrapper.parent / ".env"
+    env_file.write_text("GOOGLE_WORKSPACE_CLIENT_ID=partial-id\nSERVICE_ACCOUNT_KEY=UNRELATED_SECRET_SENTINEL\n")
+    config = {"expected_email": "team@example.org", "config_dir": str(tmp_path / "config"),
+              "scopes": [], "env_file": ".env"}
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLIENT_SECRET", "CLIENT_SECRET_SENTINEL")
+    monkeypatch.delenv("GOOGLE_WORKSPACE_CLIENT_ID", raising=False)
+    ns = load("auth.py", monkeypatch, __file__=str(wrapper), WORKSPACE_CONFIG=config)
+    with pytest.raises(SystemExit) as exc:
+        ns["_client_credentials"]()
+    message = str(exc.value)
+    assert "GOOGLE_WORKSPACE_CLIENT_ID" in message and str(env_file) in message
+    assert "client.json" in message and "doctor.py" in message
+    assert "CLIENT_SECRET_SENTINEL" not in message and "UNRELATED_SECRET_SENTINEL" not in message
