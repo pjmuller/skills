@@ -3,9 +3,9 @@
 ## Unreleased
 - agents-md: `global.md` + `global-template.md` for the user-level cross-project prompt (what belongs where, pruning by experiment, merging the template into an existing file, re-sync marker); t3-setup merges this template instead of external bases.
 - t3-manage-thread: `dispatch-workers.md` — project-agnostic rules for spawning worker threads (short 🏓/📤 titles, thinker model, brief shapes, bookkeeping).
-- google-workspace-core: add a secret-safe offline doctor and modular `client.json` fallback; ClickUp missing-token errors now identify checked paths safely.
+- google-workspace-core: one `gws.py --config workspace.json` CLI and importable `gws_core`; replaces REST/read-only/modular facades. Includes account-bound OAuth, secret-safe diagnostics, draft CRUD, Slides tooling and offline parity tests.
+- ClickUp missing-token errors now identify checked paths safely.
 - video-shrink-for-gemini: `download-leexi` fetches a Leexi call's transcript, summary, follow-up tasks and presigned recording through the public API (Basic auth, scoped keys, 403 on Python's default User-Agent); `leexi.md` condenses the API reference.
-- google-workspace-core: neutral Workspace REST/read-only facades and modular clients; explicit account configuration, preserved compatibility interfaces, offline auth and request tests.
 - slides: default to committed repo-local installs, so colleagues/cloud agents need no global skill.
 - slides: reusable presentation craft, concise speaker notes, visual verification and curated MIT-attributed Slidev guidance; thin project wrappers retain local brand and delivery context.
 - t3-spawn-thread: discover accounts across native provider drivers; model-aware name matching, ambiguity rejection, and preserved Codex account/effort inheritance.
