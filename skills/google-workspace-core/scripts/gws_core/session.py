@@ -23,13 +23,14 @@ class Session:
 
     def __init__(self, token: str, *, timeout: float = 120) -> None:
         self.token = token
+        self.timeout = timeout
         self._http: httpx.Client | None = None
 
     @property
     def http(self) -> httpx.Client:
         if self._http is None:
             self._http = httpx.Client(
-                headers={"Authorization": f"Bearer {self.token}"}, timeout=120
+                headers={"Authorization": f"Bearer {self.token}"}, timeout=self.timeout
             )
         return self._http
 
