@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- slides: reusable presentation craft, concise speaker notes, visual verification and curated MIT-attributed Slidev guidance; thin project wrappers retain local brand and delivery context.
 - t3-spawn-thread: discover accounts across native provider drivers; model-aware name matching, ambiguity rejection, and preserved Codex account/effort inheritance.
 - migration-parity: concise autonomous migration guidance with independent baselines, data/effect comparisons and end-to-end user workflows.
 - t3-hide-thread: preserve fractional timestamps so same-second turn completion is re-snoozed; regression coverage for queued pings and attention requests.
