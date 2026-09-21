@@ -2,7 +2,7 @@
 
 Distinguish account identity, offline refresh, granted scopes, and access to the requested resource.
 A successful profile request proves neither refreshability nor write access. To test offline access,
-call `gws_core.credentials(config)` (it refreshes and verifies in memory); never print tokens.
+run `gws.py --config PATH doctor --live` (refresh and identity check without saving); never print tokens.
 Report writes as untested unless the task included a verified write. Don't mutate user data just
 to test permissions. A resource 404 can mean missing access or an obsolete ID; reauthentication
 alone is not a demonstrated fix. Access-token expiry normally refreshes automatically.

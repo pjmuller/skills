@@ -54,8 +54,8 @@ edits from highest index downward. `slides-delete` requires `--yes`; Drive remov
 - Tab name is locale-dependent: a spreadsheet **created via the API** gets `Sheet1`, one created in
   a Dutch UI gets `Blad1`. A wrong tab name fails as `400 Unable to parse range` — run
   `sheet-meta` first.
-- `USER_ENTERED` (what we use) evaluates `=SUM(...)` and coerces dates/numbers; switch to `RAW` via
-  `api`/`sheet-batch` when you need literal text.
+- `USER_ENTERED` (what we use) evaluates `=SUM(...)` and coerces dates/numbers; use `sheet-write --raw`
+  when you need literal text.
 - `sheet-read` returns strings and **ragged rows** (trailing empty cells are omitted).
 
 **Drive**
