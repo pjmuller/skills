@@ -53,7 +53,8 @@ otherwise gets its house default (sol/opus high · fable/astra medium · haiku l
 which is the policy we want.
 
 Long task: write the spec to a markdown file, keep the brief to path + locked
-decisions + verification expectation. Inline briefs are shell arguments — the
+decisions + verification expectation ([dispatch-workers.md](dispatch-workers.md) for the
+full brief shape and title rules). Inline briefs are shell arguments — the
 backtick / `$(...)` rule in [cross-thread-ping.md](cross-thread-ping.md) applies.
 
 `T3 provider is missing or disabled: codex` while the UI shows it enabled → the

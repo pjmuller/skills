@@ -51,6 +51,7 @@ view: `t3-fleet list --recent 12h --title-prefix 🏓` / `--stalled` (skill
 | Need | Read |
 | --- | --- |
 | Create a thread: profiles, models, thinking, titles, long briefs | [spawn-thread.md](spawn-thread.md) |
+| Dispatch tickets/findings/meeting items as worker threads: titles, thinker model, brief shapes, bookkeeping | [dispatch-workers.md](dispatch-workers.md) |
 | Message an existing thread (ping-back, quoting pitfall) | [cross-thread-ping.md](cross-thread-ping.md) |
 | Read a thread's transcript / brief / progress | [read-thread.md](read-thread.md) |
 | Settle / unsettle a finished thread (settle = kill) | [settle-thread.md](settle-thread.md) |
