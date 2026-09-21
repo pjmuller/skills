@@ -1,6 +1,6 @@
 ---
 name: agents-md
-description: Create or simplify a repository's AGENTS.md or canonical CLAUDE.md. Use for agent onboarding, project context, domain taxonomy, or pruning bloated entrypoints; not general documentation rewrites.
+description: "Create, simplify or prune agent entrypoints: a repository's AGENTS.md / canonical CLAUDE.md, or the global cross-project file (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md), including merging the shared global template into someone's existing file. Use for agent onboarding, project context, domain taxonomy, trimming bloated prompts; not general documentation rewrites."
 ---
 
 # Agent entrypoints
@@ -9,6 +9,10 @@ Give a capable agent the context that changes its decisions: what this project i
 for, who depends on it, where responsibility ends, and how to verify its work.
 Explain why and the desired outcome; leave implementation choices open unless a
 real constraint or concrete verification requirement makes precision necessary.
+
+This file covers a repository's entrypoint. The user-level file loaded in every
+repo (write, prune, merge the [template](global-template.md), port improvements)
+has its own economics: [global.md](global.md).
 
 ## Ground it
 

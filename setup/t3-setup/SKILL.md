@@ -52,10 +52,11 @@ Do this **before** `skills add -g`: it writes to the active
 2. Make `~/.agents/skills`, `~/.claude/skills`, and **every** isolated Claude
    home's `skills` one symlink to that canonical directory. Verify resolved paths.
 3. Merge global instructions into `<setup-repo>/ai/AGENTS.md`; never overwrite
-   existing preferences. If the prompt names a base, read it and merge its body:
-   developer base is `macbook_setup/ai/CLAUDE.md`; non-developer base is
-   `ai-academy/setup/AGENTS_TEMPLATE.md` (fill identity placeholders, omit its
-   introductory template wrapper). Fetch the supplied source if not local.
+   existing preferences. If the prompt asks for the template, merge
+   [global-template.md](../../skills/agents-md/global-template.md) following
+   [global.md](../../skills/agents-md/global.md#merge-the-template-into-someones-existing-file)
+   at the same revision (their facts win, placeholders filled from evidence,
+   sections for absent tools dropped, template marker appended).
    Default: keep the user's existing instructions and append a short “T3 threads”
    section pointing to `~/.agents/skills/t3-manage-thread/SKILL.md` and its helpers.
    If no prompt exists, create a minimal user-specific prompt with that section.
