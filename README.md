@@ -12,7 +12,7 @@ global for tools you call from any repo, repo-local for everything else.
 
 | Skill | You need it when… | Scope | Install (then `scripts/install` + `--check`) |
 | --- | --- | --- | --- |
-| [slides](skills/slides/SKILL.md) | create, edit or review presentations: story, visual craft, notes and bundled Slidev expertise | global; repo-local in team repos + `project-slides` wrapper | `pnpm dlx skills add pjmuller/skills -s slides -g -y` (no command installer) |
+| [slides](skills/slides/SKILL.md) | create, edit or review presentations: story, visual craft, notes and bundled Slidev expertise | product repo + `project-slides` wrapper | `pnpm dlx skills add pjmuller/skills -s slides -y` (no command installer) |
 | [migration-parity](skills/migration-parity/SKILL.md) | migrate a working system with independent old/new data, UI and side-effect verification | global | `pnpm dlx skills add pjmuller/skills -s migration-parity -g -y` (no command installer) |
 | [agents-md](skills/agents-md/SKILL.md) | create or simplify AGENTS.md / canonical CLAUDE.md: intent, boundaries, vocabulary and verification | global | `pnpm dlx skills add pjmuller/skills -s agents-md -g -y` (no command installer) |
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
