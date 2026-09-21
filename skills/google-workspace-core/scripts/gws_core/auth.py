@@ -121,15 +121,36 @@ def client_credentials(config: WorkspaceConfig) -> ClientCredentials:
 
 # --- token ------------------------------------------------------------------
 
-def _get(url: str, token: str, params: dict | None = None) -> dict:
-    # `requests` (not httpx) so a caller importing only the auth layer keeps working.
+def _endpoint(url: str) -> str:
+    """The URL without its query string: a query can carry the access token."""
+    return url.split("?", 1)[0]
+
+
+def _call(method: str, url: str, **kw) -> dict:
+    """One OAuth/identity call whose failures never quote a URL, body or exception text.
+
+    Uses `requests` (not httpx) so a caller importing only the auth layer keeps working.
+    """
     import requests
 
-    response = requests.get(url, headers={"Authorization": f"Bearer {token}"},
-                            params=params, timeout=30)
+    try:
+        response = requests.request(method, url, timeout=30, **kw)
+    except requests.RequestException:
+        # The exception text can contain the prepared URL, and that can carry a token.
+        raise AuthError(f"could not reach {_endpoint(url)}; check the network") from None
     if response.status_code >= 400:
-        raise AuthError(f"could not verify the Google account (HTTP {response.status_code})")
-    return response.json()
+        raise AuthError(f"{_endpoint(url)} refused the request (HTTP {response.status_code})")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise AuthError(f"{_endpoint(url)} returned an unreadable response") from None
+    if not isinstance(payload, dict):
+        raise AuthError(f"{_endpoint(url)} returned an unexpected response")
+    return payload
+
+
+def _get(url: str, token: str) -> dict:
+    return _call("GET", url, headers={"Authorization": f"Bearer {token}"})
 
 
 def account_for_token(config: WorkspaceConfig, token: str) -> str:
@@ -140,7 +161,8 @@ def account_for_token(config: WorkspaceConfig, token: str) -> str:
 
 
 def granted_scopes(token: str) -> set[str]:
-    return set(str(_get(TOKENINFO, token, {"access_token": token}).get("scope", "")).split())
+    # POST, so the access token travels in the body instead of a loggable query string.
+    return set(str(_call("POST", TOKENINFO, data={"access_token": token}).get("scope", "")).split())
 
 
 def verify_account(config: WorkspaceConfig, credentials: Credentials) -> str:
@@ -154,18 +176,27 @@ def refresh(credentials: Credentials) -> None:
     """Refresh directly, so the auth layer needs no google-auth transport extra."""
     import requests
 
-    response = requests.post(credentials.token_uri or TOKEN_URI, timeout=30, data={
+    url = credentials.token_uri or TOKEN_URI
+    data = {
         "grant_type": "refresh_token",
         "refresh_token": credentials.refresh_token,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-    })
+    }
+    try:
+        response = requests.post(url, timeout=30, data=data)
+    except requests.RequestException:
+        raise AuthError(f"could not reach {_endpoint(url)} to refresh the token") from None
     if response.status_code >= 400:
-        # Report the status and Google's short error code only: the body is never echoed.
+        # Status plus Google's short error code only: the response body is never echoed.
         raise AuthError(f"token refresh failed (HTTP {response.status_code}"
                         f"{_oauth_error(response)}); {REAUTH}")
-    payload = response.json()
-    credentials.token = payload["access_token"]
+    try:
+        payload = response.json()
+        access_token = payload["access_token"]
+    except (ValueError, KeyError, TypeError):
+        raise AuthError(f"{_endpoint(url)} returned no usable access token; {REAUTH}") from None
+    credentials.token = access_token
     # google-auth compares expiry against a naive UTC clock
     credentials.expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
         seconds=int(payload.get("expires_in", 3600))
@@ -173,9 +204,10 @@ def refresh(credentials: Credentials) -> None:
 
 
 def _oauth_error(response) -> str:
+    """Google's short error code, if the untrusted body carries a plausible one."""
     try:
         code = response.json().get("error")
-    except ValueError:
+    except (ValueError, AttributeError):
         return ""
     return f": {code}" if isinstance(code, str) and OAUTH_ERROR.fullmatch(code) else ""
 

@@ -52,8 +52,13 @@ def google(monkeypatch):
             return Response({"emailAddress": state["email"]})
         return Response({"scope": " ".join(state["granted"])})
 
+    def request(method, url, **kw):
+        # tokeninfo is a POST in the auth layer but answers with the granted scopes.
+        return post(url, **kw) if url.endswith("/token") else get(url, **kw)
+
     monkeypatch.setattr(requests, "post", post)
     monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "request", request)
     monkeypatch.setattr("httpx.get", lambda *a, **kw: pytest.fail("auth must not need httpx"))
     monkeypatch.setattr("httpx.post", lambda *a, **kw: pytest.fail("auth must not need httpx"))
     return state
@@ -230,6 +235,80 @@ def test_refresh_failures_never_echo_the_response_body(config, google):
     with pytest.raises(AuthError) as exc:
         credentials(config)
     assert "invalid_grant" in str(exc.value) and "s3cr3t" not in str(exc.value)
+
+
+def test_network_and_body_failures_never_leak_the_access_token(config, google, monkeypatch):
+    """A prepared URL or an untrusted body must never reach a message or a traceback."""
+    import traceback
+
+    from gws_core.auth import granted_scopes
+
+    write_token(config)
+    sentinel = "ya29.SENTINEL-ACCESS-TOKEN"
+
+    def exploding(method, url, **kw):
+        raise requests.ConnectionError(f"failed to connect to {url}?access_token={sentinel}")
+
+    monkeypatch.setattr(requests, "request", exploding)
+    with pytest.raises(AuthError) as exc:
+        granted_scopes(sentinel)
+    rendered = "".join(traceback.format_exception(exc.value))
+    assert sentinel not in str(exc.value) and sentinel not in rendered
+    assert "oauth2.googleapis.com/tokeninfo" in str(exc.value)
+
+    class Garbage:
+        status_code = 200
+
+        def json(self):
+            raise ValueError(f"not JSON: access_token={sentinel}")
+
+    monkeypatch.setattr(requests, "request", lambda *a, **kw: Garbage())
+    with pytest.raises(AuthError) as exc:
+        granted_scopes(sentinel)
+    rendered = "".join(traceback.format_exception(exc.value))
+    assert sentinel not in str(exc.value) and sentinel not in rendered
+
+
+def test_refresh_failures_stay_sanitized_when_the_token_endpoint_is_unreachable(config, monkeypatch):
+    import traceback
+
+    from google.oauth2.credentials import Credentials
+
+    from gws_core.auth import refresh
+
+    secret = "1//SENTINEL-REFRESH-TOKEN"
+    credentials = Credentials(None, refresh_token=secret, client_id="c", client_secret="s",
+                              token_uri="https://oauth2.googleapis.com/token")
+
+    def exploding(url, **kw):
+        raise requests.ConnectionError(f"POST {url} data={kw.get('data')!r}")
+
+    monkeypatch.setattr(requests, "post", exploding)
+    with pytest.raises(AuthError) as exc:
+        refresh(credentials)
+    rendered = "".join(traceback.format_exception(exc.value))
+    assert secret not in str(exc.value) and secret not in rendered
+
+
+def test_the_tokeninfo_call_keeps_the_token_out_of_the_query_string(config, monkeypatch):
+    from gws_core.auth import granted_scopes
+
+    seen = {}
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"scope": "https://www.googleapis.com/auth/drive"}
+
+    def record(method, url, **kw):
+        seen.update(method=method, url=url, **kw)
+        return Response()
+
+    monkeypatch.setattr(requests, "request", record)
+    assert granted_scopes("ya29.token") == {"https://www.googleapis.com/auth/drive"}
+    assert seen["method"] == "POST" and "?" not in seen["url"]
+    assert seen["data"] == {"access_token": "ya29.token"}
 
 
 def test_auth_layer_needs_neither_httpx_nor_the_cli():
