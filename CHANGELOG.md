@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- google-workspace-core: neutral Workspace REST/read-only facades and modular clients; explicit account configuration, preserved compatibility interfaces, offline auth and request tests.
 - slides: default to committed repo-local installs, so colleagues/cloud agents need no global skill.
 - slides: reusable presentation craft, concise speaker notes, visual verification and curated MIT-attributed Slidev guidance; thin project wrappers retain local brand and delivery context.
 - t3-spawn-thread: discover accounts across native provider drivers; model-aware name matching, ambiguity rejection, and preserved Codex account/effort inheritance.

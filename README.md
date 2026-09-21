@@ -26,6 +26,7 @@ global for tools you call from any repo, repo-local for everything else.
 | [disk-audit](skills/disk-audit/SKILL.md) | the Mac is filling up; deterministic audit, cleanup only of self-regenerating caches | setup repo | `pnpm dlx skills add pjmuller/skills -s disk-audit -y` |
 | [resource-audit](skills/resource-audit/SKILL.md) | the Mac is slow or hot; CPU/RAM pressure, process ownership, targeted stopping and recovery | setup repo | `pnpm dlx skills add pjmuller/skills -s resource-audit -y` |
 | [clickup-core](skills/clickup-core/SKILL.md) | agents in a product repo read/write ClickUp tasks (rich comments, attachments) against that repo's workspace config | product repo | `pnpm dlx skills add pjmuller/skills -s clickup-core -y` + a thin `clickup` skill holding `clickup.toml` |
+| [google-workspace-core](skills/google-workspace-core/SKILL.md) | agents need reusable Workspace clients with repository-owned accounts and existing CLI contracts | product repo | `pnpm dlx skills add pjmuller/skills -s google-workspace-core -y` + an account wrapper |
 
 Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance;
 claude-cloud needs t3-manage-thread for profile → Keychain resolution (macOS only).
