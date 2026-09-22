@@ -84,6 +84,10 @@ def test_api_passthrough_expands_shorthands_and_refuses_foreign_hosts():
     args.json = True
     with pytest.raises(WorkspaceError, match="googleapis.com"):
         cmd_api(args, workspace)
+    args = build_parser().parse_args(["api", "GET", "/slides/v1/presentations/abc"])
+    args.json = True
+    with pytest.raises(WorkspaceError, match="unknown API path"):
+        cmd_api(args, workspace)
 
 
 def test_mail_body_is_either_inline_or_a_file():

@@ -131,8 +131,11 @@ def cmd_api(a, ws):
                 host == "www.googleapis.com" or host.endswith(".googleapis.com")):
             raise WorkspaceError("absolute api URLs must be HTTPS on a *.googleapis.com host")
     else:
-        url = next((h for prefix, h in HOSTS.items() if url.startswith(prefix)),
-                   "https://www.googleapis.com") + url
+        host = next((h for prefix, h in HOSTS.items() if url.startswith(prefix)), None)
+        if host is None:  # www.googleapis.com answers unknown paths with an HTML 404: refuse early
+            raise WorkspaceError(f"unknown API path {url!r}; shorthand paths start with "
+                                 f"{', '.join(HOSTS)} — otherwise pass the full https:// URL")
+        url = host + url
     params = dict(item.partition("=")[::2] for item in (a.param or []))
     kw: dict = {"params": params}
     if a.body:
@@ -673,7 +676,8 @@ def build_parser() -> argparse.ArgumentParser:
     add("whoami", cmd_whoami, "show the authenticated Google account and granted scopes")
     add("token", cmd_token, "print the short-lived access token (for ad-hoc curl)")
 
-    command = add("api", cmd_api, "authenticated raw call; path may be a full URL or /drive/v3/files")
+    command = add("api", cmd_api, "authenticated raw call; full https://*.googleapis.com URL or a "
+                                  "shorthand path: " + " ".join(f"{p}…" for p in HOSTS))
     command.add_argument("method")
     command.add_argument("url")
     command.add_argument("--body", help="JSON request body: FILE or - for stdin")
