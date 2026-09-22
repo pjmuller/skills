@@ -24,8 +24,9 @@ Linux/WSL thread helpers are supported by code paths but not live-tested here.
 | Term | Meaning here |
 | --- | --- |
 | **Skill** | Discoverable instructions in `SKILL.md`, optionally bundled with scripts/docs; not itself a CLI command. [Distribution](README.md). |
-| **Global / repo-local install** | Machine-wide availability versus a tracked project copy and lockfile. Both are replaceable installs; this repo owns the source. [Scope](README.md#agent-skills). |
-| **Bootstrap** | One-time machine setup consumed from `setup/`; not an installed skill. [T3 setup](setup/t3-setup/SKILL.md). |
+| **Global / repo-local registration** | Discovery in every repository on one machine versus a tracked repository copy and lockfile. Helper availability on `PATH` is separate. Both registrations are replaceable; this repo owns the source. [Scope](README.md#registration-scope). |
+| **Personal setup / project / skill source repository** | One person's machine and operator maintenance / product-team-domain work / reusable public distribution rather than live configuration. [Scope](README.md#registration-scope). |
+| **Bootstrap** | One-time consumption of setup instructions/templates from `setup/`; not an installed skill and not a claim that maintenance skills are one-time-only. [T3 setup](setup/t3-setup/SKILL.md). |
 | **Helper / installer** | A helper performs work; `scripts/install` exposes its commands and `--check` verifies readiness. Installing instructions alone does not install commands. |
 | **T3 project** | T3's repository/workspace entry, selected when spawning a thread. [Spawn](skills/t3-manage-thread/spawn-thread.md). |
 | **Thread / session / turn** | T3 task conversation / its provider runtime / one agent response cycle. A finished turn can leave the session alive. [Lifecycle](skills/t3-manage-thread/settle-thread.md). |

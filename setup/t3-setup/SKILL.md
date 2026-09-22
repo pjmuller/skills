@@ -20,7 +20,10 @@ logins/2FA you cannot complete. Preserve unrelated work and report deviations.
 ## Detect before creating
 
 - Read prompt parameters: identity, OS, setup repo, accounts, prompt base, and skill scopes.
-  Default: `t3-manage-thread` global; `t3-schedule` project-local in the setup repo.
+  Default: register only `t3-manage-thread` globally. Register machine and operator
+  skills repo-locally in the personal setup repository: `agents-md` for initial
+  prompt setup and later maintenance, `tone-of-voice` when creating or refreshing
+  that file, `codexbar-setup` when CodexBar is selected, and `t3-schedule` on macOS.
 - Discover GitHub identity with `gh api user`; inspect `~/code/<gh-user>/*setup*`.
   Reuse an existing setup repo and its name; prefer a supplied path, otherwise the
   repo already owning agent configuration. If absent, create private
@@ -44,13 +47,20 @@ logins/2FA you cannot complete. Preserve unrelated work and report deviations.
 Do this **before** `skills add -g`: it writes to the active
 `CLAUDE_CONFIG_DIR/skills` as well as `~/.agents/skills`.
 
-1. Make `<setup-repo>/ai/skills/` the canonical global skill directory. Merge
-   existing skills from every discovered home and `~/.agents/skills` into it.
-   Preserve distinct files; for conflicting versions keep a dated backup outside
+1. Inventory existing skill links and directories before merging. Classify each
+   user-installed skill by discovery scope: only explicitly global skills go in
+   `<setup-repo>/ai/skills/`, the canonical global directory. Register machine and
+   operator maintenance in the personal setup repository; leave project skills
+   with their owning projects. Preserve source checkouts, unknown content and
+   harness-owned cache/system directories rather than treating them as installed
+   skills or deleting them. For conflicting versions keep a dated backup outside
    the installed skill tree, compare, and merge deliberately. Never recursively
    copy a symlink into itself or replace a real directory before preserving it.
 2. Make `~/.agents/skills`, `~/.claude/skills`, and **every** isolated Claude
-   home's `skills` one symlink to that canonical directory. Verify resolved paths.
+   home's `skills` one symlink to that canonical directory when those locations
+   contain only user-installed global skills. Preserve Codex's harness-owned
+   `~/.codex/skills/.system` and caches; use per-skill links for global skills there
+   instead of replacing the whole directory. Verify every resolved path.
 3. Merge global instructions into `<setup-repo>/ai/AGENTS.md`; never overwrite
    existing preferences. If the prompt asks for the template, merge
    [global-template.md](../../skills/agents-md/global-template.md) following
@@ -124,14 +134,22 @@ directory symlinks. Ensure `~/.local/bin` is on PATH in the user's login shell.
 ```bash
 pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y
 ~/.agents/skills/t3-manage-thread/scripts/install
-# Run the following from the setup repo (macOS only):
+# Run repo-local registrations from the personal setup repo:
+pnpm dlx skills add pjmuller/skills -s agents-md -y
+# When selected:
+pnpm dlx skills add pjmuller/skills -s tone-of-voice -y
+pnpm dlx skills add pjmuller/skills -s codexbar-setup -y
+# macOS only:
 pnpm dlx skills add pjmuller/skills -s t3-schedule -y
 .agents/skills/t3-schedule/scripts/install
 ```
 
 Install additional requested skills at their requested scopes, dependency helpers
-first; run each available `scripts/install`. Use `t3-usage-windows` for warm-up, daytime top-ups and limit recovery. Commit project skill files, `skills-lock.json`, and the
-relative `.claude/skills` link (or CLI-created per-skill links per README).
+first; run each available `scripts/install`. A helper linked into `~/.local/bin`
+is available on PATH without making its skill globally discoverable. Use
+`t3-usage-windows` for warm-up, daytime top-ups and limit recovery. Commit repo-local
+skill files, `skills-lock.json`, and the relative `.claude/skills` link (or CLI-created
+per-skill links per README).
 Recheck all global home links after installation; preserve one canonical tree.
 
 ## Verify live and record

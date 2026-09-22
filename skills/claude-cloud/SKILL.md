@@ -15,14 +15,24 @@ Device-attested sessions may refuse unsigned requests; do not attempt to bypass 
 
 ## Install
 
+Register this skill repo-locally only in a project where local agents drive that
+project's cloud sessions. Its command can still be available machine-wide on PATH.
+
 ```sh
-pnpm dlx skills add pjmuller/skills -s claude-cloud -g -y
-<skill dir>/scripts/install && <skill dir>/scripts/install --check
+pnpm dlx skills add pjmuller/skills -s claude-cloud -y
+# Once per machine, only if no canonical claude-cloud command is already on PATH:
+.agents/skills/claude-cloud/scripts/install
+.agents/skills/claude-cloud/scripts/install --check
 ```
 
-Needs [t3-manage-thread](../t3-manage-thread/SKILL.md) installed: `--profile` resolution and the
-Keychain service name come from its `t3-limits` lib. Add or inspect Claude profiles with
-[T3 setup](../../setup/t3-setup/SKILL.md). Also needs `uv` and macOS `security`.
+Run the command installer from one chosen canonical copy. Other project repositories
+register the skill for discovery but keep using that existing PATH helper; do not
+relink it to whichever repository was installed most recently.
+
+Needs [`t3-manage-thread`](https://github.com/pjmuller/skills/blob/main/skills/t3-manage-thread/SKILL.md):
+its installer puts `t3-limits` and the shared profile-resolution library on PATH.
+Add or inspect Claude profiles in the machine's T3 provider setup. Also needs `uv`
+and macOS `security`.
 
 ## Usage
 

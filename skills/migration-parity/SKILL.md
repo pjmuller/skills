@@ -5,6 +5,10 @@ description: Verify old-versus-new behavior during rewrites, ports, replatformin
 
 # Migration parity
 
+Register this skill repo-locally and on demand in the project undergoing an active
+migration. Do not register it globally: its guidance should enter context only in
+repositories where old-versus-new parity is current work.
+
 Use the working system as an executable reference. Preserve outcomes users depend on; identify intentional changes explicitly. Scale this guidance to the risk: a small migration may need a few fixtures, not a new harness.
 
 ## Establish the working agreement

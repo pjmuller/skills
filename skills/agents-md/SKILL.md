@@ -15,6 +15,13 @@ repo (write, prune, merge the [template](global-template.md), port improvements)
 has its own economics: [global.md](global.md). Handoffs between people, agents
 and roles (relay prompt, dev → non-technical, bug report → dev): [handoff.md](handoff.md).
 
+Register this skill repo-locally in the personal setup repository for initial
+global-prompt setup and periodic pruning, template sync and machine-wide prompt
+maintenance. If a project should discover it for its own entrypoint or handoffs,
+register it explicitly in that project too. The bundled files are reusable
+templates and procedures; the person's live prompt stays outside this replaceable
+skill installation.
+
 ## Ground it
 
 Read the existing entrypoint, applicable parent instructions, and linked skills

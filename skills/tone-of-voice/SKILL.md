@@ -1,6 +1,6 @@
 ---
 name: tone-of-voice
-description: Build or refresh a person's tone-of-voice file in a short interview: gather writing they are proud of (pasted text, sent mail via google-workspace-core, Google Docs, LinkedIn posts), extract how they sound and what they never sound like, confirm in ping-pong, write `tone-of-voice.md` and point the global agent prompt at it. Use for "capture my tone of voice", "write like me", "my writing style file", or when an agent drafts messages in someone's name and no such file exists.
+description: "Build or refresh a person's tone-of-voice file in a short interview: gather writing they are proud of (pasted text, sent mail via google-workspace-core, Google Docs, LinkedIn posts), extract how they sound and what they never sound like, confirm in ping-pong, write `tone-of-voice.md` and point the global agent prompt at it. Use for 'capture my tone of voice', 'write like me', 'my writing style file', or when an agent drafts messages in someone's name and no such file exists."
 ---
 
 # Tone of voice
@@ -9,6 +9,11 @@ Outcome: one `tone-of-voice.md` the person owns, derived from **their real writi
 from taste, that any agent reads before drafting in their name. Starter shape and the
 anti-AI-slop checklist: [template.md](template.md). The file is theirs: do not send it
 anywhere, do not copy private mail into it beyond short verbatim samples they approved.
+
+Register this skill repo-locally in the personal setup repository for initial
+capture and periodic refresh. Register it in a target project only when that
+project's agents should discover the workflow there. `template.md` is a reusable
+input; the live `tone-of-voice.md` stays outside this replaceable installation.
 
 ## 1. Collect samples (ask, don't assume)
 Ask which of these they can give, and take every one offered. 10–30 pieces across at least

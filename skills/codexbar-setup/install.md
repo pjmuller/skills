@@ -10,9 +10,10 @@ Inspect installed versions before adapting; upstream behavior changes.
 ```bash
 brew install --cask codexbar
 uv tool install claude-swap
-pnpm dlx skills add pjmuller/skills -s codexbar-setup -g -y
-~/.agents/skills/codexbar-setup/scripts/install
-~/.agents/skills/codexbar-setup/scripts/install --check
+# From the personal setup repository:
+pnpm dlx skills add pjmuller/skills -s codexbar-setup -y
+.agents/skills/codexbar-setup/scripts/install
+.agents/skills/codexbar-setup/scripts/install --check
 open -a CodexBar
 ```
 
@@ -172,7 +173,8 @@ use native login/cswap reconciliation (large default-home MCP stores can hit thi
   `launchctl kickstart gui/$(id -u)/com.t3-skills.codexbar-profiles.sync`; inspect
   last exit status/log. Do not force a token rotation just to test the watcher.
 
-Updates: `pnpm dlx skills update codexbar-setup -g`, rerun installer/check and
+Updates: from the personal setup repository run
+`pnpm dlx skills update codexbar-setup -p`, rerun installer/check and
 `codexbar-profiles install-jobs` to refresh absolute paths. Config stays outside
 installed files. `codexbar-profiles remove-jobs` unloads only these two jobs;
 credentials/config remain. Restore legacy jobs only after the replacement stops.

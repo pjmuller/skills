@@ -19,8 +19,8 @@ This workflow authorizes agreed test prompts only, not unrelated messages or sys
 ## Editing a cloud environment (allowlist, variables)
 
 The API has no environment-edit endpoint: network domains, env vars and the setup script are
-changed in the web UI only, and the platform applies them to **new** sessions. Recipe (verified
-2026-09-22 on Kamp RC, Personal Chrome):
+changed in the web UI only, and the platform applies them to **new** sessions. Recipe verified
+2026-09-22 in an authenticated Chrome profile:
 
 1. Open https://claude.ai/code in the Chrome profile that owns the environment (account name shows
    bottom-left). Above the composer, click the cloud-icon pill with the environment name.

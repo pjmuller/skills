@@ -5,6 +5,9 @@ description: Install and troubleshoot CodexBar alongside T3 Code and native Code
 
 # CodexBar with T3
 
+Register this skill repo-locally in the personal setup repository. Its helper may
+be linked onto the machine's PATH; that does not make the skill globally discoverable.
+
 Read [installation and profile sharing](install.md) for setup, migration or stale
 quota/login problems. Discover existing homes and jobs first; retain healthy
 accounts. CodexBar is the quota display; native CLI homes remain authentication
