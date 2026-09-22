@@ -97,3 +97,13 @@ def test_create_wait_defaults_and_title(monkeypatch, capsys):
     assert calls[0]['title'] == 'Check'
     assert calls[0]['config']['sources'][0]['revision'] == 'stable'
     assert capsys.readouterr().out == '### Assistant\n\nok\n\n'
+
+
+def test_gate_wraps_prompt_and_rejects_short_shas():
+    sha = "1eda7a4c11ce37875f9ff64a0d8a2793a9020564"
+    text = cloud.gated("Run X.", sha)
+    assert text.startswith(f"Dry run, expected {sha}") and "Run X." in text and text.endswith(cloud.GATE_FOOTER)
+    follow = cloud.gated("Re-run 6.", sha, "main", follow_up=True)
+    assert f"git fetch origin main && git checkout --detach {sha}" in follow
+    with pytest.raises(cloud.Failure, match="40-hex"):
+        cloud.gated("x", "abc")

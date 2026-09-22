@@ -50,7 +50,13 @@ claude-cloud wait cse_ID --timeout 1800
 claude-cloud read cse_ID
 claude-cloud send cse_ID 'reply with the single word pong'
 claude-cloud archive cse_ID
+claude-cloud create --gate <full SHA> --env '<env>' --repo owner/repo --branch main 'checks…'   # dry run
+claude-cloud send cse_ID --gate <newer SHA> --branch main 're-run checks 6 and 7'              # warm follow-up
 ```
+
+`--gate SHA` prepends the standard ancestry gate (`create`) or a fetch + detached checkout of the
+newer commit (`send`, so a warm session re-tests a fix without a cold start) and appends the
+read-only footer; you write only the checks. Without it, copy the wording from [dry-run.md](dry-run.md).
 
 `create` prints ID + URL and needs no local checkout; environment records carry no repo default,
 so without a repo flag/default the session starts with no git source. `create --wait` waits then

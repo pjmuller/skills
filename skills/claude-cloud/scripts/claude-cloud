@@ -192,6 +192,25 @@ class API:
             cursor = next_cursor
 
 
+GATE_FOOTER = ("No edits, commits, pushes or PRs, even if a stop hook asks. No production writes. "
+               "Temporary diagnostics may use scratch files outside tracked source; never expose "
+               "credentials. Finish background checks; report the actual tested SHA.")
+
+
+def gated(prompt, sha, branch=None, follow_up=False):
+    """Standard dry-run wrapper: SHA ancestry gate first, read-only footer last."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        raise Failure("--gate expects a full 40-hex commit SHA", 2)
+    if follow_up:
+        head = (f"Follow-up on a newer commit, expected {sha}. Run `git fetch origin"
+                f"{' ' + branch if branch else ''} && git checkout --detach {sha}` (a detached checkout "
+                f"is fine; it is not an edit). Print `git rev-parse HEAD`; if it is not {sha}, stop and report both SHAs.")
+    else:
+        head = (f"Dry run, expected {sha}. Print `git rev-parse HEAD`; gate all checks with "
+                f"`git merge-base --is-ancestor {sha} HEAD`. If missing or not an ancestor, stop and report both SHAs.")
+    return f"{head}\n\n{prompt}\n\n{GATE_FOOTER}"
+
+
 def session_id(value):
     if not re.fullmatch(r"(?:session|cse)_[A-Za-z0-9_-]+", value):
         raise argparse.ArgumentTypeError("Expected session_… or cse_… ID")
@@ -489,6 +508,7 @@ def main():
     create.add_argument("--title")
     create.add_argument("--wait", action="store_true")
     create.add_argument("--timeout", type=float, default=1800)
+    create.add_argument("--gate", metavar="SHA", help="wrap the prompt in the standard SHA-ancestry gate + read-only footer")
     create.add_argument("prompt")
     for name in ("send", "wait", "read", "archive"):
         sub = commands.add_parser(name)
@@ -497,6 +517,8 @@ def main():
             sub.add_argument("--json", action="store_true")
         if name == "send":
             sub.add_argument("message")
+            sub.add_argument("--gate", metavar="SHA", help="prefix a fetch + detached checkout of SHA and the read-only footer")
+            sub.add_argument("--branch", help="branch to fetch for --gate")
         if name == "wait":
             sub.add_argument("--timeout", type=float, default=1800)
     # Accept profile before or after the subcommand.
@@ -561,8 +583,9 @@ def main():
                 raise Failure("Expected GitHub owner/repo or HTTPS repository URL", 2)
             sources = [{"type": "git_repository", "url": "https://github.com/" + repo,
                         "revision": args.branch}]
+        prompt = gated(args.prompt, args.gate) if args.gate else args.prompt
         body = {"title": args.title if args.title is not None else args.prompt[:120], "environment_id": env["environment_id"],
-                "events": [user_event(args.prompt)],
+                "events": [user_event(prompt)],
                 "config": {"sources": sources, "outcomes": []}}
         created = api.call("/v1/code/sessions", body)["session"]
         print(created["id"], flush=True)
@@ -574,7 +597,8 @@ def main():
     elif args.command == "send":
         latest = api.call(f"/v1/code/sessions/{args.id}/events?sort_order=desc&limit=1")["data"]
         cursor = str(latest[0]["sequence_num"]) if latest else None
-        event = user_event(args.message, args.id)
+        message = gated(args.message, args.gate, args.branch, follow_up=True) if args.gate else args.message
+        event = user_event(message, args.id)
         api.call(f"/v1/code/sessions/{args.id}/events", {"events": [event]})
         print(args.id, flush=True)
         print("https://claude.ai/code/" + args.id, flush=True)
