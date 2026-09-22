@@ -248,3 +248,13 @@ class AppendOpsTest(unittest.TestCase):
 
         self.assertEqual(result["ops"][0], {"insert": "body\n"})
         self.assertIn("extra", json.dumps(result["ops"][1:]))
+
+
+class CommentMentionGuardTests(unittest.TestCase):
+    def test_mention_first_without_mention_is_an_error(self):
+        # --mention-first is a prefix, not the recipient: posting a "ping" with no tag must fail loudly.
+        from types import SimpleNamespace
+        a = SimpleNamespace(id="t1", text="hi", mention=None, mention_first="", json=False)
+        with self.assertRaisesRegex(SystemExit, "--mention-first needs --mention"):
+            MODULE["cmd_comment"](a)
+

@@ -38,7 +38,7 @@ contents. Platform OAuth/client credentials are unrelated to personal API identi
 | `tasks`, `search --search TEXT` | Paginated list tasks; `--list`, `--assignee`, repeated `--status` / `--tag`, `--include-closed`; search is selected-list substring filtering |
 | `task ID [--comments]`, `comments ID` | Full task and paginated comments |
 | `create --name TEXT`, `update ID`, `close ID [--status NAME]`, `delete ID --yes` | Task lifecycle; create supports `--parent`, `--tag`; project policy supplies defaults |
-| `comment ID --text TEXT [--mention ALIAS] [--mention-first PREFIX]` | Structured Markdown comment with native user/task mentions |
+| `comment ID --text TEXT [--mention ALIAS] [--mention-first PREFIX]` | Structured Markdown comment with native user/task mentions. The recipient is always `--mention`; `--mention-first` only moves it to the top after PREFIX (`''` = mention leads) and errors without `--mention` |
 | `attach ID FILE [--name NAME] [--embed]` | MIME-correct upload and optional native player/file chip |
 | `field ID FIELD --value JSON_OR_ENUM` / `--remove` | Custom field alias or UUID; exact configured enum labels |
 | `handoff ID --text TEXT [--mention ALIAS] [--status NAME]`, `review ID --verdict ok\|to-test [--text TEXT] [--mention ALIAS] [--comment]` | Configured local workflow; recipients must be unambiguous |

@@ -710,7 +710,9 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
     if mention and prefix is not None:
         parts: list[dict] = ([{"text": prefix + " "}] if prefix else []) + [
             {"type": "tag", "user": {"id": mention}}]
-        parts += comment_parts(("\n" if prefix else " ") + text)
+        # Separator as its own part: comment_parts trims leading whitespace, which glued the mention
+        # to the first word ("@Astrid Schottekun jij").
+        parts += [{"text": "\n" if prefix else " "}] + comment_parts(text)
     else:
         parts = comment_parts(text.rstrip() + " " if mention else text)
         if mention:
@@ -974,6 +976,11 @@ def cmd_close(a):
 
 
 def cmd_comment(a):
+    # --mention-first is only a PREFIX placed before the mention; the recipient always comes from
+    # --mention. Passing an alias to --mention-first alone used to post a plain comment with no tag,
+    # silently (2026-09-22): a ping nobody receives is worse than an error.
+    if a.mention_first is not None and not a.mention:
+        sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
     post_comment(a.id, a.text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first)
 
 
@@ -1124,7 +1131,9 @@ def main(argv=None):
             s.add_argument("--rem-assignee", action="append")
         if cmd in ("comment", "handoff", "review"): s.add_argument("--text", required=cmd != "review")
         if cmd in ("comment", "handoff", "review"): s.add_argument("--mention")
-        if cmd == "comment": s.add_argument("--mention-first")
+        if cmd == "comment":
+            s.add_argument("--mention-first", metavar="PREFIX",
+                           help="put the --mention at the top, after PREFIX ('' = mention leads); requires --mention")
         if cmd == "review":
             s.add_argument("--verdict", choices=["ok", "to-test"], required=True)
             s.add_argument("--comment", action="store_true")
