@@ -1,8 +1,8 @@
 # Global agent prompt: template
 
 Merge base for a developer's cross-project file; procedure in [global.md](global.md).
-Replace every `{…}` from evidence on the machine, delete sections for tools you
-lack, keep your own facts. Model names are explicit and refreshed here when new
+Replace the few `{…}` (name, role, accounts, paths) from evidence on the machine,
+delete sections for tools you lack, keep your own facts. Model names are explicit and refreshed here when new
 models ship; pull the update. The file starts below the rule.
 
 ---
@@ -25,9 +25,9 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
-- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data){ and: your own exceptions, e.g. production deploys}.
+- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and the deploy exception under Commit.
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
-- {If you dictate: My prompts are speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.}
+- My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
 
 ## Verify your own work
@@ -55,9 +55,10 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
 
-## Commit {pick your model: parallel agents on shared `main` | feature branches + PR}
+## Commit (parallel agents on shared `main`, no feature branches)
 - One commit per high-level task (cherry-pick friendly), not per small step.
-- Done = shared `main` contains the commit, pushed. {If you deploy: Done = live: ship on every plane the change touches, then re-verify live (real run/curl/UI, not just green tests). Exceptions: {repos where a human approves deploys}.}
+- Done = shared `main` contains the commit, pushed. A detached/worktree-only commit is unfinished.
+- Done = live: for repos that deploy/promote/publish, ship on every plane the change touches, then re-verify live (real run/curl/UI, not just green tests). Don't stop at "ready to deploy", don't ask. Exception, high-volume production repos (named in their own AGENTS.md): first diff production vs `main` and confirm the delta is only your change or cosmetic commits; anything else → 👀 ask before deploying.
 - Other agents ship to `main` while you work: pull before you start and again before you push; build on their landed work.
 - Leave other agents' in-flight changes alone. Races are fine: a shared file commits whole; your file already committed by someone else is expected.
 - Never `checkout`/`reset`/`stash` in the shared checkout (promote/deploy/compare): other agents have uncommitted edits there. Use a throwaway `git worktree add --detach /tmp/<x> origin/<branch>`, remove it when done.
@@ -67,13 +68,13 @@ High-level map for future agents: the **INTENT** behind each architecture/featur
 Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory which stays user bound (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
 Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets the core fix in code/config, not a workaround note.
 
-## Tooling ({machine}): one tool per job
+## Tooling: one tool per job
 - Python: `uv` only (no pip/poetry/venv/pyenv). Node/JS: `pnpm` only (`pnpm dlx` replaces npx).
 - Versions: `mise` only (check `mise.toml`). Env vars: `mise.toml` `[env]` loading `~/.config/mise-env/<org>/<repo>.env` (`redact = true`); no direnv. Vars not loaded → `mise exec -- <cmd>`.
-- {Languages you use, one line each: Ruby `bundler` + `mise` · Go modules + `go build ./... && go vet ./... && golangci-lint run` after edits · …}
-- Docker: {colima | Docker Desktop}. Install: {`brew` | apt}.
+- Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
+- Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser: {which browser/profile per account}. {Volatile IDs → pointer file beside this one.}
+- Browser: {browser + profile name per account}; volatile IDs go in a pointer file beside this one.
 
 ## Writing in my name
 - {Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first.} Never use em dashes in outgoing copy.
