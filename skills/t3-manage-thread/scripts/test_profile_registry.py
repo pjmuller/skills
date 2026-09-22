@@ -1,5 +1,6 @@
 """Native registry + real spawn selection block, without live thread mutations."""
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -99,6 +100,16 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
             assert {"id": "reasoningEffort", "value": "medium"} in selected["options"]
         if model == "auto" and inherited == "codex":
             assert {"id": "fastMode", "value": True} in selected["options"]
+
+
+def test_list_profiles_rows(settings):
+    result = subprocess.run([str(SCRIPTS / "t3-list-profiles"), "--json"], capture_output=True, text=True,
+                            env={**os.environ, "T3CODE_HOME": str(settings.parent.parent)})
+    assert result.returncode == 0, result.stderr
+    got = {(r["ecosystem"], r["instance_id"]): r["profile"] for r in json.loads(result.stdout)}
+    assert got[("OpenAI", "codex")] == "alpha" and got[("OpenAI", "codex_beta")] == "beta"
+    assert got[("Claude", "claudeAgent")] == "beta"          # same label, other ecosystem
+    assert ("OpenAI", "codex_disabled") not in got
 
 
 def test_native_enablement_defaults():

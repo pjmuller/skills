@@ -1,0 +1,57 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""List enabled T3 provider instances per ecosystem with the exact --profile value.
+
+    t3-list-profiles          # human table
+    t3-list-profiles --json   # machine-readable
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from profile_registry import registry, enabled, family, account_label  # noqa: E402
+
+ECOSYSTEM = {"claude": ("Claude", "fable · opus · haiku"),
+             "codex": ("OpenAI", "astra · sol"),
+             "antigravity": ("Google", "gemini")}
+
+
+def rows(settings_path):
+    instances = {id: e for id, e in registry(settings_path).items() if enabled(e)}
+    out = []
+    for id, entry in instances.items():
+        fam = family(entry)
+        label = " ".join(account_label(entry))
+        # --profile value: the account label when unique within the driver family, else the id.
+        same = [i for i, e in instances.items() if family(e) == fam and account_label(e) == account_label(entry)]
+        profile = label if label and len(same) == 1 else id
+        name = entry.get("displayName") or (entry.get("config") or {}).get("displayName") or id
+        out.append({"ecosystem": ECOSYSTEM.get(fam, (fam, ""))[0], "models": ECOSYSTEM.get(fam, (fam, ""))[1],
+                    "instance_id": id, "display_name": name, "profile": profile})
+    order = {"Claude": 0, "OpenAI": 1, "Google": 2}
+    return sorted(out, key=lambda r: (order.get(r["ecosystem"], 9), r["display_name"]))
+
+
+def main():
+    base = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3"))
+    data = rows(base / "userdata" / "settings.json")
+    if "--json" in sys.argv[1:]:
+        print(json.dumps(data, indent=2))
+        return 0
+    print("--profile is the account; --model picks the ecosystem. Omit both to inherit.")
+    current = None
+    for r in data:
+        if r["ecosystem"] != current:
+            current = r["ecosystem"]
+            print(f"\n{current}" + (f"  (--model {r['models']})" if r["models"] else ""))
+        print(f"  --profile {r['profile']:<14} {r['display_name']:<22} [{r['instance_id']}]")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

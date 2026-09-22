@@ -1,8 +1,11 @@
 # Code review by the opposite model
 
 A model reads its own code the way it wrote it and misses the same things, so the
-reviewer is never the builder's model family. The review is a 🏓 round-trip
-worker: the builder thread spawns it, the reviewer pings back, the builder triages.
+reviewer is never the builder's model family: built in Claude (Fable/Opus) →
+**Astra** reviews; built in Codex (Sol/Astra) → **Fable** reviews. Reviewer =
+thinker model at its house effort, not the implementer model. The review is a 🏓
+round-trip worker: the builder thread spawns it, the reviewer pings back, the
+builder triages.
 
 ## When
 Not every change: small fixes, one-concern edits, config/doc tweaks → trust the
@@ -13,15 +16,16 @@ once per long session; a diff > ~1000 LOC is too big → split it.
 ## Spawn the reviewer
 ```bash
 # builder runs in Claude → OpenAI reviews
-t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 # builder runs in Codex → Claude reviews
-t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 ```
-`--model` picks the driver; the account follows the builder's (sibling instance).
-`--profile <account>` only to review on another account.
-Always this spawn flow ([spawn-thread.md](spawn-thread.md)), never an in-harness
-same-model sub-agent (Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass,
-does not count as the review. The reviewer is read-only on the shared checkout;
+No `--profile`/`--thinking`: account and effort follow the builder
+(`t3-list-profiles` only when the user names another account). Always this
+spawn flow ([spawn-thread.md](spawn-thread.md)), never a vendor hand-off plugin
+(codex-delegate / claude-delegate) and never an in-harness same-model sub-agent
+(Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass, does not count as
+the review. The reviewer is read-only on the shared checkout;
 another revision needed → `/tmp` worktree.
 
 ## Brief the reviewer (file on disk, path in the spawn argument)

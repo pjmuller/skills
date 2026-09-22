@@ -39,19 +39,20 @@ AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by 
 Same for my numbers/mechanisms and other models' reviews: proxies for an intent, not orders. Restate the intent, pick the better mechanism, push back when I'm wrong. Not up for reinterpretation: safety limits and account/token routing.
 
 ## Coding: implementing complex specs (>100 loc)
-- Bigger features only (not small fixes; trust the builder): code review by the **opposite model** (Claude-built → Astra Med reviews; OpenAI-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons.
+- Bigger features only: code review by the **opposite model** (Claude-built → Astra reviews; OpenAI-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: skill `t3-manage-thread` → `code-review.md`.
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
 ### Delegation
 - Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. All coding, any size, goes to **in-harness sub-agents** (Opus high from Claude CLI · Sol high from Codex CLI); the thinker verifies.
-- A separate 🏓 worker thread only when the work needs the *other provider*; verify its ping-back here, then `t3-settle-thread --wait <id>`. `--model` picks the driver, the account stays the same; `--profile <account>` only to switch accounts.
-  - Claude CLI → OpenAI: `t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"` (opposite-model review: astra med · computer/browser use: astra low).
-  - Codex CLI → Claude: `t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"` (opposite-model review: fable med).
+- A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use → Astra low); verify its ping-back here, then `t3-settle-thread --wait <id>`.
+  - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
+  - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
+  - No `--profile`/`--thinking`: account and effort follow the parent. Only when I name an account → `t3-list-profiles` for the exact value.
 
 ## T3 threads (skill `t3-manage-thread`; helpers on PATH)
-`t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread`.
-- Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID; a standalone CLI session has no ping-back address.
+`t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles`.
+- Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
 
 ## Commit {pick your model: parallel agents on shared `main` | feature branches + PR}

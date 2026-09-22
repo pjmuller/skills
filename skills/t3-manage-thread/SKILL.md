@@ -15,9 +15,10 @@ prints project + thread IDs — report those.
 ```bash
 # 🏓 round-trip worker (hidden while running, pings the parent back, parent settles it)
 t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"
-# other provider: --model picks the driver; account = inherited sibling (Claude side: by capacity, ties prefer the sibling)
-t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
-t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
+# other ecosystem: --model is enough (account + effort follow the parent)
+t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
+t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
+t3-list-profiles   # only when the user names an account: exact --profile values per ecosystem
 # 📤 standalone (visible, never hidden/settled by helpers); add --settle-when-done for fire-and-forget
 t3-spawn-thread --title "📤 <task>" -- "<brief>"
 
@@ -29,17 +30,19 @@ t3-hide-thread <id> · t3-rename-thread <id> --title "…" · t3-limits · t3-de
 ```
 
 Rules of thumb: brief = file on disk, path in the argument (no backticks or
-`$(...)` inline: the shell expands them). `--thinking` only when a level is
-named. `--profile` = account label (`probackup`, `dentai`), never a driver: add it
-only to switch accounts or when routing says "Choose --profile". `--source-thread` when the parent is not auto-detected (Codex CLI
-sessions have no T3 address). Default to 🏓 unless the user said standalone.
-Hidden ≠ stopped; settle only after the ping-back is verified.
+`$(...)` inline: the shell expands them). Usually no `--profile` and no
+`--thinking`: the helper keeps the parent's account (sibling instance when the
+ecosystem changes; Claude side by capacity) and each model's house effort. Pass
+them only when the user names an account or a level; `t3-list-profiles` gives
+the exact `--profile` value. `--source-thread` when the parent is not
+auto-detected (Codex CLI sessions have no T3 address). Default to 🏓 unless the
+user said standalone. Hidden ≠ stopped; settle only after the ping-back is verified.
 
 ## Which doc
 
 | Need | Read |
 | --- | --- |
-| Spawn: profiles, models, thinking, 🏓/📤/fire-and-forget, images in a brief, routing policy | [spawn-thread.md](spawn-thread.md) |
+| Spawn: profiles (`t3-list-profiles`), models, thinking, 🏓/📤/fire-and-forget, images in a brief, routing policy | [spawn-thread.md](spawn-thread.md) |
 | Dispatch tickets/findings as worker threads: titles, thinker model, brief shapes, bookkeeping | [dispatch-workers.md](dispatch-workers.md) |
 | Opposite-model code review as a 🏓 worker: when, brief, reviewer output, builder push-back | [code-review.md](code-review.md) |
 | Ping an existing thread (ping-back, quoting trap, visibility) | [cross-thread-ping.md](cross-thread-ping.md) |

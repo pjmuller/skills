@@ -55,7 +55,9 @@ switching from another provider. Flash thinking lives in the model ID:
 `--thinking low|medium|high` selects its suffix; no separate effort option is sent.
 Explicit full model IDs work too. T3's Google login is separate from native `agy` login.
 
-`--profile` / `--model` / `--thinking` and their aliases: `--help`. When limits are
+`--profile` / `--model` / `--thinking` and their aliases: `--help`;
+`t3-list-profiles` prints the enabled accounts per ecosystem with the exact
+`--profile` value (use it when the user names an account, so no typos). When limits are
 tight, `t3-limits` ([limits.md](limits.md)) shows the same cached usage used by routing. Pass
 `--thinking` **only when the user names a level** — an explicitly chosen model
 otherwise gets its house default (sol/opus high · fable/astra medium · haiku low),
