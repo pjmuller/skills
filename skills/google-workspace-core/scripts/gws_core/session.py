@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import httpx
 
@@ -36,6 +37,10 @@ class Session:
 
     def send(self, method: str, url: str, **kw) -> httpx.Response:
         """Raw call: the caller inspects the response instead of getting an ApiError."""
+        if "?" in url:  # httpx `params` replaces the URL's query, so fold it in first
+            parts = urlsplit(url)
+            kw["params"] = {**dict(parse_qsl(parts.query)), **(kw.get("params") or {})}
+            url = urlunsplit(parts._replace(query=""))
         if url.startswith((f"{DRIVE}/", DRIVE_UPLOAD)):  # shared drives are opt-in per call
             kw["params"] = {"supportsAllDrives": "true", **(kw.get("params") or {})}
         return self.http.request(method.upper(), url, **kw)

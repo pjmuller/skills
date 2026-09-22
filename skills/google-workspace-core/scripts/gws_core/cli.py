@@ -16,7 +16,8 @@ from .inputs import (extract_id, parse_json_arg, parse_values, protected_write, 
                      read_requests, read_text)
 from .render import out, table, trunc, write_out
 from .session import Workspace
-from .slides import element_kind, element_text, notes_text, placeholder_type, slide_title
+from .slides import (element_geometry, element_kind, element_paragraphs, element_text, notes_text,
+                     placeholder_type, slide_title)
 
 HOSTS = {  # shorthand path prefix -> API host, for the generic `api` passthrough
     "/gmail/": "https://gmail.googleapis.com",
@@ -507,7 +508,10 @@ def cmd_slides_slide(a, ws):
             continue
         if "image" in element:
             print(f"    contentUrl: {element['image'].get('contentUrl', '')[:160]}")
-        text = element_text(element).replace("\v", "\n").rstrip()
+        if "shape" not in element and "elementGroup" not in element:
+            print(f"    {element_geometry(element)}")
+        lines = [("\t" * level) + line for level, line in element_paragraphs(element)]
+        text = "\n".join(lines).rstrip()
         if text:
             body = text if len(text) <= a.max_chars else text[: a.max_chars] + "\n    …[truncated]"
             print("\n".join(f"    {line}" for line in body.split("\n")))
@@ -594,8 +598,10 @@ def cmd_slides_move(a, ws):
 def cmd_slides_image(a, ws):
     result = ws.slides.insert_image(a.pres, a.slide, drive=ws.drive, url=a.url, file=a.file,
                                     x=a.x, y=a.y, width=a.w, height=a.h, name=a.name, parent=a.parent)
-    out(result, a.json, f"image {result['objectId']} on slide {result['slide']}"
-        + (f" (drive file {result['driveFileId']})" if result["driveFileId"] else ""))
+    human = f"image {result['objectId']} on slide {result['slide']}"
+    if result["driveFileId"]:
+        human += f"\ndrive file {result['driveFileId']} in {result['driveFolder']}"
+    out(result, a.json, human)
 
 
 def cmd_slides_thumbnail(a, ws):
@@ -937,7 +943,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--match-case", action="store_true")
 
     command = add("slides-set-text", cmd_slides_set_text,
-                  "replace a shape's whole text (styling is lost)")
+                  "replace a shape's whole text (may lose run styling; prefer slides-replace)")
     command.add_argument("pres")
     command.add_argument("element", help="page element objectId (see slides-slide)")
     command.add_argument("--text", required=True)
@@ -985,7 +991,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--w", type=float, help="width in pt (default 660 if no --h)")
     command.add_argument("--h", type=float, help="height in pt; give one of --w/--h to keep the ratio")
     command.add_argument("--name", help="Drive name for the uploaded image")
-    command.add_argument("--parent", help="Drive folder for the upload (default: the deck's folder)")
+    command.add_argument("--parent", help="Drive folder for the upload (default: the deck's folder "
+                                          "when readable, else My Drive root)")
 
     command = add("slides-thumbnail", cmd_slides_thumbnail, "render one slide to PNG (LARGE)")
     command.add_argument("pres")
@@ -997,6 +1004,17 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("-o", "--out", required=True)
 
     return parser
+
+
+def network_failure(exc: Exception) -> str:
+    """Name the host: a sandbox egress allowlist usually covers *.googleapis.com only."""
+    host = getattr(getattr(exc, "request", None), "url", None)
+    host = host.host if host is not None else ""
+    message = f"network failure talking to {host or 'Google'}: {exc}"
+    if host and not host.endswith("googleapis.com"):
+        message += (f"\nthis is not a *.googleapis.com host; in a restricted sandbox (cloud session) "
+                    f"allow {host} in the egress list or run this command locally")
+    return message
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1012,7 +1030,7 @@ def main(argv: list[str] | None = None) -> None:
     except WorkspaceError as exc:
         sys.exit(f"error: {exc}")
     except httpx.RequestError as exc:
-        sys.exit(f"error: network failure talking to Google: {exc}")
+        sys.exit(f"error: {network_failure(exc)}")
     except BrokenPipeError:  # `| head` is a normal way to use this CLI
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
     except (OSError, ValueError) as exc:

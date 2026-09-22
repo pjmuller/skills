@@ -27,7 +27,9 @@ edits from highest index downward. `slides-delete` requires `--yes`; Drive remov
 - When several people edit a deck at once, so **slide numbers shift between calls**: resolve
   the anchor by objectId right before `slides-add --after` / `slides-move`, and re-check with
   `slides-outline` after a bulk insert (a block inserted "after 38" once landed before its cue
-  slides because two slides had been added above it minutes earlier).
+  slides because two slides had been added above it minutes earlier). Two `slides-add --after X`
+  calls in a row land in reverse order (each goes directly after X); pass a `--spec` list to insert
+  several slides in order.
 - Text lives in `shape.text.textElements[]`, each with `textRun` (content + style),
   `paragraphMarker` (bullets/paragraph style) or `autoText` (slide number). Concatenating only
   `textRun.content` is what `slides-*` does; `\n` ends a paragraph, `\v` is a soft line break.
@@ -35,14 +37,19 @@ edits from highest index downward. `slides-delete` requires `--yes`; Drive remov
   `deleteText` takes `textRange: {type: "ALL"}` or `FIXED_RANGE` + start/endIndex.
 - Table cells need `cellLocation: {rowIndex, columnIndex}` on insert/delete text; `slides-slide`
   prints the cell grid so you can count.
-- `slides-set-text` = `deleteText(ALL)` + `insertText(0)`. **The old run styling is gone** — the new
-  run inherits the shape/placeholder defaults. Restyle with `updateTextStyle` in the same batch if
-  it matters; for a pure wording change prefer `slides-replace` (keeps styling).
+- `slides-set-text` = `deleteText(ALL)` + `insertText(0)`. The new run inherits the
+  shape/placeholder defaults, so **run-level styling may be lost** (placeholder-level colours
+  survive). Prefer `slides-replace` for a wording change; restyle with `updateTextStyle` if needed.
 - Placeholders matter: `SLIDE_NUMBER` shapes contain the page number and are filtered from titles
   and `slides-text`; `TITLE`/`CENTERED_TITLE` is what the outline shows.
 - Elements can be `elementGroup`s — text is nested in `children` (the CLI recurses).
 - Speaker notes are on `slideProperties.notesPage`; write to
   `notesProperties.speakerNotesObjectId` (printed by `slides-slide`), not to the page.
+
+- `slides-thumbnail` downloads from `lh*.googleusercontent.com`, outside the `*.googleapis.com`
+  hosts everything else uses; a sandbox egress allowlist must include `*.googleusercontent.com`
+  or thumbnails fail with a network error naming that host. `slides-export-pdf` stays on
+  googleapis.com.
 
 **Docs**
 - Markdown export escapes markdown-ish characters (`>>` → `\>\>`) and starts with a UTF-8 BOM

@@ -296,3 +296,45 @@ def test_gmail_fetch_retries_quota_answers_with_backoff(monkeypatch):
     gmail = GmailClient(session, sender=ACCOUNT)
     assert gmail._fetch_all(gmail.get, ["m1"], workers=1) == [{"id": "m1"}]
     assert calls == [2, 4]
+
+
+def test_slides_image_names_the_upload_folder_when_the_deck_folder_is_unreadable(tmp_path):
+    image = tmp_path / "logo.png"
+    image.write_bytes(b"\x89PNG")
+    session = FakeSession([
+        Recorded({"slides": [{"objectId": "s1"}]}),          # presentation
+        Recorded({}),                                        # deck parents: none visible
+        Recorded({"id": "1FILEAAAAAAAAAAAAA"}),              # upload
+        Recorded({"replies": []}),                           # createImage
+        Recorded({"pageElements": []}),                      # no natural size: skip rescale
+    ])
+    from gws_core.drive import DriveClient as Drive
+
+    result = SlidesClient(session).insert_image(
+        "1AAAAAAAAAAAAAAAA", "1", drive=Drive(session), file=str(image))
+    assert result["driveFolder"].startswith("My Drive root")
+
+
+def test_slides_paragraphs_keep_bullet_nesting_and_geometry_is_in_pt():
+    from gws_core.slides import element_geometry, element_paragraphs
+
+    shape = {"shape": {"text": {"textElements": [
+        {"paragraphMarker": {"bullet": {"nestingLevel": 0}}}, {"textRun": {"content": "top\n"}},
+        {"paragraphMarker": {"bullet": {"nestingLevel": 1}}}, {"textRun": {"content": "nested\n"}},
+    ]}}}
+    assert element_paragraphs(shape) == [(0, "top"), (1, "nested")]
+    image = {"image": {}, "size": {"width": {"magnitude": 12700 * 300}, "height": {"magnitude": 12700 * 100}},
+             "transform": {"scaleX": 2, "scaleY": 2, "translateX": 12700 * 30, "translateY": 0}}
+    assert element_geometry(image) == "600x200 pt at (30, 0)"
+
+
+def test_session_keeps_a_query_string_inside_the_url():
+    from gws_core.session import Session
+
+    session = Session("token")
+    recorded = []
+    session._http = type("Http", (), {
+        "request": lambda self, method, url, **kw: recorded.append((url, kw["params"]))
+        or Recorded({})})()
+    session.send("GET", "https://slides.googleapis.com/v1/presentations/p?fields=title", params={"x": "1"})
+    assert recorded == [("https://slides.googleapis.com/v1/presentations/p", {"fields": "title", "x": "1"})]

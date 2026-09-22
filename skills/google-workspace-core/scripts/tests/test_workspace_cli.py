@@ -117,3 +117,16 @@ def test_sheet_write_requires_values_or_csv(write_config, monkeypatch):
     with pytest.raises(SystemExit) as exit_info:
         main(["sheet-write", "1AAAAAAAAAAAAAAAA", "A1"])
     assert "--values or --csv" in str(exit_info.value)
+
+
+def test_network_failures_name_a_host_outside_googleapis():
+    import httpx
+
+    from gws_core.cli import network_failure
+
+    request = httpx.Request("GET", "https://lh7-rt.googleusercontent.com/x")
+    message = network_failure(httpx.ProxyError("403 Forbidden", request=request))
+    assert message.startswith("network failure talking to lh7-rt.googleusercontent.com")
+    assert "allow lh7-rt.googleusercontent.com" in message
+    inside = httpx.Request("GET", "https://slides.googleapis.com/v1/x")
+    assert "allow" not in network_failure(httpx.ConnectError("boom", request=inside))

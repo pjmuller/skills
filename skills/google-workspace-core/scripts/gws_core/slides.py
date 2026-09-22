@@ -53,6 +53,42 @@ def element_text(element: dict) -> str:
     return "".join(parts)
 
 
+def element_paragraphs(element: dict) -> list[tuple[int, str]]:
+    """(nesting level, text) per paragraph of a shape or group; tables flatten like element_text."""
+    if "shape" not in element and "elementGroup" not in element:
+        return [(0, line) for line in element_text(element).replace("\v", "\n").split("\n")]
+    paragraphs: list[tuple[int, str]] = []
+
+    def walk(node: dict) -> None:
+        for item in ((node.get("shape") or {}).get("text") or {}).get("textElements", []):
+            if "paragraphMarker" in item:
+                level = ((item["paragraphMarker"].get("bullet") or {}).get("nestingLevel", 0))
+                paragraphs.append((level, ""))
+            run = item.get("textRun") or item.get("autoText")
+            if run:
+                if not paragraphs:
+                    paragraphs.append((0, ""))
+                level, text = paragraphs[-1]
+                paragraphs[-1] = (level, text + run.get("content", ""))
+        for child in (node.get("elementGroup") or {}).get("children", []):
+            walk(child)
+
+    walk(element)
+    return [(level, text.replace("\v", "\n").rstrip("\n")) for level, text in paragraphs]
+
+
+def element_geometry(element: dict) -> str:
+    """`WxH pt at (x, y)` from size + transform, the way slides-image takes them."""
+    size, transform = element.get("size") or {}, element.get("transform") or {}
+    if not size:
+        return "no size"
+    scale_x, scale_y = transform.get("scaleX", 1), transform.get("scaleY", 1)
+    width = size.get("width", {}).get("magnitude", 0) * scale_x / EMU_PER_PT
+    height = size.get("height", {}).get("magnitude", 0) * scale_y / EMU_PER_PT
+    x, y = transform.get("translateX", 0) / EMU_PER_PT, transform.get("translateY", 0) / EMU_PER_PT
+    return f"{width:.0f}x{height:.0f} pt at ({x:.0f}, {y:.0f})"
+
+
 def element_kind(element: dict) -> str:
     kind = next((key for key in ELEMENT_KINDS if key in element), "unknown")
     if kind == "elementGroup":
@@ -130,8 +166,8 @@ class SlidesClient:
         return self.batch(deck, {"requests": [request]})
 
     def set_text(self, deck: str, element_id: str, text: str) -> dict:
-        # No API keeps the old run styling: deleteText(ALL) drops it and the new run inherits
-        # the shape/placeholder defaults. Restyle explicitly afterwards if it matters.
+        # deleteText(ALL) + insertText: the new run inherits the shape/placeholder defaults, so
+        # run-level styling set on the old text is lost (placeholder-level styling survives).
         requests: list[dict] = [{"deleteText": {"objectId": element_id, "textRange": {"type": "ALL"}}}]
         if text:
             requests.append({"insertText": {"objectId": element_id, "insertionIndex": 0, "text": text}})
@@ -314,11 +350,14 @@ class SlidesClient:
                      name: str | None = None, parent: str | None = None) -> dict:
         deck_id = extract_id(deck)
         index, slide = self.resolve(self.presentation(deck_id, "slides(objectId)"), slide_ref)
-        file_id = None
+        file_id = folder = None
         if file:
-            # Default: drop the image next to the deck itself.
+            # Default: next to the deck. A deck on a shared drive we cannot list has no readable
+            # parent, and Drive then silently files the upload in My Drive root: say so.
             target_parent = parent or drive.parent_of(deck_id)
             file_id = drive.upload(file, name, target_parent)["id"]
+            folder = (f"folder {extract_id(target_parent)}" if target_parent
+                      else "My Drive root (deck folder not readable; pass --parent)")
             url = f"https://drive.google.com/uc?id={file_id}"
         properties: dict[str, Any] = {
             "pageObjectId": slide["objectId"],
@@ -345,7 +384,7 @@ class SlidesClient:
         if not (width and height):
             self.scale_image(deck_id, slide["objectId"], image_id,
                              width or (None if height else 660), height, x, y)
-        return {"objectId": image_id, "slide": index, "driveFileId": file_id}
+        return {"objectId": image_id, "slide": index, "driveFileId": file_id, "driveFolder": folder}
 
     def thumbnail(self, deck: str, slide_ref: str) -> tuple[int, str, bytes]:
         import httpx

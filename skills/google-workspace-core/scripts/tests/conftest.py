@@ -1,6 +1,7 @@
 """Fixtures for the Workspace core tests; helpers live in workspace_testkit."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,14 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace_testkit import ACCOUNT, SCOPES  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_environment(monkeypatch):
+    """A cloud/dev shell exporting GWS_* must not leak into the deterministic offline suite."""
+    for name in list(os.environ):
+        if name.startswith(("GWS_", "GOOGLE_WORKSPACE_")):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture
