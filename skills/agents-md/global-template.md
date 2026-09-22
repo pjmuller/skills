@@ -77,7 +77,7 @@ Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets th
 - Browser: {browser + profile name per account}; volatile IDs go in a pointer file beside this one.
 
 ## Writing in my name
-- {Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first.} Never use em dashes in outgoing copy.
+- Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
 - Handoffs (prompt for a colleague's agent, dev → product owner, bug report → dev) → read skill `agents-md` → `handoff.md` first. Goal + key insights/decisions + current state + next steps; symptoms over conclusions. No filler.
 
 ## Abbreviations
