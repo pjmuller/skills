@@ -5,9 +5,13 @@
 # ///
 """Find T3 Code threads currently blocked on a provider rate/usage limit, and resume them.
 
-The only signal is the thread's LAST message: a short assistant message saying the
-limit was hit. Read path is a read-only snapshot of T3's projection store; resume
-shells out to t3-ping-thread on PATH.
+Two signals, both from a read-only snapshot of T3's projection store:
+1. the thread's LAST message is a short assistant banner saying the limit was hit;
+2. the thread's provider session sits in `error` with a usage/rate-limit
+   `last_error` (T3 fails the turn instead of posting a banner; the sidebar shows
+   "Failed") and nothing was sent to the thread since. The paired
+   `runtime.warning` activity carries the exact `resetsAt`.
+Resume shells out to t3-ping-thread on PATH.
 """
 
 from __future__ import annotations
@@ -45,6 +49,8 @@ LIMIT_TEXT = re.compile(
 )
 # "resets 8pm (Europe/Brussels)" / "resets 10:10am"
 RESET_AT = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.IGNORECASE)
+# projection_thread_sessions.last_error when T3 fails the turn on a limit.
+SESSION_LIMIT_ERROR = re.compile(r"(usage|rate)[ -]limit", re.IGNORECASE)
 MAX_LIMIT_CHARS = 400
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 TITLE_CHARS = 50
@@ -193,7 +199,77 @@ def load_limited(store: Path) -> list[Limited]:
                 reset_at=parse_reset(text, at),
             )
         )
+    found.extend(load_session_limited(store, {item.thread_id for item in found}))
     return sorted(found, key=lambda item: item.at, reverse=True)
+
+
+def load_session_limited(store: Path, seen: set[str]) -> list[Limited]:
+    """Threads whose provider session failed on a limit (sidebar "Failed").
+
+    T3's idle reaper later flips the session to `stopped` but keeps
+    `last_error`, so both states count. A message created after the error means
+    someone already resumed it. The reset moment comes from the same turn's
+    `runtime.warning` payload (`detail.resetsAt`, epoch seconds); without one the
+    row resumes on request.
+    """
+    with connect_readonly(store) as connection:
+        rows = connection.execute("""
+            SELECT s.thread_id, s.last_error, s.updated_at,
+                   t.title,
+                   json_extract(t.model_selection_json,'$.instanceId') AS profile,
+                   json_extract(t.model_selection_json,'$.model') AS model,
+                   p.title AS project,
+                   (SELECT MAX(m.created_at) FROM projection_thread_messages m
+                     WHERE m.thread_id = s.thread_id) AS last_message_at,
+                   (SELECT a.payload_json FROM projection_thread_activities a
+                     WHERE a.thread_id = s.thread_id AND a.kind = 'runtime.warning'
+                       AND a.created_at <= s.updated_at
+                     ORDER BY a.created_at DESC LIMIT 1) AS warning_json,
+                   (SELECT a.created_at FROM projection_thread_activities a
+                     WHERE a.thread_id = s.thread_id AND a.kind = 'runtime.warning'
+                       AND a.created_at <= s.updated_at
+                     ORDER BY a.created_at DESC LIMIT 1) AS warning_at
+            FROM projection_thread_sessions s
+            JOIN projection_threads t ON t.thread_id = s.thread_id
+            LEFT JOIN projection_projects p ON p.project_id = t.project_id
+            WHERE s.status IN ('error', 'stopped')
+              AND t.deleted_at IS NULL AND t.archived_at IS NULL
+        """).fetchall()
+
+    found: list[Limited] = []
+    for row in rows:
+        text = " ".join((row["last_error"] or "").split())
+        at = maybe_time(row["warning_at"]) or maybe_time(row["updated_at"])
+        if row["thread_id"] in seen or at is None or not SESSION_LIMIT_ERROR.search(text):
+            continue
+        last_message_at = maybe_time(row["last_message_at"])
+        if last_message_at and last_message_at > at:
+            continue
+        kind, reset_at = "model", None
+        try:
+            detail = json.loads(row["warning_json"] or "{}").get("detail") or {}
+            window = str(detail.get("rateLimitType") or "")
+            if detail.get("resetsAt"):
+                reset_at = datetime.fromtimestamp(int(detail["resetsAt"]), timezone.utc).astimezone(TZ)
+                kind = "session" if window.startswith("five_hour") else (
+                    "weekly" if window.startswith("seven_day") else "model"
+                )
+        except (TypeError, ValueError, AttributeError):
+            pass
+        found.append(
+            Limited(
+                thread_id=row["thread_id"],
+                profile=row["profile"] or "-",
+                model=row["model"] or "-",
+                title=" ".join((row["title"] or "").split()),
+                project=row["project"] or "-",
+                kind=kind,
+                text=text,
+                at=at,
+                reset_at=reset_at,
+            )
+        )
+    return found
 
 
 def display_names(path: Path | None = None) -> dict[str, str]:

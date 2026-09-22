@@ -56,6 +56,13 @@ class LimitedFixtureTest(unittest.TestCase):
               message_id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, text TEXT,
               created_at TEXT
             );
+            CREATE TABLE projection_thread_sessions (
+              thread_id TEXT PRIMARY KEY, status TEXT, last_error TEXT, updated_at TEXT
+            );
+            CREATE TABLE projection_thread_activities (
+              activity_id TEXT PRIMARY KEY, thread_id TEXT, kind TEXT,
+              payload_json TEXT, created_at TEXT
+            );
             INSERT INTO projection_projects VALUES ('p','fixture','/tmp/fixture');
         """)
         now = datetime.now(timezone.utc)
@@ -170,6 +177,45 @@ class LimitedFixtureTest(unittest.TestCase):
             "(Europe/Brussels). Switch to another model.",
             5,
         )
+        # Session failed on a limit (sidebar "Failed"), no banner message; the
+        # runtime.warning carries the exact reset (weekly, 20 min ahead).
+        def session_error(
+            thread_id: str, minutes_ago: float, resets_at: datetime | None, status: str = "error"
+        ) -> None:
+            moment = stamp(now - timedelta(minutes=minutes_ago))
+            connection.execute(
+                "INSERT INTO projection_thread_sessions VALUES (?,?,?,?)",
+                (thread_id, status, "Claude usage limit reached. Send the message again once the limit resets.", moment),
+            )
+            if resets_at:
+                connection.execute(
+                    "INSERT INTO projection_thread_activities VALUES (?,?,?,?,?)",
+                    (
+                        f"w-{thread_id[:8]}", thread_id, "runtime.warning",
+                        json.dumps({"message": "paused", "detail": {"resetsAt": int(resets_at.timestamp()), "rateLimitType": "seven_day_overage_included"}}),
+                        moment,
+                    ),
+                )
+
+        self.failed = thread("hhhhhhhh", "session failed pending")
+        message("h1", self.failed, "assistant", "Pushed as d49c503. Now publishing.", 25)
+        session_error(self.failed, 18, now + timedelta(minutes=20))
+
+        self.failed_passed = thread("iiiiiiii", "session failed passed")
+        message("i1", self.failed_passed, "assistant", "Checking the mail arrived.", 200)
+        session_error(self.failed_passed, 190, now - timedelta(hours=1), status="stopped")
+
+        # Session error, but a message arrived afterwards -> already resumed.
+        resumed = thread("jjjjjjjj", "session failed resumed")
+        session_error(resumed, 60, now - timedelta(minutes=30))
+        message("j1", resumed, "user", "continue", 20)
+
+        # Session error unrelated to limits -> ignored.
+        crashed = thread("kkkkkkkk", "session crashed")
+        connection.execute(
+            "INSERT INTO projection_thread_sessions VALUES (?,?,?,?)",
+            (crashed, "error", "Provider session did not survive a server restart.", stamp(now)),
+        )
         connection.commit()
         connection.close()
 
@@ -197,6 +243,18 @@ class LimitedFixtureTest(unittest.TestCase):
         self.assertNotIn("eeeeeeee", ids)  # long prose, not a limit banner
         self.assertEqual(ids[0], "99999999")  # newest first
 
+    def test_session_error_limits_are_detected(self) -> None:
+        by_id = {row["short_id"]: row for row in self.rows()}
+        self.assertEqual(by_id["hhhhhhhh"]["kind"], "weekly")
+        self.assertFalse(by_id["hhhhhhhh"]["reset_passed"])
+        self.assertTrue(by_id["iiiiiiii"]["reset_passed"])
+        self.assertNotIn("jjjjjjjj", by_id)  # message after the session error
+        self.assertNotIn("kkkkkkkk", by_id)  # non-limit session error
+        out = self.run_script("resume", "--dry-run")
+        self.assertIn("DRYRUN", out)
+        self.assertIn("iiiiiiii", out.split("DRYRUN")[1] + out)
+        self.assertIn("skip   hhhhhhhh  weekly limit, not resumable yet", out)
+
     def test_kinds_and_profile_filter(self) -> None:
         kinds = {row["short_id"]: row["kind"] for row in self.rows()}
         self.assertEqual(kinds["aaaaaaaa"], "session")
@@ -211,7 +269,7 @@ class LimitedFixtureTest(unittest.TestCase):
         )
         self.assertEqual(
             {row["short_id"] for row in self.rows("--profile", "claude")},
-            {"aaaaaaaa", "dddddddd", "99999999"},
+            {"aaaaaaaa", "dddddddd", "99999999", "hhhhhhhh", "iiiiiiii"},
         )
 
     def test_reset_parsing_and_since_window(self) -> None:
@@ -221,14 +279,14 @@ class LimitedFixtureTest(unittest.TestCase):
         self.assertIsNone(by_id["ffffffff"]["reset_at"])
         self.assertEqual(
             [row["short_id"] for row in self.rows("--since", "20m")],
-            ["99999999", "ffffffff"],
+            ["99999999", "ffffffff", "hhhhhhhh"],
         )
         actionable = self.rows("--resumable", "--exclude", self.blocked[:8])
-        self.assertEqual([row["short_id"] for row in actionable], ["ffffffff"])
+        self.assertEqual([row["short_id"] for row in actionable], ["ffffffff", "iiiiiiii"])
         before = stamp(self.now - timedelta(minutes=15))
         self.assertEqual(
             {row["short_id"] for row in self.rows("--before", before)},
-            {"aaaaaaaa", "dddddddd"},
+            {"aaaaaaaa", "dddddddd", "hhhhhhhh", "iiiiiiii"},
         )
 
     def test_monthly_banner_with_a_session_reset_is_resumable(self) -> None:
@@ -286,7 +344,7 @@ class LimitedFixtureTest(unittest.TestCase):
         # `claudeAgent` is a prefix of every other Claude id -> exact match wins.
         self.assertEqual(
             {row["short_id"] for row in self.rows("--profile", "claudeAgent")},
-            {"aaaaaaaa", "99999999"},
+            {"aaaaaaaa", "99999999", "hhhhhhhh", "iiiiiiii"},
         )
 
     def test_resume_reports_nothing_to_do(self) -> None:
@@ -592,6 +650,13 @@ class NothingBlockedTest(unittest.TestCase):
             CREATE TABLE projection_thread_messages (
               message_id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, text TEXT,
               created_at TEXT
+            );
+            CREATE TABLE projection_thread_sessions (
+              thread_id TEXT PRIMARY KEY, status TEXT, last_error TEXT, updated_at TEXT
+            );
+            CREATE TABLE projection_thread_activities (
+              activity_id TEXT PRIMARY KEY, thread_id TEXT, kind TEXT,
+              payload_json TEXT, created_at TEXT
             );
         """)
         connection.commit()

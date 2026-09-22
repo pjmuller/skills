@@ -35,8 +35,11 @@ quotas and accounts without session rows are skipped. T3 must be running;
 launchd retries on the next tick. It never wakes the Mac.
 For a manual decision preview: `topup run --dry-run --ignore-hours`.
 
-`limited` detects a short limit banner as the thread's **last assistant message**;
-a later user message means it is no longer blocked. `resume` sends `continue`,
+`limited` detects two signals: a short limit banner as the thread's **last
+assistant message**, or a provider session in `error`/`stopped` whose
+`last_error` is a usage/rate limit (sidebar "Failed", no banner; the paired
+`runtime.warning` activity gives the exact reset). A later message on the thread
+means it is no longer blocked. `resume` sends `continue`,
 skipping monthly caps and future resets unless `--force`. Model/API banners with
 no reset time resume when requested. Check `t3-drafts list --limited`; use
 `resume --protect-drafts` to exclude unsent drafts. Re-list immediately after
