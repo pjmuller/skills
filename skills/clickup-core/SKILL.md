@@ -63,6 +63,8 @@ project skill says otherwise:
   author for their own ticket unless it is urgent.
 - Shipped facts only. Never post a pending decision, an open question or a "waiting for approval";
   decide in the chat thread, then write the outcome as one line. In limbo → write nothing.
+- Writing in the other direction (a non-technical reporter handing a bug to a developer): symptoms,
+  data points and the intended outcome, not conclusions; skill `agents-md` → `handoff.md`.
 
 ## Rich content and media
 

@@ -43,14 +43,14 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
-### Delegation
-- Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. All coding, any size, goes to **in-harness sub-agents** (Opus high from Claude CLI · Sol high from Codex CLI); the thinker verifies.
-- A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use → Astra low); verify its ping-back here, then `t3-settle-thread --wait <id>`.
+## Delegation
+- Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. Coding goes to **in-harness sub-agents** (Opus, Sonnet, Haiku in Claude CLI · Sol, Terra, Luna from Codex CLI); the thinker verifies.
+- A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
-  - No `--profile`/`--thinking`: account and effort follow the parent. Only when I name an account → `t3-list-profiles` for the exact value.
+  - No `--profile`/`--thinking`: account and effort follow the parent. Only when I name an account/profile → `t3-list-profiles` for the exact value.
 
-## T3 threads (skill `t3-manage-thread`; helpers on PATH)
+### T3 threads (skill `t3-manage-thread`; helpers on PATH)
 `t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles`.
 - Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
@@ -63,8 +63,8 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - Never `checkout`/`reset`/`stash` in the shared checkout (promote/deploy/compare): other agents have uncommitted edits there. Use a throwaway `git worktree add --detach /tmp/<x> origin/<branch>`, remove it when done.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
-High-level map for future agents: the **INTENT** behind each architecture/feature/component, and which source files to open. Progressive disclosure (no "god" files); link related skill files. Code stays the source of truth: reference filenames/methods, not snippets. After a coding task, create/update relevant skill files.
-Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
+High-level map for future agents: the **INTENT** behind each architecture/feature/component, and which source files to open. Progressive disclosure (no "god" md files); link related skill files. Code stays the source of truth: reference filenames/methods, not snippets. After a coding task, create/update relevant skill files.
+Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory which stays user bound (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
 Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets the core fix in code/config, not a workaround note.
 
 ## Tooling ({machine}): one tool per job
@@ -77,7 +77,7 @@ Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets th
 
 ## Writing in my name
 - {Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first.} Never use em dashes in outgoing copy.
-- Handoff to a colleague's agent = goal + key insights/decisions + current state + next steps. No filler.
+- Handoffs (prompt for a colleague's agent, dev → product owner, bug report → dev) → read skill `agents-md` → `handoff.md` first. Goal + key insights/decisions + current state + next steps; symptoms over conclusions. No filler.
 
 ## Abbreviations
 {Company/product abbreviations you use in prompts.}

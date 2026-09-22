@@ -12,7 +12,8 @@ real constraint or concrete verification requirement makes precision necessary.
 
 This file covers a repository's entrypoint. The user-level file loaded in every
 repo (write, prune, merge the [template](global-template.md), port improvements)
-has its own economics: [global.md](global.md).
+has its own economics: [global.md](global.md). Handoffs between people, agents
+and roles (relay prompt, dev → non-technical, bug report → dev): [handoff.md](handoff.md).
 
 ## Ground it
 

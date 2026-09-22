@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- agents-md: `handoff.md` (relay prompt for a colleague/harness, dev → non-technical, non-technical → dev with intent first and symptoms over conclusions); template synced (delegation heading, sub-agent model lists, handoff pointer). clickup-core links to it for reporter → developer handoffs; wrapper template no longer carries a link that only resolves after copying.
 - t3-manage-thread: `t3-list-profiles` lists enabled accounts per ecosystem (Claude / OpenAI / Google) with the exact `--profile` value; spawn examples drop `--profile`/`--thinking` (account and effort follow the parent). `code-review.md` absorbs the model pairing and hand-off-plugin rule; agents-md `global-template.md` delegation block simplified to match.
 - t3-spawn-thread: `--profile` is an account label orthogonal to `--model` (`probackup` + `astra` → Codex ProBackup, + `fable` → Claude ProBackup); a driver switch without `--profile` picks the inherited account's sibling instance instead of failing. Docs/examples drop `--profile codex`.
 - t3-manage-thread: `code-review.md` — opposite-model review as a 🏓 worker (when, spawn commands both directions, brief shape, reviewer output, builder push-back); `SKILL.md` slimmed to a commands-first entrypoint with cross-provider spawn examples.

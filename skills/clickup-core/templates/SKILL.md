@@ -3,7 +3,7 @@ name: clickup
 description: Use ClickUp for this project's tickets and handoffs; supplies workspace topology and house policies to clickup-core.
 ---
 
-Uses [clickup-core](../clickup-core/SKILL.md) at `.agents/skills/clickup-core`.
+Uses `clickup-core` installed beside this wrapper at `.agents/skills/clickup-core/SKILL.md`.
 Install/update: `pnpm dlx skills add pjmuller/skills -s clickup-core -y`.
 Read [clickup.toml](clickup.toml) for workspace, lists, status/priority/custom-field enums and members.
 Keep this skill and config outside the replaceable core directory.
