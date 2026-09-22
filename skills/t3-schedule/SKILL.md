@@ -23,7 +23,7 @@ t3-schedule refresh         # regenerate all runners/plists after a template cha
 Use `add --settle-when-done` for unattended jobs: forwards the spawn helper's
 [fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done),
 which hides the running thread and appends self-settlement instructions. Do not use a 🏓 title.
-For Sol High, pass `--profile codex --model sol --thinking high` to bypass Claude profile selection.
+For Sol High, pass `--profile <account> --model sol --thinking high` (account label, e.g. `probackup`; no thread to inherit a sibling from).
 
 One job = LaunchAgent `com.t3-skills.t3-schedule.<name>` (`~/Library/LaunchAgents`, `ProcessType=Interactive` —
 `Standard` still clamps the t3 CLI to 15-25 s per call, measured 2026-09-09) → runner

@@ -13,10 +13,12 @@ once per long session; a diff > ~1000 LOC is too big → split it.
 ## Spawn the reviewer
 ```bash
 # builder runs in Claude → OpenAI reviews
-t3-spawn-thread --profile codex --model astra --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 # builder runs in Codex → Claude reviews
-t3-spawn-thread --profile <claude-profile> --model fable --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 ```
+`--model` picks the driver; the account follows the builder's (sibling instance).
+`--profile <account>` only to review on another account.
 Always this spawn flow ([spawn-thread.md](spawn-thread.md)), never an in-harness
 same-model sub-agent (Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass,
 does not count as the review. The reviewer is read-only on the shared checkout;

@@ -44,8 +44,10 @@ def test_registry_names_and_ambiguity(settings):
 
 def test_auto_preserves_codex_and_refuses_account_guess(settings):
     assert route("gpt-6-astra", "codex_beta", settings)[0] == "codex_beta"
+    # Driver switch keeps the account: Claude Beta -> Codex Beta (sibling label).
+    assert route("gpt-6-astra", "claudeAgent", settings)[0] == "codex_beta"
     with pytest.raises(ValueError, match="Choose --profile"):
-        route("gpt-6-astra", "claudeAgent", settings)
+        route("gpt-6-astra", "new_instance", settings)  # Future Gamma has no Codex sibling
 
 
 @pytest.mark.parametrize("profile,model,inherited,expected,option", [
@@ -61,7 +63,8 @@ def test_auto_preserves_codex_and_refuses_account_guess(settings):
     ("antigravity_beta", "astra", "codex", None, None),
     ("codex_beta", "fable", "codex", None, None),
     ("beta", "auto", "codex", None, None),
-    ("auto", "astra", "claudeAgent", None, None),
+    ("auto", "astra", "claudeAgent", "codex_beta", "reasoningEffort"),
+    ("auto", "astra", "new_instance", None, None),
 ])
 def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected, option):
     script = (SCRIPTS / "t3-spawn-thread").read_text()

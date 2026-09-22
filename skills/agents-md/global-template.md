@@ -43,17 +43,11 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
-### Delegation: Claude Code + Fable (Codex/GPT Sol & Astra: skip this block)
-Fable = planning, critical thinking, taste, judgement, verification; rarely the implementer. Think first, delegate once the plan/decision is clear.
-- Coding ≤200 LOC → Opus sub-agent in-harness (Agent tool).
-- Coding >200 LOC → **always** a Sol high worker thread: `t3-spawn-thread --profile codex --model sol --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; worker pings back (🏓); verify here, then settle the worker.
-- (Sub)tasks whose core work is computer use → Astra Low.
-- Effort defaults: Fable medium · Opus high.
-
-### Delegation: Codex CLI, session started in Astra (Claude sessions: skip this block)
-- Coding ≤200 LOC → Sol high sub-agent.
-- Coding >200 LOC → `t3-spawn-thread --profile {claude-profile} --model opus --thinking high --source-thread <parent-id> --title "🏓 …" -- "<brief>"`; verify the report, then settle the worker. Little usage left in the Claude profiles → Sol high sub-agents instead.
-- Effort defaults: Sol high · Astra med (`--model astra` = gpt-6-astra).
+### Delegation
+- Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. All coding, any size, goes to **in-harness sub-agents** (Opus high from Claude CLI · Sol high from Codex CLI); the thinker verifies.
+- A separate 🏓 worker thread only when the work needs the *other provider*; verify its ping-back here, then `t3-settle-thread --wait <id>`. `--model` picks the driver, the account stays the same; `--profile <account>` only to switch accounts.
+  - Claude CLI → OpenAI: `t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"` (opposite-model review: astra med · computer/browser use: astra low).
+  - Codex CLI → Claude: `t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"` (opposite-model review: fable med).
 
 ## T3 threads (skill `t3-manage-thread`; helpers on PATH)
 `t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread`.

@@ -108,7 +108,12 @@ T3 rejects Codex continuation across different shared homes. Do not patch thread
 metadata to migrate running work.
 
 A single Claude profile skips polling. Other providers retain a compatible
-inherited account; a driver switch with multiple candidates requires `--profile`.
+inherited account; a driver switch (Claude thread → `--model astra`) picks the
+**sibling** instance: same display name minus the driver word ("Claude ProBackup"
+→ "Codex ProBackup"). No unique sibling → "Choose --profile". Towards Claude the
+capacity ranking still applies; ties prefer the sibling. So `--profile` is
+an account label, orthogonal to `--model`; `--profile codex` / `claude` still
+resolve to the built-in instance ids for compatibility.
 CodexBar cannot attribute quota to multiple T3 instances. Monthly overage spend caps
 are not subscription windows and are not a routing signal. Missing model caps cannot
 be inferred. Implementation: `scripts/lib/profile_routing.py`; shared collection,

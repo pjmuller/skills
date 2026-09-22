@@ -52,6 +52,15 @@ def resolve(instances, requested, model_family="unknown"):
                      f"{requested}. Enabled provider instances: {available}")
 
 
+DRIVER_WORDS = {"claude", "codex", "gemini", "antigravity", "opencode", "cursor", "grok"}
+
+
+def account_label(entry):
+    """Display name minus the driver word: 'Codex Beta' and 'Claude Beta' share 'beta'."""
+    name = str(entry.get("displayName") or (entry.get("config") or {}).get("displayName") or "")
+    return tuple(w for w in name.casefold().split() if w not in DRIVER_WORDS)
+
+
 def compatible(instances, preferred, model_family):
     candidates = [id for id, entry in instances.items()
                   if enabled(entry) and family(entry) == model_family]
@@ -59,6 +68,11 @@ def compatible(instances, preferred, model_family):
         return preferred
     if len(candidates) == 1:
         return candidates[0]
+    # Driver switch: stay on the same account (sibling instance with the same label).
+    label = account_label(instances.get(preferred, {}))
+    siblings = [id for id in candidates if label and account_label(instances[id]) == label]
+    if len(siblings) == 1:
+        return siblings[0]
     raise ValueError(f"Choose --profile explicitly for {model_family}: "
                      f"{', '.join(candidates) or 'no enabled profiles'}")
 

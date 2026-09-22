@@ -70,6 +70,12 @@ def route(model, preferred, settings_path=SETTINGS, collect=claude_accounts):
     ids = [p[0] for p in claude_profiles(settings_path)]
     if len(ids) < 2:
         return (ids[0] if ids else preferred), "single compatible profile; usage not polled"
+    if preferred not in ids:
+        # Driver switch (Codex thread -> Claude): ties prefer the sibling account.
+        try:
+            preferred = compatible(registry(settings_path), preferred, "claude")
+        except ValueError:
+            pass
     now = datetime.now(timezone.utc)
     accounts = collect(settings_path=settings_path,
                        cache_path=settings_path.parent / "t3-limits-cache.json", now=now)

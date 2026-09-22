@@ -15,9 +15,9 @@ prints project + thread IDs — report those.
 ```bash
 # 🏓 round-trip worker (hidden while running, pings the parent back, parent settles it)
 t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"
-# cross-provider workers (explicit profile switches the driver)
-t3-spawn-thread --profile codex --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
-t3-spawn-thread --profile <claude-profile> --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
+# other provider: --model picks the driver; account = inherited sibling (Claude side: by capacity, ties prefer the sibling)
+t3-spawn-thread --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
+t3-spawn-thread --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
 # 📤 standalone (visible, never hidden/settled by helpers); add --settle-when-done for fire-and-forget
 t3-spawn-thread --title "📤 <task>" -- "<brief>"
 
@@ -30,7 +30,8 @@ t3-hide-thread <id> · t3-rename-thread <id> --title "…" · t3-limits · t3-de
 
 Rules of thumb: brief = file on disk, path in the argument (no backticks or
 `$(...)` inline: the shell expands them). `--thinking` only when a level is
-named. `--source-thread` when the parent is not auto-detected (Codex CLI
+named. `--profile` = account label (`probackup`, `dentai`), never a driver: add it
+only to switch accounts or when routing says "Choose --profile". `--source-thread` when the parent is not auto-detected (Codex CLI
 sessions have no T3 address). Default to 🏓 unless the user said standalone.
 Hidden ≠ stopped; settle only after the ping-back is verified.
 
