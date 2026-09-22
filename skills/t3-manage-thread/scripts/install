@@ -72,7 +72,7 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/t3-manage-thread" ]] || warn_project=true
-for command_name in "${helpers[@]}"; do
+for command_name in t3-spawn-thread t3-ping-thread t3-read-thread t3-settle-thread t3-hide-thread t3-rename-thread t3-limits t3-delete-thread t3-list-profiles; do
   existing="$(readlink -f "$bin_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
