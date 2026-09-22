@@ -19,7 +19,7 @@ EXPECTED_COMMANDS = {
     "gmail-search", "gmail-export", "gmail-recent", "gmail-get", "gmail-thread", "gmail-send", "gmail-draft",
     "gmail-draft-list", "gmail-draft-get", "gmail-draft-send", "gmail-draft-delete",
     "gmail-labels", "gmail-label", "gmail-attachments", "gmail-save-text",
-    "slides-outline", "slides-slide", "slides-text", "slides-replace", "slides-set-text",
+    "slides-resolve", "slides-outline", "slides-slide", "slides-text", "slides-replace", "slides-set-text",
     "slides-batch", "slides-add", "slides-notes", "slides-delete", "slides-move", "slides-image",
     "slides-thumbnail", "slides-export-pdf",
 }

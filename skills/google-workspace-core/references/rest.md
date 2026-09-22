@@ -40,6 +40,9 @@ edits from highest index downward. `slides-delete` requires `--yes`; Drive remov
 - `slides-set-text` = `deleteText(ALL)` + `insertText(0)`. The new run inherits the
   shape/placeholder defaults, so **run-level styling may be lost** (placeholder-level colours
   survive). Prefer `slides-replace` for a wording change; restyle with `updateTextStyle` if needed.
+- Slide references resolve in `gws_core/slides_ref.py`: an all-digit token is a 1-based slide
+  number, anything else an objectId; `parse_slides_url` pulls deck + slide out of `?slide=id.X` or
+  `#slide=id.X`. `slides-resolve` prints the pair plus a link back.
 - Placeholders matter: `SLIDE_NUMBER` shapes contain the page number and are filtered from titles
   and `slides-text`; `TITLE`/`CENTERED_TITLE` is what the outline shows.
 - Elements can be `elementGroup`s — text is nested in `children` (the CLI recurses).

@@ -28,6 +28,9 @@ policy. Narrow accounts simply get a permission error.
   `token.json`, `client.json` or a `.env`.
 - Output is compact text; `--json` (before or after the command) gives the raw API payload.
   Machine callers should always pass `--json`. Commands accept a Google URL or a bare id.
+- Slides: wherever a slide objectId is expected, pass a 1-based slide number or a pasted Slides
+  URL (`?slide=id.X`, which alone supplies deck *and* slide). `slides-resolve <deck-or-url> [ref]`
+  translates either way, `slides-outline <url>` marks the linked slide with `*`.
 - Only perform requested writes, preserve unrelated content, read the result back. Drive deletion
   is trash; `slides-delete` needs `--yes`; Gmail sending is not idempotent.
 

@@ -8,6 +8,7 @@ from typing import Any
 from .errors import WorkspaceError
 from .inputs import extract_id
 from .session import DRIVE, SLIDES, Session
+from .slides_ref import resolve_slide
 
 EMU_PER_PT = 12700
 TITLE_TYPES = ("TITLE", "CENTERED_TITLE")
@@ -141,17 +142,9 @@ class SlidesClient:
 
     @staticmethod
     def resolve(deck_data: dict, ref: str) -> tuple[int, dict]:
-        """`ref` is a 1-based slide number or a slide objectId."""
-        slides = deck_data.get("slides", [])
-        if str(ref).isdigit():
-            index = int(ref)
-            if not 1 <= index <= len(slides):
-                raise WorkspaceError(f"slide {index} out of range (deck has {len(slides)})")
-            return index, slides[index - 1]
-        for index, slide in enumerate(slides, 1):
-            if slide["objectId"] == ref:
-                return index, slide
-        raise WorkspaceError(f"no slide {ref!r} in this presentation")
+        """`ref` is a 1-based slide number, a slide objectId or a Slides URL carrying one."""
+        index, _ = resolve_slide(deck_data, ref)
+        return index, deck_data["slides"][index - 1]
 
     def outline(self, deck: str) -> dict:
         return self.presentation(deck, OUTLINE_FIELDS)
@@ -161,8 +154,10 @@ class SlidesClient:
         request: dict[str, Any] = {"replaceAllText": {
             "containsText": {"text": find, "matchCase": bool(match_case)}, "replaceText": replace}}
         if slides:
+            refs = [item.strip() for item in slides.split(",") if item.strip()]
+            data = self.presentation(deck, "slides(objectId)")
             request["replaceAllText"]["pageObjectIds"] = [
-                item.strip() for item in slides.split(",") if item.strip()]
+                self.resolve(data, ref)[1]["objectId"] for ref in refs]
         return self.batch(deck, {"requests": [request]})
 
     def set_text(self, deck: str, element_id: str, text: str) -> dict:

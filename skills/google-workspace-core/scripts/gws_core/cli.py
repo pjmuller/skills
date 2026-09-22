@@ -18,6 +18,7 @@ from .render import out, table, trunc, write_out
 from .session import Workspace
 from .slides import (element_geometry, element_kind, element_paragraphs, element_text, notes_text,
                      placeholder_type, slide_title)
+from .slides_ref import parse_slides_url, resolve_slide, slide_url
 
 HOSTS = {  # shorthand path prefix -> API host, for the generic `api` passthrough
     "/gmail/": "https://gmail.googleapis.com",
@@ -466,14 +467,50 @@ def cmd_gmail_save_text(a, ws):
 
 # --- slides -----------------------------------------------------------------
 
+def slide_target(pres: str, slide: str | None) -> tuple[str, str]:
+    """Deck + slide ref, where either positional may be a Slides URL carrying `?slide=id.X`."""
+    deck_from_pres, slide_from_pres = parse_slides_url(pres)
+    if slide is None:
+        if not slide_from_pres:
+            raise WorkspaceError("no slide given: pass a slide number, an objectId, or a Slides "
+                                 "URL with ?slide=id.<objectId>")
+        return pres, slide_from_pres
+    deck_from_slide, slide_from_slide = parse_slides_url(slide)
+    if deck_from_slide and deck_from_pres and deck_from_slide != deck_from_pres:
+        raise WorkspaceError(f"that slide URL is for presentation {deck_from_slide}, "
+                             f"not {deck_from_pres}")
+    return pres, slide_from_slide or slide
+
+
+def slide_targets(pres: str, slides: list[str]) -> list[str]:
+    """Same, for the commands taking several slides; an empty list falls back to the URL."""
+    return [slide_target(pres, ref)[1] for ref in slides] if slides else [slide_target(pres, None)[1]]
+
+
+def cmd_slides_resolve(a, ws):
+    """Slide number <-> objectId, so a pasted link and a deck position name the same slide."""
+    pres, ref = slide_target(a.pres, a.ref)
+    deck = ws.slides.presentation(
+        pres, "presentationId,slides(objectId,pageElements(shape(placeholder,shapeType,"
+              "text(textElements(textRun(content))))))")
+    index, object_id = resolve_slide(deck, ref)
+    title = slide_title(deck["slides"][index - 1])
+    url = slide_url(deck["presentationId"], object_id)
+    out({"index": index, "objectId": object_id, "title": title, "url": url}, a.json,
+        f"slide {index}  objectId={object_id}  title={title}\n{url}")
+
+
 def cmd_slides_outline(a, ws):
     deck = ws.slides.outline(a.pres)
+    marked = parse_slides_url(a.pres)[1]
+    marked = resolve_slide(deck, marked)[1] if marked else None
     layouts = {item["objectId"]: item.get("layoutProperties", {}).get("displayName", "?")
                for item in deck.get("layouts", [])}
     rows: list[list] = [["#", "OBJECT_ID", "LAYOUT", "EL", "TITLE / FIRST TEXT", "NOTES"]]
     for index, slide in enumerate(deck.get("slides", []), 1):
         layout = layouts.get((slide.get("slideProperties") or {}).get("layoutObjectId"), "-")
-        rows.append([index, slide["objectId"], trunc(layout, 22), len(slide.get("pageElements", [])),
+        rows.append([f"*{index}" if slide["objectId"] == marked else index,
+                     slide["objectId"], trunc(layout, 22), len(slide.get("pageElements", [])),
                      trunc(slide_title(slide), 60), trunc(notes_text(slide), 24)])
     out(deck.get("slides", []), a.json,
         f"{deck.get('title')}  ({deck.get('presentationId')})  {len(deck.get('slides', []))} slides\n"
@@ -481,10 +518,11 @@ def cmd_slides_outline(a, ws):
 
 
 def cmd_slides_slide(a, ws):
+    pres, ref = slide_target(a.pres, a.slide)
     deck = ws.slides.presentation(
-        a.pres, "presentationId,title,slides(objectId),layouts(objectId,layoutProperties.displayName)")
-    index, stub = ws.slides.resolve(deck, a.slide)
-    page = ws.slides.page(a.pres, stub["objectId"])
+        pres, "presentationId,title,slides(objectId),layouts(objectId,layoutProperties.displayName)")
+    index, stub = ws.slides.resolve(deck, ref)
+    page = ws.slides.page(pres, stub["objectId"])
     if a.json:
         return out(page, True)
     layouts = {item["objectId"]: item.get("layoutProperties", {}).get("displayName", "?")
@@ -576,30 +614,33 @@ def cmd_slides_add(a, ws):
 
 
 def cmd_slides_notes(a, ws):
-    deck = ws.slides.presentation(a.pres, "slides(objectId)")
-    index, slide = ws.slides.resolve(deck, a.slide)
-    ws.slides.set_notes(a.pres, slide["objectId"], a.text or "")
+    pres, ref = slide_target(a.pres, a.slide)
+    deck = ws.slides.presentation(pres, "slides(objectId)")
+    index, slide = ws.slides.resolve(deck, ref)
+    ws.slides.set_notes(pres, slide["objectId"], a.text or "")
     out({"slide": index, "objectId": slide["objectId"]}, a.json,
         f"notes set on slide {index} ({len(a.text or '')} chars)")
 
 
 def cmd_slides_delete(a, ws):
+    refs = slide_targets(a.pres, a.slides)
     deck = ws.slides.presentation(a.pres, "slides(objectId)")
-    targets = [ws.slides.resolve(deck, ref) for ref in a.slides]
+    targets = [ws.slides.resolve(deck, ref) for ref in refs]
     if not a.yes:
         listing = ", ".join(f"{index} ({slide['objectId']})" for index, slide in targets)
         raise WorkspaceError(f"refusing without --yes: would delete slide(s) {listing}")
-    deleted = ws.slides.delete_slides(a.pres, a.slides)
+    deleted = ws.slides.delete_slides(a.pres, refs)
     out(deleted, a.json, f"deleted {len(deleted)} slide(s)")
 
 
 def cmd_slides_move(a, ws):
-    moved = ws.slides.move_slides(a.pres, a.slides, a.to)
+    moved = ws.slides.move_slides(a.pres, slide_targets(a.pres, a.slides), a.to)
     out({"moved": moved, "to": a.to}, a.json, f"moved {len(moved)} slide(s) to position {a.to}")
 
 
 def cmd_slides_image(a, ws):
-    result = ws.slides.insert_image(a.pres, a.slide, drive=ws.drive, url=a.url, file=a.file,
+    pres, ref = slide_target(a.pres, a.slide)
+    result = ws.slides.insert_image(pres, ref, drive=ws.drive, url=a.url, file=a.file,
                                     x=a.x, y=a.y, width=a.w, height=a.h, name=a.name, parent=a.parent)
     human = f"image {result['objectId']} on slide {result['slide']}"
     if result["driveFileId"]:
@@ -608,7 +649,8 @@ def cmd_slides_image(a, ws):
 
 
 def cmd_slides_thumbnail(a, ws):
-    index, object_id, png = ws.slides.thumbnail(a.pres, a.slide)
+    pres, ref = slide_target(a.pres, a.slide)
+    index, object_id, png = ws.slides.thumbnail(pres, ref)
     out({"slide": index, "objectId": object_id, "out": a.out}, a.json,
         f"slide {index} -> {write_out(a.out, png)}")
 
@@ -925,12 +967,18 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("-o", "--out", required=True)
 
     # slides
-    command = add("slides-outline", cmd_slides_outline, "one compact line per slide")
+    command = add("slides-resolve", cmd_slides_resolve,
+                  "slide number <-> objectId (takes a pasted Slides URL)")
+    command.add_argument("pres", help="presentation id or URL")
+    command.add_argument("ref", nargs="?", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
+
+    command = add("slides-outline", cmd_slides_outline,
+                  "one compact line per slide (* marks the slide in a pasted URL)")
     command.add_argument("pres")
 
     command = add("slides-slide", cmd_slides_slide, "every element + notes of one slide")
     command.add_argument("pres")
-    command.add_argument("slide", help="1-based slide number or objectId")
+    command.add_argument("slide", nargs="?", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     command.add_argument("--max-chars", type=int, default=2000)
 
     command = add("slides-text", cmd_slides_text, "markdown-ish dump of all slide text")
@@ -943,7 +991,8 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("pres")
     command.add_argument("--find", required=True)
     command.add_argument("--replace", required=True)
-    command.add_argument("--slides", help="comma-separated slide objectIds (default: whole deck)")
+    command.add_argument("--slides",
+                         help="comma-separated slide numbers/objectIds (default: whole deck)")
     command.add_argument("--match-case", action="store_true")
 
     command = add("slides-set-text", cmd_slides_set_text,
@@ -959,7 +1008,8 @@ def build_parser() -> argparse.ArgumentParser:
     command = add("slides-add", cmd_slides_add,
                   "insert slide(s); --spec = JSON list of {layout,title,body,notes}")
     command.add_argument("pres")
-    command.add_argument("--after", help="1-based slide number or objectId; default: end of deck")
+    command.add_argument("--after",
+                         help="1-based slide number, objectId or Slides URL; default: end of deck")
     command.add_argument("--layout", default="Title and body",
                          help="layout display name / API name / id")
     command.add_argument("--title")
@@ -971,22 +1021,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     command = add("slides-notes", cmd_slides_notes, "replace a slide's speaker notes")
     command.add_argument("pres")
-    command.add_argument("slide", help="1-based slide number or objectId")
+    command.add_argument("slide", nargs="?", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     command.add_argument("--text", required=True, help="new notes ('' clears)")
 
     command = add("slides-delete", cmd_slides_delete, "delete slide(s) (needs --yes)")
     command.add_argument("pres")
-    command.add_argument("slides", nargs="+", help="1-based numbers or objectIds")
+    command.add_argument("slides", nargs="*", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     command.add_argument("--yes", action="store_true")
 
     command = add("slides-move", cmd_slides_move, "move slide(s) so the first becomes slide N")
     command.add_argument("pres")
-    command.add_argument("slides", nargs="+", help="1-based numbers or objectIds")
+    command.add_argument("slides", nargs="*", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     command.add_argument("--to", type=int, required=True, help="target 1-based position")
 
     command = add("slides-image", cmd_slides_image, "insert an image (local file or public URL)")
     command.add_argument("pres")
-    command.add_argument("slide", help="1-based slide number or objectId")
+    command.add_argument("slide", nargs="?", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     source = command.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", help="local image; uploaded to Drive first")
     source.add_argument("--url", help="publicly fetchable image URL")
@@ -1000,7 +1050,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     command = add("slides-thumbnail", cmd_slides_thumbnail, "render one slide to PNG (LARGE)")
     command.add_argument("pres")
-    command.add_argument("slide", help="1-based slide number or objectId")
+    command.add_argument("slide", nargs="?", help="1-based slide number, objectId or Slides URL (omit if the URL has ?slide=)")
     command.add_argument("-o", "--out", required=True)
 
     command = add("slides-export-pdf", cmd_slides_export_pdf, "export the whole deck to PDF")
