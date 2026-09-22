@@ -1,78 +1,62 @@
 ---
 name: t3-manage-thread
-description: Spawn, ping, read, rename, or settle a separate T3 Code thread from an agent or terminal. Use when the user asks to spawn/delegate/hand off an independent task in T3 Code, to send a cross-thread message (ping-back) to another T3 thread, to read another thread's transcript/brief/progress, or to settle/clear/acknowledge a finished thread so it leaves the "needs you" inbox. Do not use for Claude Desktop or Codex tasks.
+description: Spawn, ping, read, rename, or settle a separate T3 Code thread from an agent or terminal. Use when the user asks to spawn/delegate/hand off an independent task in T3 Code, to send a cross-thread message (ping-back) to another T3 thread, to read another thread's transcript/brief/progress, to run an opposite-model code review as a worker thread, or to settle/clear/acknowledge a finished thread so it leaves the "needs you" inbox. Do not use for Claude Desktop or Codex tasks.
 ---
 
 # T3 Manage Thread
 
+Helpers on PATH; use them before touching T3's raw API, cookies or SQLite.
+Every flag: `--help`. Spawn uses the current git root, inherits model/thinking,
+picks a Claude profile by capacity, runs full-access in the local checkout and
+prints project + thread IDs — report those.
+
+## Commands
+
 ```bash
-t3-spawn-thread --title "Short title" -- "<task brief>"
+# 🏓 round-trip worker (hidden while running, pings the parent back, parent settles it)
+t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"
+# cross-provider workers (explicit profile switches the driver)
+t3-spawn-thread --profile codex --model astra --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
+t3-spawn-thread --profile <claude-profile> --model fable --thinking med --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
+# 📤 standalone (visible, never hidden/settled by helpers); add --settle-when-done for fire-and-forget
+t3-spawn-thread --title "📤 <task>" -- "<brief>"
+
+t3-ping-thread --thread <parent-id> --from "<label>" -- "<report>"   # arrives as a user turn, wakes the agent
+t3-read-thread <id>                                                   # transcript/brief/progress (read before pinging)
+t3-settle-thread --wait <id>                                          # settle = kill session + its sub-agents; terminal
+t3-settle-thread --self                                               # "…then settle this thread": last tool call
+t3-hide-thread <id> · t3-rename-thread <id> --title "…" · t3-limits · t3-delete-thread --yes <id>
 ```
 
-Use the helpers before touching T3's raw API, cookies or SQLite. Spawn uses the
-current git root, inherits model/thinking, selects a Claude profile by capacity
-([routing policy](spawn-thread.md#automatic-profile-routing)), runs full-access
-in the local checkout, and prints the project + thread IDs — report those.
-
-## 🏓 round-trip workers
-
-**Return path is decided per spawn, from what the user asked for that spawn:**
-
-- 🏓 round-trip — the parent needs the result back (a review, a delegated
-  implementation, any sub-task the parent verifies). Hidden while it runs, so
-  the sidebar stays focused.
-- 📤 standalone — the user said "standalone / separate thread / hand off": it
-  lives on its own, nobody pings back, never hidden or settled by helpers.
-- Not clearly said? **Default to 🏓.** It keeps the sidebar clean and the user
-  can always promote it. Pick 📤 only when the task is a topic of its own that
-  the parent has no further use for.
-- A thread's own mode never propagates. A standalone thread is a clean slate:
-  each thread it spawns gets 🏓 or 📤 on its own merits.
-
-| Step | Command / effect |
-| --- | --- |
-| spawn | `t3-spawn-thread --title "🏓 <task>" -- "<brief>"` — ping-back footer appended to the brief; thread **hidden** (snoozed, still running) |
-| worker reports | `t3-ping-thread --thread <parent> --from <label> -- "<report>"` (the footer) |
-| orchestrator verifies, then ends it | `t3-settle-thread --wait <id>` — **settle = kill** (stops the session and its sub-agents). Terminal, never automatic. |
-
-Hidden ≠ stopped: hiding is a snooze that a keeper maintains, and a hidden
-worker must resurface the moment it dies or needs the user
-([hide-thread.md](hide-thread.md)). **Neither settle nor archive can hide a live
-worker: both stop its session. Use snooze instead.** See
-[settle-thread.md](settle-thread.md). Threads without 🏓 (standalone, 📤
-hand-offs, orchestrators) are never hidden or settled by the helpers — except
-fire-and-forget spawns (`--settle-when-done`: hidden while running, the worker
-settles itself at the end; [spawn-thread.md](spawn-thread.md#fire-and-forget---settle-when-done)). Fleet
-view: `t3-fleet list --recent 12h --title-prefix 🏓` / `--stalled` (skill
-`t3-maintenance`).
+Rules of thumb: brief = file on disk, path in the argument (no backticks or
+`$(...)` inline: the shell expands them). `--thinking` only when a level is
+named. `--source-thread` when the parent is not auto-detected (Codex CLI
+sessions have no T3 address). Default to 🏓 unless the user said standalone.
+Hidden ≠ stopped; settle only after the ping-back is verified.
 
 ## Which doc
 
 | Need | Read |
 | --- | --- |
-| Create a thread: profiles, models, thinking, titles, long briefs | [spawn-thread.md](spawn-thread.md) |
-| Dispatch tickets/findings/meeting items as worker threads: titles, thinker model, brief shapes, bookkeeping | [dispatch-workers.md](dispatch-workers.md) |
-| Message an existing thread (ping-back, quoting pitfall) | [cross-thread-ping.md](cross-thread-ping.md) |
+| Spawn: profiles, models, thinking, 🏓/📤/fire-and-forget, images in a brief, routing policy | [spawn-thread.md](spawn-thread.md) |
+| Dispatch tickets/findings as worker threads: titles, thinker model, brief shapes, bookkeeping | [dispatch-workers.md](dispatch-workers.md) |
+| Opposite-model code review as a 🏓 worker: when, brief, reviewer output, builder push-back | [code-review.md](code-review.md) |
+| Ping an existing thread (ping-back, quoting trap, visibility) | [cross-thread-ping.md](cross-thread-ping.md) |
 | Read a thread's transcript / brief / progress | [read-thread.md](read-thread.md) |
-| Settle / unsettle a finished thread (settle = kill) | [settle-thread.md](settle-thread.md) |
-| Settle **yourself** ("…then settle this thread"): `t3-settle-thread --self` as the last tool call, no background work alive | [settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread) |
+| Settle / unsettle / settle yourself (settle = kill) | [settle-thread.md](settle-thread.md) |
 | Hide / unhide a live worker (snooze keeper) | [hide-thread.md](hide-thread.md) |
-| Rename a thread (hard-set title, `--prefix`, wait for auto-title) | [rename-thread.md](rename-thread.md) |
-| Rate-limit windows per Claude profile + Codex (before spawning / when threads hit limits) | [limits.md](limits.md) |
-| Delete a thread (`t3-delete-thread --yes ID`) — soft: rows stay in SQLite; bulk select + hard purge of rows/transcripts | `t3-maintenance` skill → `t3-purge-threads` |
+| Rename (hard-set title, `--prefix`, wait for auto-title) | [rename-thread.md](rename-thread.md) |
+| Rate-limit windows per Claude profile + Codex | [limits.md](limits.md) |
+| Bulk select + hard purge of threads | `t3-maintenance` skill → `t3-purge-threads` |
+| Fleet view of workers (`t3-fleet list --title-prefix 🏓` / `--stalled`) | `t3-maintenance` skill |
 | Native upstream tools (when to retire these helpers) | [upstream-checkpoint.md](upstream-checkpoint.md) |
 
 ## Install
 
 ```bash
-scripts/install          # symlinks the eight helpers into ~/.local/bin
+scripts/install          # symlinks the helpers into ~/.local/bin
 scripts/install --check  # deps + T3 Code reachable
 ```
 
 Deps: `jq`, `curl`, `uuidgen`, `sqlite3`, `pnpm`, `uv`, `git`, T3 Code running.
-`scripts/lib/t3-common.sh` pins a global `t3` CLI to the server version and
-mints/revokes its own short-lived bearer session (`desktop-managed-local` auth
-is fine). macOS, Linux, WSL2; detached workers use launchd / `systemd-run --user`.
-
-Every flag is in `--help`. Debugging: `T3_SPAWN_DEBUG=1` traces the shell
-helpers (not the read-only `t3-read-thread`); failures print the CLI stderr.
+macOS, Linux, WSL2. Debugging: `T3_SPAWN_DEBUG=1` traces the shell helpers.

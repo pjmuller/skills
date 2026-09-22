@@ -25,6 +25,15 @@ accidental inherit silently runs the work under the wrong project/provider.
 Nothing here settles the worker. After its report is verified:
 `t3-settle-thread --wait THREAD_ID`.
 
+Return path is decided per spawn, from what the user asked for that spawn:
+🏓 when the parent needs the result back (review, delegated implementation, any
+sub-task the parent verifies); 📤 standalone when the user said "standalone /
+separate thread / hand off" (visible, nobody pings back, never hidden or settled
+by helpers). Not clearly said → **default to 🏓**; the user can always promote
+it. A thread's own mode never propagates: a standalone thread is a clean slate
+for what it spawns. Hidden ≠ stopped, and neither settle nor archive can hide a
+live worker (both stop its session): use snooze ([hide-thread.md](hide-thread.md)).
+
 ## Fire-and-forget: `--settle-when-done`
 
 For standalone work nobody needs to verify (e.g. a `yt-ingest` batch): hides the
