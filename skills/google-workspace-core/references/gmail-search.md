@@ -10,7 +10,7 @@ Three deterministic steps; the agent's own `grep` does the fuzzy part.
    (one line per file, date-sorted). `--by-thread` writes one file per conversation with a
    `## <date> · <sender>` section per message; use it when the answer is spread over replies.
    Re-running with a wider query only fetches new ids and rebuilds the index.
-3. **Search locally**: `grep -ril 'kredietaanvraag' /tmp/gmail/<topic>`, `grep -n -E '[0-9]{3}\.?[0-9]{3}' …`,
+3. **Search locally**: `grep -ril 'opzeg' /tmp/gmail/<topic>`, `grep -n -i -E 'deadline|uiterlijk' …`,
    `rg -C2 …`. Read only the files that matter, `sed -n` on long ones. Need the full chain or the
    PDFs? `gmail-thread <threadId>`, `gmail-attachments <id> -o DIR` (or `gmail-export --attachments`).
 
@@ -23,38 +23,51 @@ Pass Gmail's own query language through untouched; do not invent a filter layer 
 
 ## Gmail query cheat sheet
 
+Every row below was verified live against the API (2026-09). `-n` counts in the notes are hits.
+
 | Need | Query |
 | --- | --- |
-| Person, any direction | `from:zwerts OR to:zwerts` or just `zwerts` (matches display name and address) |
-| Several people | `{from:alexandru from:kim.zwerts}` (`{}` = OR) |
-| Words anywhere, all required | `lening architect` (implicit AND) |
-| Any of several words | `lening OR krediet OR hypotheek` |
-| Exact phrase | `"totale ontlening"` |
-| Exclude | `-newsletter`, `-from:noreply` |
-| Subject only | `subject:(lening OR krediet)` |
-| Date window | `after:2025/01/01 before:2025/06/30`, `newer_than:6m`, `older_than:1y` |
-| Attachments | `has:attachment`, `filename:pdf`, `filename:offerte.pdf`, `larger:1M` |
-| Where | `in:anywhere` (also Spam/Trash), `in:sent`, `label:bank`, `is:starred` |
-| Grouping | `(from:kbc.be OR from:ing.be) subject:lening after:2024/01/01` |
+| Person, any direction | `from:reniers OR to:reniers`, or just `reniers` (display name and address) |
+| Address parts | `from:kim` also matches `kim.zwerts@…` (local part splits on `.`); `from:kbc.be` = whole domain |
+| Several people | `{from:alexandru from:kim.zwerts}` (`{}` = OR); `from:(kbc.be OR juumo.io)` |
+| Me | `from:me to:supplier.com`, `to:me` |
+| All words (AND) | `contract opzeg` (implicit AND; `AND` also works) |
+| Any word | `contract OR overeenkomst OR agreement` |
+| Exact phrase | `"klant worden"`; `subject:"Re: Klant worden"` |
+| Near each other | `verhuis AROUND 5 datum` |
+| Exclude | `-newsletter`, `-from:noreply`, `-subject:automatisch`, `NOT factuur` |
+| Subject only | `subject:(offerte OR quote)` |
+| Date window | `after:2025/01/01 before:2025/06/30` (`2025-01-01` and epoch seconds also work) |
+| Relative | `newer_than:6m`, `older_than:1y` (`d`, `m`, `y`) |
+| Attachments | `has:attachment`, `filename:pdf`, `filename:contract.pdf`, `larger:1M`, `smaller:10K` |
+| Google files | `has:drive`, `has:document`, `has:spreadsheet`, `has:youtube` |
+| Where | `in:anywhere` (adds Spam/Trash), `in:sent`, `in:drafts`, `label:<name>`, `has:nouserlabels` |
+| State | `is:unread`, `is:starred`, `is:important`, `category:updates` |
+| Headers | `cc:`, `bcc:`, `deliveredto:`, `list:vendor.com` (mailing-list id), `rfc822msgid:<id>` |
+| Grouping | `(from:kbc.be OR from:ing.be) subject:contract after:2024/01/01` |
 
 Gotchas that cost the most time:
 
-- **Whole words only.** Gmail does not do substrings: `lening` misses `leningen`, `krediet` misses
-  `kredietaanvraag`, `400000` misses `400.000`. List the variants with `OR`, or search wide
-  (person + date window) and let `grep` do the substring/regex work locally.
-- A recurring price hides in invoices: `subject:factuur <vendor>` gives one amount per period;
-  the negotiation sits in the first thread (`"klant worden"`, `offerte`) and a later change in a
-  reply to an invoice. Compare amounts across years before answering.
-- Amounts are unreliable search terms (`400.000`, `400 000`, `400k`, `€400.000`). Search on the
-  people and period, grep for `[0-9]{3}[.,]?[0-9]{3}` afterwards.
-- Names: the address part matters. `from:kim` matches `Kim Zwerts <kim.zwerts@kbc.be>`; a domain
-  (`from:kbc.be`) catches colleagues who took over the file.
-- Dates are `YYYY/MM/DD`. `newer_than:` / `older_than:` take `d`, `m`, `y`.
-- `-n` defaults are small; paginated listing goes to 500 per page, so `-n 300` is fine for a
-  first sweep of a person's history.
+- **Whole words, no stemming, no substrings** (verified): `subject:lening` and `subject:leningen`
+  are disjoint sets; `from:zwert` finds nothing. List variants with `OR`, or search wide (person +
+  period) and let `grep` do the substring/regex work locally.
+- Numbers are unreliable search terms (`400.000`, `400 000`, `400k`). Search on the people and
+  the period, grep the export for the number pattern afterwards.
+- Recurring facts hide in periodic mail (`subject:factuur <vendor>` gives one value per period);
+  the decision sits in the first thread (`"klant worden"`, `offerte`, `voorstel`) and a change in
+  a later reply. Compare across periods before answering.
+- `in:inbox` fails on an archived mailbox; use `in:anywhere` when the count is suspiciously low.
+- `-n` defaults are small; listing paginates at 500 per page, so `-n 300` is fine for a first
+  sweep of one person's history.
 - Grep noise: header lines (`attachments:`, `id:`) and signatures (phone, VAT numbers) match digit
-  patterns. Anchor on currency or context: `grep -n -E '€ ?[0-9]|[0-9] ?(eur|k\b)|ontlen|krediet'`.
+  patterns; anchor on a currency sign, unit or nearby keyword.
 - Gmail meters units per minute per user; big `--by-thread` sweeps back off automatically and a
   failed id is reported, never silently dropped. Rerun the same command to fetch the rest.
 - Multi-language mailboxes: reply markers in Dutch/French/German are stripped by the exporter;
   a quoted chain that survived means an unusual client, use `--full` or `gmail-thread`.
+
+Dig deeper:
+
+- Google's operator list: <https://support.google.com/mail/answer/7190>
+- API search semantics (`q` = the web UI syntax): <https://developers.google.com/gmail/api/guides/filtering>
+- Per-user quota units per method: <https://developers.google.com/gmail/api/reference/quota>
