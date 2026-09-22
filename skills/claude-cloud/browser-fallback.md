@@ -29,8 +29,8 @@ changed in the web UI only, and the platform applies them to **new** sessions. R
    "environment settings, right arrow"; clicking the name only selects it).
 3. **Network access** = Custom; **Allowed domains** below it is a plain multiline textarea, one
    domain per line, no chips. It shows ~4 lines and scrolls internally; wildcards like `*.example.com`
-   work. Append the agreed line, keep the rest byte-identical, click **Save changes**, reopen to verify.
-   Inspection only: **Cancel**.
+   work. Append the agreed line, keep the rest byte-identical, click **Save changes**: the modal closes
+   asynchronously, no confirm dialog or toast. Reopen to verify. Inspection only: **Cancel**.
 4. Gotcha: **Environment variables sit on the same modal, unmasked, also in the accessibility
    tree.** Never dump the full modal snapshot or full-page screenshots: read only the Allowed-domains
    locator and crop screenshots to the network section.
