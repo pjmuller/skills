@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- google-workspace-core: `gmail-export` writes a query's messages (or `--by-thread` conversations) as compact Markdown files plus `index.md` for local grep; `gmail-search` paginates and fetches metadata concurrently; `references/gmail-search.md` holds the search → export → grep loop and Gmail query cheat sheet.
 - agents-md: `global.md` + `global-template.md` for the user-level cross-project prompt (what belongs where, pruning by experiment, merging the template into an existing file, re-sync marker); t3-setup merges this template instead of external bases.
 - t3-manage-thread: `dispatch-workers.md` — project-agnostic rules for spawning worker threads (short 🏓/📤 titles, thinker model, brief shapes, bookkeeping).
 - google-workspace-core: one `gws.py --config workspace.json` CLI and importable `gws_core`; replaces REST/read-only/modular facades. Includes account-bound OAuth, secret-safe diagnostics, draft CRUD, Slides tooling and offline parity tests.

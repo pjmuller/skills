@@ -16,7 +16,7 @@ EXPECTED_COMMANDS = {
     "sheet-batch-write", "sheet-batch", "sheet-add-tab", "sheet-delete-rows", "sheet-freeze-rows",
     "sheet-format-rows", "sheet-named-ranges", "sheet-add-named-range", "sheet-tables",
     "table-read", "table-append", "table-rename",
-    "gmail-search", "gmail-recent", "gmail-get", "gmail-thread", "gmail-send", "gmail-draft",
+    "gmail-search", "gmail-export", "gmail-recent", "gmail-get", "gmail-thread", "gmail-send", "gmail-draft",
     "gmail-draft-list", "gmail-draft-get", "gmail-draft-send", "gmail-draft-delete",
     "gmail-labels", "gmail-label", "gmail-attachments", "gmail-save-text",
     "slides-outline", "slides-slide", "slides-text", "slides-replace", "slides-set-text",

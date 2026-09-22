@@ -11,7 +11,7 @@ from gws_core.gmail import GmailClient, extract_codes, trim_quotes
 from gws_core.sheets import SheetsClient
 from gws_core.slides import SlidesClient
 
-from workspace_testkit import ACCOUNT, FakeSession, Recorded
+from workspace_testkit import ACCOUNT, FakeSession, Recorded, RoutedSession
 
 
 def body_part(text, mime="text/plain"):
@@ -145,6 +145,59 @@ def test_gmail_view_trims_quotes_only_when_asked():
     assert trim_quotes("keep\n-- \nsignature") == "keep"
 
 
+def mail(mid, tid, subject, date, sender, body="Hallo daar"):
+    return {"id": mid, "threadId": tid, "payload": {
+        "headers": [{"name": "Date", "value": date}, {"name": "From", "value": sender},
+                    {"name": "To", "value": ACCOUNT}, {"name": "Subject", "value": subject}],
+        **body_part(body)}}
+
+
+M1 = mail("m1", "t1", "Offerte", "Mon, 17 Aug 2026 12:23:00 +0200", "Kim <kim@kbc.be>")
+M2 = mail("m2", "t1", "Re: Offerte", "Tue, 18 Aug 2026 09:00:00 +0200", "Jan <jan@x.be>", "Bedankt")
+
+
+def test_gmail_message_ids_paginate_up_to_the_limit():
+    session = FakeSession([Recorded({"messages": [{"id": "a"}, {"id": "b"}], "nextPageToken": "n"}),
+                           Recorded({"messages": [{"id": "c"}, {"id": "d"}]})])
+    ids = GmailClient(session, sender=ACCOUNT).message_ids("from:x", 3)
+    assert [item["id"] for item in ids] == ["a", "b", "c"]
+    assert session.calls[0][2]["params"]["maxResults"] == 3
+    assert session.calls[1][2]["params"] == {"q": "from:x", "maxResults": 1, "pageToken": "n"}
+
+
+def test_gmail_export_writes_greppable_files_and_skips_them_on_a_second_run(tmp_path):
+    other = mail("m2", "t2", "Factuur", "Tue, 18 Aug 2026 09:00:00 +0200", "Jan <jan@x.be>")
+    session = RoutedSession({"messages/m1": M1, "messages/m2": other,
+                             "messages": {"messages": [{"id": "m1", "threadId": "t1"},
+                                                       {"id": "m2", "threadId": "t2"}]}})
+    gmail = GmailClient(session, sender=ACCOUNT)
+    result = gmail.export("label:inbox", tmp_path)
+    assert (result["written"], result["skipped"]) == (2, 0)
+    text = (tmp_path / "2026-08-17_m1.md").read_text(encoding="utf-8")
+    assert text.startswith("# Offerte\ndate: 2026-08-17 12:23\nfrom: Kim <kim@kbc.be>\n"
+                           f"to: {ACCOUNT}\nid: m1  thread: t1\n\nHallo daar")
+    index = (tmp_path / "index.md").read_text(encoding="utf-8").splitlines()
+    assert [line.split("  ")[-1] for line in index] == ["2026-08-17_m1.md", "2026-08-18_m2.md"]
+    assert index[0] == "2026-08-17 12:23  Kim <kim@kbc.be>  Offerte  2026-08-17_m1.md"
+    again = gmail.export("label:inbox", tmp_path)
+    assert (again["written"], again["skipped"], again["errors"]) == (0, 2, [])
+    assert (tmp_path / "index.md").read_text(encoding="utf-8").splitlines() == index
+
+
+def test_gmail_export_by_thread_writes_one_file_per_thread(tmp_path):
+    session = RoutedSession({"threads/t1": {"id": "t1", "messages": [M1, M2]},
+                             "messages": {"messages": [{"id": "m1", "threadId": "t1"},
+                                                       {"id": "m2", "threadId": "t1"}]}})
+    result = GmailClient(session, sender=ACCOUNT).export("label:inbox", tmp_path, by_thread=True)
+    assert result["written"] == 1
+    text = (tmp_path / "2026-08-17_t1.md").read_text(encoding="utf-8")
+    assert text.startswith("# Offerte\nthread: t1\nmessages: 2\n\n"
+                           "## 2026-08-17 12:23 \u00b7 Kim <kim@kbc.be>\n")
+    assert text.count("\n## ") == 2 and "## 2026-08-18 09:00 \u00b7 Jan <jan@x.be>" in text
+    assert (tmp_path / "index.md").read_text(encoding="utf-8").strip() == (
+        "2026-08-17 12:23  Kim <kim@kbc.be>  Offerte (2 msgs)  2026-08-17_t1.md")
+
+
 def test_gmail_attachment_names_are_safe_and_unique(tmp_path):
     payload = {"mimeType": "multipart/mixed", "parts": [
         body_part("body text"),
@@ -219,3 +272,16 @@ def test_slides_image_opens_access_only_for_the_failing_create(tmp_path):
     assert result["driveFileId"] == "1FILEAAAAAAAAAAAAA"
     methods = [(method, url.rsplit("/", 2)[-2:]) for method, url, _ in session.calls]
     assert ("DELETE", ["permissions", "perm-1"]) in methods
+
+
+def test_gmail_fetch_retries_quota_answers_with_backoff(monkeypatch):
+    from gws_core import gmail as gmail_module
+
+    calls = []
+    monkeypatch.setattr(gmail_module.time, "sleep", calls.append)
+    quota = Recorded({"error": {"message": "Quota exceeded for quota metric 'Total Query Cost'"}},
+                     status=403)
+    session = FakeSession([quota, quota, Recorded({"id": "m1"})])
+    gmail = GmailClient(session, sender=ACCOUNT)
+    assert gmail._fetch_all(gmail.get, ["m1"], workers=1) == [{"id": "m1"}]
+    assert calls == [1, 2]

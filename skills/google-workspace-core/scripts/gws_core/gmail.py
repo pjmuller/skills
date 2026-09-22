@@ -8,14 +8,17 @@ import mimetypes
 import re
 import time
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.policy import SMTP
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from .errors import WorkspaceError
+from .errors import ApiError, WorkspaceError
 from .session import GMAIL, Session
 
 HEADER_ORDER = ("Date", "From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References")
@@ -131,6 +134,21 @@ def _headers(part: dict) -> dict[str, str]:
             for header in part.get("headers", []) if header.get("name")}
 
 
+def message_date(message: dict) -> datetime | None:
+    """Date header when it parses, else Gmail's internalDate (ms epoch, UTC)."""
+    raw = _headers(message.get("payload") or {}).get("date")
+    if raw:
+        try:
+            return parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            pass
+    internal = message.get("internalDate")
+    try:
+        return datetime.fromtimestamp(int(internal) / 1000, tz=UTC) if internal else None
+    except (TypeError, ValueError, OSError):
+        return None
+
+
 def _is_file_part(part: dict) -> bool:
     """Tell real attachments/inline files from large text body parts."""
     headers = _headers(part)
@@ -167,21 +185,40 @@ class GmailClient:
         return self.session.api("GET", f"{GMAIL}/profile")
 
     def message_ids(self, query: str, limit: int = 25) -> list[dict]:
-        return self.session.api(
-            "GET", f"{GMAIL}/messages", params={"q": query, "maxResults": limit}
-        ).get("messages", [])
+        """Page through the search until `limit` ids are collected (Gmail caps a page at 500)."""
+        found: list[dict] = []
+        token = None
+        while len(found) < limit:
+            params: dict[str, Any] = {"q": query, "maxResults": min(limit - len(found), 500)}
+            if token:
+                params["pageToken"] = token
+            page = _patient(lambda: self.session.api("GET", f"{GMAIL}/messages", params=params))
+            found.extend(page.get("messages", []))
+            token = page.get("nextPageToken")
+            if not token:
+                break
+        return found[:limit]
+
+    def _fetch_all(self, fn: Callable[[Any], Any], items: list, workers: int = 4) -> list:
+        """Map fn over items concurrently (httpx.Client is thread-safe), keeping input order."""
+        if not items:
+            return []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(lambda item: _patient(lambda: fn(item)), items))
 
     def search(self, query: str, limit: int = 25) -> list[dict]:
-        """One compact record per hit (date/from/subject), without fetching bodies."""
-        found = []
-        for stub in self.message_ids(query, limit):
-            message = self.session.api(
+        """One compact record per hit (date/from/to/subject), without fetching bodies."""
+        def metadata(stub: dict) -> dict:
+            return self.session.api(
                 "GET", f"{GMAIL}/messages/{stub['id']}",
-                params={"format": "metadata", "metadataHeaders": ["Date", "From", "Subject"]})
+                params={"format": "metadata", "metadataHeaders": ["Date", "From", "To", "Subject"]})
+
+        found = []
+        for message in self._fetch_all(metadata, self.message_ids(query, limit)):
             headers = _headers(message.get("payload") or {})
             found.append({"id": message.get("id"), "threadId": message.get("threadId"),
                           "date": headers.get("date", ""), "from": headers.get("from", ""),
-                          "subject": headers.get("subject", "")})
+                          "to": headers.get("to", ""), "subject": headers.get("subject", "")})
         return found
 
     def get(self, message_id: str) -> dict:
@@ -308,6 +345,91 @@ class GmailClient:
         target.write_text("\n".join([*lines, "", view["body"]]), encoding="utf-8")
         return {"path": str(target), "mime_type": "text/plain", "size": target.stat().st_size}
 
+    # --- export -------------------------------------------------------------
+
+    def export(self, query: str, out_dir: str | Path, *, limit: int = 100, by_thread: bool = False,
+               trim: bool = True, attachments: bool = False) -> dict:
+        """Write matching mail as compact markdown files an agent can grep; existing ids are kept."""
+        target = Path(out_dir).expanduser()
+        target.mkdir(parents=True, exist_ok=True)
+        key = "threadId" if by_thread else "id"
+        wanted = list(dict.fromkeys(
+            stub[key] for stub in self.message_ids(query, limit) if stub.get(key)))
+        pending = [item for item in wanted if not any(target.glob(f"*_{item}.md"))]
+        fetch = self.thread if by_thread else self.get
+
+        def load(item_id: str) -> tuple[dict | None, str | None]:
+            try:
+                return _patient(lambda: fetch(item_id)), None
+            except Exception as failure:  # noqa: BLE001 - one bad message must not abort the export
+                return None, str(failure)
+
+        written: list[str] = []
+        errors: list[dict] = []
+        for item_id, (fetched, error) in zip(pending, self._fetch_all(load, pending), strict=True):
+            if error or fetched is None:
+                errors.append({"id": item_id, "error": error or "empty response"})
+                continue
+            messages = fetched.get("messages", []) if by_thread else [fetched]
+            try:
+                written.append(str(self._write_export(target, fetched, messages,
+                                                      trim=trim, by_thread=by_thread)))
+            except Exception as failure:  # noqa: BLE001 - one bad message must not abort the export
+                errors.append({"id": item_id, "error": str(failure)})
+                continue
+            if attachments:
+                errors.extend(self._export_files(target, messages))
+        return {"dir": str(target), "written": len(written), "skipped": len(wanted) - len(pending),
+                "files": written, "index": str(_write_index(target)), "errors": errors}
+
+    def _export_files(self, target: Path, messages: list[dict]) -> list[dict]:
+        """Download attachments beside the markdown; a failure is reported, not fatal."""
+        failures = []
+        for message in messages:
+            if not self.attachment_index(message.get("payload") or {}):
+                continue
+            try:
+                self.download_files(message["id"], target / "files" / message["id"])
+            except Exception as failure:  # noqa: BLE001 - one bad message must not abort the export
+                failures.append({"id": message.get("id"), "error": str(failure)})
+        return failures
+
+    def _write_export(self, target: Path, fetched: dict, messages: list[dict], *,
+                      trim: bool, by_thread: bool) -> Path:
+        blocks = [self._export_block(message, trim=trim, heading=by_thread) for message in messages]
+        if by_thread:
+            first = messages[0] if messages else {}
+            subject = _headers(first.get("payload") or {}).get("subject") or "(no subject)"
+            head = [f"# {subject}", f"thread: {fetched.get('id', '')}",
+                    f"messages: {len(messages)}", ""]
+            content = "\n".join(head) + "\n" + "\n\n".join(blocks) + "\n"
+            stamp = _stamp(message_date(first))
+        else:
+            content = blocks[0] + "\n"
+            stamp = _stamp(message_date(fetched))
+        path = target / f"{stamp[:10]}_{fetched.get('id', '')}.md"
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _export_block(self, message: dict, *, trim: bool, heading: bool) -> str:
+        """One message as markdown: a `## ` section inside a thread file, else a whole file."""
+        view = self.view(message, trim=trim)
+        headers = view["headers"]
+        if heading:
+            lines = [f"## {_stamp(message_date(message))} · {headers.get('From', '')}"]
+        else:
+            lines = [f"# {headers.get('Subject') or '(no subject)'}",
+                     f"date: {_stamp(message_date(message))}", f"from: {headers.get('From', '')}"]
+        lines.append(f"to: {headers.get('To', '')}")
+        if headers.get("Cc"):
+            lines.append(f"cc: {headers['Cc']}")
+        lines.append(f"id: {message.get('id', '')}" if heading else
+                     f"id: {message.get('id', '')}  thread: {message.get('threadId', '')}")
+        if view["attachments"]:
+            lines.append("attachments: " + ", ".join(
+                f"{item['filename']} ({item['size']} bytes)" for item in view["attachments"]))
+        return "\n".join([*lines, "", _clean_body(view["body"] or message.get("snippet", ""))])
+
     # --- composing ----------------------------------------------------------
 
     def build(self, to: str, subject: str, body: str, *, cc: str | None = None,
@@ -423,6 +545,62 @@ class GmailClient:
             raise WorkspaceError("pass --add LABEL or --remove LABEL")
         return self.session.api("POST", f"{GMAIL}/messages/{message_id}/modify",
                                 json={"addLabelIds": add_ids, "removeLabelIds": remove_ids})
+
+
+def _patient(call: Callable[[], Any]) -> Any:
+    """Gmail meters "units per minute per user"; a 429/403 quota answer is retried with backoff."""
+    for attempt in range(6):
+        try:
+            return call()
+        except ApiError as failure:
+            quota = failure.status == 429 or (failure.status == 403 and "quota" in failure.detail.lower())
+            if attempt == 5 or not quota:
+                raise
+            time.sleep(2 ** attempt)
+
+
+def _stamp(when: datetime | None) -> str:
+    return when.strftime("%Y-%m-%d %H:%M") if when else "0000-00-00 00:00"
+
+
+def _clean_body(text: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
+
+
+def _index_entry(path: Path) -> dict:
+    """Read back what a written export file says about itself, per-message or thread."""
+    entry = {"subject": "", "date": "", "from": "", "messages": 0}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# ") and not entry["subject"]:
+            entry["subject"] = line[2:].strip()
+        elif line.startswith("date: ") and not entry["date"]:
+            entry["date"] = line[6:].strip()
+        elif line.startswith("from: ") and not entry["from"]:
+            entry["from"] = line[6:].strip()
+        elif line.startswith("messages: ") and line[10:].strip().isdigit():
+            entry["messages"] = int(line[10:].strip())
+        elif line.startswith("## ") and not entry["date"]:
+            head = line[3:].split(" · ", 1)
+            entry["date"] = head[0].strip()
+            entry["from"] = entry["from"] or (head[1].strip() if len(head) > 1 else "")
+        if entry["subject"] and entry["date"] and entry["from"]:
+            break
+    return entry
+
+
+def _write_index(target: Path) -> Path:
+    """Regenerate index.md from every export file present, so incremental runs stay correct."""
+    rows = []
+    for path in sorted(target.glob("*.md")):
+        if path.name == "index.md":
+            continue
+        entry = _index_entry(path)
+        subject = entry["subject"] + (f" ({entry['messages']} msgs)" if entry["messages"] else "")
+        rows.append((entry["date"], path.name,
+                     f"{entry['date']}  {entry['from']}  {subject}  {path.name}"))
+    index = target / "index.md"
+    index.write_text("".join(f"{line}\n" for _, _, line in sorted(rows)), encoding="utf-8")
+    return index
 
 
 def _downloadable_parts(part: dict) -> Iterator[dict]:

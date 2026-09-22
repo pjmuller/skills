@@ -48,6 +48,8 @@ creds = credentials(config)            # google.oauth2 Credentials for a Google 
   contract, importable API.
 - [REST details](references/rest.md): compact reads, batch indexes, Slides/Drive workarounds.
 - [Draft preservation and access checks](references/drafts.md): existing drafts, MIME, races.
+- [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` to Markdown files → local
+  `grep`; Gmail query cheat sheet and its whole-word gotchas.
 - [Troubleshooting](references/troubleshooting.md): the doctor and first-machine setup.
 
 Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`. Live verification uses

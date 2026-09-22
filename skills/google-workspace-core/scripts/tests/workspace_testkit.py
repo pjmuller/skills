@@ -62,3 +62,18 @@ class FakeSession:
 
     def close(self):
         pass
+
+
+class RoutedSession(FakeSession):
+    """Route by URL instead of a queue: concurrent fetches arrive in any order."""
+
+    def __init__(self, routes):
+        super().__init__()
+        self.routes = dict(routes)
+
+    def api(self, method, url, **kw):
+        self.calls.append((method.upper(), url, kw))
+        for fragment, payload in self.routes.items():
+            if fragment in url:
+                return payload
+        raise AssertionError(f"no route for {url}")

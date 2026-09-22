@@ -370,6 +370,18 @@ def cmd_gmail_search(a, ws):
     out(messages, a.json, table(rows) + f"\n\n{len(messages)} message(s)")
 
 
+def cmd_gmail_export(a, ws):
+    result = ws.gmail.export(a.query, a.out, limit=a.max, by_thread=a.by_thread,
+                             trim=not a.full, attachments=a.attachments)
+    human = (f"wrote {result['written']} file(s), {result['skipped']} already present "
+             f"-> {result['dir']}\nindex: {result['index']}")
+    if result["errors"]:
+        human += (f"\n{len(result['errors'])} fetch(es) failed; rerun the same command to retry them:"
+                  + "".join(f"\n  {e['id']}: {trunc(e['error'], 160)}" for e in result["errors"][:5])
+                  + ("\n  …" if len(result["errors"]) > 5 else ""))
+    out(result, a.json, human)
+
+
 def cmd_gmail_get(a, ws):
     message = ws.gmail.get(a.id)
     out(message, a.json, format_message(ws.gmail.view(message, trim=not a.full), a.max_chars))
@@ -822,7 +834,18 @@ def build_parser() -> argparse.ArgumentParser:
     # gmail
     command = add("gmail-search", cmd_gmail_search, "search Gmail; one compact line per message")
     command.add_argument("query", help="Gmail search query")
-    command.add_argument("-n", "--max", type=int, default=25)
+    command.add_argument("-n", "--max", type=int, default=25,
+                         help="(paginates; up to 500 per page)")
+
+    command = add("gmail-export", cmd_gmail_export,
+                  "write matching mail as markdown files in a directory, for grepping")
+    command.add_argument("query", help="Gmail search query")
+    command.add_argument("-o", "--out", required=True, help="output directory")
+    command.add_argument("-n", "--max", type=int, default=100)
+    command.add_argument("--by-thread", action="store_true", help="one file per thread")
+    command.add_argument("--full", action="store_true", help="keep quoted chains and signatures")
+    command.add_argument("--attachments", action="store_true",
+                         help="also download file parts to <dir>/files/<messageId>/")
 
     command = add("gmail-get", cmd_gmail_get, "message headers, body text and attachment index")
     command.add_argument("id", help="message id")
