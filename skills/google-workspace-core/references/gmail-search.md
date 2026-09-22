@@ -14,6 +14,11 @@ Three deterministic steps; the agent's own `grep` does the fuzzy part.
    `rg -C2 …`. Read only the files that matter, `sed -n` on long ones. Need the full chain or the
    PDFs? `gmail-thread <threadId>`, `gmail-attachments <id> -o DIR` (or `gmail-export --attachments`).
 
+4. **Clean up.** The export is a local copy of private mail. Once the answer is delivered, ask the
+   user whether everything was found and whether the folder may go; on yes, `rm -rf` the whole
+   topic folder. Never delete it silently (they may want a second look) and never leave it
+   behind unasked.
+
 Pass Gmail's own query language through untouched; do not invent a filter layer on top of it.
 
 ## Gmail query cheat sheet
@@ -37,6 +42,9 @@ Gotchas that cost the most time:
 - **Whole words only.** Gmail does not do substrings: `lening` misses `leningen`, `krediet` misses
   `kredietaanvraag`, `400000` misses `400.000`. List the variants with `OR`, or search wide
   (person + date window) and let `grep` do the substring/regex work locally.
+- A recurring price hides in invoices: `subject:factuur <vendor>` gives one amount per period;
+  the negotiation sits in the first thread (`"klant worden"`, `offerte`) and a later change in a
+  reply to an invoice. Compare amounts across years before answering.
 - Amounts are unreliable search terms (`400.000`, `400 000`, `400k`, `€400.000`). Search on the
   people and period, grep for `[0-9]{3}[.,]?[0-9]{3}` afterwards.
 - Names: the address part matters. `from:kim` matches `Kim Zwerts <kim.zwerts@kbc.be>`; a domain

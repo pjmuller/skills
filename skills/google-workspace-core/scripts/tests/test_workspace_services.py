@@ -143,6 +143,17 @@ def test_gmail_view_trims_quotes_only_when_asked():
     assert "old" in gmail.view(message, trim=False)["body"]
     assert extract_codes("Your code is 4821 and A1B2C3") == ["4821", "A1B2C3"]
     assert trim_quotes("keep\n-- \nsignature") == "keep"
+    wrapped = "keep\n\nOn Mon, 11 Mar 2024 at 08:19, Someone <s@example.com>\nwrote:\n> old"
+    assert trim_quotes(wrapped) == "keep"
+
+
+def test_gmail_body_decoding_and_export_cleanup():
+    from gws_core.gmail import _clean_body, _decode_text
+
+    assert _decode_text("gegevens …".encode(), 'text/plain; charset="Windows-1252"') == "gegevens …"
+    assert _decode_text("caf\xe9".encode("cp1252"), 'text/plain; charset="Windows-1252"') == "café"
+    tracking = "<http://k3o5.mjt.lu/lnk/" + "A" * 120 + ">"
+    assert _clean_body(f"https://juumo.io {tracking}\n\n\n\nbye ") == "https://juumo.io\n\nbye"
 
 
 def mail(mid, tid, subject, date, sender, body="Hallo daar"):
@@ -284,4 +295,4 @@ def test_gmail_fetch_retries_quota_answers_with_backoff(monkeypatch):
     session = FakeSession([quota, quota, Recorded({"id": "m1"})])
     gmail = GmailClient(session, sender=ACCOUNT)
     assert gmail._fetch_all(gmail.get, ["m1"], workers=1) == [{"id": "m1"}]
-    assert calls == [1, 2]
+    assert calls == [2, 4]

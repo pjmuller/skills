@@ -25,7 +25,7 @@ HEADER_ORDER = ("Date", "From", "To", "Cc", "Reply-To", "Subject", "Message-ID",
 # A 4-10 character run of letters+digits containing at least one digit: 123456, A1B2C3, 9F4K2.
 CODE_RE = re.compile(r"\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,10}\b")
 QUOTE_MARKERS = (
-    r"^On .{1,400}? wrote:\s*$",
+    r"^On [^\n]{1,400}?(?:\n[^\n]{0,120})?\s*wrote:\s*$",
     r"^Op .{1,400}? schreef.{0,200}?:\s*$",
     r"^Le .{1,400}? a écrit\s*:\s*$",
     r"^Am .{1,400}? schrieb.{0,200}?:\s*$",
@@ -165,8 +165,9 @@ def _is_file_part(part: dict) -> bool:
 
 
 def _decode_text(raw: bytes, content_type: str) -> str:
+    """Strict UTF-8 first: mail clients declare Windows-1252 and still send UTF-8 bytes."""
     match = re.search(r"charset\s*=\s*[\"']?([^;\"'\s]+)", content_type, re.I)
-    for charset in dict.fromkeys([*( [match.group(1)] if match else [] ), "utf-8", "windows-1252"]):
+    for charset in dict.fromkeys(["utf-8", *([match.group(1)] if match else []), "windows-1252"]):
         try:
             return raw.decode(charset)
         except (LookupError, UnicodeDecodeError):
@@ -549,14 +550,14 @@ class GmailClient:
 
 def _patient(call: Callable[[], Any]) -> Any:
     """Gmail meters "units per minute per user"; a 429/403 quota answer is retried with backoff."""
-    for attempt in range(6):
+    for attempt in range(7):
         try:
             return call()
         except ApiError as failure:
             quota = failure.status == 429 or (failure.status == 403 and "quota" in failure.detail.lower())
-            if attempt == 5 or not quota:
+            if attempt == 6 or not quota:
                 raise
-            time.sleep(2 ** attempt)
+            time.sleep(2 ** (attempt + 1))  # 2 … 128 s, outlasting the per-minute window
 
 
 def _stamp(when: datetime | None) -> str:
@@ -564,7 +565,9 @@ def _stamp(when: datetime | None) -> str:
 
 
 def _clean_body(text: str) -> str:
-    return re.sub(r"\n{3,}", "\n\n", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    """Normalise newlines and drop mailer tracking links (100+ char <http…> targets)."""
+    text = re.sub(r" ?<https?://[^\s>]{100,}>", "", text.replace("\r\n", "\n").replace("\r", "\n"))
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)).strip()
 
 
 def _index_entry(path: Path) -> dict:
