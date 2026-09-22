@@ -18,11 +18,11 @@ Never paste a sub-agent's/worker's report through. Rewrite it: what broke, what 
 Docs you write get the same rule: ⅓ the words you'd typically use, no filler headers.
 Status emojis only in the final wrap-up, never mid-work; one per distinct outcome (e.g. ✅ task A · 🚫 task B):
 
-✅ done/verified
-👀 needs review/course-change
-🚫 blocked
-🏓 awaiting a ping-back from a **separate T3 thread**: keep this thread open, nothing to do yet
-📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
+- ✅ done/verified
+- 👀 needs review/course-change
+- 🚫 blocked
+- 🏓 awaiting a ping-back from a **separate T3 thread**: keep this thread open, nothing to do yet
+- 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
 - Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and the deploy exception under Commit.
