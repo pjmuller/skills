@@ -298,7 +298,28 @@ class CodexRowsTest(unittest.TestCase):
         _, rows, _ = t3_limits.codex_rows(payload)
         self.assertEqual([r.window for r in rows], ["session", "3h"])
         self.assertTrue(math.isnan(rows[1].used_percent))  # missing % is unknown, not 0
-        self.assertIsNone(t3_limits.json_rows([codex_account(payload)], NOW)[1]["used_percent"])
+        row = t3_limits.json_rows([codex_account(payload)], NOW)[1]
+        self.assertIsNone(row["used_percent"])
+        self.assertIsNone(row["room_percent"])
+        json.dumps(row, allow_nan=False)  # strict consumers must not see NaN
+
+    def test_malformed_payload_is_unknown_not_a_crash(self):
+        settings = Path(tempfile.mkdtemp()) / "settings.json"
+        settings.write_text(json.dumps({"providerInstances": {
+            "codex": {"driver": "codex", "enabled": True, "config": {"homePath": str(settings.parent / "a")}},
+            "codex_b": {"driver": "codex", "enabled": True, "config": {"homePath": str(settings.parent / "b")}}}}))
+        for home in ("a", "b"):
+            (settings.parent / home).mkdir()
+            (settings.parent / home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {
+                "access_token": "secret", "account_id": home}}))
+        bad = {"rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 604800, "reset_at": "bad"}}}
+        fetch = lambda c: bad if c["identity"] == "a" else CODEX_PAYLOAD
+        first, second = t3_limits.codex_accounts(fetch=fetch, settings_path=settings,
+                                                 cache_path=settings.parent / "cache.json", now=NOW)
+        self.assertIn("malformed", first.error)
+        self.assertEqual(first.rows, [])
+        self.assertEqual(second.error, "")
+        self.assertEqual(second.rows[0].used_percent, 91.0)
 
     def test_codex_credentials_from_home(self):
         home = Path(tempfile.mkdtemp())

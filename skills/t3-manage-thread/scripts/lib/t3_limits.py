@@ -78,7 +78,7 @@ class Row:
     def pace(self, now: datetime) -> tuple[float, float] | None:
         """(expected used %, room) for an evenly spread load; None when the window
         has no reset time or no known length."""
-        if self.resets_at is None or not self.length_seconds:
+        if self.resets_at is None or not self.length_seconds or math.isnan(self.used_percent):
             return None
         remaining = (self.resets_at - now).total_seconds()
         if remaining <= 0:  # stale window (no request since it ended)
@@ -307,11 +307,18 @@ def collect(
             else:
                 # Too old to trust as a reading, but an exhausted cap is still a fact
                 # until its reset: keep only that evidence next to the error.
-                _, rows, _ = parse(entry["payload"], credentials)
-                account.rows = [r for r in rows if r.used_percent >= 100 and
-                                r.resets_at is not None and r.resets_at > now]
+                try:
+                    _, rows, _ = parse(entry["payload"], credentials)
+                    account.rows = [r for r in rows if r.used_percent >= 100 and
+                                    r.resets_at is not None and r.resets_at > now]
+                except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+                    pass
         if payload is not None:
-            account.plan, account.rows, account.notes = parse(payload, credentials)
+            try:
+                account.plan, account.rows, account.notes = parse(payload, credentials)
+            except (TypeError, ValueError, KeyError, AttributeError, OverflowError) as error:
+                # One malformed payload must not abort the other accounts: unknown, not a crash.
+                account.error, account.rows, account.stale = f"malformed usage payload ({error.__class__.__name__})", [], False
         accounts.append(account)
     if dirty:
         write_cache(cache, cache_path)
