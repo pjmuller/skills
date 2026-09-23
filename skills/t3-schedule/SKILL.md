@@ -9,7 +9,6 @@ description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every
 t3-schedule add --name fleet-report-work --at 07:30 --weekdays \
   --project ~/code/example/example-app --model fable \
   -- "Run the fleet-report-work skill for yesterday, end to end (ClickUp ticket included)."
-t3-schedule pick-profile    # Claude profile with the most spare room now (capacity rule, scripted)
 t3-schedule list            # jobs · loaded? · profile/model · last run + result
 t3-schedule list --markdown # same as a table — use this when the user asks "what's scheduled?"
 t3-schedule run-now NAME    # launchctl kickstart + prints the runner's log (real spawn)
@@ -38,10 +37,12 @@ Install: `scripts/install` (symlink into `~/.local/bin`, needs the
 ## Contract
 - **Spawn is a root thread.** The runner unsets `CODEX_THREAD_ID` etc. and `run-now` goes through
   launchd, so no parent thread is inherited even when fired from inside a T3 agent.
-- **Profile.** Omit `--profile` → the runner asks `t3-schedule pick-profile` at fire time: capacity-based routing (skip session ≥90 % / weekly ≥95 % used; rank by long-window room + ½
-  session room, minus 15 points per scheduled job that profile already got in the last 3 h —
-  `picks.log` — so near-equal profiles alternate while exhausted ones stay skipped; all blocked →
-  soonest session reset). `t3-limits` down → project default, logged.
+- **Profile.** Omit `--profile` → `t3-spawn-thread` routes by capacity at fire time
+  ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing); the decision block
+  lands in the job log). Every account exhausted → the spawn refuses, the runner fails and the
+  catch-up poller retries every 15 min until slot+10h, so the job lands once a window resets
+  instead of sitting as a blocked thread. No spreading of near-equal profiles across jobs:
+  usage is re-read between jobs (90 s cache) and real consumption ranks them.
 - **Spacing.** Slots are ≥15 min apart and the
   catch-up poller kicks **one job per tick** (earliest slot first, never while another runner is
   spawning), so limits are re-read between jobs even after a long power-off.

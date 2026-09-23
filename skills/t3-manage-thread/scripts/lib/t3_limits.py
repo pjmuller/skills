@@ -3,14 +3,15 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Print the current subscription rate-limit windows for every Claude profile T3 Code
-knows about, plus Codex.
+"""Print the current subscription rate-limit windows for every Claude and Codex
+profile T3 Code knows about.
 
-Read-only and deterministic: T3's `settings.json` lists the enabled `claudeAgent`
-provider instances, each one's OAuth token is read from the macOS Keychain, and the
-percentages come from Anthropic's `/api/oauth/usage`. Tokens are never printed and
-never refreshed (a refresh would rotate them out from under Claude Code itself); an
-expired token just reports itself. Codex comes from the CodexBar CLI.
+Read-only and deterministic: T3's `settings.json` lists the enabled provider
+instances; each Claude instance's OAuth token is read from the macOS Keychain and
+each Codex instance's from `<home>/auth.json`; the percentages come from Anthropic's
+`/api/oauth/usage` and ChatGPT's `/backend-api/wham/usage`. Tokens are never printed
+and never refreshed (a refresh would rotate them out from under the CLI itself); an
+expired token just reports itself.
 
     t3-limits                     # one aligned block per account (Europe/Brussels)
     t3-limits --json              # flat rows for other scripts
@@ -30,9 +31,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.error
@@ -46,6 +49,8 @@ TZ = ZoneInfo("Europe/Brussels")
 SETTINGS = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "settings.json"
 KEYCHAIN_BASE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+CODEX_HOME = Path.home() / ".codex"  # Codex CLI default; T3's empty homePath
 HEADERS = {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "t3-limits/0.1"}
 TIMEOUT = 10
 CACHE = SETTINGS.parent / "t3-limits-cache.json"
@@ -108,25 +113,34 @@ def keychain_service(home_path: str) -> str:
     return f"{KEYCHAIN_BASE}-{digest[:8]}"
 
 
-def claude_profiles(settings_path: Path) -> list[tuple[str, str, str]]:
-    """(instance_id, display name, home path) for enabled claudeAgent instances."""
+def provider_profiles(settings_path: Path, driver: str) -> list[tuple[str, str, str]]:
+    """(instance_id, display name, home path) for enabled instances of one driver."""
     try:
         settings = json.loads(settings_path.read_text())
         instances = dict(settings.get("providerInstances", {}))
     except (OSError, ValueError):
         return []
-    # Mirror the built-in Claude fallback when T3 resets provider settings.
-    if "claudeAgent" not in instances:
-        legacy = settings.get("providers", {}).get("claudeAgent", {})
-        instances["claudeAgent"] = {"driver": "claudeAgent", "enabled": legacy.get("enabled", True)}
+    # Mirror T3's built-in fallback when provider settings were reset: the driver
+    # name doubles as the default instance id.
+    if driver not in instances:
+        legacy = settings.get("providers", {}).get(driver, {})
+        instances[driver] = {"driver": driver, "enabled": legacy.get("enabled", True)}
     found = []
     for instance_id, entry in instances.items():
-        if entry.get("driver") != "claudeAgent" or entry.get("enabled") is False or (entry.get("config") or {}).get("enabled") is False:
+        if entry.get("driver") != driver or entry.get("enabled") is False or (entry.get("config") or {}).get("enabled") is False:
             continue
         label = entry.get("displayName") or instance_id
         home = (entry.get("config") or {}).get("homePath") or ""
         found.append((instance_id, label, home))
     return found
+
+
+def claude_profiles(settings_path: Path) -> list[tuple[str, str, str]]:
+    return provider_profiles(settings_path, "claudeAgent")
+
+
+def codex_profiles(settings_path: Path) -> list[tuple[str, str, str]]:
+    return provider_profiles(settings_path, "codex")
 
 
 def keychain_token(service: str) -> dict:
@@ -162,10 +176,10 @@ def read_cache(path: Path) -> dict:
 def write_cache(cache: dict, path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(cache))
-        temporary.chmod(0o600)
-        temporary.replace(path)
+        handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name)  # 0600
+        with os.fdopen(handle, "w") as stream:
+            stream.write(json.dumps(cache))
+        os.replace(temporary, path)
     except OSError as error:
         debug(f"cache write failed: {error}")
 
@@ -178,20 +192,28 @@ def retry_delay(error: Exception) -> float:
         return 1.0
 
 
-def fetch_with_retry(token: str, fetch) -> dict:
-    """The usage endpoint is shared with other pollers, so a 429 is routine: back off
+def fetch_with_retry(credentials, fetch) -> dict:
+    """The usage endpoints are shared with other pollers, so a 429 is routine: back off
     once (honouring Retry-After) before the caller falls back to its cache."""
     try:
-        return fetch(token)
+        return fetch(credentials)
     except urllib.error.HTTPError as error:
-        if error.code == 401:
+        if error.code in (401, 403):
             raise
         delay = retry_delay(error)
     except urllib.error.URLError:
         delay = 1.0
     debug(f"retrying in {delay:.1f}s")
     time.sleep(delay)
-    return fetch(token)
+    return fetch(credentials)
+
+
+def percent(value) -> float:
+    """A missing percentage is unknown (NaN), never 0 — routing treats NaN as unverified."""
+    try:
+        return float(value) if value is not None else math.nan
+    except (TypeError, ValueError):
+        return math.nan
 
 
 def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
@@ -210,7 +232,7 @@ def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
         rows.append(
             Row(
                 window,
-                float(limit.get("percent") or 0),
+                percent(limit.get("percent")),
                 parse_time(limit.get("resets_at")),
                 SESSION_SECONDS if kind == "session" else WEEKLY_SECONDS,
             )
@@ -228,7 +250,7 @@ def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
                 rows.append(
                     Row(
                         window,
-                        float(entry["utilization"]),
+                        percent(entry["utilization"]),
                         parse_time(entry.get("resets_at")),
                         length,
                     )
@@ -239,6 +261,73 @@ def claude_rows(payload: dict) -> tuple[list[Row], list[str]]:
     return rows, []
 
 
+def collect(
+    profiles: list[tuple[str, str, str]],
+    credentials_for,
+    fetch,
+    parse,
+    cache_path: Path,
+    fresh: bool,
+    now: datetime,
+) -> list[Account]:
+    """One Account per T3 instance: local credential → usage payload → rows, with
+    the shared fresh/stale cache keyed by instance id (never tokens). A cache entry
+    is only valid for the identity (home path + account id) that produced it."""
+    cache = read_cache(cache_path)
+    accounts, dirty = [], False
+    for instance_id, label, home in profiles:
+        account = Account(label=label, instance_id=instance_id)
+        credentials: dict = {}
+        payload = None
+        entry: dict = {}
+        age = None
+        try:
+            credentials = credentials_for(home)
+            identity = f"{home}|{credentials.get('identity', '')}"
+            entry = cache.get(instance_id) or {}
+            entry = entry if entry.get("payload") and entry.get("identity") == identity else {}
+            age = now.timestamp() - float(entry.get("fetched_at") or 0) if entry else None
+            if entry and not fresh and age < FRESH_SECONDS:
+                debug(f"{instance_id}: cache hit ({age:.0f}s old)")
+                payload = entry["payload"]
+            else:
+                payload = fetch_with_retry(credentials, fetch)
+                cache[instance_id] = {"payload": payload, "fetched_at": now.timestamp(),
+                                      "identity": identity}
+                dirty = True
+        except urllib.error.HTTPError as error:
+            account.error = EXPIRED_HINT if error.code in (401, 403) else f"HTTP {error.code}"
+        except (LookupError, KeyError, OSError, ValueError) as error:
+            account.error = str(error) or error.__class__.__name__
+        if account.error and entry:
+            account.fetched_at = now - timedelta(seconds=age)
+            if account.error != EXPIRED_HINT and age < STALE_SECONDS:
+                debug(f"{instance_id}: {account.error} — serving cache ({age:.0f}s old)")
+                payload, account.error, account.stale = entry["payload"], "", True
+            else:
+                # Too old to trust as a reading, but an exhausted cap is still a fact
+                # until its reset: keep only that evidence next to the error.
+                _, rows, _ = parse(entry["payload"], credentials)
+                account.rows = [r for r in rows if r.used_percent >= 100 and
+                                r.resets_at is not None and r.resets_at > now]
+        if payload is not None:
+            account.plan, account.rows, account.notes = parse(payload, credentials)
+        accounts.append(account)
+    if dirty:
+        write_cache(cache, cache_path)
+    return accounts
+
+
+def claude_plan(credentials: dict) -> str:
+    # The tier can disagree with the plan (a Pro account reporting `max_20x`);
+    # show both rather than a single misleading label. See limits.md.
+    tier = str(credentials.get("rateLimitTier") or "").removeprefix("default_claude_")
+    subscription = str(credentials.get("subscriptionType") or "")
+    if tier and subscription and not tier.startswith(subscription):
+        return f"{tier} ({subscription})"
+    return tier or subscription
+
+
 def claude_accounts(
     fetch=fetch_claude_usage,
     settings_path: Path = SETTINGS,
@@ -246,111 +335,98 @@ def claude_accounts(
     fresh: bool = False,
     now: datetime | None = None,
 ) -> list[Account]:
-    now = now or datetime.now(timezone.utc)
-    cache = read_cache(cache_path)
-    accounts, dirty = [], False
-    for instance_id, label, home in claude_profiles(settings_path):
-        account = Account(label=label, instance_id=instance_id)
-        entry = cache.get(instance_id) or {}
-        entry = entry if entry.get("payload") else {}
-        age = now.timestamp() - float(entry.get("fetched_at") or 0) if entry else None
-        credentials: dict = {}
-        payload = None
-        try:
-            credentials = keychain_token(keychain_service(home))
-            if entry and not fresh and age < FRESH_SECONDS:
-                debug(f"{instance_id}: cache hit ({age:.0f}s old)")
-                payload = entry["payload"]
-            else:
-                payload = fetch_with_retry(credentials["accessToken"], fetch)
-                cache[instance_id] = {"payload": payload, "fetched_at": now.timestamp()}
-                dirty = True
-        except urllib.error.HTTPError as error:
-            account.error = EXPIRED_HINT if error.code == 401 else f"HTTP {error.code}"
-        except (LookupError, KeyError, OSError, ValueError) as error:
-            account.error = str(error) or error.__class__.__name__
-        if account.error and account.error != EXPIRED_HINT and entry and age < STALE_SECONDS:
-            debug(f"{instance_id}: {account.error} — serving cache ({age:.0f}s old)")
-            payload, account.error = entry["payload"], ""
-            account.stale, account.fetched_at = True, now - timedelta(seconds=age)
-        if payload is not None:
-            # The tier can disagree with the plan (a Pro account reporting `max_20x`);
-            # show both rather than a single misleading label. See limits.md.
-            tier = str(credentials.get("rateLimitTier") or "").removeprefix("default_claude_")
-            subscription = str(credentials.get("subscriptionType") or "")
-            if tier and subscription and not tier.startswith(subscription):
-                account.plan = f"{tier} ({subscription})"
-            else:
-                account.plan = tier or subscription
-            account.rows, account.notes = claude_rows(payload)
-        accounts.append(account)
-    if dirty:
-        write_cache(cache, cache_path)
-    return accounts
+    return collect(
+        claude_profiles(settings_path),
+        lambda home: keychain_token(keychain_service(home)),
+        lambda credentials: fetch(credentials["accessToken"]),
+        lambda payload, credentials: (claude_plan(credentials), *claude_rows(payload)),
+        cache_path, fresh, now or datetime.now(timezone.utc),
+    )
 
 
 # --- Codex -------------------------------------------------------------------
 
 
-def fetch_codex_usage() -> dict:
-    result = subprocess.run(
-        [
-            "codexbar",
-            "usage",
-            "--provider",
-            "codex",
-            "--format",
-            "json",
-            "--no-credits",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
+def codex_credentials(home_path: str) -> dict:
+    """Codex CLI's login for one home (`auth.json`); the empty T3 homePath is the
+    default `~/.codex`. API-key logins have no subscription windows."""
+    path = (Path(home_path).expanduser() if home_path else CODEX_HOME) / "auth.json"
+    if not path.exists():
+        raise LookupError(f"no Codex login in {path.parent}")
+    auth = json.loads(path.read_text())
+    tokens = auth.get("tokens") or {}
+    if auth.get("auth_mode") not in (None, "chatgpt") or not tokens.get("access_token"):
+        raise LookupError(f"no ChatGPT login in {path.parent} (auth_mode {auth.get('auth_mode')})")
+    account_id = tokens.get("account_id") or ""
+    return {"accessToken": tokens["access_token"], "accountId": account_id, "identity": account_id}
+
+
+def fetch_codex_usage(credentials: dict) -> dict:
+    request = urllib.request.Request(
+        CODEX_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {credentials['accessToken']}",
+            "ChatGPT-Account-Id": credentials.get("accountId", ""),
+            "User-Agent": HEADERS["User-Agent"],
+        },
     )
-    if result.returncode != 0:
-        raise RuntimeError(
-            (result.stderr or result.stdout).strip()[:120] or "codexbar failed"
-        )
-    payload = json.loads(result.stdout)
-    return payload[0] if isinstance(payload, list) else payload
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        return json.loads(response.read())
 
 
-def codex_account(fetch=fetch_codex_usage) -> Account:
-    account = Account(label="Codex", instance_id="codex")
-    try:
-        payload = fetch()
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-        account.error = str(error) or error.__class__.__name__
-        return account
-    if payload.get("error"):
-        account.error = str(payload["error"])[:120]
-        return account
+def window_name(seconds: int | None) -> str:
+    if seconds == SESSION_SECONDS:
+        return "session"
+    if seconds == WEEKLY_SECONDS:
+        return "weekly"
+    return f"{(seconds or 0) // 3600}h"
 
-    usage = payload.get("usage") or {}
-    account.label = f"Codex  {usage.get('accountEmail') or '-'}"
-    account.plan = str(usage.get("loginMethod") or "")
-    # Only the top-level windows; the Spark sub-windows (extraRateWindows) are noise.
-    for key, window, length in (
-        ("primary", "session", SESSION_SECONDS),
-        ("secondary", "weekly", WEEKLY_SECONDS),
-    ):
-        entry = usage.get(key)
+
+def codex_rows(payload: dict) -> tuple[str, list[Row], list[str]]:
+    """(plan, rows, notes) from ChatGPT's usage endpoint. Only the subscription
+    windows become rows; model reserves and reset credits are notes."""
+    rows: list[Row] = []
+    limit = payload.get("rate_limit") or {}
+    for key in ("primary_window", "secondary_window"):
+        entry = limit.get(key)
         if not entry:
             continue
-        minutes = entry.get("windowMinutes")
-        account.rows.append(
+        seconds = entry.get("limit_window_seconds")
+        reset = entry.get("reset_at")
+        rows.append(
             Row(
-                window,
-                float(entry.get("usedPercent") or 0),
-                parse_time(entry.get("resetsAt")),
-                int(minutes) * 60 if minutes else length,
+                window_name(seconds),
+                percent(entry.get("used_percent")),
+                datetime.fromtimestamp(reset, timezone.utc) if reset else None,
+                int(seconds) if seconds else None,
             )
         )
-    credits = (usage.get("codexResetCredits") or {}).get("availableCount")
+    notes = []
+    for extra in payload.get("additional_rate_limits") or []:
+        window = ((extra.get("rate_limit") or {}).get("primary_window")) or {}
+        if window:
+            notes.append(f"{extra.get('limit_name') or 'reserve'} ({extra.get('normal_model_slug') or '-'}): "
+                         f"{float(window.get('used_percent') or 0):.0f}% used")
+    credits = (payload.get("rate_limit_reset_credits") or {}).get("available_count")
     if credits:
-        account.notes.append(f"reset credits: {credits}")
-    return account
+        notes.append(f"reset credits: {credits}")
+    plan = str(payload.get("plan_type") or "")
+    email = payload.get("email")
+    return (f"{plan} · {email}" if email else plan), rows, notes
+
+
+def codex_accounts(
+    fetch=fetch_codex_usage,
+    settings_path: Path = SETTINGS,
+    cache_path: Path = CACHE,
+    fresh: bool = False,
+    now: datetime | None = None,
+) -> list[Account]:
+    return collect(
+        codex_profiles(settings_path), codex_credentials, fetch,
+        lambda payload, _credentials: codex_rows(payload),
+        cache_path, fresh, now or datetime.now(timezone.utc),
+    )
 
 
 # --- formatting --------------------------------------------------------------
@@ -395,9 +471,13 @@ def relative_age(account: Account, now: datetime) -> str:
     return f"{int(seconds // 60)}m" if seconds >= 60 else f"{int(seconds)}s"
 
 
+def used_text(row: Row) -> str:
+    return "  ?" if math.isnan(row.used_percent) else f"{row.used_percent:3.0f}"
+
+
 def pace_text(row: Row, now: datetime) -> str:
     pace = row.pace(now)
-    if pace is None:
+    if pace is None or math.isnan(row.used_percent):
         return "pace   -   room   -"
     expected, room = pace
     return f"pace {expected:3.0f}%  room {room:+4.0f}"
@@ -408,9 +488,7 @@ def render(accounts: list[Account], now: datetime) -> str:
     width = max((len(row.window) for row in rows), default=7)
     out = [PACE_LEGEND]
     for account in accounts:
-        head = f"{account.label}"
-        if account.instance_id != "codex":
-            head += f"  ({account.instance_id})"
+        head = f"{account.label}  ({account.instance_id})"
         if account.stale:
             head += f"  (cached {relative_age(account, now)} ago)"
         out.append(f"{head}  {account.plan}".rstrip())
@@ -418,7 +496,7 @@ def render(accounts: list[Account], now: datetime) -> str:
             out.append(f"  {account.error}")
         for row in account.rows:
             out.append(
-                f"  {row.window:<{width}} {row.used_percent:3.0f}% used   "
+                f"  {row.window:<{width}} {used_text(row)}% used   "
                 f"{pace_text(row, now)}   {reset_text(row.resets_at, now)}"
             )
         out.extend(f"  {note}" for note in account.notes)
@@ -444,7 +522,7 @@ def render_markdown(accounts: list[Account], now: datetime) -> str:
             room = f"{pace[1]:+.0f}" if pace else "-"
             out.append(
                 f"| {account.label} | `{account.instance_id}` | {row.window} "
-                f"| {row.used_percent:.0f}% | {expected} | {room} "
+                f"| {used_text(row).strip()}% | {expected} | {room} "
                 f"| {reset_text(row.resets_at, now).removeprefix('resets ')} |"
             )
         for note in account.notes:
@@ -471,7 +549,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "account": account.label,
                     "instance_id": account.instance_id,
                     "window": row.window,
-                    "used_percent": row.used_percent,
+                    "used_percent": None if math.isnan(row.used_percent) else row.used_percent,
                     "window_seconds": row.length_seconds,
                     "pace_percent": round(pace[0], 1) if pace else None,
                     "room_percent": round(pace[1], 1) if pace else None,
@@ -504,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     fmt.add_argument("--json", action="store_true", help="flat rows for scripts")
     fmt.add_argument("--markdown", action="store_true", help="one markdown table")
     parser.add_argument(
-        "--profile", help="substring of instance id / display name / 'codex'"
+        "--profile", help="substring of instance id / display name"
     )
     parser.add_argument(
         "--fresh", action="store_true", help="skip the 90s usage cache"
@@ -518,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.codex_only:
         accounts += claude_accounts(fresh=args.fresh)
     if not args.claude_only:
-        accounts.append(codex_account())
+        accounts += codex_accounts(fresh=args.fresh)
     if args.profile:
         needle = args.profile.casefold()
         accounts = [

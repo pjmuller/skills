@@ -7,7 +7,7 @@ description: Spawn, ping, read, rename, or settle a separate T3 Code thread from
 
 Helpers on PATH; use them before touching T3's raw API, cookies or SQLite.
 Every flag: `--help`. Spawn uses the current git root, inherits model/thinking,
-picks a Claude profile by capacity, runs full-access in the local checkout and
+picks the account by capacity (Claude and Codex), runs full-access in the local checkout and
 prints project + thread IDs — report those.
 
 ## Commands
@@ -15,7 +15,7 @@ prints project + thread IDs — report those.
 ```bash
 # 🏓 round-trip worker (hidden while running, pings the parent back, parent settles it)
 t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"
-# other ecosystem: --model is enough (account + effort follow the parent)
+# other ecosystem: --model is enough (account by capacity, ties keep the parent's account; effort follows the parent)
 t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
 t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
 t3-list-profiles   # only when the user names an account: exact --profile values per ecosystem
@@ -31,8 +31,8 @@ t3-hide-thread <id> · t3-rename-thread <id> --title "…" · t3-limits · t3-de
 
 Rules of thumb: brief = file on disk, path in the argument (no backticks or
 `$(...)` inline: the shell expands them). Usually no `--profile` and no
-`--thinking`: the helper keeps the parent's account (sibling instance when the
-ecosystem changes; Claude side by capacity) and each model's house effort. Pass
+`--thinking`: the helper routes the account by capacity within the model's
+ecosystem (ties keep the parent's account or its sibling) and each model's house effort. Pass
 them only when the user names an account or a level; `t3-list-profiles` gives
 the exact `--profile` value. `--source-thread` when the parent is not
 auto-detected (Codex CLI sessions have no T3 address). Default to 🏓 unless the
@@ -50,7 +50,7 @@ user said standalone. Hidden ≠ stopped; settle only after the ping-back is ver
 | Settle / unsettle / settle yourself (settle = kill) | [settle-thread.md](settle-thread.md) |
 | Hide / unhide a live worker (snooze keeper) | [hide-thread.md](hide-thread.md) |
 | Rename (hard-set title, `--prefix`, wait for auto-title) | [rename-thread.md](rename-thread.md) |
-| Rate-limit windows per Claude profile + Codex | [limits.md](limits.md) |
+| Rate-limit windows per Claude + Codex profile (the numbers routing uses) | [limits.md](limits.md) |
 | Bulk select + hard purge of threads | `t3-maintenance` skill → `t3-purge-threads` |
 | Fleet view of workers (`t3-fleet list --title-prefix 🏓` / `--stalled`) | `t3-maintenance` skill |
 | Native upstream tools (when to retire these helpers) | [upstream-checkpoint.md](upstream-checkpoint.md) |

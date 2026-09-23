@@ -12,6 +12,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 from profile_registry import registry, resolve, enabled
 from profile_routing import route
+from t3_limits import Account
 
 
 @pytest.fixture
@@ -19,8 +20,10 @@ def settings(tmp_path):
     path = tmp_path / "userdata" / "settings.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"providerInstances": {
-        "codex": {"driver": "codex", "displayName": "Codex Alpha", "enabled": True},
-        "codex_beta": {"driver": "codex", "displayName": "Codex Beta", "enabled": True},
+        "codex": {"driver": "codex", "displayName": "Codex Alpha", "enabled": True,
+                  "config": {"homePath": str(tmp_path / "no-codex-home")}},
+        "codex_beta": {"driver": "codex", "displayName": "Codex Beta", "enabled": True,
+                       "config": {"homePath": str(tmp_path / "no-codex-home-beta")}},
         "claudeAgent": {"driver": "claudeAgent", "displayName": "Claude Beta", "enabled": True},
         "antigravity_beta": {"driver": "antigravity", "displayName": "Gemini Beta", "enabled": True},
         "new_instance": {"driver": "futureDriver", "displayName": "Future Gamma", "enabled": True},
@@ -43,12 +46,12 @@ def test_registry_names_and_ambiguity(settings):
         resolve(profiles, "missing")
 
 
-def test_auto_preserves_codex_and_refuses_account_guess(settings):
-    assert route("gpt-6-astra", "codex_beta", settings)[0] == "codex_beta"
-    # Driver switch keeps the account: Claude Beta -> Codex Beta (sibling label).
-    assert route("gpt-6-astra", "claudeAgent", settings)[0] == "codex_beta"
-    with pytest.raises(ValueError, match="Choose --profile"):
-        route("gpt-6-astra", "new_instance", settings)  # Future Gamma has no Codex sibling
+def test_auto_preserves_codex_and_sibling_tie(settings):
+    unknown = lambda **_: [Account("codex", "codex", error="x"), Account("codex_beta", "codex_beta", error="x")]
+    assert route("gpt-6-astra", "codex_beta", settings, unknown)[0] == "codex_beta"
+    # Driver switch with no verified capacity: Claude Beta -> Codex Beta (sibling label).
+    assert route("gpt-6-astra", "claudeAgent", settings, unknown)[0] == "codex_beta"
+    assert route("gpt-6-astra", "new_instance", settings, unknown)[0] == "codex"  # no sibling: first id
 
 
 @pytest.mark.parametrize("profile,model,inherited,expected,option", [
@@ -65,7 +68,7 @@ def test_auto_preserves_codex_and_refuses_account_guess(settings):
     ("codex_beta", "fable", "codex", None, None),
     ("beta", "auto", "codex", None, None),
     ("auto", "astra", "claudeAgent", "codex_beta", "reasoningEffort"),
-    ("auto", "astra", "new_instance", None, None),
+    ("auto", "astra", "new_instance", "codex", "reasoningEffort"),  # no sibling: capacity routing, first id
 ])
 def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected, option):
     script = (SCRIPTS / "t3-spawn-thread").read_text()
@@ -83,7 +86,13 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
         f"provider_choice={shlex.quote(profile)}; model_choice={shlex.quote(model)}; thinking_choice=auto\n" +
         f"t3_base_dir={shlex.quote(str(settings.parent.parent))}\n" +
         f"model_selection_json={shlex.quote(payload)}\n" + code + '\necho "$model_selection_json"\n')
-    result = subprocess.run(["bash", str(runner)], capture_output=True, text=True)
+    # Hermetic: no Keychain (fake `security`) and no Codex homes → every account is "unknown".
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / "security").write_text("#!/bin/sh\nexit 1\n")
+    (fake_bin / "security").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    result = subprocess.run(["bash", str(runner)], capture_output=True, text=True, env=env)
     if expected is None:
         assert result.returncode != 0
         assert any(word in result.stderr for word in ["incompatible", "Ambiguous", "Choose --profile"])

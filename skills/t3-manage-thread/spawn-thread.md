@@ -84,39 +84,51 @@ workers do open the file when the brief names it.
 
 ## Automatic profile routing
 
-Omitted `--profile` (or `auto`) selects among enabled Claude accounts after resolving
-the requested/inherited model. Explicit profiles, including `T3_SPAWN_PROVIDER`,
-win unchanged (`--profile claude` still means the built-in `claudeAgent` account).
-Model, thinking and cross-project checks retain their existing rules.
+Omitted `--profile` (or `auto`) selects among the enabled T3 instances of the resolved
+model's driver — Claude **and** Codex, one policy. Explicit profiles, including
+`T3_SPAWN_PROVIDER`, win unchanged and never poll (`--profile claude` still means the
+built-in `claudeAgent` account). Model, thinking and cross-project checks keep their rules.
 
-With multiple Claude accounts, reuse `t3-limits` reads/cache; no extra setup.
-Exclude exhausted session, weekly and matching model-only caps. Rank fresh accounts
-by their worst window's pace room, then minimum headroom. Ties prefer the inherited
-account, then instance ID. Paid overage never adds capacity or changes billing settings.
+Policy (`scripts/lib/profile_routing.py`, usage from `t3_limits.py` — the same numbers
+`t3-limits` prints, 90 s cache):
 
-Fresh capacity beats unknown/stale usage. With only unknown candidates, prefer the
-inherited account, then instance ID, and print that capacity is unverified. A stale
-exhausted cap remains excluded until its reset; a past reset is unknown, not proof
-of replenishment. If every candidate is exhausted, stop before creating a thread;
-`--profile NAME` is an intentional override. Usage can change after selection.
+- **Excluded**: any relevant window at 100 % until its reset (session, weekly, any other
+  top-level Codex window, and a `<Model> only` cap for the requested family). A cached
+  exhausted cap stays excluded even after the cache is too old to serve as a reading.
+- **Unknown**: unreachable account (429, expired token, no login), stale reading, missing
+  percentage, past reset. Ranked after every verified account; picked only when nothing
+  is verified, with "capacity unverified" in the reason.
+- **Ranking**: worst window's pace room (pace − used) first, then minimum headroom. This is
+  the whole rule; a window ≥ 90 % used is labelled `[tight]` but not demoted — a weekly at
+  92 % that resets in two hours is still the right pick over one burning far ahead of pace.
+  Ties prefer the inherited account (on a driver switch: its sibling, same display name
+  minus the driver word), then the instance id.
+- **All exhausted** → the spawn refuses before creating a thread; `--profile NAME` is the
+  intentional override. Usage can change after selection; no reservation or prediction of
+  in-flight work, and paid overage never counts as capacity.
 
-Profile names come from T3's native registry on every invocation: exact instance
-ID first, then a unique case-insensitive ID/display-name match. An explicit model
-narrows name matches to its driver (`--profile beta --model astra` selects Codex
-Beta even when Claude Beta exists). Disabled profiles are excluded. Ambiguous
-names fail; use an exact ID. Adding accounts in T3 needs no helper maintenance.
-Existing threads are separate: changing their instance restarts the session, and
-T3 rejects Codex continuation across different shared homes. Do not patch thread
-metadata to migrate running work.
+Every automatic route prints its decision block on stderr (also under `--dry-run`):
 
-A single Claude profile skips polling. Other providers retain a compatible
-inherited account; a driver switch (Claude thread → `--model astra`) picks the
-**sibling** instance: same display name minus the driver word ("Claude ProBackup"
-→ "Codex ProBackup"). No unique sibling → "Choose --profile". Towards Claude the
-capacity ranking still applies; ties prefer the sibling. So `--profile` is
-an account label, orthogonal to `--model`; `--profile codex` / `claude` still
-resolve to the built-in instance ids for compatibility.
-CodexBar cannot attribute quota to multiple T3 instances. Monthly overage spend caps
-are not subscription windows and are not a routing signal. Missing model caps cannot
-be inferred. Implementation: `scripts/lib/profile_routing.py`; shared collection,
-parsing and cache: `scripts/lib/t3_limits.py` (also used by the `t3-limits` CLI).
+```
+Profile routing for claude-fable-5-1 (usage cached ≤90 s; explicit --profile NAME bypasses this):
+  claudeAgent             session 3% (room +25) · weekly 35% (room +16) · Fable only 50% (room +1)
+  claudeAgent_kampkompas  session 6% (room +22) · weekly 17% (room -4) · Fable only 28% (room -15)
+  claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) · Fable only 31% (room +2)  ← selected
+  → claudeAgent_dentai: best bottleneck room (Fable only +2)
+```
+
+Known trade-offs of the single rule: bottleneck ranking ignores a strong second window
+(weekly +45 with session −2 loses to weekly +16 with session +5), and nothing spreads
+near-simultaneous spawns across equal accounts — the next read (≤ 90 s later) sees the
+real consumption instead.
+
+Profile names come from T3's native registry on every invocation: exact instance ID first,
+then a unique case-insensitive ID/display-name match. An explicit model narrows name
+matches to its driver (`--profile beta --model astra` selects Codex Beta even when Claude
+Beta exists). Disabled profiles are excluded. Ambiguous names fail; use an exact ID. Adding
+accounts in T3 needs no helper maintenance. Existing threads are separate: changing their
+instance restarts the session, and T3 rejects Codex continuation across different shared
+homes. Do not patch thread metadata to migrate running work.
+
+Drivers without per-instance usage (Antigravity, forks) keep the inherited account or its
+unique sibling; otherwise "Choose --profile". Missing model caps cannot be inferred.

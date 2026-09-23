@@ -58,11 +58,49 @@ def test_single_enabled_and_builtin_fallback(tmp_path):
         "a": {"driver": "claudeAgent", "enabled": True},
         "b": {"driver": "claudeAgent", "enabled": True, "config": {"enabled": False}}
     }}))
-    collect = Mock(side_effect=AssertionError("single profile must not poll"))
-    assert route("claude-fable-5", "b", settings, collect)[0] == "a"
+    # A single profile is still polled: an exhausted one refuses, an unreachable one is unverified.
+    collect = Mock(return_value=[Account("a", "a", error="HTTP 429")])
+    selected, reason, explanation = route("claude-fable-5", "b", settings, collect)
+    assert selected == "a" and "unverified" in reason and "unknown: HTTP 429" in explanation
+    collect = Mock(return_value=[account("a", 100)])
+    with pytest.raises(ValueError, match="--profile") as info:
+        route("claude-fable-5", "b", settings, collect)
+    assert "excluded: session exhausted" in info.value.explanation
     settings.write_text('{}')
     assert claude_profiles(settings)[0][0] == "claudeAgent"
+    collect = Mock(return_value=[Account("codex", "codex", error="no Codex login")])
     assert route("gpt-6-astra", "codex", settings, collect)[0] == "codex"
+
+
+def test_codex_windows_and_nonstandard_caps():
+    rows = [Row("weekly", 55, NOW + timedelta(days=3), 604800)]  # Pro: weekly only, no session
+    a = Account("Codex A", "codex_a", rows=rows)
+    b = Account("Codex B", "codex_b", rows=[Row("weekly", 21, NOW + timedelta(days=6, hours=7), 604800),
+                                            Row("3h", 100, NOW + timedelta(hours=1), 10800)])
+    selected, reason, _ = choose([a, b], "gpt-6-astra", "codex_b", NOW)
+    assert selected == "codex_a" and "weekly" in reason  # the odd-length cap still excludes b
+    b.rows[1].used_percent = 0
+    b.rows[0].resets_at = NOW + timedelta(days=1)  # 21% used with 86% of the week gone: room +65
+    assert choose([a, b], "gpt-6-astra", "codex_b", NOW)[0] == "codex_b"
+    nan = Account("Codex C", "codex_c", rows=[Row("weekly", float("nan"), NOW + timedelta(days=1), 604800)])
+    assert choose([nan], "gpt-6-astra", "codex_c", NOW)[1].startswith("usage unknown")
+
+
+def test_driver_switch_routes_by_capacity_ties_prefer_sibling(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"providerInstances": {
+        "codex": {"driver": "codex", "displayName": "Codex Alpha", "enabled": True},
+        "codex_beta": {"driver": "codex", "displayName": "Codex Beta", "enabled": True},
+        "claudeAgent": {"driver": "claudeAgent", "displayName": "Claude Beta", "enabled": True},
+        "gamma": {"driver": "futureDriver", "displayName": "Future Gamma", "enabled": True},
+    }}))
+    even = lambda id: Account(id, id, rows=[Row("weekly", 20, NOW + timedelta(days=2), 604800)])
+    collect = Mock(return_value=[even("codex"), even("codex_beta")])
+    assert route("gpt-6-astra", "claudeAgent", settings, collect)[0] == "codex_beta"  # tie → sibling
+    assert route("gpt-6-astra", "gamma", settings, collect)[0] == "codex"  # no sibling: still routed
+    collect = Mock(return_value=[even("codex"), Account("codex_beta", "codex_beta", rows=[
+        Row("weekly", 80, NOW + timedelta(days=2), 604800)])])
+    assert route("gpt-6-astra", "claudeAgent", settings, collect)[0] == "codex"  # capacity beats sibling
 
 
 def test_legacy_scoped_payload():

@@ -15,8 +15,9 @@ Options:
                                                     substring of its display name; --model picks
                                                     the driver ("probackup" + astra = Codex
                                                     ProBackup, + fable = Claude ProBackup).
-                                                    Default: Claude by capacity; other drivers
-                                                    stay on the inherited account's sibling.
+                                                    Default: Claude/Codex by capacity (ties keep
+                                                    the parent's account or its sibling); other
+                                                    drivers stay on the inherited account.
   --provider PROFILE                                Alias for --profile
   --model auto|sol|astra|haiku|fable|opus|gemini|MODEL  Default: inherit
   --thinking auto|low|med|medium|high                Default: inherit, else high

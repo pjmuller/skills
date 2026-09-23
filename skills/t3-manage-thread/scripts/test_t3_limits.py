@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -65,31 +66,24 @@ CLAUDE_PAYLOAD = {
     ],
 }
 
-CODEX_PAYLOAD = {
-    "pace": {"secondary": {"summary": "20% in deficit | Runs out in 11h 51m"}},
-    "usage": {
-        "accountEmail": "user@example.com",
-        "loginMethod": "pro",
-        "primary": None,
-        "secondary": {
-            "usedPercent": 91,
-            "windowMinutes": 10080,
-            "resetsAt": "2026-09-07T05:25:09Z",
-        },
-        "extraRateWindows": [
-            {
-                "id": "codex-spark",
-                "title": "Codex Spark 5-hour",
-                "window": {
-                    "usedPercent": 0,
-                    "resetsAt": "2026-09-05T10:07:22Z",
-                    "windowMinutes": 300,
-                },
-            }
-        ],
-        "codexResetCredits": {"availableCount": 3},
+CODEX_PAYLOAD = {  # chatgpt.com/backend-api/wham/usage
+    "email": "user@example.com",
+    "plan_type": "pro",
+    "rate_limit": {
+        "primary_window": {"used_percent": 91, "limit_window_seconds": 604800, "reset_at": 1788758709},
+        "secondary_window": None,
     },
+    "additional_rate_limits": [
+        {"limit_name": "gpt-reserve", "normal_model_slug": "gpt-5.6-luna",
+         "rate_limit": {"primary_window": {"used_percent": 0, "limit_window_seconds": 604800, "reset_at": 1790000000}}}
+    ],
+    "rate_limit_reset_credits": {"available_count": 3},
 }
+
+
+def codex_account(payload=CODEX_PAYLOAD) -> "t3_limits.Account":
+    plan, rows, notes = t3_limits.codex_rows(payload)
+    return t3_limits.Account("Codex Alpha", "codex", plan, rows, notes)
 
 
 class KeychainServiceTest(unittest.TestCase):
@@ -188,6 +182,7 @@ class CacheTest(unittest.TestCase):
                     "claudeAgent_work": {
                         "payload": CLAUDE_PAYLOAD,
                         "fetched_at": NOW.timestamp() - age_seconds,
+                        "identity": "~/.claude_work_home|",
                     }
                 }
             )
@@ -262,27 +257,68 @@ class CacheTest(unittest.TestCase):
         with patch.object(t3_limits.time, "sleep"):
             [account] = self._accounts(fetch)
         self.assertEqual(account.error, "HTTP 429")
-        self.assertEqual(account.rows, [])
+        # Too old to serve as a reading, but the exhausted session (reset in the
+        # future) survives as evidence so routing keeps excluding the account.
+        self.assertEqual([(r.window, r.used_percent) for r in account.rows], [("session", 100.0)])
         self.assertFalse(account.stale)
+        self.assertIsNotNone(account.fetched_at)
+
+    def test_cache_bound_to_identity(self):
+        self._write_cache(30)
+        cached = json.loads(self.cache.read_text())
+        cached["claudeAgent_work"]["identity"] = "~/.other_home|"
+        self.cache.write_text(json.dumps(cached))
+        calls = []
+
+        def fetch(_token):
+            calls.append(1)
+            return dict(CLAUDE_PAYLOAD, limits=[])
+
+        [account] = self._accounts(fetch)
+        self.assertEqual(len(calls), 1)  # a different home/account never reuses the entry
+        self.assertEqual(json.loads(self.cache.read_text())["claudeAgent_work"]["identity"],
+                         "~/.claude_work_home|")
 
 
 class CodexRowsTest(unittest.TestCase):
-    def test_null_primary_and_extra_windows(self):
-        account = t3_limits.codex_account(fetch=lambda: CODEX_PAYLOAD)
-        self.assertEqual(account.plan, "pro")
-        self.assertEqual(account.label, "Codex  user@example.com")
+    def test_windows_notes_and_plan(self):
+        account = codex_account()
+        self.assertEqual(account.plan, "pro · user@example.com")
         self.assertEqual(
             [(row.window, row.used_percent, row.length_seconds) for row in account.rows],
-            [("weekly", 91.0, 10080 * 60)],  # Spark sub-windows are dropped
+            [("weekly", 91.0, 604800)],  # optional secondary window absent
         )
-        self.assertEqual(account.notes, ["reset credits: 3"])
+        self.assertEqual(account.notes, ["gpt-reserve (gpt-5.6-luna): 0% used", "reset credits: 3"])
 
-    def test_missing_cli_becomes_an_error_row(self):
-        def fetch():
-            raise FileNotFoundError("codexbar not found")
+    def test_secondary_and_nonstandard_windows(self):
+        payload = {"rate_limit": {
+            "primary_window": {"used_percent": 12, "limit_window_seconds": 18000, "reset_at": 1789795509},
+            "secondary_window": {"used_percent": None, "limit_window_seconds": 10800, "reset_at": 1789795509},
+        }}
+        _, rows, _ = t3_limits.codex_rows(payload)
+        self.assertEqual([r.window for r in rows], ["session", "3h"])
+        self.assertTrue(math.isnan(rows[1].used_percent))  # missing % is unknown, not 0
+        self.assertIsNone(t3_limits.json_rows([codex_account(payload)], NOW)[1]["used_percent"])
 
-        account = t3_limits.codex_account(fetch=fetch)
-        self.assertIn("codexbar", account.error)
+    def test_codex_credentials_from_home(self):
+        home = Path(tempfile.mkdtemp())
+        with self.assertRaises(LookupError):
+            t3_limits.codex_credentials(str(home))
+        (home / "auth.json").write_text(json.dumps({"auth_mode": "apikey", "tokens": {}}))
+        with self.assertRaises(LookupError):
+            t3_limits.codex_credentials(str(home))
+        (home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {
+            "access_token": "secret", "account_id": "acc-1"}}))
+        credentials = t3_limits.codex_credentials(str(home))
+        self.assertEqual(credentials["identity"], "acc-1")
+
+    def test_missing_login_becomes_an_error_row(self):
+        settings = Path(tempfile.mkdtemp()) / "settings.json"
+        settings.write_text(json.dumps({"providerInstances": {"codex": {
+            "driver": "codex", "enabled": True, "config": {"homePath": str(settings.parent / "nohome")}}}}))
+        [account] = t3_limits.codex_accounts(fetch=lambda _c: CODEX_PAYLOAD, settings_path=settings,
+                                             cache_path=settings.parent / "cache.json", now=NOW)
+        self.assertIn("no Codex login", account.error)
         self.assertEqual(account.rows, [])
 
 
@@ -303,7 +339,7 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(t3_limits.reset_text(None, NOW), "no reset")
 
     def test_json_rows(self):
-        account = t3_limits.codex_account(fetch=lambda: CODEX_PAYLOAD)
+        account = codex_account()
         rows = t3_limits.json_rows([account], NOW)
         self.assertEqual(rows[0]["instance_id"], "codex")
         self.assertEqual(rows[0]["window"], "weekly")
@@ -343,9 +379,9 @@ class PaceTest(unittest.TestCase):
         self.assertIsNone(t3_limits.Row("x", 0.0, NOW + timedelta(hours=1)).pace(NOW))
 
     def test_markdown_has_one_row_per_window(self):
-        account = t3_limits.codex_account(fetch=lambda: CODEX_PAYLOAD)
+        account = codex_account()
         text = t3_limits.render_markdown([account], NOW)
-        self.assertIn("| Codex  user@example.com | `codex` | weekly | 91% | 72% | -19 |", text)
+        self.assertIn("| Codex Alpha | `codex` | weekly | 91% | 72% | -19 |", text)
 
 
 if __name__ == "__main__":

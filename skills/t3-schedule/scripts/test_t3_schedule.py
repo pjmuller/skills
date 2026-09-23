@@ -39,27 +39,12 @@ def test_runner_script_is_root_spawn(tmp_path, monkeypatch):
     assert "--no-open --settle-when-done --model fable" in mod.runner_script(s, p)
 
 
-def row(pid, window, used, room, reset=1000):
-    return {"instance_id": pid, "window": window, "used_percent": used, "room_percent": room,
-            "resets_in_seconds": reset}
-
-
-def test_pick_profile_prefers_room_and_skips_exhausted():
-    rows = [row("a", "session", 10, 30), row("a", "weekly", 11, 15), row("a", "Fable only", 16, 10),
-            row("b", "session", 22, 33), row("b", "weekly", 45, 44), row("b", "Fable only", 55, 34),
-            row("c", "session", 95, 90, reset=5), row("c", "weekly", 1, 99)]
-    pid, why = pick = mod.pick_profile(rows)
-    assert pid == "b" and "c +" in why and "blocked" in why
-    pid, why = mod.pick_profile([row("x", "session", 96, -50, reset=9), row("y", "session", 91, -40, reset=3)])
-    assert pid == "y" and why.startswith("all blocked")
-
-
 def test_runner_guard_and_auto_profile(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     p = mod.paths("job")
     body = mod.runner_script({"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None,
                               "title": "t", "wait_max": 1}, p)
-    assert "already spawned today" in body and "t3-schedule pick-profile" in body
+    assert "already spawned today" in body and "pick-profile" not in body and "--profile" in body
     assert str(p["last"]) in body
 
 
@@ -68,13 +53,6 @@ def test_last_run(tmp_path):
     assert mod.last_run(log) == "never"
     log.write_text("=== 2026-09-07 12:50:55 CEST  lbl\nstuff\n-- job: spawned X\n")
     assert mod.last_run(log) == "2026-09-07 12:50 job: spawned X"
-
-
-def test_pick_profile_tolerates_null_room():
-    # t3-limits reported room_percent=null for a session window on 2026-09-09 and crashed every job
-    rows = [row("a", "session", 0, None), row("a", "weekly", 40, 7), row("b", "session", 4, 3.9, reset=None)]
-    pid, why = mod.pick_profile(rows)
-    assert pid == "a"
 
 
 def test_due_now_window_and_days():
@@ -96,16 +74,6 @@ def test_runner_fails_once_per_day(tmp_path, monkeypatch):
                               "title": "t", "wait_max": 10}, p)
     assert str(p["failed"]) in body and 'fail "job: spawn FAILED' in body
     assert body.count("display notification") == 2  # once in fail(), once on success
-
-
-def test_pick_profile_recent_penalty_spreads_close_profiles():
-    rows = [row("a", "session", 10, 50), row("a", "weekly", 20, 40),
-            row("b", "session", 12, 48), row("b", "weekly", 22, 38),
-            row("c", "session", 50, 5), row("c", "weekly", 96, 1)]
-    assert mod.pick_profile(rows)[0] == "a"
-    assert mod.pick_profile(rows, {"a": 1})[0] == "b"        # a just got a job → b, nearly equal room
-    assert mod.pick_profile(rows, {"a": 1, "b": 1})[0] == "a"  # never the exhausted c
-    assert mod.pick_profile(rows, {"a": 5})[0] == "b"
 
 
 def test_refresh_retires_legacy_and_preserves_job_data(tmp_path, monkeypatch):
