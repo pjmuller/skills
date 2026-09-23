@@ -212,7 +212,7 @@ normalize_model() {
     astra) printf '%s' "gpt-6-astra" ;;
     haiku) printf '%s' "claude-haiku-4-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
-    opus) printf '%s' "claude-opus-5" ;;
+    opus) printf '%s' "claude-opus-5-5" ;;
     gemini) printf '%s' "gemini-3.8-flash-high" ;;
     *) printf '%s' "$1" ;;
   esac
@@ -336,7 +336,7 @@ else
 fi
 
 if [[ -z "$model_selection_json" || "$model_selection_json" == "null" ]]; then
-  model_selection_json='{"instanceId":"claudeAgent","model":"claude-opus-5","options":[]}'
+  model_selection_json='{"instanceId":"claudeAgent","model":"claude-opus-5-5","options":[]}'
 fi
 model_selection_json="$(printf '%s' "$model_selection_json" | jq -c '
   {instanceId:(.instanceId // .provider), model:.model, options:(.options // [])}')"
@@ -356,7 +356,7 @@ elif [[ "$(provider_family "$provider_instance_id")" != "$(provider_family "$inh
         "$(provider_family "$provider_instance_id")" != "$(model_family "$model_name")" ]]; then
   case "$(provider_family "$provider_instance_id")" in
     codex) model_name="gpt-5.6-sol" ;;
-    claude) model_name="claude-opus-5" ;;
+    claude) model_name="claude-opus-5-5" ;;
     antigravity) model_name="gemini-3.8-flash-high" ;;
     *) echo "Select --model explicitly for provider $provider_instance_id." >&2; exit 2 ;;
   esac
@@ -391,7 +391,7 @@ fi
 # inheriting the caller's level.
 if [[ "$model_choice" != "auto" && "$thinking_choice" == "auto" ]]; then
   case "$model_name" in
-    gpt-5.6-sol|claude-opus-5) thinking_choice="high" ;;
+    gpt-5.6-sol|claude-opus-5-5|claude-opus-5) thinking_choice="high" ;;
     claude-fable-5-1|claude-fable-5|gpt-6-astra) thinking_choice="medium" ;;
     claude-haiku-4-5) thinking_choice="low" ;;
   esac
