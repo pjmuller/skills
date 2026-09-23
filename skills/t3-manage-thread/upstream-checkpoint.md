@@ -1,17 +1,18 @@
 # Upstream replacement checkpoint
 
 Before extending these helpers, check upstream native orchestration (last checked
-2026-09-16, T3 v0.0.42: nothing on stable; no `t3 thread` CLI, no thread MCP tools).
+2026-09-23, T3 v0.0.42: nothing on stable; no `t3 thread` CLI, no thread MCP tools).
 Orchestrator V2 [PR #2829](https://github.com/pingdotgg/t3code/pull/2829) is unmerged but
 already contains native `create_threads`, `t3_thread_start`, `t3_thread_send`,
 `t3_thread_wait/read/list/interrupt`, `delegate_task` and scheduled tasks; its
 `agents/mcp-*` stack (#10554–#10566) adds launch-by-project, organize, metadata,
-attachments and forks — all merged into stack bases only. Open main-branch backports:
-[#11303](https://github.com/pingdotgg/t3code/pull/11303) (create/list/read/send/wait/
-interrupt/settle), [#11360](https://github.com/pingdotgg/t3code/pull/11360),
-[#11795](https://github.com/pingdotgg/t3code/pull/11795), [#11864](https://github.com/pingdotgg/t3code/pull/11864),
-rename [#12018](https://github.com/pingdotgg/t3code/pull/12018), auto-settle opt-out
-[#11846](https://github.com/pingdotgg/t3code/pull/11846). Tracker: Ideas
+attachments and forks — all merged into stack bases only. **2026-09-19 freeze:** the maintainer
+closed every main-branch orchestration/provider PR ("rewritten for V2, reopen once V2 lands"):
+[#11303](https://github.com/pingdotgg/t3code/pull/11303), [#11360](https://github.com/pingdotgg/t3code/pull/11360),
+[#11864](https://github.com/pingdotgg/t3code/pull/11864), rename [#12018](https://github.com/pingdotgg/t3code/pull/12018),
+snooze fix #7179, background wake #10183. Still open on main:
+[#11795](https://github.com/pingdotgg/t3code/pull/11795) (`create_threads`), auto-settle opt-out
+[#11846](https://github.com/pingdotgg/t3code/pull/11846). V2 #2829 is the only gate. Tracker: Ideas
 [#8433](https://github.com/pingdotgg/t3code/discussions/8433). V2's blocking
 `delegate_task mode:"wait"` hits the 300 s HTTP ceiling ([#11168](https://github.com/pingdotgg/t3code/issues/11168)):
 keep the async 🏓 ping-back shape.

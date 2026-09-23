@@ -43,5 +43,5 @@ the turn ends. Same kill semantics, so only on the user's explicit request. Rule
 and the caller's turn *is* the running session — it used to time out after 120 s).
 Related: [spawn-thread.md](spawn-thread.md), [cross-thread-ping.md](cross-thread-ping.md),
 fleet audits in `.agents/skills/t3-maintenance`. Upstream: no provider-facing
-settle/snooze tool as of v0.0.42 (backport #11303 open) — see the
+settle/snooze tool as of v0.0.42 (backport #11303 closed unmerged 2026-09-19; V2 only) — see the
 [upstream checkpoint](upstream-checkpoint.md) before extending.

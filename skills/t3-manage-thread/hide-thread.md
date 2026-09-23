@@ -10,8 +10,8 @@ session; that is [settle-thread.md](settle-thread.md).
 
 `thread.snooze` is visibility-only (collapsed Snoozed shelf; allowed while
 running), but T3 pops a snoozed thread back on every completed turn
-([#6368](https://github.com/pingdotgg/t3code/issues/6368), fix PR #7179
-unmerged; v0.0.42 source: the server keeps `snoozedUntil`, the client and the
+([#6368](https://github.com/pingdotgg/t3code/issues/6368); fix PR #7179 closed
+unmerged 2026-09-19 in the V2 freeze, no successor; v0.0.42 source: the server keeps `snoozedUntil`, the client and the
 settlement policy derive a "raised hand" from activity newer than the snooze),
 on a pending approval/user-input, and on a fresh session error; any
 `thread.turn.start` (a ping) clears it. Custom snooze durations (#11800, v0.0.42)
