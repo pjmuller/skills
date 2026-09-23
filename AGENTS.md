@@ -3,9 +3,9 @@
 Public MIT skill source. Each `skills/<name>/SKILL.md` has name/description
 frontmatter and owns its scripts/docs. `setup/t3-setup` is consumed raw once,
 never installed. Keep skills self-contained; cross-skill commands resolve via PATH.
-Every command-shipping skill has an idempotent `scripts/install` plus `--check`
-covering its command links and dependencies. Shared thread plumbing stays inside
-`t3-manage-thread/scripts/lib/`. No configuration file; personal settings live
+Every installable skill has an idempotent `scripts/install` plus `--check` covering its
+dependencies and, when it exposes commands on PATH, their links. Shared thread
+plumbing stays inside `t3-manage-thread/scripts/lib/`. No configuration file; personal settings live
 outside installed skills because CLI updates replace them.
 
 Use neutral examples/fixtures; preserve useful upstream workaround explanations.
