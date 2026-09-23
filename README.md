@@ -32,6 +32,7 @@ their discovered skill list.
 
 | Skill | You need it when… | Scope | Register (then `scripts/install` + `--check`) |
 | --- | --- | --- | --- |
+| [monologue](skills/monologue/SKILL.md) | read notes, original summaries and timestamped speaker turns; reuse the Python API client | project repo | `pnpm dlx skills add pjmuller/skills -s monologue -y` |
 | [slides](skills/slides/SKILL.md) | create, edit or review presentations: story, visual craft, notes and bundled Slidev expertise | project repo + `project-slides` wrapper | `pnpm dlx skills add pjmuller/skills -s slides -y` (no command installer) |
 | [migration-parity](skills/migration-parity/SKILL.md) | migrate a working system with independent old/new data, UI and side-effect verification | project repo, while migration is active | `pnpm dlx skills add pjmuller/skills -s migration-parity -y` (no command installer) |
 | [agents-md](skills/agents-md/SKILL.md) | create or simplify a repo's AGENTS.md / CLAUDE.md, write, prune and merge the global cross-project prompt ([template](skills/agents-md/global-template.md)), or write a handoff ([patterns](skills/agents-md/handoff.md)) | personal setup repo; target project when explicitly wanted there | `pnpm dlx skills add pjmuller/skills -s agents-md -y` (no command installer) |
