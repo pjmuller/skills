@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in ""|--check) mode="${1:-}";; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "$mode" ]; then echo "source: $root"; fi
+command -v uv >/dev/null || { echo "Install uv first (brew install uv)" >&2; exit 1; }
+command -v mise >/dev/null || { echo "Install mise first (brew install mise); it pins Go/Python for the Neonize build" >&2; exit 1; }
+if [ "$(uname -s)" = Darwin ]; then
+  brew list libmagic >/dev/null 2>&1 || { echo "Install libmagic first: brew install libmagic" >&2; exit 1; }
+fi
+dylib="$root/.build/neonize/neonize/neonize-darwin-arm64.dylib"
+if [ ! -f "$dylib" ]; then
+  if [ -n "$mode" ]; then
+    echo "Neonize 0.4.7 is not built ($dylib missing); run scripts/install" >&2
+    exit 1
+  fi
+  "$root/scripts/build-neonize"
+fi
+uv sync --project "$root" --locked
+uv run --project "$root" python -c 'import whatsapp_bridge'
+uv run --project "$root" wa --help >/dev/null
+printf '%s\n' 'whatsapp-bridge ready; run `uv run --project '"$root"' wa login --window` to pair (no global command links)'

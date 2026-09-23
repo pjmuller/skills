@@ -1,0 +1,27 @@
+#!/bin/bash
+# Build the official release until upstream publishes its native binaries/PyPI wheel.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ "$(uname -s)/$(uname -m)" != Darwin/arm64 ]]; then
+  echo 'This local build currently supports Apple Silicon macOS only.' >&2
+  exit 1
+fi
+revision=d5d17b8579db56e66bf396e2d5a77ac72f391e7d
+mkdir -p .build
+if [[ ! -d .build/neonize ]]; then
+  git clone --depth 1 --branch 0.4.7 https://github.com/krypton-byte/neonize.git .build/neonize
+fi
+[[ "$(git -C .build/neonize rev-parse HEAD)" == "$revision" ]] || {
+  echo 'Unexpected Neonize checkout revision; refusing to build.' >&2; exit 1;
+}
+git -C .build/neonize diff --quiet HEAD -- || {
+  echo 'Neonize source modified; refusing to build.' >&2; exit 1;
+}
+mise install
+(
+  cd .build/neonize/goneonize
+  mise exec go@1.26.0 -- env GOTOOLCHAIN=local CGO_ENABLED=1 \
+    CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 \
+    go build -buildmode=c-shared -ldflags=-s -o ../neonize/neonize-darwin-arm64.dylib .
+)
+echo 'Built upstream Neonize 0.4.7. Run uv sync to install.'

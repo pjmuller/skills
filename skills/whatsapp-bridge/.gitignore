@@ -1,0 +1,6 @@
+.venv/
+.build/
+*.db*
+*.sqlite*
+*.log
+.env*

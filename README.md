@@ -48,6 +48,7 @@ their discovered skill list.
 | [resource-audit](skills/resource-audit/SKILL.md) | the Mac is slow or hot; CPU/RAM pressure, process ownership, targeted stopping and recovery | personal setup repo | `pnpm dlx skills add pjmuller/skills -s resource-audit -y` |
 | [clickup-core](skills/clickup-core/SKILL.md) | agents in a project repo read/write ClickUp tasks (rich comments, attachments) against that repo's workspace config | project repo | `pnpm dlx skills add pjmuller/skills -s clickup-core -y` + a thin `clickup` skill holding `clickup.toml` |
 | [google-workspace-core](skills/google-workspace-core/SKILL.md) | agents need reusable Workspace clients with repository-owned accounts and existing CLI contracts | project repo | `pnpm dlx skills add pjmuller/skills -s google-workspace-core -y` + an account wrapper |
+| [whatsapp-bridge](skills/whatsapp-bridge/SKILL.md) | an agent must read WhatsApp chats, resolve contacts and send explicitly authorized individual texts from a locally paired account (Neonize/whatsmeow, no browser) | personal setup repo + a thin wrapper holding account/recipient policy | `pnpm dlx skills add pjmuller/skills -s whatsapp-bridge -y` |
 
 Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance;
 claude-cloud needs t3-manage-thread for profile → Keychain resolution (macOS only).

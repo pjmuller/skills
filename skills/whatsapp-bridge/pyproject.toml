@@ -1,0 +1,21 @@
+[project]
+name = "whatsapp-bridge"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["neonize==0.4.7", "qrcode==8.2"]
+
+[tool.uv.sources]
+neonize = { path = ".build/neonize" }
+
+[project.scripts]
+wa = "whatsapp_bridge:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
