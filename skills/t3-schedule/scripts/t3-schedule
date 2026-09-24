@@ -26,6 +26,7 @@ LABEL_PREFIX = "com.t3-skills.t3-schedule"
 CATCH_UP = "catch-up"                 # job name reserved for the poller
 CATCH_UP_INTERVAL = 900               # seconds between catch-up ticks
 CATCH_UP_GRACE_HOURS = 10             # a missed/failed slot is retried until slot+10h (same day)
+ONCE_DEADLINE = (23, 0)               # once-jobs have no tomorrow: retried until 23:00 that day
 DEFAULT_WAIT_MAX = 10                 # minutes the runner waits for T3 Code; catch-up retries later
 # pnpm's global bin is not on launchd's PATH; without it the runner falls back to the slow
 # `pnpm dlx`. Resolved when the plist is written, so a custom PNPM_HOME is honoured.
@@ -191,7 +192,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     echo "-- $1"
     if [[ "$(cat {shlex.quote(str(p["failed"]))} 2>/dev/null)" != "$today" ]]; then
       echo "$today" > {shlex.quote(str(p["failed"]))}
-      osascript -e "display notification \\"$1 (catch-up retries until slot+{CATCH_UP_GRACE_HOURS}h)\\" with title \\"t3-schedule\\"" || true
+      osascript -e "display notification \\"$1 (catch-up retries until {'23:00' if spec.get('once') else f'slot+{CATCH_UP_GRACE_HOURS}h'})\\" with title \\"t3-schedule\\"" || true
     fi
     exit 1
   }}
@@ -314,7 +315,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     p["plist"].write_bytes(plist)
     bootstrap(p["plist"])
     arm_catch_up()
-    print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until +{CATCH_UP_GRACE_HOURS}h)")
+    print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
     print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={args.model or 'default'}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     return 0
@@ -443,9 +444,11 @@ def write_artefacts(spec: dict) -> None:
     p["plist"].write_bytes(plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once")))
 
 
-def window(at: str, day: datetime) -> tuple[datetime, datetime]:
+def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, datetime]:
     hour, minute = parse_at(at)
     slot = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if once:
+        return slot, max(slot, slot.replace(hour=ONCE_DEADLINE[0], minute=ONCE_DEADLINE[1]))
     end = slot + timedelta(hours=CATCH_UP_GRACE_HOURS)
     return slot, min(end, slot.replace(hour=23, minute=59, second=59))  # same calendar day only
 
@@ -463,7 +466,7 @@ def due_now(spec: dict, now: datetime, last: str | None) -> bool:
     days = spec.get("days")
     if days is not None and (now.weekday() + 1) % 7 not in days:  # launchd: 0=Sun
         return False
-    slot, end = window(spec["at"], now)
+    slot, end = window(spec["at"], now, bool(spec.get("once")))
     return slot <= now <= end
 
 
@@ -474,7 +477,7 @@ def retire_status(spec: dict, now: datetime, last: str | None) -> str | None:
         return None
     if last:
         return f"fired {last}"
-    if window(spec["at"], datetime.fromisoformat(spec["once"]))[1] < now:
+    if window(spec["at"], datetime.fromisoformat(spec["once"]), once=True)[1] < now:
         return "expired (never fired)"
     return None
 

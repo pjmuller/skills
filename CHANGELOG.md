@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-schedule: once-jobs retry a missed/failed slot until 23:00 that day (recurring jobs keep slot+10h: they have tomorrow).
 - t3-spawn-thread: `--settle-when-done` footer is conditional — the worker self-settles only on a clean outcome (nothing new the user needs); otherwise it unhides itself (`t3-hide-thread --unhide <own id>`) and ends with a terse report.
 - t3-schedule: `add --once YYYY-MM-DD` one-shot jobs with the recurring guarantees (catch-up until slot+10h, one spawn). Runner guards launchd's yearly re-fire; the catch-up poller retires fired/expired once-jobs (`list` shows the outcome, expiry notifies); `run-now` forces the date; past date/time rejected; `--weekdays`/`--days`/`--once` mutually exclusive.
 - whatsapp-bridge: new skill. Local Python WhatsApp helper (pinned Neonize 0.4.7 built from source, `NEONIZE_BOT_TAG=off`, no browser/daemon): QR pairing via a real Terminal window, synced-history reads, contact lookup/bounded reply context, allowlisted individual sends with 5 s cross-process pacing. Mechanics live in the core; a repo-local wrapper skill owns the account, own number, allowed recipients and drafting policy.

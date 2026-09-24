@@ -60,7 +60,8 @@ Install: `scripts/install` (symlink into `~/.local/bin`, needs the
 - **Provider limits / auth** are the thread's problem, same as a manual spawn: a rate-limited
   thread shows the banner and `t3-usage-windows limited` handles it; expired `rc`/Claude OAuth surfaces in the
   thread. The daily notification + sidebar thread `⏰ name date` is the ack; nothing else pings the user.
-- **One-shot (`--once`)** = same guarantees (catch-up until slot+10h that day, one spawn). launchd
+- **One-shot (`--once`)** = same guarantees, one spawn; catch-up retries until 23:00 that day
+  (no tomorrow to fall back on). launchd
   has no Year, so the runner skips any other date and any run after `<name>.last` exists; the
   catch-up poller then retires the job (bootout, plist + runner deleted, spec kept; `list` shows
   `fired <date>` or `expired (never fired)` + one notification). `run-now` fires it immediately.

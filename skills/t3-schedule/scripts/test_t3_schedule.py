@@ -142,7 +142,7 @@ def test_once_due_and_retire():
     assert not mod.due_now(spec, datetime(2027, 9, 26, 9, 0), "2026-09-26")  # annual re-fire
     assert mod.retire_status(spec, sat, None) is None                     # still in window
     assert mod.retire_status(spec, sat, "2026-09-26") == "fired 2026-09-26"
-    assert mod.retire_status(spec, datetime(2026, 9, 26, 18, 1), None) == "expired (never fired)"
+    assert mod.retire_status(spec, datetime(2026, 9, 26, 23, 1), None) == "expired (never fired)"
     assert mod.retire_status({"at": "08:00", "days": None}, sat, None) is None  # recurring: never
     assert not mod.due_now({**spec, "retired": "fired 2026-09-26"}, sat, None)
 
@@ -155,3 +155,12 @@ def test_parse_once_rejects_past():
     for day, h in (("2026-09-24", 10), ("2026-09-23", 12), ("26/09/2026", 8)):
         with pytest.raises(SystemExit):
             mod.parse_once(day, h, 0, now)
+
+
+def test_once_catch_up_until_23h():
+    from datetime import datetime
+    spec = {"name": "o", "at": "08:00", "days": None, "once": "2026-09-26"}
+    assert mod.due_now(spec, datetime(2026, 9, 26, 22, 45), None)  # recurring grace would end 18:00
+    assert not mod.due_now(spec, datetime(2026, 9, 26, 23, 5), None)
+    assert mod.retire_status(spec, datetime(2026, 9, 26, 22, 0), None) is None
+    assert mod.retire_status(spec, datetime(2026, 9, 26, 23, 5), None) == "expired (never fired)"
