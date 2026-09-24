@@ -19,7 +19,7 @@ t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"
 t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Claude → OpenAI
 t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"   # from Codex → Claude
 t3-list-profiles   # only when the user names an account: exact --profile values per ecosystem
-# 📤 standalone (visible, never hidden/settled by helpers); add --settle-when-done for fire-and-forget
+# 📤 standalone (visible, never hidden/settled by helpers); --settle-when-done = fire-and-forget: self-settles on a clean outcome, surfaces if the user is needed
 t3-spawn-thread --title "📤 <task>" -- "<brief>"
 
 t3-ping-thread --thread <parent-id> --from "<label>" -- "<report>"   # arrives as a user turn, wakes the agent

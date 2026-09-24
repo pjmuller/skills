@@ -512,14 +512,14 @@ fi
 # Fire-and-forget threads settle themselves: the self-settle footer is appended
 # mechanically for the same reason as the ping-back footer (a brief that merely
 # said "settle when done" is not deterministic).
+thread_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 settle_footer=""
 if ((settle_when_done)); then
-  settle_footer="$(printf '\n---\nFire-and-forget thread. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: once the task is complete and no background work (sub-agents, background shells, monitors) is alive, run `t3-settle-thread --self` as your LAST tool call, then end the turn with the final answer. Do nothing after that call.')"
+  settle_footer="$(printf '\n---\nFire-and-forget thread. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: once the task is complete and no background work (sub-agents, background shells, monitors) is alive, decide whether the user needs to see this thread.\n- Clean outcome (brief fully executed, no new discovery, decision, risk or actionable the user should know about): run `t3-settle-thread --self` as your LAST tool call, then end the turn with a one-line final answer. Do nothing after that call.\n- Anything needing the user (blocked, partial, surprising finding, a decision or follow-up for them): do NOT settle. Run `t3-hide-thread --unhide %s` so the thread surfaces, then end the turn with a terse report of what needs them.' "$thread_id")"
   prompt_text="$prompt_text
 $settle_footer"
 fi
 
-thread_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 create_command_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 turn_command_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 message_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
