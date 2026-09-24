@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Recurring T3 Code threads on a wall-clock schedule, via macOS LaunchAgents.
+"""Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS LaunchAgents.
 
 Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
 T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`. Nothing here
@@ -19,7 +19,7 @@ import plistlib
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 LABEL_PREFIX = "com.t3-skills.t3-schedule"
@@ -87,12 +87,29 @@ def parse_days(args: argparse.Namespace) -> list[int] | None:
     return sorted(days)
 
 
+def parse_once(value: str, hour: int, minute: int, now: datetime) -> str:
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        raise SystemExit(f"--once expects YYYY-MM-DD, got {value!r}")
+    if datetime.combine(day, time(hour, minute)) <= now:
+        raise SystemExit(f"--once {day} {hour:02d}:{minute:02d} is in the past")
+    return day.isoformat()
+
+
 def describe_days(days: list[int] | None) -> str:
     if days is None:
         return "daily"
     if days == WEEKDAYS:
         return "weekdays"
     return ",".join(DAY_NAMES[d] for d in days)
+
+
+def describe_when(spec: dict) -> str:
+    once = spec.get("once")
+    if not once:
+        return describe_days(spec["days"])
+    return f"once {once} ({DAY_NAMES[(date.fromisoformat(once).weekday() + 1) % 7]})"
 
 
 def valid_name(name: str) -> str:
@@ -104,9 +121,12 @@ def valid_name(name: str) -> str:
 
 
 # --- artefacts -----------------------------------------------------------------
-def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Path) -> bytes:
-    if days is None:
-        interval: object = {"Hour": hour, "Minute": minute}
+def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Path, once: str | None = None) -> bytes:
+    if once:
+        day = date.fromisoformat(once)
+        interval: object = {"Month": day.month, "Day": day.day, "Hour": hour, "Minute": minute}
+    elif days is None:
+        interval = {"Hour": hour, "Minute": minute}
     else:
         interval = [{"Hour": hour, "Minute": minute, "Weekday": d} for d in days]
     return plistlib.dumps(
@@ -129,21 +149,35 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
         if spec.get(flag):
             spawn += [f"--{flag}", spec[flag]]
     spawn_quoted = " ".join(shlex.quote(part) for part in spawn)
+    last = shlex.quote(str(p["last"]))
+    if spec.get("once"):
+        guard = f"""  today=$(date +%F)
+  # launchd has no Year: the plist re-fires yearly until the catch-up poller retires it.
+  if [[ -s {last} ]]; then
+    echo "-- already fired once ($(cat {last})), skipping"
+    exit 0
+  fi
+  if [[ "$today" != "{spec["once"]}" && "$T3_SCHEDULE_FORCE" != 1 ]]; then
+    echo "-- once-job for {spec["once"]}, not today, skipping"
+    exit 0
+  fi"""
+    else:
+        guard = f"""  # At most one spawn per calendar day: launchd replays a missed StartCalendarInterval once at
+  # wake, and a wake just before the slot would otherwise fire twice within minutes.
+  today=$(date +%F)
+  if [[ "$(cat {last} 2>/dev/null)" == "$today" ]]; then
+    echo "-- already spawned today ($today), skipping"
+    exit 0
+  fi"""
     return f"""#!/bin/zsh
-# recurring T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
+# {'one-shot' if spec.get('once') else 'recurring'} T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
 # never inherit a parent thread: a scheduled thread is a root, whatever spawned the runner
 unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID T3_MCP_BEARER_TOKEN
 mkdir -p {shlex.quote(str(p["log"].parent))}
 {{
   echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z')  {label_for(name)}"
-  # At most one spawn per calendar day: launchd replays a missed StartCalendarInterval once at
-  # wake, and a wake just before the slot would otherwise fire twice within minutes.
-  today=$(date +%F)
-  if [[ "$(cat {shlex.quote(str(p["last"]))} 2>/dev/null)" == "$today" ]]; then
-    echo "-- already spawned today ($today), skipping"
-    exit 0
-  fi
+{guard}
   # T3 Code must be up to accept the spawn; the Mac may have just woken (launchd runs missed
   # StartCalendarInterval jobs at the next wake), so wait for it.
   t3_up() {{
@@ -238,7 +272,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     if p["spec"].exists() and not args.force:
         raise SystemExit(f"{name} already exists; `t3-schedule remove {name}` or add --force to replace")
     hour, minute = parse_at(args.at)
-    days = parse_days(args)
+    once = parse_once(args.once, hour, minute, datetime.now()) if args.once else None
+    days = None if once else parse_days(args)
     if args.settle_when_done and (args.title or "").startswith("🏓"):
         raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
     project = Path(args.project).expanduser().resolve()
@@ -257,11 +292,12 @@ def cmd_add(args: argparse.Namespace) -> int:
         "title": args.title or f"⏰ {name} {{date}}",
         "at": f"{hour:02d}:{minute:02d}",
         "days": days,
+        "once": once,
         "wait_max": args.wait_max,
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
     body = runner_script(spec, p)
-    plist = plist_body(name, hour, minute, days, p["sh"])
+    plist = plist_body(name, hour, minute, days, p["sh"], once)
     if args.dry_run:
         print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {p['prompt']}\n{prompt}")
         return 0
@@ -269,6 +305,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
     if loaded(name):
         bootout(name)
+    if once:  # a re-armed once-job must not look fired already
+        p["last"].unlink(missing_ok=True)
     p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
     p["prompt"].write_text(prompt)
     p["sh"].write_text(body)
@@ -276,7 +314,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     p["plist"].write_bytes(plist)
     bootstrap(p["plist"])
     arm_catch_up()
-    print(f"armed    {label_for(name)}\nfires    {describe_days(days)} at {spec['at']} (missed/failed → catch-up until +{CATCH_UP_GRACE_HOURS}h)")
+    print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until +{CATCH_UP_GRACE_HOURS}h)")
     print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={args.model or 'default'}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     return 0
@@ -317,17 +355,17 @@ def cmd_list(args: argparse.Namespace) -> int:
             name = spec["name"]
             prompt = paths(name)["prompt"].read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
-                f"| {name} | {describe_days(spec['days'])} {spec['at']} | {Path(spec['project']).name} "
+                f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name} "
                 f"| {spec.get('profile') or 'auto'} / {spec.get('model') or 'default'} "
-                f"| {'yes' if loaded(name) else 'NO'} | {last_run(paths(name)['log'])} "
+                f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
         return 0
     for spec in rows:
         name = spec["name"]
-        state = "loaded" if loaded(name) else "NOT loaded"
+        state = spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
         print(
-            f"{name:<28} {describe_days(spec['days']):<9} {spec['at']}  {state:<10} "
+            f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
             f"{spec.get('profile') or '-'}/{spec.get('model') or '-'}  {spec['project']}"
         )
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
@@ -355,9 +393,14 @@ def cmd_run_now(args: argparse.Namespace) -> int:
     inherited from the caller's process ancestry), then tail the log until the runner
     reports. --foreground runs the script directly."""
     p = require_spec(args.name)
+    spec = json.loads(p["spec"].read_text())
+    if spec.get("retired"):
+        raise SystemExit(f"{args.name} is retired ({spec['retired']}); re-arm with add --force")
     before = p["log"].stat().st_size if p["log"].exists() else 0
-    if args.foreground:
-        status = subprocess.run(["/bin/zsh", "-lc", str(p["sh"])]).returncode
+    if args.foreground or spec.get("once"):
+        # kickstart cannot pass env, and a once-job's runner skips any day but its own unless forced
+        env = {**os.environ, "T3_SCHEDULE_FORCE": "1"} if spec.get("once") else None
+        status = subprocess.run(["/bin/zsh", "-lc", str(p["sh"])], env=env).returncode
     else:
         result = launchctl("kickstart", f"{domain()}/{label_for(args.name)}")
         if result.returncode != 0:
@@ -397,21 +440,43 @@ def write_artefacts(spec: dict) -> None:
     hour, minute = parse_at(spec["at"])
     p["sh"].write_text(runner_script(spec, p))
     p["sh"].chmod(0o755)
-    p["plist"].write_bytes(plist_body(spec["name"], hour, minute, spec["days"], p["sh"]))
+    p["plist"].write_bytes(plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once")))
+
+
+def window(at: str, day: datetime) -> tuple[datetime, datetime]:
+    hour, minute = parse_at(at)
+    slot = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    end = slot + timedelta(hours=CATCH_UP_GRACE_HOURS)
+    return slot, min(end, slot.replace(hour=23, minute=59, second=59))  # same calendar day only
 
 
 def due_now(spec: dict, now: datetime, last: str | None) -> bool:
-    """Slot passed today, still inside the grace window, and nothing spawned today."""
-    if last == now.strftime("%Y-%m-%d"):
+    """Slot passed today, still inside the grace window, and nothing spawned today
+    (once-jobs: today is their date and they never fired)."""
+    if spec.get("retired"):
+        return False
+    if spec.get("once"):
+        if last or spec["once"] != now.strftime("%Y-%m-%d"):
+            return False
+    elif last == now.strftime("%Y-%m-%d"):
         return False
     days = spec.get("days")
     if days is not None and (now.weekday() + 1) % 7 not in days:  # launchd: 0=Sun
         return False
-    hour, minute = parse_at(spec["at"])
-    slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    end = slot + timedelta(hours=CATCH_UP_GRACE_HOURS)
-    end = min(end, slot.replace(hour=23, minute=59, second=59))  # same calendar day only
+    slot, end = window(spec["at"], now)
     return slot <= now <= end
+
+
+def retire_status(spec: dict, now: datetime, last: str | None) -> str | None:
+    """Once-jobs leave launchd after firing or once their window closed (the plist would
+    re-fire next year); a runner cannot bootout itself, so the poller does it."""
+    if not spec.get("once") or spec.get("retired"):
+        return None
+    if last:
+        return f"fired {last}"
+    if window(spec["at"], datetime.fromisoformat(spec["once"]))[1] < now:
+        return "expired (never fired)"
+    return None
 
 
 def last_spawn(name: str) -> str | None:
@@ -446,6 +511,22 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
     now = datetime.now()
     log = home() / ".t3/userdata/logs" / f"t3-schedule.{CATCH_UP}.log"
     kicked = []
+    for spec in specs():
+        name = spec["name"]
+        status = retire_status(spec, now, last_spawn(name))
+        if not status or running(name):
+            continue
+        kicked.append(f"retire {name} ({status})")
+        if args.dry_run:
+            continue
+        bootout(name)
+        paths(name)["plist"].unlink(missing_ok=True)
+        paths(name)["sh"].unlink(missing_ok=True)
+        spec["retired"] = status
+        paths(name)["spec"].write_text(json.dumps(spec, indent=2) + "\n")
+        if status.startswith("expired"):
+            msg = f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired"
+            subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
     # One job per tick, earliest slot first: after a long power-off several slots are due at
     # once, and firing them together would make every spawn route to the same profile from
     # the same limits snapshot. Spacing them by one tick re-reads the limits between jobs.
@@ -463,7 +544,7 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
         result = launchctl("kickstart", f"{domain()}/{label_for(name)}")
         kicked.append(name if result.returncode == 0 else f"{name} FAILED: {result.stderr.strip()}")
     if kicked:
-        line = f"{now:%Y-%m-%d %H:%M:%S}  kickstart: {', '.join(kicked)}"
+        line = f"{now:%Y-%m-%d %H:%M:%S}  catch-up: {', '.join(kicked)}"
         print(line)
         if not args.dry_run:
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -490,6 +571,8 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         plist.unlink()
     for spec in specs():
         name = spec["name"]
+        if spec.get("retired"):
+            continue  # never re-arm a spent once-job
         spec.setdefault("wait_max", DEFAULT_WAIT_MAX)
         if loaded(name):
             bootout(name)
@@ -506,6 +589,8 @@ def cmd_set_at(args: argparse.Namespace) -> int:
     """Move a job's slot without re-typing the prompt: rewrites spec + plist, keeps everything else."""
     p = require_spec(args.name)
     spec = json.loads(p["spec"].read_text())
+    if spec.get("retired"):
+        raise SystemExit(f"{args.name} is retired ({spec['retired']}); re-arm with add --force")
     hour, minute = parse_at(args.at)
     spec["at"] = f"{hour:02d}:{minute:02d}"
     if loaded(args.name):
@@ -513,7 +598,7 @@ def cmd_set_at(args: argparse.Namespace) -> int:
     p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
     write_artefacts(spec)
     bootstrap(p["plist"])
-    print(f"moved    {label_for(args.name)} → {describe_days(spec['days'])} at {spec['at']}")
+    print(f"moved    {label_for(args.name)} → {describe_when(spec)} at {spec['at']}")
     return 0
 
 
@@ -527,15 +612,17 @@ def cmd_show(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="t3-schedule",
-        description="Recurring T3 Code threads on a wall-clock schedule (macOS LaunchAgents).",
+        description="Recurring or one-shot T3 Code threads on a wall-clock schedule (macOS LaunchAgents).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     add = sub.add_parser("add", help="arm a job: t3-schedule add --name X --at 07:30 --weekdays --project P -- \"prompt\"")
     add.add_argument("--name", required=True, help="job id → com.t3-skills.t3-schedule.<name>")
     add.add_argument("--at", required=True, help="HH:MM local (Europe/Brussels = machine clock)")
-    add.add_argument("--weekdays", action="store_true", help="Mon-Fri")
-    add.add_argument("--days", help="comma list mon,tue,... (default: every day)")
+    when = add.add_mutually_exclusive_group()
+    when.add_argument("--weekdays", action="store_true", help="Mon-Fri")
+    when.add_argument("--days", help="comma list mon,tue,... (default: every day)")
+    when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
     add.add_argument("--project", required=True, help="repo path the thread runs in")
     add.add_argument("--profile", help="T3 provider instance; omit → t3-spawn-thread routes by capacity at fire time")
     add.add_argument("--model", help="sol|astra|fable|opus|haiku|MODEL")
@@ -558,7 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("name")
     rm.set_defaults(func=cmd_remove)
 
-    run = sub.add_parser("run-now", help="fire the job now via launchd and print the result")
+    run = sub.add_parser("run-now", help="fire the job now via launchd (once-jobs: foreground, forced) and print the result")
     run.add_argument("name")
     run.add_argument("--foreground", action="store_true", help="run the script directly instead of launchctl kickstart")
     run.add_argument("--timeout", type=int, default=120, help="seconds to wait for the runner's result line")

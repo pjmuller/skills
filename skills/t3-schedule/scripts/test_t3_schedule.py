@@ -114,3 +114,44 @@ def test_runner_path_has_pnpm_and_mise():
     # launchd gets no login shell PATH: without pnpm's global bin the runner falls back to `pnpm dlx`
     assert mod.PNPM_BIN in mod.SCHEDULE_PATH
     assert "$HOME/.local/share/mise/shims" in mod.SCHEDULE_PATH
+
+
+def test_once_plist_and_runner_guard(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    body = plistlib.loads(mod.plist_body("x", 8, 0, None, tmp_path / "x.sh", "2026-09-26"))
+    assert body["StartCalendarInterval"] == {"Month": 9, "Day": 26, "Hour": 8, "Minute": 0}
+    p = mod.paths("job")
+    s = {"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None,
+         "title": "t", "wait_max": 1, "once": "2026-09-26"}
+    once = mod.runner_script(s, p)
+    assert "already fired once" in once and '!= "2026-09-26" && "$T3_SCHEDULE_FORCE" != 1' in once
+    assert "already spawned today" not in once
+    s["once"] = None
+    assert "already fired once" not in mod.runner_script(s, p) and "T3_SCHEDULE_FORCE" not in mod.runner_script(s, p)
+    assert mod.describe_when({"once": "2026-09-26", "days": None}) == "once 2026-09-26 (sat)"
+    assert mod.describe_when({"days": mod.WEEKDAYS}) == "weekdays"
+
+
+def test_once_due_and_retire():
+    from datetime import datetime
+    spec = {"at": "08:00", "days": None, "once": "2026-09-26"}
+    sat = datetime(2026, 9, 26, 9, 0)
+    assert mod.due_now(spec, sat, None)
+    assert not mod.due_now(spec, datetime(2026, 9, 27, 9, 0), None)     # wrong date
+    assert not mod.due_now(spec, sat, "2026-09-26")                       # already fired
+    assert not mod.due_now(spec, datetime(2027, 9, 26, 9, 0), "2026-09-26")  # annual re-fire
+    assert mod.retire_status(spec, sat, None) is None                     # still in window
+    assert mod.retire_status(spec, sat, "2026-09-26") == "fired 2026-09-26"
+    assert mod.retire_status(spec, datetime(2026, 9, 26, 18, 1), None) == "expired (never fired)"
+    assert mod.retire_status({"at": "08:00", "days": None}, sat, None) is None  # recurring: never
+    assert not mod.due_now({**spec, "retired": "fired 2026-09-26"}, sat, None)
+
+
+def test_parse_once_rejects_past():
+    import pytest
+    from datetime import datetime
+    now = datetime(2026, 9, 24, 10, 0)
+    assert mod.parse_once("2026-09-24", 10, 1, now) == "2026-09-24"
+    for day, h in (("2026-09-24", 10), ("2026-09-23", 12), ("26/09/2026", 8)):
+        with pytest.raises(SystemExit):
+            mod.parse_once(day, h, 0, now)

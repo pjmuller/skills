@@ -1,6 +1,6 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) via a macOS LaunchAgent. Use for "schedule a daily/weekly T3 job", "every morning run the fleet report", "list/remove scheduled T3 jobs", "/t3-schedule". Not for one-shot in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
+description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent. Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "list/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
 ---
 
 # t3-schedule
@@ -9,6 +9,8 @@ description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every
 t3-schedule add --name fleet-report-work --at 07:30 --weekdays \
   --project ~/code/example/example-app --model fable \
   -- "Run the fleet-report-work skill for yesterday, end to end (ClickUp ticket included)."
+t3-schedule add --name downscale-db --once 2026-09-26 --at 08:00 \
+  --project ~/code/example/example-app -- "Downscale the staging DB to the weekend size."
 t3-schedule list            # jobs · loaded? · profile/model · last run + result
 t3-schedule list --markdown # same as a table — use this when the user asks "what's scheduled?"
 t3-schedule run-now NAME    # launchctl kickstart + prints the runner's log (real spawn)
@@ -29,7 +31,7 @@ One job = LaunchAgent `com.t3-skills.t3-schedule.<name>` (`~/Library/LaunchAgent
 `~/.t3/userdata/scheduled/t3-schedule/<name>.sh` → waits for T3 Code (≤ `--wait-max` min, default 10)
 → `t3-spawn-thread --project … --no-open --title "⏰ <name> <date>" -- "<prompt>"` → macOS
 notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`. Prompt lives in `<name>.prompt.md`
-(or `--prompt-file`). `--days mon,thu` / `--weekdays` / default daily. `--title` accepts `{date}`.
+(or `--prompt-file`). `--days mon,thu` / `--weekdays` / `--once YYYY-MM-DD` / default daily. `--title` accepts `{date}`.
 
 Install: `scripts/install` (symlink into `~/.local/bin`, needs the
 `t3-manage-thread` helpers on PATH).
@@ -58,4 +60,8 @@ Install: `scripts/install` (symlink into `~/.local/bin`, needs the
 - **Provider limits / auth** are the thread's problem, same as a manual spawn: a rate-limited
   thread shows the banner and `t3-usage-windows limited` handles it; expired `rc`/Claude OAuth surfaces in the
   thread. The daily notification + sidebar thread `⏰ name date` is the ack; nothing else pings the user.
+- **One-shot (`--once`)** = same guarantees (catch-up until slot+10h that day, one spawn). launchd
+  has no Year, so the runner skips any other date and any run after `<name>.last` exists; the
+  catch-up poller then retires the job (bootout, plist + runner deleted, spec kept; `list` shows
+  `fired <date>` or `expired (never fired)` + one notification). `run-now` fires it immediately.
 - Never edit `<name>.sh` by hand — `add --force` (one job) or `refresh` (all) regenerates it.
