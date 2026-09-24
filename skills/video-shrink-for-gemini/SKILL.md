@@ -98,6 +98,13 @@ prompt. The ancillary `media_summary_generation` 503 is harmless; only a main-ru
    Approve the requested file write within the authorized task, then read it yourself.
 5. Verify spoken words, visual changes, timestamps and coverage against the recording;
    report gaps. Return the Markdown path, preserve inputs, then exit the CLI.
+   Small-text UI walkthroughs need a real check: on a 29-minute 720p screen share (normal
+   preset, 2026-09-24), Flash made up most of the on-screen text, the example data, the
+   pricing and the screen names while still sounding sure of itself. Check 3–4 source
+   frames first. If they disagree, use the `scene-frames` output as the source and treat
+   the Gemini draft as hypotheses only.
+   If a sandboxed agent's `osascript` clipboard write leaves `clipboard info` empty, it
+   failed silently: run it outside the sandbox.
 
 Run directly in native `agy` when it works; a T3 worker is optional, not a media
 prerequisite. For model comparisons, use fresh conversations, identical media and
