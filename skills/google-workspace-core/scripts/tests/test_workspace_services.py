@@ -123,6 +123,24 @@ def test_gmail_html_send_carries_both_alternatives():
     assert "Hallo daar" in plain.get_payload(decode=True).decode()
 
 
+def test_gmail_plain_draft_preserves_authored_paragraphs_and_bullets():
+    body = ("Dag team,\n\n"
+            "Deze lange zin bevat enkele accenten en loopt ruim voorbij de breedte van "
+            "een gewone mailregel, zodat MIME-transportregels geen nieuwe zichtbare "
+            "regeleinden mogen toevoegen aan de tekst die we als concept opslaan.\n\n"
+            "- Eerste punt met €190.\n"
+            "- Tweede punt met een langere uitleg, die ook verder mag lopen dan één regel.\n\n"
+            "Groeten,\nNaam")
+    session = FakeSession([Recorded({"id": "draft", "message": {"id": "message"}})])
+    GmailClient(session, sender=ACCOUNT).create_draft("reader@example.com", "Onderwerp", body)
+    raw = session.calls[0][2]["json"]["message"]["raw"]
+    message = message_from_bytes(base64.urlsafe_b64decode(raw))
+    assert not message.is_multipart()
+    assert message.get_content_type() == "text/plain"
+    assert message.get_content_charset() == "utf-8"
+    assert message.get_payload(decode=True).decode("utf-8").replace("\r\n", "\n") == body + "\n"
+
+
 def test_gmail_keeps_an_authored_plain_text_body_beside_an_html_alternative():
     session = FakeSession([Recorded({"id": "sent"})])
     GmailClient(session, sender=ACCOUNT).send("a@b.c", "Report", "Plain report",

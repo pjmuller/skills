@@ -7,6 +7,28 @@ Report writes as untested unless the task included a verified write. Don't mutat
 to test permissions. A resource 404 can mean missing access or an obsolete ID; reauthentication
 alone is not a demonstrated fix. Access-token expiry normally refreshes automatically.
 
+## Composing messages
+
+For new messages, prefer plain text: `gmail-draft --body-file PATH` (or
+`ws.gmail.create_draft(..., body)`) creates a single `text/plain; charset=utf-8` MIME part.
+Use ordinary paragraphs and `- ` bullets, with a blank line between bullets when each point is
+long. Keep lines as you want them read; don't insert fixed-width line breaks to match today's
+composer window. `--html` or `--html-file` is an explicit escape hatch for messages that need
+layout or rich formatting. The Python email library may fold quoted-printable transport lines;
+those soft breaks disappear when MIME is decoded. Gmail's web composer may still rewrap or
+normalize a plain-text draft when a person edits and sends it. Our serializer cannot guarantee
+that the sent message will keep the draft's visual wrapping. For a layout-sensitive message,
+use minimal HTML only when the layout itself matters, and inspect the sent copy when available.
+Use simple paragraphs, line breaks and lists with a readable plain-text alternative; avoid fixed
+widths, layout tables, custom fonts and pasted editor markup. Do not auto-convert Markdown.
+Do not add `format=flowed` as a magic fix: it requires RFC3676 encoding and client support;
+Gmail may rewrite it on send. Diagnose wrapping from the decoded MIME body, not the encoded
+wire lines. Never send a test email without authorization.
+
+References: [Gmail draft MIME requirements](https://developers.google.com/workspace/gmail/api/guides/drafts),
+[Python MIME content handling](https://docs.python.org/3/library/email.contentmanager.html),
+[flowed text semantics](https://www.rfc-editor.org/rfc/rfc3676.html).
+
 ## Existing Gmail drafts (either account)
 
 - Fetch the current draft before composing an edit. Treat its latest text as the base; preserve
