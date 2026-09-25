@@ -31,12 +31,14 @@ def test_runner_script_is_root_spawn(tmp_path, monkeypatch):
          "title": "⏰ job {date}", "wait_max": 5}
     body = mod.runner_script(s, p)
     assert "unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID" in body
-    assert "t3-spawn-thread --project /repo --no-open --model fable" in body and "profile=work" in body
+    assert "for candidate in fable; do" in body and "profile=work" in body
+    assert 't3-spawn-thread --project /repo --no-open --model "$candidate" "${profile_flag[@]}" --dry-run -- probe' in body
+    assert 't3-spawn-thread --project /repo --no-open --model "$chosen" "${profile_flag[@]}" --title' in body
     assert "--thinking" not in body
     assert str(p["prompt"]) in body and str(p["log"]) in body
     assert "--settle-when-done" not in body
     s["settle_when_done"] = True
-    assert "--no-open --settle-when-done --model fable" in mod.runner_script(s, p)
+    assert '--no-open --settle-when-done --model "$chosen"' in mod.runner_script(s, p)
 
 
 def test_runner_guard_and_auto_profile(tmp_path, monkeypatch):
@@ -101,6 +103,10 @@ def test_refresh_retires_legacy_and_preserves_job_data(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(args, 0 if label in active else 1, '', '')
     monkeypatch.setattr(mod, 'launchctl', ctl)
     monkeypatch.setattr(mod, 'bootstrap', lambda path: active.add(plistlib.loads(path.read_bytes())['Label']))
+    monkeypatch.setattr(mod, 'running', lambda name: True)
+    mod.cmd_refresh(argparse.Namespace())
+    assert mod.label_for('smoke') not in active  # a running job is left alone
+    monkeypatch.setattr(mod, 'running', lambda name: False)
     mod.cmd_refresh(argparse.Namespace())
     mod.cmd_refresh(argparse.Namespace())
     assert legacy not in active and not old.exists()
@@ -164,3 +170,38 @@ def test_once_catch_up_until_23h():
     assert not mod.due_now(spec, datetime(2026, 9, 26, 23, 5), None)
     assert mod.retire_status(spec, datetime(2026, 9, 26, 22, 0), None) is None
     assert mod.retire_status(spec, datetime(2026, 9, 26, 23, 5), None) == "expired (never fired)"
+
+
+def test_runner_model_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("job")
+    s = {"name": "job", "project": "/r", "profile": None, "model": "haiku,luna", "thinking": "high",
+         "title": "t", "wait_max": 1}
+    body = mod.runner_script(s, p)
+    assert "for candidate in haiku luna; do" in body
+    assert 'fail "job: no model candidate available (haiku,luna)"' in body
+    assert body.index("--dry-run -- probe") < body.index('--model "$chosen"')
+    assert '--thinking high --model "$candidate"' in body
+    s["model"] = None
+    assert f"for candidate in {mod.DEFAULT_MODELS.replace(',', ' ')}; do" in mod.runner_script(s, p)
+    assert mod.describe_models(s) == "opus,sol (default)" and mod.describe_models({"model": "fable"}) == "fable"
+
+
+def test_valid_models():
+    import pytest
+    assert mod.valid_models("opus,sol") == "opus,sol" and mod.valid_models(None) is None
+    assert mod.valid_models("claude-opus-4.5_x") == "claude-opus-4.5_x"
+    for bad in ("opus,,sol", "bad model", "opus,", ""):
+        with pytest.raises(SystemExit):
+            mod.valid_models(bad)
+
+
+def test_hide_and_no_notify(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("job")
+    base = {"name": "job", "project": "/r", "profile": None, "model": "haiku", "thinking": None, "title": "t", "wait_max": 1}
+    body = mod.runner_script({**base, "hide": True, "notify": False}, p)
+    assert "--no-open --hide" in body and "--settle-when-done" not in body
+    assert body.count("display notification") == 2 and '\n  : osascript' in body  # success notification disabled, fail() kept
+    default = mod.runner_script(base, p)
+    assert "--hide" not in default and ": osascript" not in default

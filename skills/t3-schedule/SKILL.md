@@ -7,7 +7,7 @@ description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every
 
 ```bash
 t3-schedule add --name fleet-report-work --at 07:30 --weekdays \
-  --project ~/code/example/example-app --model fable \
+  --project ~/code/example/example-app --model opus,sol \
   -- "Run the fleet-report-work skill for yesterday, end to end (ClickUp ticket included)."
 t3-schedule add --name downscale-db --once 2026-09-26 --at 08:00 \
   --project ~/code/example/example-app -- "Downscale the staging DB to the weekend size."
@@ -24,6 +24,7 @@ t3-schedule refresh         # regenerate all runners/plists after a template cha
 Use `add --settle-when-done` for unattended jobs: forwards the spawn helper's
 [fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done),
 which hides the running thread and appends self-settlement instructions. Do not use a 🏓 title.
+`add --hide --no-notify` = hidden thread without the self-settle footer and without the launch notification: the prompt (or a helper it runs, e.g. `skills-refresh --job`) owns settle/unhide.
 For Sol High, pass `--profile <account> --model sol --thinking high` (account label, e.g. `probackup`; no thread to inherit a sibling from).
 
 One job = LaunchAgent `com.t3-skills.t3-schedule.<name>` (`~/Library/LaunchAgents`, `ProcessType=Interactive` —
@@ -39,11 +40,20 @@ Install: `scripts/install` (symlink into `~/.local/bin`, needs the
 ## Contract
 - **Spawn is a root thread.** The runner unsets `CODEX_THREAD_ID` etc. and `run-now` goes through
   launchd, so no parent thread is inherited even when fired from inside a T3 agent.
-- **Profile.** Omit `--profile` → `t3-spawn-thread` routes by capacity at fire time
-  ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing); the decision block
-  lands in the job log). Every account exhausted → the spawn refuses, the runner fails and the
-  catch-up poller retries every 15 min until slot+10h, so the job lands once a window resets
-  instead of sitting as a blocked thread. No spreading of near-equal profiles across jobs:
+- **Model + profile.** `--model a,b` = ordered candidates: at fire time the first whose ecosystem
+  is installed *and* has capacity wins. No `--model` ≡ `--model opus,sol`. Omit `--profile` →
+  `t3-spawn-thread` picks the account with most room
+  ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing)). The runner probes
+  each candidate with the spawn helper's `--dry-run`; the log shows `-- probe model X` + its
+  decision block (`← selected` = account, `→` = why):
+  ```
+  -- probe model opus
+     Profile routing for claude-opus-… (usage cached ≤90 s; explicit --profile NAME bypasses this):
+       claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) …  ← selected
+       → claudeAgent_dentai: best bottleneck score (…)
+  ```
+  No candidate available → the runner fails and the catch-up poller retries every 15 min until
+  slot+10h, so the job lands once a window resets instead of sitting as a blocked thread. No spreading of near-equal profiles across jobs:
   usage is re-read between jobs (90 s cache) and real consumption ranks them.
 - **Spacing.** Slots are ≥15 min apart and the
   catch-up poller kicks **one job per tick** (earliest slot first, never while another runner is

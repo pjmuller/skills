@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.4.0 (2026-09-25)
+- t3-manage-thread: `skills-refresh` — release-gated updater for globally installed copies of this repo's skills: applies only new `vX.Y.Z` tags (never `main` HEAD), stages a clone at the tag, `bash -n` pre-check, swaps the skill directories with a last-good rollback, reruns each updated skill's `scripts/install`, writes `~/.agents/pjmuller-skills.version` and prints the CHANGELOG entries between the two tags (exit 0 current · 10 applied · 1 failed). `skills-refresh schedule` registers the daily 06:30 job: macOS via `t3-schedule add --hide --no-notify` on `haiku,luna`, prompt = `skills-refresh --job`, which itself settles the thread (nothing new) or surfaces it once with the changelog (applied) or the error; `--quiet` settles on applied too. Linux/WSL via cron. Symlinked source checkouts are left alone. No `skills update`/`skills check` involved.
+- t3-manage-thread: `t3-spawn-thread --version` / `skills-refresh --version` print the installed release tag from the stamp (or `source checkout <git describe>`); `scripts/install --check` shows it. `--model luna` alias (`gpt-6-luna`).
+- t3-schedule: `add --hide` (snooze keeper without the self-settle footer) and `add --no-notify` (no launch notification); `refresh` skips jobs whose runner is active instead of killing a spawn in flight.
+- t3-schedule: `--model` accepts an ordered comma list (`opus,sol`): at fire time the runner probes each candidate with `t3-spawn-thread --dry-run` and spawns the first whose ecosystem is installed and has capacity; no `--model` ≡ `opus,sol`. Profile keeps following the spawn helper's capacity routing (unknown-capacity accounts only when nothing is verified).
+- t3-setup / README: the standard T3 setup is `t3-manage-thread` + `t3-schedule`, both global, plus the `skills-refresh` job; `docs/onboarding/skills-refresh.md` is the paste-to-colleague upgrade note.
+
 ## v0.3.4 (2026-09-25)
 - video-shrink-for-gemini: mandatory vocabulary grounding before any Gemini/OpenAI transcription (people, products, taxonomies/enums from the project's docs → `## Vocabulary` block and `--hint`); `transcribe-openai` without `OPENAI_API_KEY` prints skipped and exits 0 (enrichment, not a blocker). Annotation prompt carries the same vocabulary field.
 

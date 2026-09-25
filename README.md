@@ -13,8 +13,8 @@ then, for skills that ship commands, run `scripts/install` and `scripts/install 
 one machine. **Repo-local registration** (omit `-g`) writes a tracked copy to
 `.agents/skills/<name>` plus `skills-lock.json`, so worktrees, cloud sandboxes and
 colleagues discover the version that repository expects. Register as little as
-possible globally; this catalog recommends only `t3-manage-thread` globally by
-default.
+possible globally; this catalog recommends only `t3-manage-thread` and
+`t3-schedule` globally by default.
 
 A **personal setup repository** owns one person's machine setup, operator workflows
 and periodic maintenance. A **project repository** owns product, team or domain work.
@@ -40,7 +40,7 @@ their discovered skill list.
 | [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
 | [claude-cloud](skills/claude-cloud/SKILL.md) | a local agent must drive Claude Code **cloud** sessions headlessly: create, send, wait, read, archive; cloud dry runs and browser fallback (undocumented API experiment) | project repo where local agents drive its cloud sessions | `pnpm dlx skills add pjmuller/skills -s claude-cloud -y` |
 | [codexbar-setup](skills/codexbar-setup/SKILL.md) | CodexBar should share native profiles with T3/Codex and keep Claude credentials fresh (macOS) | personal setup repo | `pnpm dlx skills add pjmuller/skills -s codexbar-setup -y` |
-| [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd | personal setup repo | `pnpm dlx skills add pjmuller/skills -s t3-schedule -y` |
+| [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd | global (with t3-manage-thread) | `pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y` |
 | [t3-maintenance](skills/t3-maintenance/SKILL.md) | you orchestrate many worker threads: fleet view, stalled workers, unsent drafts, purge, prompt mining | personal setup repo | `pnpm dlx skills add pjmuller/skills -s t3-maintenance -y` |
 | [t3-find-thread](skills/t3-find-thread/SKILL.md) | "which thread did we discuss X in?"; full-text search over local transcripts, jump to it | personal setup repo | `pnpm dlx skills add pjmuller/skills -s t3-find-thread -y` |
 | [t3-usage-windows](skills/t3-usage-windows/SKILL.md) | you juggle several Claude/Codex accounts: warm five-hour windows, top up during the day, resume rate-limited threads | personal setup repo | `pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y` |
@@ -53,7 +53,7 @@ their discovered skill list.
 | [google-workspace-core](skills/google-workspace-core/SKILL.md) | agents need reusable Workspace clients with repository-owned accounts and existing CLI contracts | project repo | `pnpm dlx skills add pjmuller/skills -s google-workspace-core -y` + an account wrapper |
 | [whatsapp-bridge](skills/whatsapp-bridge/SKILL.md) | an agent must read WhatsApp chats, resolve contacts and send explicitly authorized individual texts from a locally paired account (Neonize/whatsmeow, no browser) | personal setup repo + a thin wrapper holding account/recipient policy | `pnpm dlx skills add pjmuller/skills -s whatsapp-bridge -y` |
 
-Dependencies: t3-schedule, t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance;
+Dependencies: t3-schedule and t3-manage-thread are installed together by setup; t3-maintenance and t3-usage-windows need t3-manage-thread's helpers; t3-usage-windows also needs t3-maintenance;
 claude-cloud needs t3-manage-thread for profile → Keychain resolution (macOS only).
 T3 Code must be running for the T3 skills. Thread helpers work on macOS and Linux/WSL; launchd scheduling and the top-up daemon are macOS-only.
 
@@ -61,15 +61,17 @@ Paste-to-your-agent version:
 
 ```
 Register the skill <name> from github.com/pjmuller/skills in the repository that owns the work with
-`pnpm dlx skills add pjmuller/skills -s <name> -y`; use `-g` only for t3-manage-thread or an explicitly
+`pnpm dlx skills add pjmuller/skills -s <name> -y`; use `-g` only for t3-manage-thread, t3-schedule or an explicitly
 chosen machine-wide skill. If it ships commands, run scripts/install and scripts/install --check and
 fix what --check reports; PATH availability does not change the skill's discovery scope. Then read SKILL.md.
 ```
 
 ## Update
 
-Nothing auto-updates. `pnpm dlx skills update -g` (global) or `pnpm dlx skills update -p` inside the
-repo (commit the diff + lockfile), then rerun `scripts/install` and `--check` for updated skills that ship commands.
+The daily `skills-refresh` job applies new release tags of t3-manage-thread + t3-schedule
+(stamp `~/.agents/pjmuller-skills.version`, `t3-spawn-thread --version`). Repo-local copies:
+`pnpm dlx skills update -p` inside the repo (commit the diff + lockfile), then rerun
+`scripts/install` and `--check` for updated skills that ship commands.
 Installers refuse to replace commands from another checkout; use `--relink` to choose a new canonical copy.
 `--check` prints its resolved source directory first.
 Updates replace installed files; keep personal customizations outside them. After updating

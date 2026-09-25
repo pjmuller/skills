@@ -38,6 +38,7 @@ HEALTH_PATH = "/.well-known/t3/environment"
 DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_NAMES = {v: k for k, v in DAYS.items()}
 WEEKDAYS = [1, 2, 3, 4, 5]
+DEFAULT_MODELS = "opus,sol"            # no --model: Claude when installed with capacity, else Codex
 
 
 # --- paths --------------------------------------------------------------------
@@ -113,6 +114,20 @@ def describe_when(spec: dict) -> str:
     return f"once {once} ({DAY_NAMES[(date.fromisoformat(once).weekday() + 1) % 7]})"
 
 
+def valid_models(value: str | None) -> str | None:
+    """Ordered comma list; the runner spawns the first candidate the spawn helper can route."""
+    if value is None:
+        return None
+    tokens = value.split(",")
+    if not all(t and all(c.isalnum() or c in "._-" for c in t) for t in tokens):
+        raise SystemExit(f"--model expects a comma list of [A-Za-z0-9._-]+ (e.g. opus,sol), got {value!r}")
+    return value
+
+
+def describe_models(spec: dict) -> str:
+    return spec.get("model") or f"{DEFAULT_MODELS} (default)"
+
+
 def valid_name(name: str) -> str:
     if not name or not all(c.isalnum() or c in "-_" for c in name):
         raise SystemExit("--name must be [A-Za-z0-9_-]+ (it becomes part of the launchd label)")
@@ -146,10 +161,12 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     spawn = ["t3-spawn-thread", "--project", spec["project"], "--no-open"]
     if spec.get("settle_when_done"):
         spawn.append("--settle-when-done")
-    for flag in ("model", "thinking"):
-        if spec.get(flag):
-            spawn += [f"--{flag}", spec[flag]]
+    if spec.get("hide"):
+        spawn.append("--hide")
+    if spec.get("thinking"):
+        spawn += ["--thinking", spec["thinking"]]
     spawn_quoted = " ".join(shlex.quote(part) for part in spawn)
+    candidates = " ".join(shlex.quote(m) for m in (spec.get("model") or DEFAULT_MODELS).split(","))
     last = shlex.quote(str(p["last"]))
     if spec.get("once"):
         guard = f"""  today=$(date +%F)
@@ -211,7 +228,19 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   profile_flag=()
   [[ -n "$profile" ]] && profile_flag=(--profile "$profile")
   title="${{title//\\{{date\\}}/$(date +%F)}}"
-  out=$({spawn_quoted} "${{profile_flag[@]}}" --title "$title" -- "$(cat {shlex.quote(str(p["prompt"]))})" 2>&1)
+  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
+  # own dry-run decides (same routing as the real spawn); its decision block lands here.
+  chosen=
+  for candidate in {candidates}; do
+    echo "-- probe model $candidate"
+    if probe=$({spawn_quoted} --model "$candidate" "${{profile_flag[@]}}" --dry-run -- probe 2>&1); then
+      chosen=$candidate
+    fi
+    echo "$probe" | sed 's/^/   /'
+    [[ -n "$chosen" ]] && break
+  done
+  [[ -n "$chosen" ]] || fail "{name}: no model candidate available ({spec.get("model") or DEFAULT_MODELS})"
+  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat {shlex.quote(str(p["prompt"]))})" 2>&1)
   rc=$?
   echo "$out"
   (( rc == 0 )) || fail "{name}: spawn FAILED (exit $rc) - see log"
@@ -220,7 +249,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   thread=$(echo "$out" | sed -n 's/^Thread ID: *//p' | head -1)
   msg="{name}: spawned $title ${{thread:+($thread)}}"
   echo "-- $msg"
-  osascript -e "display notification \\"$msg\\" with title \\"t3-schedule\\"" || true
+  {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n  : '}osascript -e "display notification \\"$msg\\" with title \\"t3-schedule\\"" || true
 }} >> {shlex.quote(str(p["log"]))} 2>&1
 """
 
@@ -287,9 +316,11 @@ def cmd_add(args: argparse.Namespace) -> int:
         "name": name,
         "project": str(project),
         "profile": args.profile,
-        "model": args.model,
+        "model": valid_models(args.model),
         "thinking": args.thinking,
         "settle_when_done": args.settle_when_done,
+        "hide": args.hide,
+        "notify": not args.no_notify,
         "title": args.title or f"⏰ {name} {{date}}",
         "at": f"{hour:02d}:{minute:02d}",
         "days": days,
@@ -316,7 +347,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     bootstrap(p["plist"])
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
-    print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={args.model or 'default'}")
+    print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={describe_models(spec)}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     return 0
 
@@ -357,7 +388,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             prompt = paths(name)["prompt"].read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
                 f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name} "
-                f"| {spec.get('profile') or 'auto'} / {spec.get('model') or 'default'} "
+                f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
                 f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
@@ -367,7 +398,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         state = spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
         print(
             f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
-            f"{spec.get('profile') or '-'}/{spec.get('model') or '-'}  {spec['project']}"
+            f"{spec.get('profile') or '-'}/{describe_models(spec)}  {spec['project']}"
         )
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
     return 0
@@ -576,6 +607,9 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         name = spec["name"]
         if spec.get("retired"):
             continue  # never re-arm a spent once-job
+        if running(name):  # bootout would kill a spawn in flight; zsh reads its script lazily
+            print(f"skipped   {label_for(name)} (runner active; rerun refresh later)")
+            continue
         spec.setdefault("wait_max", DEFAULT_WAIT_MAX)
         if loaded(name):
             bootout(name)
@@ -628,9 +662,11 @@ def build_parser() -> argparse.ArgumentParser:
     when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
     add.add_argument("--project", required=True, help="repo path the thread runs in")
     add.add_argument("--profile", help="T3 provider instance; omit → t3-spawn-thread routes by capacity at fire time")
-    add.add_argument("--model", help="sol|astra|fable|opus|haiku|MODEL")
+    add.add_argument("--model", help=f"ordered comma list, first installed with capacity wins: opus,sol · fable · MODEL (default {DEFAULT_MODELS})")
     add.add_argument("--thinking", help="low|medium|high (omit → model's house default)")
     add.add_argument("--settle-when-done", action="store_true", help="hide the thread while running and instruct it to settle itself when done")
+    add.add_argument("--hide", action="store_true", help="hide the thread while running (snooze keeper), no self-settle footer: the prompt owns the lifecycle")
+    add.add_argument("--no-notify", action="store_true", help="no macOS notification on spawn (failures still notify once per day)")
     add.add_argument("--title", help="thread title; {date} → YYYY-MM-DD. Default: '⏰ <name> {date}'")
     add.add_argument("--prompt-file", help="read the prompt from a file instead of the argument")
     add.add_argument("--wait-max", type=int, default=DEFAULT_WAIT_MAX, help=f"minutes to wait for T3 Code before giving up (default {DEFAULT_WAIT_MAX}; catch-up retries)")

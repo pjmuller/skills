@@ -57,3 +57,11 @@ Design points:
 
 ## Astra's review (🏓 thread, 2026-09-25)
 Same verdict: "automate distribution, not self-modification inside a skill". Extra points folded in: the `skills` CLI's `check` dispatches to the same updater as `update` (confirmed in v1.5.24 source, still true in 1.7.0), so pin the CLI version in the job; a content hash proves change, not publisher authenticity, so pin the source commit/tag; stage + validate + activate with last-good rollback; never assume `skills add` installs PATH helpers. Astra prefers update PRs with auto-merge for Mode 1; with shared `main` and no feature branches here, a direct `[skip ci]` commit after a green smoke test is the equivalent.
+
+## Status 2026-09-25 (evening)
+Mode 2 shipped: `skills-refresh` in t3-manage-thread ([doc](../../skills/t3-manage-thread/skills-refresh.md)), wired into `setup/t3-setup`; colleague note in [docs/onboarding/skills-refresh.md](../onboarding/skills-refresh.md). The job clones the tag with git and copies the skill directories itself, so no `skills` CLI version needs pinning (`skills check` never runs).
+
+Mode 1 follow-up (not done: >30 lines, needs `shared-skill-sync` changes in macbook_setup):
+1. `update.py`: `--ref TAG` for `plan`/`apply` — compare consumers against `archived(SOURCE, TAG, …)` instead of `HEAD`, and install with `skills add pjmuller/skills#TAG` (CLI tag refs: see the probe result in the same-day build thread; fallback `git archive TAG | tar -x` into the worktree).
+2. State file `~/.agents/shared-skill-sync.last-tag`; `plan` exits 0 "no new tag" when `git ls-remote --tags` has nothing newer.
+3. `t3-schedule add --name shared-skill-sync --at 05:30 --project ~/code/pjmuller/macbook_setup --model haiku,luna --settle-when-done -- "…plan → apply → check → push; surface only when repos were touched"`; 06:30 is taken by fleet-kampadmin-support on PJ's Mac (slots ≥15 min apart).

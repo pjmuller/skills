@@ -20,10 +20,11 @@ logins/2FA you cannot complete. Preserve unrelated work and report deviations.
 ## Detect before creating
 
 - Read prompt parameters: identity, OS, setup repo, accounts, prompt base, and skill scopes.
-  Default: register only `t3-manage-thread` globally. Register machine and operator
+  Default: register `t3-manage-thread` and `t3-schedule` globally (macOS; Linux/WSL:
+  thread helpers + `skills-refresh` cron, no launchd). Register machine and operator
   skills repo-locally in the personal setup repository: `agents-md` for initial
   prompt setup and later maintenance, `tone-of-voice` when creating or refreshing
-  that file, `codexbar-setup` when CodexBar is selected, and `t3-schedule` on macOS.
+  that file, `codexbar-setup` when CodexBar is selected.
 - Discover GitHub identity with `gh api user`; inspect `~/code/<gh-user>/*setup*`.
   Reuse an existing setup repo and its name; prefer a supplied path, otherwise the
   repo already owning agent configuration. If absent, create private
@@ -134,14 +135,15 @@ directory symlinks. Ensure `~/.local/bin` is on PATH in the user's login shell.
 ```bash
 pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y
 ~/.agents/skills/t3-manage-thread/scripts/install
+pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y        # macOS
+~/.agents/skills/t3-schedule/scripts/install                    # --relink when an older repo-local copy owns ~/.local/bin/t3-schedule
+skills-refresh                     # pin the install to the newest release tag; writes ~/.agents/pjmuller-skills.version
+skills-refresh schedule --project <setup-repo>   # daily 06:30 job: macOS via t3-schedule (hidden, self-settling, surfaces once when a release was applied), Linux/WSL via cron
 # Run repo-local registrations from the personal setup repo:
 pnpm dlx skills add pjmuller/skills -s agents-md -y
 # When selected:
 pnpm dlx skills add pjmuller/skills -s tone-of-voice -y
 pnpm dlx skills add pjmuller/skills -s codexbar-setup -y
-# macOS only:
-pnpm dlx skills add pjmuller/skills -s t3-schedule -y
-.agents/skills/t3-schedule/scripts/install
 ```
 
 Install additional requested skills at their requested scopes, dependency helpers
@@ -165,11 +167,15 @@ Recheck all global home links after installation; preserve one canonical tree.
   loaded and the runner finds `uv`, `pnpm`, `jq`, and `sqlite3` on PATH (include
   `~/.local/share/mise/shims` when installed there). Remove the smoke job with
   `t3-schedule remove t3-setup-smoke` even after a failure; preserve diagnostic logs.
+  `t3-schedule list` must show `skills-refresh` (Linux/WSL: `crontab -l`);
+  `skills-refresh --version` must print a tag.
 - Record bootstrap source URL/full revision, installed skill revisions/locks,
   tested T3 version, home layout, and update procedure in the setup repo's `SETUP.md`.
-  Updates: `pnpm dlx skills update <name> -g` or `-p`, then rerun that skill's
-  `scripts/install` and `scripts/install --check`. Updates wipe and replace skill
-  files: keep personal customizations elsewhere. Commit and push setup changes.
+  Updates arrive through the daily `skills-refresh` job (release tags only);
+  `skills-refresh` runs it by hand. Never `skills update`/`skills check` on these two
+  skills (they re-fetch main HEAD). Repo-local skills: `pnpm dlx skills update -p`, then
+  rerun `scripts/install --check`. Updates wipe and replace skill files: keep personal
+  customizations elsewhere. Commit and push setup changes.
 
 Finish with this copyable feedback block; no secrets. Include exact errors for
 failures, “none” for empty categories, and one actionable next prompt if needed.

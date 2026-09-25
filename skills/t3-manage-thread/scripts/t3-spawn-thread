@@ -19,7 +19,7 @@ Options:
                                                     the parent's account or its sibling); other
                                                     drivers stay on the inherited account.
   --provider PROFILE                                Alias for --profile
-  --model auto|sol|astra|haiku|fable|opus|gemini|MODEL  Default: inherit
+  --model auto|sol|astra|luna|haiku|fable|opus|gemini|MODEL  Default: inherit
   --thinking auto|low|med|medium|high                Default: inherit, else high
   --source-thread THREAD_ID                          Override the detected parent
   --title TITLE                                     Default: first 72 prompt chars
@@ -35,6 +35,7 @@ Options:
                                                     Not for 🏓 workers (the orchestrator settles those).
   --no-open                                         Do not focus the new T3 thread
   --dry-run                                         Resolve everything, create nothing
+  --version                                         Installed pjmuller/skills release
   -h, --help
 
 If no task brief argument is given, the prompt is read from stdin.
@@ -111,6 +112,9 @@ while (($#)); do
     --dry-run)
       dry_run=1
       shift
+      ;;
+    --version)
+      exec "$(dirname "$(readlink -f "$0")")/skills-refresh" --version
       ;;
     -h|--help)
       usage 0
@@ -213,6 +217,7 @@ normalize_model() {
         "$normalized" "$t3_base_dir" "${2:-}"
       ;;
     astra) printf '%s' "gpt-6-astra" ;;
+    luna) printf '%s' "gpt-6-luna" ;;
     haiku) printf '%s' "claude-haiku-4-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
     gemini) printf '%s' "gemini-3.8-flash-high" ;;

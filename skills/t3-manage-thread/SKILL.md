@@ -53,6 +53,7 @@ user said standalone. Hidden ≠ stopped; settle only after the ping-back is ver
 | Rate-limit windows per Claude + Codex profile (the numbers routing uses) | [limits.md](limits.md) |
 | Bulk select + hard purge of threads | `t3-maintenance` skill → `t3-purge-threads` |
 | Fleet view of workers (`t3-fleet list --title-prefix 🏓` / `--stalled`) | `t3-maintenance` skill |
+| Stay on the newest release (`skills-refresh`, `--version`, daily job) | [skills-refresh.md](skills-refresh.md) |
 | Native upstream tools (when to retire these helpers) | [upstream-checkpoint.md](upstream-checkpoint.md) |
 
 ## Install
@@ -60,6 +61,7 @@ user said standalone. Hidden ≠ stopped; settle only after the ping-back is ver
 ```bash
 scripts/install          # symlinks the helpers into ~/.local/bin
 scripts/install --check  # deps + T3 Code reachable
+skills-refresh schedule  # colleagues: daily release-tag update + changelog thread (skills-refresh.md)
 ```
 
 Deps: `jq`, `curl`, `uuidgen`, `sqlite3`, `pnpm`, `uv`, `git`, T3 Code running.
