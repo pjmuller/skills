@@ -84,6 +84,9 @@ hidden slides are excluded from the presented deck and expected export count.
   Render, inspect labels, then adjust scale or simplify. For paired diagrams, a two-column
   layout with top-to-bottom flow often fits better than stacking. Keep the same visual scale
   when size carries meaning. Do not compensate for an overloaded diagram with tiny text.
+- Pin `colorSchema: light` or `dark` in headmatter and design the palette for it. Unset, Slidev
+  follows the viewer's OS preference while the exporter renders light, so hardcoded colours can
+  pass PNG review and still be invisible in the browser.
 - `aspectRatio` and `canvasWidth` belong in headmatter. Design for the delivery surface:
   a square social carousel and a widescreen talk need different compositions.
 
