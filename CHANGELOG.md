@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- clickup-core: `scripts/syncup.py` downloads a SyncUp's recording, AI notes and untimed notetaker transcript from a chat message, chat channel (`--list`) or notes Doc URL; token-only (no clickup.toml), private git-ignored output, exit 75 while ClickUp is still processing.
 - t3-schedule: once-jobs retry a missed/failed slot until 23:00 that day (recurring jobs keep slot+10h: they have tomorrow).
 - t3-spawn-thread: `--settle-when-done` footer is conditional — the worker self-settles only on a clean outcome (nothing new the user needs); otherwise it unhides itself (`t3-hide-thread --unhide <own id>`) and ends with a terse report.
 - t3-schedule: `add --once YYYY-MM-DD` one-shot jobs with the recurring guarantees (catch-up until slot+10h, one spawn). Runner guards launchd's yearly re-fire; the catch-up poller retires fired/expired once-jobs (`list` shows the outcome, expiry notifies); `run-now` forces the date; past date/time rejected; `--weekdays`/`--days`/`--once` mutually exclusive.

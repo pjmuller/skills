@@ -28,6 +28,11 @@ follow-up tasks, speaker/timestamp paragraphs) and, unless transcript-only, the 
 `recording_url` as `source.webm`. Leexi's timestamped transcript is the speech layer; use
 Gemini for what happened on screen and to check what Leexi heard.
 
+## ClickUp SyncUp input
+
+ClickUp SyncUp recordings, AI notes and the untimed notetaker transcript come from
+clickup-core's `scripts/syncup.py URL --out PRIVATE_DIR`; then follow the normal route below.
+
 ## Inspect and choose mode
 
 Inspect 3–4 frames across each clip and measure duration with `ffprobe`.

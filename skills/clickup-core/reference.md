@@ -58,6 +58,20 @@ The fixture suite covers these shapes, unknown embeds, ordered text preservation
 Private content interfaces have no stability guarantee. Probe new embed shapes through UI-write and
 API readback before extending the parser. Task descriptions cannot prove notification delivery.
 
+## SyncUp recordings
+
+`scripts/syncup.py` follows the chain: SyncUp root chat message (`A SyncUp Happened` in text/plain) →
+reply from the ClickUp AI bot (`user_id` `-4`) linking the notes Doc → Doc pages via v3
+`docs/{id}/pages?content_format=text/md` → a bare `*.clickup-attachments.com` media link on the
+notes page. Calls over ~1 h get an audio-only recording (1 GB cap), so any media extension counts.
+Notes and the recording appear 5–10 min after the call (exit 75). The "Meeting Transcript" page is
+the live notetaker's: untimed and possibly partial (it can stop mid-sentence while the recording
+runs on). The web player's timed captions come from a private AI-service endpoint
+(`/ai/v1/workspaces/{ws}/transcriptions/attachment/{uuid}` on the shard from
+`shard/v1/handshake/{ws}`) that rejects personal tokens, so they are unsupported; for a timed
+transcript run the recording through video-shrink-for-gemini's local route
+(`transcribe-local`) or Gemini.
+
 Official API references: [tasks](https://developer.clickup.com/docs/tasks),
 [comment formatting](https://developer.clickup.com/docs/comment-formatting),
 [rate limits](https://developer.clickup.com/docs/rate-limits).
