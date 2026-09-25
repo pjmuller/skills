@@ -69,6 +69,8 @@ def test_auto_preserves_codex_and_sibling_tie(settings):
     ("beta", "auto", "codex", None, None),
     ("auto", "astra", "claudeAgent", "codex_beta", "reasoningEffort"),
     ("auto", "astra", "new_instance", "codex", "reasoningEffort"),  # no sibling: capacity routing, first id
+    ("codex_beta", "gpt-5.6-sol", "codex", "codex_beta", "reasoningEffort"),
+    ("auto", "claude-opus-5", "claudeAgent", "claudeAgent", "effort"),
 ])
 def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected, option):
     script = (SCRIPTS / "t3-spawn-thread").read_text()
@@ -107,6 +109,10 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
         if model == "astra":
             assert selected["model"] == "gpt-6-astra"
             assert {"id": "reasoningEffort", "value": "medium"} in selected["options"]
+        if model in ("gpt-5.6-sol", "claude-opus-5"):
+            assert selected["model"] == model
+        if profile == "codex_beta" and model == "auto" and inherited == "claudeAgent":
+            assert selected["model"] == "gpt-6-sol"
         if model == "auto" and inherited == "codex":
             assert {"id": "fastMode", "value": True} in selected["options"]
 

@@ -69,6 +69,15 @@ tight, `t3-limits` ([limits.md](limits.md)) shows the same cached usage used by 
 otherwise gets its house default (sol/opus high · fable/astra medium · haiku low),
 which is the policy we want.
 
+`--model sol` and `--model opus` read T3's locally refreshed model manifest on
+each spawn, then choose the highest numeric version of that family. Sol also
+uses the selected Codex account's recent model cache, so account availability
+can differ. A missing T3 catalog falls back to Sol 6 / Opus 5.5; explicit
+full model IDs stay pinned. This is local deterministic selection, with no LLM
+call. A Codex cache older than one hour is ignored in favor of T3's catalog;
+a fresh account catalog with no Sol model stops the spawn. T3 refreshes its
+manifest and Codex refreshes each account's cache.
+
 Long task: write the spec to a markdown file, keep the brief to path + locked
 decisions + verification expectation ([dispatch-workers.md](dispatch-workers.md) for the
 full brief shape and title rules). Inline briefs are shell arguments — the

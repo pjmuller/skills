@@ -208,11 +208,13 @@ normalize_model() {
   local normalized
   normalized="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   case "$normalized" in
-    sol) printf '%s' "gpt-5.6-sol" ;;
+    sol|opus)
+      uv run --script "$(dirname "$(readlink -f "$0")")/lib/model_resolution.py" \
+        "$normalized" "$t3_base_dir" "${2:-}"
+      ;;
     astra) printf '%s' "gpt-6-astra" ;;
     haiku) printf '%s' "claude-haiku-4-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
-    opus) printf '%s' "claude-opus-5-5" ;;
     gemini) printf '%s' "gemini-3.8-flash-high" ;;
     *) printf '%s' "$1" ;;
   esac
@@ -345,6 +347,7 @@ provider_instance_id="$(printf '%s' "$model_selection_json" | jq -r '.instanceId
 inherited_provider_instance_id="$provider_instance_id"
 model_name="$(printf '%s' "$model_selection_json" | jq -r '.model')"
 inherited_model_name="$model_name"
+defaulted_to_sol=0
 normalized_provider="$(normalize_provider "$provider_choice")"
 if [[ "$normalized_provider" != "auto" ]]; then
   provider_instance_id="$normalized_provider"
@@ -355,8 +358,8 @@ if [[ "$model_choice" != "auto" ]]; then
 elif [[ "$(provider_family "$provider_instance_id")" != "$(provider_family "$inherited_provider_instance_id")" &&
         "$(provider_family "$provider_instance_id")" != "$(model_family "$model_name")" ]]; then
   case "$(provider_family "$provider_instance_id")" in
-    codex) model_name="gpt-5.6-sol" ;;
-    claude) model_name="claude-opus-5-5" ;;
+    codex) model_name="$(normalize_model sol)"; defaulted_to_sol=1 ;;
+    claude) model_name="$(normalize_model opus)" ;;
     antigravity) model_name="gemini-3.8-flash-high" ;;
     *) echo "Select --model explicitly for provider $provider_instance_id." >&2; exit 2 ;;
   esac
@@ -367,6 +370,13 @@ fi
 if [[ "$provider_choice" == "auto" ]]; then
   provider_instance_id="$(uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_routing.py" \
     "$model_name" "$provider_instance_id" "$t3_base_dir/userdata/settings.json")"
+fi
+
+# Recheck Codex's account-specific catalog after capacity routing. An alias
+# follows the newest model available to the selected account; a full ID stays
+# pinned exactly as requested.
+if [[ "$(printf '%s' "$model_choice" | tr '[:upper:]' '[:lower:]')" == "sol" ]] || ((defaulted_to_sol)); then
+  model_name="$(normalize_model sol "$provider_instance_id")"
 fi
 
 selected_family="$(model_family "$model_name")"
@@ -391,7 +401,7 @@ fi
 # inheriting the caller's level.
 if [[ "$model_choice" != "auto" && "$thinking_choice" == "auto" ]]; then
   case "$model_name" in
-    gpt-5.6-sol|claude-opus-5-5|claude-opus-5) thinking_choice="high" ;;
+    gpt-*-sol|claude-opus-*) thinking_choice="high" ;;
     claude-fable-5-1|claude-fable-5|gpt-6-astra) thinking_choice="medium" ;;
     claude-haiku-4-5) thinking_choice="low" ;;
   esac
