@@ -8,6 +8,7 @@ tool; Claude Code: Read). Keep every rule block.
 
 Run directory: `{{RUN_DIR}}` (absolute). Meeting: {{TITLE}} · {{DATE_TIME_LOCAL}} · {{DURATION}} · spoken language {{LANGUAGE}}.
 Speakers: {{SPEAKERS}} (uncertain → Unknown). Context: {{SITUATION_ONE_LINE}}.
+Vocabulary (exact spellings, grounded in the project's docs/taxonomies; a term that sounds like one of these is spelled like this): {{VOCABULARY}}.
 Write the result to `{{RUN_DIR}}/analysis.md`; write nothing else outside the run directory.
 
 ## Inputs (read in this order)

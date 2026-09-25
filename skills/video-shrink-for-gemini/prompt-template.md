@@ -33,6 +33,13 @@ In transcript-first mode, add brief `[screen: app / page / record]` context only
 when it clarifies speech. Mixed mode also gets the full visual section above.
 Spell names/product terms as in the context; do not replace visible wording.
 
+## Vocabulary (spell these exactly; ASR and speech both get them wrong)
+
+{{VOCABULARY}}
+
+Spelled forms here win over what you think you hear; a term outside this list that sounds like a
+name gets `(?)`.
+
 ## Skips
 
 Condense these to `[skipped hh:mm:ss–hh:mm:ss: reason]`:

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v0.3.4 (2026-09-25)
+- video-shrink-for-gemini: mandatory vocabulary grounding before any Gemini/OpenAI transcription (people, products, taxonomies/enums from the project's docs → `## Vocabulary` block and `--hint`); `transcribe-openai` without `OPENAI_API_KEY` prints skipped and exits 0 (enrichment, not a blocker). Annotation prompt carries the same vocabulary field.
+
 ## v0.3.3 (2026-09-25)
 - video-shrink-for-gemini: `transcribe-openai` — second-opinion speech layer through OpenAI's transcription API (`gpt-transcribe` + vocabulary hint), aligned to the vendor transcript's speakers/timestamps or in chunks (`--diarize` optional); measured on Flemish meeting audio. video-frames-for-vision's annotation prompt reads it next to the vendor transcript.
 

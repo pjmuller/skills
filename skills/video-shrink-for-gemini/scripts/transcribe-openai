@@ -96,7 +96,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, help="default <media>.openai.md")
     args = parser.parse_args()
     if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY missing; load the project's environment (mise exec -- …)")
+        # Enrichment, not a dependency: callers continue on the vendor transcript alone.
+        print("skipped: OPENAI_API_KEY not set (second-opinion transcript is optional; continue with the vendor transcript)")
+        return
     media = args.media.expanduser().resolve()
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(media)],
                            check=True, capture_output=True, text=True).stdout.strip()

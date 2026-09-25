@@ -67,6 +67,17 @@ Prefer the fewest measured-to-fit clips; do not default to arbitrary ten-minute 
 
 ## Prompt
 
+**Ground the vocabulary first, every time.** Before filling the template, collect the words the
+recording will contain and the model must spell right: people (speakers, colleagues, customers),
+company/product/feature names, integrations and vendors, the project's own taxonomies and enums
+(statuses, categories, entity types, ticket prefixes), place and event names, and the language
+variety (e.g. Flemish Dutch). Sources, in this order: the project's `AGENTS.md`/`CLAUDE.md` and
+skill docs, glossary/taxonomy files, the vendor transcript's own summary and speaker list, recent
+meeting notes, ticket titles. Aim for 30–80 terms with their exact spelling; never guess terms you
+have not seen written. Put them in the template's `## Vocabulary` block (the same list is the
+`--hint` for `transcribe-openai`). A 20-word hint alone fixed the vendor's product-name errors in
+the measured run; without it Gemini and OpenAI invent plausible spellings.
+
 Fill [prompt-template.md](prompt-template.md): `MODE` = visual-first, transcript-first,
 or mixed; durations/count from ffprobe; situation, language, speakers, skips and a
 short introduction to each context file. Keep the applicable rule blocks.
@@ -138,7 +149,9 @@ distinct screen state, drops people-only stretches and writes a manifest + conta
 a vision-only model reads next to the transcript. Speech comes from the vendor transcript
 (Leexi/Fathom) or, without one, `scripts/transcribe-local` ([local route](local-route.md)).
 Sampled frames are not continuous perception; say so in the output.
-When the speech layer matters (names, products, decisions), add a second ASR opinion:
+When the speech layer matters (names, products, decisions) **and** `OPENAI_API_KEY` is in the
+environment, add a second ASR opinion (enrichment, never a blocker: without the key the script prints
+"skipped" and exits 0, and the flow continues on the vendor transcript alone):
 `transcribe-openai source.webm --align leexi-call.json --hint "<names, products, language variety>"`
 (OpenAI transcription API, needs `OPENAI_API_KEY`; Codex/Claude cannot hear audio themselves). It keeps
 the vendor's speakers and timestamps and replaces the words; the agent reads both, prefers the
