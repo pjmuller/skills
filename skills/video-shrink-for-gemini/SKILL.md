@@ -138,6 +138,12 @@ distinct screen state, drops people-only stretches and writes a manifest + conta
 a vision-only model reads next to the transcript. Speech comes from the vendor transcript
 (Leexi/Fathom) or, without one, `scripts/transcribe-local` ([local route](local-route.md)).
 Sampled frames are not continuous perception; say so in the output.
+When the speech layer matters (names, products, decisions), add a second ASR opinion:
+`transcribe-openai source.webm --align leexi-call.json --hint "<names, products, language variety>"`
+(OpenAI transcription API, needs `OPENAI_API_KEY`; Codex/Claude cannot hear audio themselves). It keeps
+the vendor's speakers and timestamps and replaces the words; the agent reads both, prefers the
+vendor for literal fillers/timing and OpenAI for names, and flags disagreements. Details and
+measurements: [local route](local-route.md).
 
 ## PJ's local examples (optional context only)
 

@@ -15,7 +15,7 @@ if [[ "${1:-}" == "--check" ]]; then
   else
     echo "warn    mlx_whisper missing (optional; uv tool install mlx-whisper)"
   fi
-  for helper in shrink-video build-prompt download-fathom transcribe-local; do
+  for helper in shrink-video build-prompt download-fathom transcribe-local transcribe-openai; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -29,7 +29,7 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/video-shrink-for-gemini" ]] || warn_project=true
-for command_name in shrink-video build-prompt download-fathom transcribe-local; do
+for command_name in shrink-video build-prompt download-fathom transcribe-local transcribe-openai; do
   existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
@@ -44,7 +44,7 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$install_dir"
-for helper in shrink-video build-prompt download-fathom transcribe-local; do
+for helper in shrink-video build-prompt download-fathom transcribe-local transcribe-openai; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
 done

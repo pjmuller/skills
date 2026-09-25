@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v0.3.3 (2026-09-25)
+- video-shrink-for-gemini: `transcribe-openai` — second-opinion speech layer through OpenAI's transcription API (`gpt-transcribe` + vocabulary hint), aligned to the vendor transcript's speakers/timestamps or in chunks (`--diarize` optional); measured on Flemish meeting audio. video-frames-for-vision's annotation prompt reads it next to the vendor transcript.
+
 ## v0.3.2 (2026-09-25)
 - video-frames-for-vision: defaults favour few but relevant frames (`--max-frames 60`, one view per page, 20 s coverage); over-budget demotion drops near-duplicate pages before short novel ones.
 - agents-md / clickup-core: handoff to a non-technical reader who works through a coding agent = one copy-pasteable md block addressed to the agent.

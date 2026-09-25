@@ -16,6 +16,9 @@ Write the result to `{{RUN_DIR}}/analysis.md`; write nothing else outside the ru
    It is the reference for what was said; you cannot hear audio, so never "correct" spoken words
    from imagination. A word that contradicts something visible on screen may be flagged as
    `[transcript says X; screen shows Y]`.
+1b. `transcript.openai.md` (if present) — a second ASR pass through OpenAI's API with a vocabulary
+   hint, same speakers/timestamps. Prefer it for names, products and numbers; prefer `transcript.md`
+   for fillers, hesitations and timing. Quote disagreements as `[Leexi: X / OpenAI: Y]`.
 2. `manifest.md` — one row per kept frame: id (page number + view letter), the second it shows,
    the view span, the page span, file path. Read the summary line: how much of the meeting was
    people-only (no screen share) and how many frames exist.

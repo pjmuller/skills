@@ -41,6 +41,21 @@ skipped a same-layout page switch and a scrolled form, and it kept talking-head 
 frames from the original, never from the shrunk file; at 1280×720 a frame costs ≈1.2k Claude
 visual tokens, and a blind Opus narration of 41 frames cost ≈91k tokens and 4 minutes.
 
+## OpenAI transcription API as a second opinion (2026-09-25)
+
+Codex CLI 0.156/0.157 cannot read an attached MP3/WAV (Sol and Astra both answer "cannot access
+audio"), so audio goes through the API: `scripts/transcribe-openai`. Measured on the same Flemish
+standup, 5-minute slice, aligned per Leexi paragraph with a 20-word hint (people, products, "Vlaams"):
+5 s wall, ≈$0.03. It fixed the product names Leexi got wrong (Klink→ClickDoc, Dent. admin→DentAdmin,
+Denti een mintgroep→Dentius en Mint Groep, zoom video→Loom-video), missed a rare device name
+(Digora→"die Nora"), and returned ≈10 % fewer words: it normalises punctuation and drops repeated
+fillers ("Ja. Ja. Check. En." → "Ja, ja, check."), so Leexi stays the literal/timing layer. Model
+notes: `gpt-transcribe` = best words, `json`/`text` only (no timestamps, hence the alignment);
+`gpt-4o-transcribe-diarize` = speakers A/B + timestamps, refuses a prompt, worse names; `whisper-1`
+= segment timestamps, decent names; `gpt-audio-1.5` chat with audio input = fluent lines with
+invented sentences and swapped speakers — never a speech layer. Long monologue paragraphs dilute the
+hint; keep hints short and let the previous turn carry context (the script does).
+
 ## Opaque IDs
 
 Claude Code (Opus, Read tool, ≤3 crops per frame at 3× lanczos upscale) read a 36-character UUID
