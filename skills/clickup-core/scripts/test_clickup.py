@@ -259,6 +259,45 @@ class CommentMentionGuardTests(unittest.TestCase):
             MODULE["cmd_comment"](a)
 
 
+URL = "https://app.clickup.com/t/2602930/869ej1uy0?comment=901&threadedComment=902"
+
+
+class CommentThreadTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        g = MODULE["post_comment"].__globals__
+        self.addCleanup(g.__setitem__, "api", g["api"])
+        g["api"] = self.fake_api
+
+    def fake_api(self, method, path, **kw):
+        self.calls.append((method, path))
+        if method == "POST":
+            return {"id": "r9"}
+        if path == "/comment/901/reply":
+            return {"comments": [{"id": "r9", "comment": [{"text": "hi "}, {"type": "tag", "user": {"id": 101}}]}]}
+        return {"comments": [{"id": "900", "comment": []}, {"id": "901", "comment": [{"text": "root"}]}]}
+
+    def test_comment_id_of_prefers_thread_root(self):
+        cid = MODULE["comment_id_of"]
+        self.assertEqual(cid(URL), "901")
+        self.assertEqual(cid("https://app.clickup.com/t/869ej1uy0?threadedComment=902"), "902")
+        self.assertEqual(cid("901"), "901")
+        with self.assertRaises(SystemExit):
+            cid("https://app.clickup.com/t/869ej1uy0")
+
+    def test_reply_posts_to_root_and_reads_back_thread(self):
+        MODULE["post_comment"]("869ej1uy0", "hi", 101, False, quiet=True, reply_to="901")
+        self.assertEqual(self.calls, [("POST", "/comment/901/reply"), ("GET", "/comment/901/reply")])
+
+    def test_comments_thread_prints_root_then_replies(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        buf = StringIO()
+        with redirect_stdout(buf):
+            MODULE["cmd_comments"](SimpleNamespace(id="869ej1uy0", thread=URL, json=True))
+        self.assertEqual([c["id"] for c in json.loads(buf.getvalue())], ["901", "r9"])
+
 
 class PickAttachmentTests(unittest.TestCase):
     ROWS = [{"id": "aaa-1.md", "title": "brief.md"}, {"id": "bbb-2.md", "title": "brief.md"},

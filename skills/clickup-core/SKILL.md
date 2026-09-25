@@ -37,8 +37,10 @@ contents. Platform OAuth/client credentials are unrelated to personal API identi
 | `topology`, `statuses --list ALIAS`, `members [--list ALIAS]`, `fields --list ALIAS` | Live topology, status enums, members and fields |
 | `tasks`, `search --search TEXT` | Paginated list tasks; `--list`, `--assignee`, repeated `--status` / `--tag`, `--include-closed`; search is selected-list substring filtering |
 | `task ID [--comments]`, `comments ID` | Full task and paginated comments |
+| `comments ID --thread REF` | One thread: root comment + replies; REF = comment id or URL with `?comment=` |
 | `create --name TEXT`, `update ID`, `close ID [--status NAME]`, `delete ID --yes` | Task lifecycle; create supports `--parent`, `--tag`; project policy supplies defaults |
 | `comment ID --text TEXT [--mention ALIAS] [--mention-first PREFIX]` | Structured Markdown comment with native user/task mentions. The recipient is always `--mention`; `--mention-first` only moves it to the top after PREFIX (`''` = mention leads) and errors without `--mention` |
+| `comment ID --text TEXT ... --reply-to REF` | Same comment, posted as a threaded reply to REF's root (`?comment=`, not `threadedComment`) |
 | `attach ID FILE [--name NAME] [--embed]` | MIME-correct upload and optional native player/file chip |
 | `detach ID ATTACHMENT --yes` | Delete one attachment (id, bare uuid or unique title) via API v3, then verify it is gone |
 | `field ID FIELD --value JSON_OR_ENUM` / `--remove` | Custom field alias or UUID; exact configured enum labels |

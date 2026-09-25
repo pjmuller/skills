@@ -13,7 +13,7 @@ import re
 import string
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -150,6 +150,17 @@ def task_id_of(ref: str) -> str:
     """Accept a bare id or any ClickUp task URL (…/t/<team>/<id>, …/t/<id>)."""
     m = re.search(r"/t/(?:\d+/)?([a-z0-9]+)", ref)
     return m.group(1) if m else ref
+
+
+def comment_id_of(ref: str) -> str:
+    """Thread ROOT id from a bare id or a task URL's ``?comment=`` (``threadedComment`` = one reply, fallback only)."""
+    if ref.isdigit():
+        return ref
+    q = parse_qs(urlparse(ref).query)
+    cid = (q.get("comment") or q.get("threadedComment") or [""])[0]
+    if not cid.isdigit():
+        sys.exit(f"not a comment id or ClickUp comment URL: {ref!r}")
+    return cid
 
 
 def list_key_of(task: dict) -> str:
@@ -706,8 +717,9 @@ def render(comment: dict) -> str:
 
 
 def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, quiet: bool = False,
-                 prefix: str | None = None):
-    """``prefix`` puts the mention at the TOP: ``<prefix> @mention\n<text>`` (e.g. "# Review")."""
+                 prefix: str | None = None, reply_to: str | None = None):
+    """``prefix`` puts the mention at the TOP: ``<prefix> @mention\n<text>`` (e.g. "# Review").
+    ``reply_to`` = thread root comment id: post as a threaded reply instead of a task comment."""
     if mention and prefix is not None:
         parts: list[dict] = ([{"text": prefix + " "}] if prefix else []) + [
             {"type": "tag", "user": {"id": mention}}]
@@ -718,9 +730,9 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
         parts = comment_parts(text.rstrip() + " " if mention else text)
         if mention:
             parts.append({"type": "tag", "user": {"id": mention}})
-    created = api("POST", f"/task/{task_id}/comment",
-                  data=json.dumps({"comment": parts, "notify_all": False}))
-    comments = api("GET", f"/task/{task_id}/comment")["comments"]
+    base = f"/comment/{reply_to}/reply" if reply_to else f"/task/{task_id}/comment"
+    created = api("POST", base, data=json.dumps({"comment": parts, "notify_all": False}))
+    comments = api("GET", base)["comments"]
     posted = next((c for c in comments if str(c["id"]) == str(created["id"])), None)
     if posted is None:
         sys.exit(f"comment {created['id']} created but not found on readback; do not retry posting")
@@ -982,11 +994,19 @@ def cmd_comment(a):
     # silently (2026-09-22): a ping nobody receives is worse than an error.
     if a.mention_first is not None and not a.mention:
         sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
-    post_comment(a.id, a.text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first)
+    post_comment(a.id, a.text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
+                 reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None)
 
 
 def cmd_comments(a):
-    out(fetch_comments(a.id), a.json)
+    comments = fetch_comments(a.id)
+    if getattr(a, "thread", None):
+        root_id = comment_id_of(a.thread)
+        root = next((c for c in comments if str(c["id"]) == root_id), None)
+        if root is None:
+            sys.exit(f"comment {root_id} not found on task {a.id}")
+        comments = [root] + api("GET", f"/comment/{root_id}/reply")["comments"]
+    out(comments, a.json)
 
 
 def cmd_handoff(a):
@@ -1156,6 +1176,9 @@ def main(argv=None):
         if cmd == "comment":
             s.add_argument("--mention-first", metavar="PREFIX",
                            help="put the --mention at the top, after PREFIX ('' = mention leads); requires --mention")
+            s.add_argument("--reply-to", metavar="REF", help="thread root comment id or URL with ?comment=; posts a threaded reply")
+        if cmd == "comments":
+            s.add_argument("--thread", metavar="REF", help="only this thread: root comment + replies (id or URL with ?comment=)")
         if cmd == "review":
             s.add_argument("--verdict", choices=["ok", "to-test"], required=True)
             s.add_argument("--comment", action="store_true")

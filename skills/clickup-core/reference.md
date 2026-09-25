@@ -41,6 +41,9 @@ returned id and confirm every expected structured part. `comment_text`, a plain 
 plain URL are not evidence of a native mention. Public Markdown can link to a ClickUp Doc, but no
 native Doc-chip write was proven.
 
+Threads: POST/GET `/comment/{root_id}/reply`; replies always target the thread root (URL `comment=`),
+never a `threadedComment` reply id.
+
 ## Comment formatting
 
 Descriptions and comments share ONE markdown parser (`_md_blocks` + `_inline_events`); `md_to_delta`
