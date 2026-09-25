@@ -25,7 +25,7 @@ download-leexi --at "today 14:00" [--window 90] [--pick N] [--transcript-only]
 - Transcript is raw Leexi ASR; summary/tasks are Leexi-generated notes, not evidence.
   No `recording_url` → archived or retention off; only the transcript exists.
 - Env: `LEEXI_KEY_ID` / `LEEXI_KEY_SECRET`. Mise-managed projects: `mise exec -- download-leexi ...`.
-- Windows (no symlinks/shebangs): `uv run --script path\to\download-leexi --at "today 14:00"`.
+- Without the installer (any OS, incl. WSL): `uv run --script path/to/download-leexi --at "today 14:00"`.
 - Install: `scripts/install` (links both helpers into `~/.local/bin`), `--check` verifies.
 
 API facts, auth and key-scope gotchas (404 = out of scope): [api.md](api.md).

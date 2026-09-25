@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v0.3.1 (2026-09-25)
+- video-frames-for-vision / leexi: Codex recipe targets Linux/WSL/macOS (apt/brew, `uv run --script` with POSIX paths); the PowerShell/winget instructions were wrong for a WSL-backed setup. Benchmark note: one Claude Code agent hits a media request limit after ~54 frames.
+
 ## v0.3.0 (2026-09-25)
 - leexi: new skill (infrastructure layer split out of video-shrink-for-gemini). `download-leexi` gains `--at "today 14:00"` (nearest call in a time window, `--pick` on ambiguity) and a default git-ignored `./.local/leexi/<uuid>/` out dir; `leexi-calls` lists recent calls; shared stdlib client `leexi_api.py`; Windows-safe `uv run --script` invocation; unit tests.
 - video-frames-for-vision: new skill for vision-only models (Codex, Claude Code) without Gemini. `select-frames` samples a recording at 1 fps, classifies people-only frames (skin/edge/content-region heuristics), groups screen frames into views (pHash + SSIM) and pages (same chrome + header band, scroll tolerant), keeps one frame per page plus extra scroll positions, crops the shared-content region at 2×, writes `manifest.md/json`, contact sheets and audit sheets (people-only sentinels, transients). Annotation prompt reproduces the meeting-analysis shape (screen events, topics, action items, ready-to-paste prompts); Codex recipe for Windows.

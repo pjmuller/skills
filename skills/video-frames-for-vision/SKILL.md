@@ -69,6 +69,6 @@ limit"), so on Claude split the batches over several sub-agents, one batch each,
 - `scripts/make-fixture` — synthetic test video (people tiles, a page, the same page scrolled,
   a second page); `test_select_frames.py` asserts the classification and grouping.
 - [annotate-prompt.md](annotate-prompt.md) — the model prompt and `analysis.md` contract.
-- [codex-recipe.md](codex-recipe.md) — install once + per-meeting steps for Codex (Windows/macOS),
+- [codex-recipe.md](codex-recipe.md) — install once + per-meeting steps for Codex (Linux/WSL/macOS),
   token budget, sandbox notes; why video/audio attachments do not work in Codex.
 - `scripts/install` / `--check` — links `select-frames`; needs `ffmpeg`, `ffprobe`, `uv`.
