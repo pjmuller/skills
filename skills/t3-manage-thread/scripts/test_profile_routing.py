@@ -9,7 +9,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
-from profile_routing import choose, relevant, route
+from profile_routing import choose, explain, relevant, route
 from t3_limits import Account, Row, claude_profiles, claude_rows
 
 NOW = datetime.now(timezone.utc)
@@ -49,6 +49,47 @@ def test_pace_headroom_and_stable_ties():
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
     b.rows[1].resets_at = NOW + timedelta(days=6)
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
+
+
+def test_expiring_weekly_preference_and_scope():
+    expiring = Account("a", "a", rows=[
+        Row("session", 20, NOW + timedelta(hours=2), 18000),
+        Row("Fable only", 70, NOW + timedelta(hours=24), 604800),
+    ])
+    other = Account("b", "b", rows=[
+        Row("session", 20, NOW + timedelta(hours=2), 18000),
+        Row("Fable only", 51, NOW + timedelta(hours=48), 604800),
+    ])
+    selected, reason, candidates = choose([expiring, other], "claude-fable-5", "b", NOW)
+    assert selected == "a" and "score" in reason
+    assert candidates[0].room < candidates[1].room
+    assert candidates[0].routing_score > candidates[1].routing_score
+    assert "weekly window +5.0; worst-window score +20.7" in explain(
+        "claude-fable-5", candidates, NOW, selected, reason)
+    # An unrelated scoped cap cannot supply a bonus to an Opus route.
+    assert choose([expiring, other], "claude-opus-5", "b", NOW)[0] == "b"
+
+
+def test_session_bottleneck_and_expiry_safeguards():
+    expiring = Account("a", "a", rows=[
+        Row("session", 58, NOW + timedelta(hours=2), 18000),
+        Row("weekly", 75, NOW + timedelta(hours=24), 604800),
+    ])
+    other = Account("b", "b", rows=[
+        Row("session", 57, NOW + timedelta(hours=2), 18000),
+        Row("weekly", 40, NOW + timedelta(days=3), 604800),
+    ])
+    selected, _, candidates = choose([expiring, other], "gpt-6-sol", "a", NOW)
+    assert selected == "b"  # session +2 stays tighter than expiring weekly +15
+    assert candidates[0].routing_score == candidates[0].room == 2
+    expiring.rows[0].used_percent = 20
+    expiring.rows[1].resets_at = NOW + timedelta(days=3)
+    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].expiry_bonus == 0
+    expiring.rows[1].resets_at = NOW + timedelta(hours=1)
+    expiring.rows[1].used_percent = 99
+    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].expiry_bonus == 1
+    expiring.rows[1].used_percent = 100
+    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].status == "excluded"
 
 
 def test_single_enabled_and_builtin_fallback(tmp_path):

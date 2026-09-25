@@ -113,8 +113,12 @@ Policy (`scripts/lib/profile_routing.py`, usage from `t3_limits.py` — the same
 - **Unknown**: unreachable account (429, expired token, no login), stale reading, missing
   percentage, past reset. Ranked after every verified account; picked only when nothing
   is verified, with "capacity unverified" in the reason.
-- **Ranking**: worst window's pace room (pace − used) first, then minimum headroom. This is
-  the whole rule; a window ≥ 90 % used is labelled `[tight]` but not demoted — a weekly at
+- **Ranking**: worst window's pace room (pace − used) first, then minimum headroom. A weekly-length
+  window resetting within 48 hours gets up to 10 extra routing points, increasing linearly
+  toward reset and capped by unused quota. This applies to relevant model-only caps too;
+  bonuses never stack, and a tighter session cap still governs the worst-window score. Raw
+  rooms and the adjusted score appear in the routing explanation. A window ≥ 90 % used is
+  labelled `[tight]` but not demoted — a weekly at
   92 % that resets in two hours is still the right pick over one burning far ahead of pace.
   Ties prefer the inherited account (on a driver switch: its sibling, same display name
   minus the driver word), then the instance id.
@@ -126,10 +130,10 @@ Every automatic route prints its decision block on stderr (also under `--dry-run
 
 ```
 Profile routing for claude-fable-5-1 (usage cached ≤90 s; explicit --profile NAME bypasses this):
-  claudeAgent             session 3% (room +25) · weekly 35% (room +16) · Fable only 50% (room +1)
-  claudeAgent_kampkompas  session 6% (room +22) · weekly 17% (room -4) · Fable only 28% (room -15)
-  claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) · Fable only 31% (room +2)  ← selected
-  → claudeAgent_dentai: best bottleneck room (Fable only +2)
+  claudeAgent             session 3% (room +25) · weekly 35% (room +16) · Fable only 50% (room +1)  [weekly window +0.0; worst-window score +1.0]
+  claudeAgent_kampkompas  session 6% (room +22) · weekly 17% (room -4) · Fable only 28% (room -15)  [weekly window +0.0; worst-window score -15.0]
+  claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) · Fable only 31% (room +2)  [weekly window +0.0; worst-window score +2.0]  ← selected
+  → claudeAgent_dentai: best bottleneck score (Fable only +2.0)
 ```
 
 Known trade-offs of the single rule: bottleneck ranking ignores a strong second window

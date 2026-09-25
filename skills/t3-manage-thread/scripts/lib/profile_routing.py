@@ -8,7 +8,8 @@ Candidates are the enabled T3 instances of the requested model's driver. Each
 one is assessed from the shared usage cache (t3_limits): an exhausted relevant
 window excludes it until that window resets; an unreachable/stale/malformed
 reading makes it "unknown"; the rest are ranked by their worst window's pace
-room (pace − used), then by minimum headroom. Ties prefer the inherited account
+room (pace − used), with a small expiry bonus for weekly caps, then by minimum
+headroom. Ties prefer the inherited account
 (or its cross-driver sibling), then the instance id. Verified capacity always
 beats unknown. All candidates exhausted → refuse (an explicit --profile is the
 override and never polls). Paid overage is never capacity.
@@ -23,10 +24,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from t3_limits import SETTINGS, claude_accounts, codex_accounts, provider_profiles, relative
+from t3_limits import SETTINGS, WEEKLY_SECONDS, claude_accounts, codex_accounts, provider_profiles, relative
 from profile_registry import registry, compatible
 
 TIGHT_PERCENT = 90  # label only: near a cap, still eligible (ranking already prefers room)
+WEEKLY_EXPIRY_SECONDS = 48 * 3600
+MAX_WEEKLY_BONUS = 10.0
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
 
@@ -59,8 +62,20 @@ class Candidate:
     detail: str = ""       # why unknown/excluded, or "tight" label
     rows: list = field(default_factory=list)
     room: float = 0.0      # worst-window pace room (ok only)
+    routing_score: float = 0.0  # worst adjusted room (ok only)
+    expiry_bonus: float = 0.0  # largest weekly bonus applied (ok only)
     headroom: float = 0.0  # min(100 - used) (ok only)
     bottleneck: str = ""
+
+
+def weekly_expiry_bonus(row, now):
+    """Spend weekly quota near reset, without inventing more than its headroom."""
+    if row.length_seconds != WEEKLY_SECONDS or not row.resets_at:
+        return 0.0
+    remaining = (row.resets_at - now).total_seconds()
+    if not 0 < remaining < WEEKLY_EXPIRY_SECONDS:
+        return 0.0
+    return min(MAX_WEEKLY_BONUS * (1 - remaining / WEEKLY_EXPIRY_SECONDS), 100 - row.used_percent)
 
 
 def assess(account, model, now):
@@ -87,10 +102,15 @@ def assess(account, model, now):
         candidate.status, candidate.detail = "unknown", "no usable windows (missing % or past reset)"
         return candidate
     candidate.headroom = min(100 - r.used_percent for r in rows)
-    paced = [(r.pace(now)[1], r.window) for r in rows if r.pace(now) is not None]
+    paced = [(r.pace(now)[1], r.window, weekly_expiry_bonus(r, now))
+             for r in rows if r.pace(now) is not None]
     # Bottleneck pace first, then absolute headroom. No-reset zero windows are
     # unused capacity, but carry no invented pacing signal.
-    candidate.room, candidate.bottleneck = min(paced) if paced else (0.0, "")
+    if paced:
+        candidate.room = min(room for room, _, _ in paced)
+        candidate.routing_score, candidate.bottleneck = min(
+            (room + bonus, window) for room, window, bonus in paced)
+        candidate.expiry_bonus = max(bonus for _, _, bonus in paced)
     if any(r.used_percent >= TIGHT_PERCENT for r in rows):
         candidate.detail = "tight"
     return candidate
@@ -109,10 +129,10 @@ def choose(accounts, model, preferred, now):
     unknown = [c for c in candidates if c.status == "unknown"]
     tie = lambda c: (c.instance_id != preferred, c.instance_id)
     if ok:
-        best = min(ok, key=lambda c: (-c.room, -c.headroom, *tie(c)))
-        why = f"best bottleneck room ({best.bottleneck} {best.room:+.0f})" if best.bottleneck else "unused capacity"
+        best = min(ok, key=lambda c: (-c.routing_score, -c.headroom, *tie(c)))
+        why = f"best bottleneck score ({best.bottleneck} {best.routing_score:+.1f})" if best.bottleneck else "unused capacity"
         if len(ok) > 1 and best.instance_id == preferred and any(
-                (c.room, c.headroom) == (best.room, best.headroom) for c in ok if c is not best):
+                (c.routing_score, c.headroom) == (best.routing_score, best.headroom) for c in ok if c is not best):
             why += ", tie → inherited account"
         return best.instance_id, why, candidates
     if unknown:
@@ -132,6 +152,8 @@ def explain(model, candidates, now, selected=None, reason=""):
             windows = " · ".join(f"{r.window} {r.used_percent:.0f}%" +
                                  (f" (room {r.pace(now)[1]:+.0f})" if r.pace(now) else "")
                                  for r in c.rows)
+            if c.bottleneck:
+                windows += f"  [weekly window +{c.expiry_bonus:.1f}; worst-window score {c.routing_score:+.1f}]"
             tag = "  [tight]" if c.detail == "tight" else ""
         else:
             windows = f"{c.status}: {c.detail}"
