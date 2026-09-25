@@ -18,7 +18,10 @@ select-frames --no-crop --features recording.webm                # whole frames,
 
 ## What it does (and why)
 
-1. Samples at 1 fps into 320×180 thumbnails with one sequential ffmpeg decode (50 min ≈ 25 s).
+1. Samples at 1 fps into 320×180 thumbnails with one sequential ffmpeg decode (50 min ≈ 25 s). A
+   `select` filter keeps the first source frame at or after each second and `showinfo` reports its
+   real pts, so the full-resolution extraction (`-ss` at that pts) is the very same frame. Encoders
+   drop frames on static screens, so time gaps between samples mean "unchanged", not "missing".
 2. **People-only detection.** A frame is `gallery` when there is no large bright content region
    and the frame is mostly skin tones on a flat client background, or when the largest region is
    itself a face. Everything else is `screen`. False positives cost a frame; false negatives cost
@@ -34,15 +37,18 @@ select-frames --no-crop --features recording.webm                # whole frames,
    (SSIM ≥ 0.85, pHash ≤ 20) are one page; glitches up to `--gap` (3 s) do not split a page; a page
    that returns later is a new page. Each page yields its longest settled view plus up to
    `--views-per-page − 1` other scroll positions, longest first. Over `--max-frames` (120), extra
-   scroll views are demoted first, then the shortest pages.
+   scroll views are demoted first, then the shortest pages. Page identity from cheap features is
+   fuzzy (same page scrolled vs a different page overlap on every metric tried), so a **coverage
+   rule** adds one frame whenever a screen-share stretch exceeds `--max-gap` (20 s) without one;
+   continuous scrolling therefore costs about one frame per 20 s, not one per second.
 6. Output: `frames/<page><view>-h-mm-ss.jpg`, `manifest.md` (table: id, second shown, view span,
    page span, file) and `manifest.json` (same plus pages, transients, demoted, gallery spans),
    `sheets/sheet-NN.jpg` (kept frames, 4×3 with labels) and `sheets/audit-NN.jpg`.
 
-Measured on a 50-minute Google Meet standup (720p, 41 min of screen share): 85 pages, 120 frames,
-people-only 8:42 detected exactly (checked against a Gemini pass over the same recording); the
-reference screen events all mapped to a kept frame after widening the page band to include the
-page header (a tab-strip-only band merged Gmail into the neighbouring app page).
+Measured on a 50-minute Google Meet standup (720p, 41 min of screen share): 136 pages, 133 frames
+(120 page + 13 coverage), people-only 8:41 matching a Gemini pass over the same recording; seven
+reference screen events (Dentex site, ClickUp list and task, Gmail, demo site, pricing page, PWA)
+all mapped to a kept frame. Runtime ≈ 40 s on an M-series Mac.
 
 ## Limits, stated in every output
 
