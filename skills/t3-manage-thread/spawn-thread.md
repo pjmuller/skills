@@ -40,10 +40,11 @@ For standalone work nobody needs to verify (e.g. a `yt-ingest` batch): hides the
 thread while it runs and appends a footer that makes the worker settle itself
 (`t3-settle-thread --self`, last tool call — [settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread))
 **only on a clean outcome**. Intent: the human is the bottleneck, so a thread that
-did exactly what was asked and learned nothing they need shouldn't cost them a
-glance. Anything that needs them — blocked, partial, a surprising finding, a
-decision or follow-up — stays: the worker unhides itself and ends with a terse
-report instead. Use it whenever the user says "…and settle it when done" for a
+finished and verified its work without an unresolved issue shouldn't cost them a
+glance. A correction already incorporated into the requested deliverable does not
+need another review. Blocked or partial work, material failures, unresolved findings,
+and user decisions stay visible: the worker unhides itself and ends with a terse
+report. Use it whenever the user says "…and settle it when done" for a
 spawned thread; the same judgement applies to "…then settle this thread".
 Refused together with a 🏓 title — round-trip workers are settled by their
 orchestrator. Compliance detector is the same as for ping-backs: a thread still

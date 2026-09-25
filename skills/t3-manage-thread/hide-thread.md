@@ -18,6 +18,11 @@ on a pending approval/user-input, and on a fresh session error; any
 are UI sugar and change none of this. `--hide` therefore arms a detached
 **keeper** (launchd / `systemd-run --user` / `setsid`) that re-snoozes the thread.
 
+T3 v0.0.42 has no hidden field on `thread.create`, and `thread.turn.start`
+unsnoozes. A fresh thread can briefly appear before the first turn starts and
+the keeper snoozes it. `--settle-when-done` also hides it, but cannot guarantee
+zero sidebar flicker with this T3 API.
+
 **After a ping** the thread is visible until the pinged turn starts, or at most
 120s: T3 refuses `thread.snooze` while the latest user message is "queued"
 (`threadHasQueuedTurnStart`: message younger than 120s and no turn with
