@@ -58,6 +58,11 @@ side-tile layout; other layouts fall back to whole-frame comparison (`--no-crop`
 Faces inside shared content (photos, testimonials) are handled by the content-region rule, but a
 full-screen photo slideshow can be misclassified as people-only: check the audit sheets.
 
+Same recording through Codex (`codex exec`, gpt-6-astra): all 137 frames read in 14 min, 3.0M input
+tokens (2.6M cached), a complete analysis with exact on-screen text. Through one Claude Code agent
+(Opus, Read tool): the harness stopped returning images after 54 frames ("media removed: request
+limit"), so on Claude split the batches over several sub-agents, one batch each, notes on disk.
+
 ## Files
 
 - `scripts/select-frames` — the selector (PEP 723; opencv-headless, numpy, imagehash, pillow).
