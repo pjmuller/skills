@@ -19,6 +19,7 @@ import requests
 
 API = "https://api.clickup.com/api/v2"
 API_V1 = "https://api.clickup.com/api/v1"  # undocumented; task `content` is lossless only here
+API_V3 = "https://api.clickup.com/api/v3"  # attachment delete exists only here
 CONFIG = {}
 CONFIG_PATH = None
 TEAM_ID = SPACE_ID = CUSTOMER_FIELD_ID = ""
@@ -1043,6 +1044,27 @@ def cmd_attach(a):
     out(result, a.json, result.get("url") or json.dumps(result))
 
 
+def pick_attachment(rows: list[dict], ref: str) -> dict:
+    """One attachment by full id (`<uuid>.<ext>`), bare uuid, or a title that is unique on the task."""
+    hits = [r for r in rows if ref in (r["id"], r["id"].rsplit(".", 1)[0])] or \
+           [r for r in rows if r.get("title") == ref]
+    if len(hits) != 1:
+        listing = "; ".join(f"{r['id']} ({r.get('title')})" for r in rows) or "none"
+        sys.exit(f"{'ambiguous' if hits else 'no'} attachment match for {ref!r}; pass the id. Attachments: {listing}")
+    return hits[0]
+
+
+def cmd_detach(a):
+    if not a.yes:
+        sys.exit("refusing to delete an attachment without --yes")
+    att = pick_attachment(attachment_rows(api("GET", f"/task/{a.id}")), a.attachment)
+    # v2 has no attachment delete; v3 deletes by workspace + full attachment id (extension included).
+    _api(API_V3, "DELETE", f"/workspaces/{CONFIG['workspace']['id']}/attachments/{att['id']}")
+    if any(r["id"] == att["id"] for r in attachment_rows(api("GET", f"/task/{a.id}"))):
+        sys.exit(f"ClickUp accepted the delete but {att['id']} is still on {a.id}")
+    out({"detached": att["id"], "title": att.get("title")}, a.json, f"detached {att['id']} ({att.get('title')}) from {a.id}")
+
+
 def resolve_field(field):
     return CONFIG.get("custom_fields", {}).get(field, {"id": field})
 
@@ -1104,7 +1126,7 @@ def main(argv=None):
     s = sub.add_parser("customers")
     s.add_argument("--search")
     s.set_defaults(fn=cmd_customers)
-    for cmd in ("task", "create", "update", "close", "comment", "comments", "handoff", "review", "attach", "field", "delete"):
+    for cmd in ("task", "create", "update", "close", "comment", "comments", "handoff", "review", "attach", "detach", "field", "delete"):
         s = sub.add_parser(cmd)
         s.set_defaults(fn=globals()["cmd_" + cmd])
         if cmd != "create": s.add_argument("id")
@@ -1145,7 +1167,9 @@ def main(argv=None):
             s.add_argument("field", help="configured field alias or UUID")
             s.add_argument("--value")
             s.add_argument("--remove", action="store_true")
-        if cmd == "delete": s.add_argument("--yes", action="store_true")
+        if cmd == "detach":
+            s.add_argument("attachment", help="attachment id (with or without extension) or unique title")
+        if cmd in ("delete", "detach"): s.add_argument("--yes", action="store_true")
     a = p.parse_args(argv)
     a.json = getattr(a, "json", False)
     if getattr(a, "id", None): a.id = task_id_of(a.id)

@@ -258,3 +258,21 @@ class CommentMentionGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "--mention-first needs --mention"):
             MODULE["cmd_comment"](a)
 
+
+
+class PickAttachmentTests(unittest.TestCase):
+    ROWS = [{"id": "aaa-1.md", "title": "brief.md"}, {"id": "bbb-2.md", "title": "brief.md"},
+            {"id": "ccc-3.jpg", "title": "shot.jpg"}]
+
+    def test_matches_full_id_bare_uuid_and_unique_title(self):
+        pick = MODULE["pick_attachment"]
+        self.assertEqual(pick(self.ROWS, "aaa-1.md")["id"], "aaa-1.md")
+        self.assertEqual(pick(self.ROWS, "bbb-2")["id"], "bbb-2.md")
+        self.assertEqual(pick(self.ROWS, "shot.jpg")["id"], "ccc-3.jpg")
+
+    def test_duplicate_title_or_unknown_ref_refuses(self):
+        pick = MODULE["pick_attachment"]
+        with self.assertRaises(SystemExit):
+            pick(self.ROWS, "brief.md")
+        with self.assertRaises(SystemExit):
+            pick(self.ROWS, "nope")
