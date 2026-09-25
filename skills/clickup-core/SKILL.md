@@ -87,7 +87,7 @@ Attachment downloads never send the ClickUp token to presigned media hosts.
 metadata. Inspect transcript AND frames; write a local digest. Scrub screen data before sharing.
 
 SyncUp (in-app call with AI Notes): `uv run scripts/syncup.py URL [--out DIR] [--no-media]` takes a
-chat message, chat channel (latest SyncUp; `--list` shows recent ones) or notes Doc URL and writes
+chat message, chat channel (newest SyncUp, exit 75 until its notes exist; `--list` shows older ones) or notes Doc URL and writes
 `notes.md`, `transcript.md`, `recording.<ext>` and `source.json` to a private, git-ignored dir. Needs
 only `CLICKUP_API_PERSONAL_TOKEN`, no clickup.toml. Exit 75 = not ready yet; limits in
 [reference.md](reference.md#syncup-recordings).

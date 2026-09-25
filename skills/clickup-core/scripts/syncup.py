@@ -14,7 +14,8 @@ Writes DIR (default /tmp/clickup-syncup-<doc_id>/, private, must be git-ignored 
     transcript.md    ClickUp's "Meeting Transcript" page: untimed, possibly partial
     recording.<ext>  the call recording (audio-only for calls over ~1 h)
 
-A channel URL resolves to its most recent SyncUp with AI notes. Needs only
+A channel URL resolves to its most recent SyncUp (exit 75 if that one has no notes yet;
+use --list to pick an older one). Needs only
 CLICKUP_API_PERSONAL_TOKEN; the workspace comes from the URL, no clickup.toml.
 Exit 75 (retry later) when the AI notes or recording link do not exist yet.
 """
@@ -79,7 +80,7 @@ def recent_syncups(ws: str, channel: str, token: str):
         page = get(f"/{ws}/chat/channels/{channel}/messages", token, **params)
         for msg in page.get("data", []):
             seen += 1
-            if msg.get("replies_count") and "syncup" in (msg.get("content") or "").lower():
+            if "syncup" in (msg.get("content") or "").lower():
                 replies = get(f"/{ws}/chat/messages/{msg['id']}/replies", token, content_format="text/md")
                 yield msg, notes_doc(replies.get("data", []))
         cursor = page.get("next_cursor")
@@ -160,7 +161,8 @@ def main() -> None:
         replies = get(f"/{ws}/chat/messages/{src['message_id']}/replies", token, content_format="text/md")
         doc = notes_doc(replies.get("data", []))
     elif src["kind"] == "channel":
-        msg, doc = next(((m, d) for m, d in recent_syncups(ws, src["channel"], token) if d), (None, None))
+        # Newest SyncUp only: "we just had a call" must never silently resolve to an older call's notes.
+        msg, doc = next(recent_syncups(ws, src["channel"], token), (None, None))
         src["message_id"] = msg and msg["id"]
     else:
         doc = (ws, src["doc_id"])
