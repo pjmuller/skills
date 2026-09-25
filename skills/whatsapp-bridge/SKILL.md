@@ -1,6 +1,6 @@
 ---
 name: whatsapp-bridge
-description: Local Python WhatsApp helper: QR login, read synced chats, find/resolve contacts, allowlisted individual text sends. Read the repository's wrapper skill first for the account, allowed recipients and drafting policy.
+description: "Local Python WhatsApp helper: QR login, read synced chats, find/resolve contacts, allowlisted individual text sends. Read the repository's wrapper skill first for the account, allowed recipients and drafting policy."
 ---
 
 Install, alternatives and limitations: [README.md](README.md). Read → draft → send semantics: [reply-workflow.md](reply-workflow.md).
