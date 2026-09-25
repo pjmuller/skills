@@ -35,12 +35,11 @@ Dutch two-speaker meeting audio, 3-minute spans, reference = a vendor transcript
   fetches it. Local ASR is for recordings without a vendor transcript (raw screen captures, Loom,
   exports) or as a tie-breaker on a disputed passage.
 
-Frames: scene threshold 0.1 gave 41 frames for a 42-minute meeting with screen share (0.05 → 94,
-0.2 → 32). At 1280×720 that is ≈1.2k Claude visual tokens per frame; a blind Opus narration of all
-41 frames cost ≈91k tokens and 4 minutes, and its three legible run UUIDs matched held-out
-references exactly. Threshold 0.1 still skipped two page states a human check had listed (a page
-switch with similar layout, and a scrolled form), so treat sampled frames as incomplete and lower
-the threshold for dense UI sessions. Extract frames from the original, never from the shrunk file.
+Frames: the sibling `video-frames-for-vision` skill (`select-frames`) replaced the earlier
+scene-change sampler (ffmpeg `select=gt(scene,0.1)`: 41 frames for a 42-minute meeting, but it
+skipped a same-layout page switch and a scrolled form, and it kept talking-head frames). Extract
+frames from the original, never from the shrunk file; at 1280×720 a frame costs ≈1.2k Claude
+visual tokens, and a blind Opus narration of 41 frames cost ≈91k tokens and 4 minutes.
 
 ## Opaque IDs
 
@@ -74,10 +73,10 @@ held-out verification.
 ## Recipe
 
 ```sh
-transcribe-local --language nl recording.mp4   # skip when fathom-timings.json exists
-scene-frames --threshold 0.1 recording.mp4
+transcribe-local --language nl recording.mp4   # skip when a vendor transcript (Leexi/Fathom) exists
+select-frames recording.mp4                    # video-frames-for-vision: manifest.md + frames/ + sheets/
 ```
 
-Then have the agent read the `manifest.tsv` frames in order and write `<name>.transcript.md` with a
-speech section built from the whisper SRT and a visual section per frame. Only then take targeted
-crops for IDs, and finish with held-out verification.
+Then follow `video-frames-for-vision`'s annotation prompt: the agent reads the manifest frames in
+order next to the timestamped transcript and writes the analysis; only then take targeted crops
+for IDs, and finish with held-out verification.

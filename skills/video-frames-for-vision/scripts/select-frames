@@ -1,0 +1,488 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["opencv-python-headless>=4.10", "numpy>=1.26", "imagehash>=4.3", "pillow>=10"]
+# ///
+"""Pick the frames of a meeting recording worth showing to a vision-only model.
+
+Deterministic, no model weights: samples the video at a low rate, drops frames that show
+only people (webcam tiles / meeting gallery), collapses each static screen state into one
+representative frame with its time span, and writes a manifest plus contact sheets.
+Run with `uv run --script select-frames VIDEO` (works on Windows too).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import cv2
+import imagehash
+import numpy as np
+from PIL import Image, ImageDraw
+
+THUMB_W, THUMB_H = 320, 180  # analysis resolution; aspect is forced, features stay comparable
+
+
+def ffprobe(path: Path) -> dict:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height:format=duration", "-of", "json", str(path)],
+        check=True, capture_output=True, text=True).stdout
+    data = json.loads(out)
+    stream = (data.get("streams") or [{}])[0]
+    if not stream.get("width"):
+        raise SystemExit(f"no video stream in {path}")
+    return {"width": int(stream["width"]), "height": int(stream["height"]),
+            "duration": float(data.get("format", {}).get("duration") or 0)}
+
+
+def sample_thumbs(path: Path, fps: float):
+    """Yield (t_seconds, BGR thumbnail) decoded sequentially by one ffmpeg process."""
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf",
+           f"fps={fps},scale={THUMB_W}:{THUMB_H}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    size = THUMB_W * THUMB_H * 3
+    index = 0
+    assert proc.stdout is not None
+    while True:
+        buf = proc.stdout.read(size)
+        if len(buf) < size:
+            break
+        yield index / fps, np.frombuffer(buf, np.uint8).reshape(THUMB_H, THUMB_W, 3)
+        index += 1
+    proc.wait()
+
+
+# ---------------------------------------------------------------- features
+
+def skin_ratio(bgr: np.ndarray) -> float:
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    return float((((h <= 25) | (h >= 160)) & (s >= 40) & (s <= 180) & (v >= 60)).mean())
+
+
+def edge_ratio(gray: np.ndarray) -> float:
+    return float((cv2.Canny(gray, 80, 160) > 0).mean())
+
+
+def flat_ratio(gray: np.ndarray) -> float:
+    g = gray.astype(np.float32)
+    mean = cv2.blur(g, (5, 5))
+    var = cv2.blur(g * g, (5, 5)) - mean * mean
+    return float((np.sqrt(np.maximum(var, 0)) < 2.0).mean())
+
+
+def content_box(bgr: np.ndarray) -> tuple[int, int, int, int] | None:
+    """Largest bright rectangle separated from the frame background by dark gaps.
+
+    Meeting clients draw shared content as one big region next to smaller webcam tiles; the
+    widest contiguous run of non-background columns, then rows, isolates that region.
+    """
+    border = np.concatenate([bgr[:2].reshape(-1, 3), bgr[-2:].reshape(-1, 3),
+                             bgr[:, :2].reshape(-1, 3), bgr[:, -2:].reshape(-1, 3)])
+    background = np.median(border, axis=0)
+    mask = np.abs(bgr.astype(np.int16) - background.astype(np.int16)).sum(axis=2) > 40
+    cols = mask.mean(axis=0) > 0.5
+    run = longest_run(cols)
+    if run is None:
+        return None
+    x0, x1 = run
+    rows = mask[:, x0:x1].mean(axis=1) > 0.5
+    run = longest_run(rows)
+    if run is None:
+        return None
+    y0, y1 = run
+    if (x1 - x0) * (y1 - y0) < 0.30 * THUMB_W * THUMB_H or (x1 - x0) * (y1 - y0) > 0.97 * THUMB_W * THUMB_H:
+        return None
+    return x0, y0, x1, y1
+
+
+def longest_run(flags: np.ndarray) -> tuple[int, int] | None:
+    best, start = None, None
+    for i, flag in enumerate(list(flags) + [False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if best is None or i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    return best
+
+
+def ssim_gray(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean SSIM of two equally sized grayscale images (Wang et al., Gaussian window)."""
+    a = a.astype(np.float64)
+    b = b.astype(np.float64)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    blur = lambda x: cv2.GaussianBlur(x, (11, 11), 1.5)  # noqa: E731
+    mu_a, mu_b = blur(a), blur(b)
+    var_a = blur(a * a) - mu_a ** 2
+    var_b = blur(b * b) - mu_b ** 2
+    cov = blur(a * b) - mu_a * mu_b
+    ssim = ((2 * mu_a * mu_b + c1) * (2 * cov + c2)) / ((mu_a ** 2 + mu_b ** 2 + c1) * (var_a + var_b + c2))
+    return float(ssim.mean())
+
+
+@dataclass
+class Sample:
+    t: float
+    kind: str  # screen | gallery
+    box: tuple[int, int, int, int] | None
+    skin: float
+    edge: float
+    flat: float
+    phash: imagehash.ImageHash | None = None
+    gray: np.ndarray | None = None
+    band: np.ndarray | None = None
+    thumb: np.ndarray | None = None
+
+
+def analyse(t: float, bgr: np.ndarray, band_frac: float = 0.3) -> Sample:
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    box = content_box(bgr)
+    skin, edge, flat = skin_ratio(bgr), edge_ratio(gray), flat_ratio(gray)
+    kind = "screen"
+    if box:
+        x0, y0, x1, y1 = box
+        inner = bgr[y0:y1, x0:x1]
+        inner_gray = gray[y0:y1, x0:x1]
+        # A big bright region is shared content unless it is itself mostly a face.
+        if skin_ratio(inner) >= 0.12 and flat_ratio(inner_gray) < 0.5:
+            kind = "gallery"
+    elif skin >= 0.10 and edge < 0.09:
+        # No large content region and the frame is faces on a flat client background.
+        kind = "gallery"
+    sample = Sample(t, kind, box, round(skin, 4), round(edge, 4), round(flat, 4))
+    if kind == "screen":
+        crop = bgr[box[1]:box[3], box[0]:box[2]] if box else bgr
+        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        sample.phash = imagehash.phash(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))
+        sample.gray = cv2.resize(crop_gray, (160, 90), interpolation=cv2.INTER_AREA)
+        # Browser chrome plus the page header: identical across scroll positions of one page,
+        # different between sites that share the same browser tab strip.
+        band = crop_gray[: max(4, int(crop_gray.shape[0] * band_frac))]
+        sample.band = cv2.resize(band, (192, 24), interpolation=cv2.INTER_AREA)
+    sample.thumb = bgr.copy()
+    return sample
+
+
+# ---------------------------------------------------------------- states
+
+@dataclass
+class View:
+    """One visually stable screen state (or one people-only stretch)."""
+    kind: str
+    start: float
+    end: float
+    anchor: Sample
+    samples: list[Sample] = field(default_factory=list)
+
+    @property
+    def seconds(self) -> float:
+        return self.end - self.start
+
+
+@dataclass
+class Page:
+    """Consecutive views sharing the same chrome band: one page, several scroll positions."""
+    start: float
+    end: float
+    views: list[View]
+    anchor: Sample
+
+    @property
+    def seconds(self) -> float:
+        return self.end - self.start
+
+
+def group_views(samples: list[Sample], step: float, phash_max: int, ssim_min: float) -> list[View]:
+    views: list[View] = []
+    for s in samples:
+        current = views[-1] if views else None
+        if current and current.kind == s.kind == "gallery":
+            current.end = s.t + step
+            current.samples.append(s)
+            continue
+        if current and current.kind == s.kind == "screen":
+            same_box = (current.anchor.box is None) == (s.box is None)
+            if same_box and (s.phash - current.anchor.phash) <= phash_max \
+                    and ssim_gray(current.anchor.gray, s.gray) >= ssim_min:
+                current.end = s.t + step
+                current.samples.append(s)
+                continue
+        views.append(View(s.kind, s.t, s.t + step, s, [s]))
+    return views
+
+
+def group_pages(views: list[View], band_min: float, phash_page_max: int, gap_max: float) -> list[Page]:
+    """Consecutive views with the same chrome band form one page. A short glitch (tooltip, overlay,
+    text selection, scroll blur) of at most gap_max seconds does not split a page; a page that
+    returns later is a new page, so the manifest keeps separate occurrences."""
+    pages: list[Page] = []
+    pending: list[View] = []
+
+    def matches(page: Page, v: View) -> bool:
+        anchor = page.anchor
+        return ssim_gray(anchor.band, v.anchor.band) >= band_min and (v.anchor.phash - anchor.phash) <= phash_page_max
+
+    for v in views:
+        if v.kind != "screen":
+            continue
+        current = pages[-1] if pages else None
+        if current and v.start - current.end <= gap_max and matches(current, v):
+            current.views += pending + [v]
+            current.end = v.end
+            pending = []
+            continue
+        if current and v.seconds <= gap_max and v.start - current.end <= gap_max:
+            pending.append(v)
+            continue
+        pages.append(Page(pending[0].start if pending else v.start, v.end, pending + [v], v.anchor))
+        pending = []
+    if pending and pages:
+        pages[-1].views += pending
+        pages[-1].end = pending[-1].end
+    return pages
+
+
+# ---------------------------------------------------------------- output
+
+def clock(seconds: float) -> str:
+    total = int(round(seconds))
+    h, rest = divmod(total, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}"
+
+
+def extract_frame(video: Path, t: float, box, info: dict, zoom: str, target: Path) -> tuple[int, int]:
+    raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(video),
+                          "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+                         check=True, capture_output=True).stdout
+    arr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        raise SystemExit(f"could not decode a frame at {t:.1f}s")
+    if box:
+        sx, sy = info["width"] / THUMB_W, info["height"] / THUMB_H
+        x0, y0, x1, y1 = (int(box[0] * sx), int(box[1] * sy), math.ceil(box[2] * sx), math.ceil(box[3] * sy))
+        arr = arr[y0:y1, x0:x1]
+    h, w = arr.shape[:2]
+    factor = 1
+    if zoom == "2" or (zoom == "auto" and w < 1400):
+        factor = 2
+    if factor > 1:
+        arr = cv2.resize(arr, (w * factor, h * factor), interpolation=cv2.INTER_LANCZOS4)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(target), arr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return arr.shape[1], arr.shape[0]
+
+
+def sheet_thumb(thumb: np.ndarray, box) -> np.ndarray:
+    """Contact sheets show the content region, resized to fit the cell, for more legible pixels."""
+    if not box:
+        return thumb
+    crop = thumb[box[1]:box[3], box[0]:box[2]]
+    h, w = crop.shape[:2]
+    scale = min(THUMB_W / w, THUMB_H / h)
+    return cv2.resize(crop, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+
+def contact_sheets(items: list[tuple[np.ndarray, str]], out_dir: Path, prefix: str, cols=4, rows=3) -> list[Path]:
+    """Grid of thumbnails with a label strip under each; labels live outside the image content."""
+    paths = []
+    per = cols * rows
+    label_h = 18
+    for n in range(0, len(items), per):
+        chunk = items[n:n + per]
+        sheet = Image.new("RGB", (cols * THUMB_W, rows * (THUMB_H + label_h)), (24, 24, 24))
+        draw = ImageDraw.Draw(sheet)
+        for i, (thumb, label) in enumerate(chunk):
+            x, y = (i % cols) * THUMB_W, (i // cols) * (THUMB_H + label_h)
+            sheet.paste(Image.fromarray(cv2.cvtColor(thumb, cv2.COLOR_BGR2RGB)), (x, y))
+            draw.text((x + 4, y + THUMB_H + 3), label, fill=(240, 240, 240))
+        path = out_dir / f"{prefix}-{n // per + 1:02d}.jpg"
+        sheet.save(path, quality=85)
+        paths.append(path)
+    return paths
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("video", type=Path)
+    parser.add_argument("--out", type=Path, help="output directory (default: <video>.frames next to the video)")
+    parser.add_argument("--fps", type=float, default=1.0, help="analysis sampling rate (default 1)")
+    parser.add_argument("--min-seconds", type=float, default=3.0, help="shorter screen views are transient: audit sheet only")
+    parser.add_argument("--max-frames", type=int, default=120, help="cap on full-resolution frames; extra scroll views, then short pages, are demoted")
+    parser.add_argument("--views-per-page", type=int, default=3, help="frames per page: longest view plus extra scroll positions")
+    parser.add_argument("--phash", type=int, default=6, help="max perceptual-hash Hamming distance for 'same view'")
+    parser.add_argument("--ssim", type=float, default=0.90, help="min SSIM (160px grey) for 'same view'")
+    parser.add_argument("--band", type=float, default=0.85, help="min SSIM of the top band (browser chrome + page header) for 'same page'")
+    parser.add_argument("--band-frac", type=float, default=0.3, help="height of that band as a fraction of the content region")
+    parser.add_argument("--phash-page", type=int, default=20, help="max Hamming distance between views of one page")
+    parser.add_argument("--gap", type=float, default=3.0, help="glitch tolerance in seconds before a page is considered left")
+    parser.add_argument("--max-gap", type=float, default=20.0, help="coverage guarantee: max screen-share seconds without a kept frame")
+    parser.add_argument("--zoom", choices=["auto", "1", "2"], default="auto", help="upscale crops narrower than 1400px (auto) for small text")
+    parser.add_argument("--audit-every", type=float, default=20.0, help="seconds between gallery sentinels on the audit sheet")
+    parser.add_argument("--no-crop", action="store_true", help="keep whole frames instead of the detected content region")
+    parser.add_argument("--features", action="store_true", help="also dump per-sample features (features.json) for tuning")
+    args = parser.parse_args()
+
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            raise SystemExit(f"missing {tool}; install FFmpeg first")
+    video = args.video.expanduser().resolve()
+    if not video.is_file():
+        raise SystemExit(f"not found: {video}")
+    out = (args.out or video.with_name(video.stem + ".frames")).expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    info = ffprobe(video)
+    step = 1 / args.fps
+
+    samples = [analyse(t, bgr, args.band_frac) for t, bgr in sample_thumbs(video, args.fps)]
+    if not samples:
+        raise SystemExit("no frames decoded")
+    if args.no_crop:
+        for s in samples:
+            s.box = None
+    views = group_views(samples, step, args.phash, args.ssim)
+    pages = group_pages(views, args.band, args.phash_page, args.gap)
+    gallery = [v for v in views if v.kind == "gallery"]
+
+    # Per page: the longest settled view is the representative, then further settled views
+    # (other scroll positions / overlays) up to --views-per-page, longest first.
+    chosen: list[tuple[Page, View, str]] = []
+    transient: list[View] = []
+    for page in pages:
+        settled = sorted((v for v in page.views if v.seconds >= args.min_seconds), key=lambda v: -v.seconds)
+        transient += [v for v in page.views if v.seconds < args.min_seconds]
+        if not settled and page.seconds >= args.min_seconds:
+            # Continuous scrolling: no single view settled, but the page was on screen long enough.
+            longest = max(page.views, key=lambda v: v.seconds)
+            transient.remove(longest)
+            settled = [longest]
+        for v in settled[: args.views_per_page]:
+            chosen.append((page, v, "page" if v is settled[0] else "scrolled"))
+        transient += settled[args.views_per_page:]
+    demoted: list[View] = []
+    if len(chosen) > args.max_frames:
+        # Demote extra scroll views first, then the shortest pages.
+        order = sorted(chosen, key=lambda c: (c[2] == "page", c[1].seconds))
+        for c in order[: len(chosen) - args.max_frames]:
+            demoted.append(c[1])
+        chosen = [c for c in chosen if c[1] not in demoted]
+    chosen.sort(key=lambda c: c[1].start)
+
+    # Time coverage, independent of page identity: no screen-share stretch longer than --max-gap
+    # without a frame. Page grouping is a budgeting heuristic; this rule catches what it merges away.
+    chosen_views = {id(c[1]) for c in chosen}
+    page_of = {id(v): p for p in pages for v in p.views}
+    screen_views = sorted((v for v in views if v.kind == "screen"), key=lambda v: v.start)
+    extra: list[tuple[Page, View, str]] = []
+    last_covered = None
+    run: list[View] = []
+    for v in screen_views:
+        if last_covered is None or v.start - last_covered > args.gap and not run and v.start > last_covered + args.max_gap:
+            last_covered = v.start  # share (re)starts: nothing to cover before it
+        if id(v) in chosen_views:
+            last_covered, run = v.end, []
+            continue
+        run.append(v)
+        if v.end - last_covered > args.max_gap:
+            pick = max(run, key=lambda w: w.seconds)
+            if pick in demoted:
+                demoted.remove(pick)
+            extra.append((page_of[id(pick)], pick, "coverage"))
+            chosen_views.add(id(pick))
+            last_covered, run = pick.end, [w for w in run if w.start >= pick.end]
+    chosen = sorted(chosen + extra, key=lambda c: c[1].start)
+
+    frames_dir = out / "frames"
+    if frames_dir.exists():
+        shutil.rmtree(frames_dir)
+    entries = []
+    sheet_items = []
+    page_index = {id(p): i for i, p in enumerate(pages, 1)}
+    letters = {}
+    for page, view, role in chosen:
+        pid = page_index[id(page)]
+        letter = chr(ord("a") + letters.get(pid, 0))
+        letters[pid] = letters.get(pid, 0) + 1
+        rep = view.samples[len(view.samples) // 2]
+        frame_id = f"{pid:03d}{letter}"
+        name = f"{frame_id}-{clock(rep.t).replace(':', '-')}.jpg"
+        box = None if args.no_crop else view.anchor.box
+        w, h = extract_frame(video, rep.t, box, info, args.zoom, frames_dir / name)
+        entries.append({"id": frame_id, "page": pid, "path": f"frames/{name}", "time": round(rep.t, 1),
+                        "clock": clock(rep.t), "start": round(view.start, 1), "end": round(view.end, 1),
+                        "seconds": round(view.seconds, 1), "span": f"{clock(view.start)}-{clock(view.end)}",
+                        "page_span": f"{clock(page.start)}-{clock(page.end)}", "size": [w, h], "cropped": bool(box),
+                        "reason": role + (" (whole frame)" if not box else "")})
+        sheet_items.append((sheet_thumb(rep.thumb, box), f"{frame_id} {clock(view.start)}-{clock(view.end)}"))
+
+    kept_times = [(c[1].start, c[1].end) for c in chosen]
+
+    def near_kept(v: View) -> bool:
+        return any(a - 5 <= v.start <= b + 5 for a, b in kept_times)
+
+    audit_items = [(v.anchor.thumb, f"demoted {clock(v.start)}") for v in demoted]
+    audit_items += [(v.anchor.thumb, f"transient {clock(v.start)}") for v in transient if not near_kept(v)]
+    for v in gallery:
+        next_t = v.start
+        for s in v.samples:
+            if s.t >= next_t:
+                audit_items.append((s.thumb, f"gallery? {clock(s.t)}"))
+                next_t = s.t + args.audit_every
+    audit_items.sort(key=lambda item: item[1].split()[-1])
+    sheets_dir = out / "sheets"
+    if sheets_dir.exists():
+        shutil.rmtree(sheets_dir)
+    sheets_dir.mkdir()
+    sheets = contact_sheets(sheet_items, sheets_dir, "sheet")
+    audits = contact_sheets(audit_items, sheets_dir, "audit")
+    gallery_seconds = round(sum(v.seconds for v in gallery), 1)
+
+    manifest = {
+        "video": str(video), "duration": round(info["duration"], 1), "width": info["width"], "height": info["height"],
+        "fps": args.fps, "phash": args.phash, "ssim": args.ssim, "band": args.band, "min_seconds": args.min_seconds,
+        "samples": len(samples), "gallery_seconds": gallery_seconds,
+        "screen_seconds": round(sum(v.seconds for v in views if v.kind == "screen"), 1),
+        "frames": entries,
+        "pages": [{"page": page_index[id(p)], "start": round(p.start, 1), "end": round(p.end, 1), "views": len(p.views)} for p in pages],
+        "transient": [{"start": round(v.start, 1), "end": round(v.end, 1)} for v in sorted(transient, key=lambda v: v.start)],
+        "demoted": [{"start": round(v.start, 1), "end": round(v.end, 1)} for v in sorted(demoted, key=lambda v: v.start)],
+        "gallery": [{"start": round(v.start, 1), "end": round(v.end, 1)} for v in gallery],
+        "sheets": [p.name for p in sheets], "audit_sheets": [p.name for p in audits],
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    lines = [f"# Frames for {video.name}", "",
+             f"Duration {clock(info['duration'])}, sampled at {args.fps:g} fps. {len(pages)} pages (distinct screens), "
+             f"{len(entries)} frames kept (one per page plus up to {args.views_per_page - 1} extra scroll positions), "
+             f"{len(transient)} transient views (<{args.min_seconds:g}s) and {len(demoted)} demoted by --max-frames; "
+             f"{clock(gallery_seconds)} classified as people-only (gallery).",
+             "Sampled frames are evidence for the moment shown, not proof of what happened between samples. "
+             "Frame ids: page number + view letter (a = longest view of that page).", "",
+             "| id | shown | view span | page span | file |", "| --- | --- | --- | --- | --- |"]
+    lines += [f"| {e['id']} | {e['clock']} | {e['span']} | {e['page_span']} | {e['path']} |" for e in entries]
+    lines += ["", "Contact sheets: " + ", ".join(f"sheets/{p.name}" for p in sheets),
+              "Audit sheets (demoted, isolated transients, people-only sentinels; check them for missed screens): "
+              + (", ".join(f"sheets/{p.name}" for p in audits) or "none")]
+    if manifest["gallery"]:
+        lines += ["", "People-only spans: " + ", ".join(f"{clock(g['start'])}-{clock(g['end'])}" for g in manifest["gallery"])]
+    (out / "manifest.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if args.features:
+        (out / "features.json").write_text(json.dumps([
+            {"t": s.t, "kind": s.kind, "box": s.box, "skin": s.skin, "edge": s.edge, "flat": s.flat} for s in samples]),
+            encoding="utf-8")
+    print(f"{out}: {len(pages)} pages, {len(entries)} frames, {len(sheets)} contact sheets, {len(audits)} audit sheets "
+          f"({len(transient)} transient, {len(demoted)} demoted, gallery {clock(gallery_seconds)})")
+    print(f"manifest: {out / 'manifest.md'}")
+
+
+if __name__ == "__main__":
+    main()

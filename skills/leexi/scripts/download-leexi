@@ -1,0 +1,92 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Retrieve a Leexi call (by URL, UUID or --at time) as transcript, summary and tasks, and optionally its recording."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import leexi_api as leexi  # noqa: E402
+
+
+def resolve(args, parser):
+    if args.target:
+        return leexi.call_uuid(args.target), args.target
+    start, end, target = leexi.parse_at(args.at, window_minutes=args.window)
+    calls = leexi.candidates(leexi.list_calls(start, end, args.min_seconds), target)
+    try:
+        call = leexi.choose(calls, target, args.pick)
+    except leexi.Ambiguous as exc:
+        print("\n".join(f"[{i}] {leexi.row(c)}" for i, c in enumerate(calls, 1)), file=sys.stderr)
+        parser.exit(2, f"Leexi --at {args.at!r}: {exc}\n")
+    if len(calls) > 1 and not args.pick:
+        print(f"note: picked [1] of {len(calls)} calls that day; others:", file=sys.stderr)
+        print("\n".join(f"[{i}] {leexi.row(c)}" for i, c in enumerate(calls, 1) if i > 1), file=sys.stderr)
+    return call["uuid"], call.get("leexi_url") or call["uuid"]
+
+
+def ignored_by_git(out):
+    try:
+        if subprocess.run(["git", "rev-parse", "--git-dir"], cwd=out, capture_output=True).returncode:
+            return True
+        return subprocess.run(["git", "check-ignore", "-q", str(out / "source.json")], cwd=out).returncode == 0
+    except FileNotFoundError:  # no git on PATH: nothing can track the files
+        return True
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("target", nargs="?", help="https://app.leexi.ai/.../calls/UUID or bare UUID; omit with --at")
+    parser.add_argument("--at", help="'today 14:00', 'yesterday 14:00', '2026-09-25 14:00', '2026-09-25' (latest that day) or '14:00'")
+    parser.add_argument("--window", type=int, default=90, help="Minutes either side of an --at time (default 90)")
+    parser.add_argument("--pick", type=int, help="Choose candidate N from the listed matches")
+    parser.add_argument("--min-seconds", type=float, default=60, help="Ignore shorter calls when resolving --at (default 60)")
+    parser.add_argument("--out", type=Path, help="Private output directory (default ./.local/leexi/<uuid>); must be git-ignored")
+    parser.add_argument("--resolve-only", action="store_true", help="Save call metadata without transcript or media")
+    parser.add_argument("--transcript-only", action="store_true", help="Save raw call JSON and readable Markdown; no media download")
+    args = parser.parse_args(argv)
+    if bool(args.target) == bool(args.at):
+        parser.error("give exactly one of TARGET or --at")
+    try:
+        uuid, source_url = resolve(args, parser)
+        out = (args.out.expanduser() if args.out else Path.cwd() / ".local" / "leexi" / uuid).resolve()
+        os.umask(0o077)
+        out.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not ignored_by_git(out):
+            parser.error("Output must be git-ignored; add the run directory (or `.local/`) to .gitignore or info/exclude first")
+        call = leexi.fetch_call(uuid)
+        print(f"call    {leexi.row(call)}")
+        recording = call.get("recording_url") or ""
+        source = {"source_url": source_url, "uuid": uuid, "leexi_url": call.get("leexi_url"), "title": call.get("title"),
+                  "performed_at": call.get("performed_at"), "duration_seconds": float(call.get("duration") or 0),
+                  "locale": call.get("locale"), "is_video": call.get("is_video"), "has_recording_url": bool(recording),
+                  "speakers": [s.get("name") for s in call.get("speakers") or []]}
+        (out / "source.json").write_text(json.dumps(source, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if not args.resolve_only:
+            (out / "leexi-call.json").write_text(json.dumps(call, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            (out / "transcript.md").write_text(leexi.render(call, source_url), encoding="utf-8")
+            if not args.transcript_only:
+                if not recording:
+                    raise ValueError("Leexi returned no recording_url (archived or audio-less call); transcript saved")
+                target = out / f"source.{Path(urlparse(recording).path).suffix.lstrip('.') or 'webm'}"
+                if not target.exists():
+                    leexi.download(recording, target)
+        print(f"out     {out}")
+        for path in sorted(out.iterdir()):
+            print(f"file    {path.name}")
+    except (ValueError, OSError) as exc:
+        parser.exit(1, f"Leexi download failed: {exc}\n")
+
+
+if __name__ == "__main__":
+    # Windows consoles default to a legacy code page; titles and names are often non-ASCII.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    main()

@@ -1,6 +1,6 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom or Leexi raw transcript retrieval without video analysis, Leexi recording download, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand.
+description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand. Leexi calls come from the leexi skill; without Gemini, frames come from video-frames-for-vision.
 ---
 
 # Video → Gemini
@@ -21,12 +21,12 @@ Never change sharing permissions.
 
 ## Leexi input
 
-For an `app.leexi.ai/.../calls/UUID` URL, use [the Leexi API flow](leexi.md):
-`download-leexi URL --out PRIVATE_DIR [--transcript-only]`. It needs `uv`, `LEEXI_KEY_ID`
-and `LEEXI_KEY_SECRET`; it saves the raw call JSON, `transcript.md` (Leexi summary, its
-follow-up tasks, speaker/timestamp paragraphs) and, unless transcript-only, the presigned
-`recording_url` as `source.webm`. Leexi's timestamped transcript is the speech layer; use
-Gemini for what happened on screen and to check what Leexi heard.
+For an `app.leexi.ai/.../calls/UUID` URL, a bare UUID or "the Leexi meeting of today around
+14:00", use the sibling `leexi` skill: `download-leexi URL --out PRIVATE_DIR` (or `--at "today
+14:00"`) saves the raw call JSON, `transcript.md` (Leexi summary, follow-up tasks,
+speaker/timestamp paragraphs) and the recording as `source.webm`; `--transcript-only` stops
+before media. Leexi's timestamped transcript is the speech layer; use Gemini for what happened
+on screen and to check what Leexi heard.
 
 ## ClickUp SyncUp input
 
@@ -106,7 +106,7 @@ prompt. The ancillary `media_summary_generation` 503 is harmless; only a main-ru
    Small-text UI walkthroughs need a real check: on a 29-minute 720p screen share (normal
    preset, 2026-09-24), Flash made up most of the on-screen text, the example data, the
    pricing and the screen names while still sounding sure of itself. Check 3–4 source
-   frames first. If they disagree, use the `scene-frames` output as the source and treat
+   frames first. If they disagree, use `select-frames` output (video-frames-for-vision) as the source and treat
    the Gemini draft as hypotheses only.
    If a sandboxed agent's `osascript` clipboard write leaves `clipboard info` empty, it
    failed silently: run it outside the sandbox.
@@ -131,11 +131,13 @@ and provide the prepared video/prompt for AI Studio. Chat-only output is incompl
 
 ## No Gemini available
 
-Seen blockers: native `agy` weekly quota 429, and video-summary 503. When Gemini is exhausted or
-existing Claude/OpenAI subscriptions are preferred, take the measured
-[local route](local-route.md): `scripts/transcribe-local` for local ASR and `scripts/scene-frames`
-for scene-sampled original-resolution frames, read by Claude Code or Codex. It is sampled, not
-continuous, perception — weaker than Gemini on anything between frames; say so in the output.
+Seen blockers: native `agy` weekly quota 429, video-summary 503, or a machine without
+Antigravity (Windows + Codex, Claude Code on a subscription). Then take the frame route of the
+sibling `video-frames-for-vision` skill: `select-frames source.webm` picks one frame per
+distinct screen state, drops people-only stretches and writes a manifest + contact sheets that
+a vision-only model reads next to the transcript. Speech comes from the vendor transcript
+(Leexi/Fathom) or, without one, `scripts/transcribe-local` ([local route](local-route.md)).
+Sampled frames are not continuous perception; say so in the output.
 
 ## PJ's local examples (optional context only)
 

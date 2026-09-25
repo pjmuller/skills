@@ -5,17 +5,11 @@ install_dir="${HOME}/.local/bin"
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
 [[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
-  for dependency in ffmpeg ffprobe uv yt-dlp; do
+  for dependency in ffmpeg ffprobe uv; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install this prerequisite with your package manager, then rerun scripts/install --check" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done
-  # mlx_whisper only powers the optional local ASR route; absence must not fail readiness.
-  if command -v mlx_whisper >/dev/null; then
-    echo "ok      mlx_whisper ($(command -v mlx_whisper))"
-  else
-    echo "warn    mlx_whisper missing (optional; uv tool install mlx-whisper)"
-  fi
-  for helper in shrink-video build-prompt download-fathom transcribe-local; do
+  for helper in select-frames; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -28,8 +22,8 @@ case "$script_dir" in
   */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
 esac
 warn_project=false
-[[ ! -d "$HOME/.agents/skills/video-shrink-for-gemini" ]] || warn_project=true
-for command_name in shrink-video build-prompt download-fathom transcribe-local; do
+[[ ! -d "$HOME/.agents/skills/video-frames-for-vision" ]] || warn_project=true
+for command_name in select-frames; do
   existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
@@ -44,7 +38,7 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$install_dir"
-for helper in shrink-video build-prompt download-fathom transcribe-local; do
+for helper in select-frames; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
 done

@@ -1,0 +1,160 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow>=10", "numpy>=1.26"]
+# ///
+"""Write a deterministic synthetic meeting recording for select-frames tests.
+
+Timeline (1 content frame per second, encoded at 5 fps, 640x360):
+  0-8 s  people only (3 webcam tiles)      8-18 s  shared page 1 (static)
+  18-26 s page 1 scrolled (same header)    26-34 s shared page 2 (other header, table)
+  34-40 s people only again
+Shared screens use a presenting layout: content left, two small webcam tiles right.
+Usage: make-fixture OUT.mp4
+"""
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+W, H, FPS, SECONDS = 640, 360, 5, 40
+BG = (32, 33, 36)
+TILE = (44, 45, 48)
+SKIN = (210, 160, 130)
+SEED = 7
+
+
+def person_tile(draw: ImageDraw.ImageDraw, box, t: int, n: int, name: str) -> None:
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle(box, radius=10, fill=TILE)
+    cx = (x0 + x1) / 2 + 4 * ((t + n) % 3 - 1)
+    cy = (y0 + y1) / 2 + 3 * ((t + 2 * n) % 3 - 1)
+    rx, ry = (x1 - x0) * 0.30, (y1 - y0) * 0.36
+    draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=SKIN)
+    draw.rectangle((x0 + 6, y1 - 18, x0 + 12 + 6 * len(name), y1 - 6), fill=(20, 20, 22))
+    draw.text((x0 + 9, y1 - 18), name, fill=(255, 255, 255))
+
+
+def gallery(t: int) -> Image.Image:
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+    for n, name in enumerate(("Ann", "Bob", "Cleo")):
+        x0 = 16 + n * 208
+        person_tile(draw, (x0, 50, x0 + 192, 310), t, n, name)
+    return img
+
+
+def text_lines(rng: np.random.Generator, count: int, width: int) -> list[tuple[int, int]]:
+    """(indent, length) per line; blank lines mark paragraphs."""
+    lines = []
+    for _ in range(count):
+        if rng.random() < 0.12:
+            lines.append((0, 0))
+        else:
+            indent = int(rng.choice([0, 0, 0, 16]))
+            lines.append((indent, int(rng.integers(width // 4, width - indent))))
+    return lines
+
+
+class Screen:
+    x0, y0, x1, y1 = 0, int(H * 0.08), int(W * 0.70), int(H * 0.92)
+    header_h = int((y1 - y0) * 0.15)
+
+    def __init__(self) -> None:
+        rng = np.random.default_rng(SEED)
+        self.body_h = self.y1 - self.y0 - self.header_h
+        self.pitch = 7  # line height incl. gap
+        self.margin = 16
+        self.lines = text_lines(rng, 3 * self.body_h // self.pitch, self.x1 - self.x0 - 2 * self.margin)
+        self.rng = rng
+
+    def header(self, draw, colour, text_len, tabs) -> None:
+        draw.rectangle((self.x0, self.y0, self.x1, self.y0 + self.header_h), fill=colour)
+        ty = self.y0 + 8
+        draw.rectangle((self.x0 + 12, ty, self.x0 + 12 + text_len, ty + 4), fill=(225, 230, 240))
+        for tx, tw in tabs:
+            draw.rectangle((self.x0 + tx, ty + 18, self.x0 + tx + tw, ty + 30), fill=(235, 238, 245))
+
+    def page(self, scroll: float) -> Image.Image:
+        img = gallery_side()
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((self.x0, self.y0, self.x1, self.y1), fill=(255, 255, 255))
+        self.header(draw, (18, 36, 86), 300, [(12, 60), (80, 70), (158, 50)])
+        top = self.y0 + self.header_h + 6
+        first = int(scroll * self.body_h) // self.pitch
+        for i, (indent, length) in enumerate(self.lines[first:]):
+            y = top + i * self.pitch
+            if y + 3 > self.y1 - 4:
+                break
+            if length:
+                draw.rectangle((self.x0 + self.margin + indent, y, self.x0 + self.margin + indent + length, y + 2),
+                               fill=(0, 0, 0))
+        return img
+
+    def table(self) -> Image.Image:
+        img = gallery_side()
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((self.x0, self.y0, self.x1, self.y1), fill=(255, 255, 255))
+        self.header(draw, (40, 150, 70), 140, [(250, 90), (350, 60)])
+        rng = np.random.default_rng(SEED + 1)
+        top, left, right = self.y0 + self.header_h + 12, self.x0 + 20, self.x1 - 20
+        cols = [left, left + 110, left + 220, left + 320, right]
+        row_h = 22
+        rows = (self.y1 - 12 - top) // row_h
+        draw.rectangle((left, top, right, top + row_h), fill=(220, 225, 230))
+        for r in range(rows + 1):
+            draw.line((left, top + r * row_h, right, top + r * row_h), fill=(90, 90, 90), width=1)
+        for c in cols:
+            draw.line((c, top, c, top + rows * row_h), fill=(90, 90, 90), width=1)
+        for r in range(rows):
+            for a, b in zip(cols, cols[1:]):
+                length = int(rng.integers(20, b - a - 12))
+                y = top + r * row_h + 9
+                draw.rectangle((a + 6, y, a + 6 + length, y + 2), fill=(0, 0, 0))
+        return img
+
+
+def gallery_side(t: int = 0) -> Image.Image:
+    """Presenting layout background: two small webcam tiles stacked on the right."""
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+    for n, name in enumerate(("Ann", "Bob")):
+        y0 = 40 + n * 145
+        person_tile(draw, (int(W * 0.74), y0, W - 16, y0 + 130), t, n, name)
+    return img
+
+
+def frame(t: int, screen: Screen) -> Image.Image:
+    if t < 8 or t >= 34:
+        return gallery(t)
+    if t < 18:
+        return screen.page(0.0)
+    if t < 26:
+        return screen.page(0.4)
+    return screen.table()
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: make-fixture OUT.mp4")
+    out = Path(sys.argv[1]).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    screen = Screen()
+    with tempfile.TemporaryDirectory() as tmp:
+        for t in range(SECONDS):
+            img = frame(t, screen)
+            for k in range(FPS):
+                img.save(Path(tmp) / f"f{t * FPS + k:05d}.png")
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-framerate", str(FPS),
+                        "-i", str(Path(tmp) / "f%05d.png"), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-r", str(FPS), str(out)], check=True)
+    print(out)
+
+
+if __name__ == "__main__":
+    main()

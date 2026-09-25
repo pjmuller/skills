@@ -1,0 +1,47 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""List recent Leexi calls newest first: performed_at (local), duration, uuid, title."""
+import argparse
+from datetime import datetime, timedelta
+import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import leexi_api as leexi  # noqa: E402
+
+
+def moment(text):
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.astimezone()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--days", type=float, default=14, help="Look back this many days (default 14)")
+    parser.add_argument("--from", dest="start", type=moment, help="ISO start (local time unless an offset is given)")
+    parser.add_argument("--to", dest="end", type=moment, help="ISO end (default now)")
+    parser.add_argument("--min-seconds", type=float, default=60, help="Hide shorter calls (default 60)")
+    parser.add_argument("--json", action="store_true", help="Print the raw call list as JSON")
+    args = parser.parse_args()
+    end = args.end or datetime.now().astimezone()
+    start = args.start or end - timedelta(days=args.days)
+    try:
+        calls = leexi.list_calls(start, end, args.min_seconds)
+    except (ValueError, OSError) as exc:
+        parser.exit(1, f"Leexi listing failed: {exc}\n")
+    if args.json:
+        json.dump(calls, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        print("\n".join(leexi.row(c) for c in calls) or "(no calls)")
+
+
+if __name__ == "__main__":
+    # Windows consoles default to a legacy code page; titles and names are often non-ASCII.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    main()
