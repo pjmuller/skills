@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## v0.3.0 (2026-09-25)
 - leexi: new skill (infrastructure layer split out of video-shrink-for-gemini). `download-leexi` gains `--at "today 14:00"` (nearest call in a time window, `--pick` on ambiguity) and a default git-ignored `./.local/leexi/<uuid>/` out dir; `leexi-calls` lists recent calls; shared stdlib client `leexi_api.py`; Windows-safe `uv run --script` invocation; unit tests.
 - video-frames-for-vision: new skill for vision-only models (Codex, Claude Code) without Gemini. `select-frames` samples a recording at 1 fps, classifies people-only frames (skin/edge/content-region heuristics), groups screen frames into views (pHash + SSIM) and pages (same chrome + header band, scroll tolerant), keeps one frame per page plus extra scroll positions, crops the shared-content region at 2×, writes `manifest.md/json`, contact sheets and audit sheets (people-only sentinels, transients). Annotation prompt reproduces the meeting-analysis shape (screen events, topics, action items, ready-to-paste prompts); Codex recipe for Windows.
 - video-shrink-for-gemini: **breaking** — `download-leexi` and `leexi.md` moved to the `leexi` skill; `scene-frames` removed in favour of `select-frames`. Docs delegate: Leexi input → `leexi`, no Gemini → `video-frames-for-vision`. Rerun `scripts/install` for both skills.
