@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.3.2 (2026-09-25)
+- video-frames-for-vision: defaults favour few but relevant frames (`--max-frames 60`, one view per page, 20 s coverage); over-budget demotion drops near-duplicate pages before short novel ones.
+- agents-md / clickup-core: handoff to a non-technical reader who works through a coding agent = one copy-pasteable md block addressed to the agent.
+
 ## v0.3.1 (2026-09-25)
 - video-frames-for-vision / leexi: Codex recipe targets Linux/WSL/macOS (apt/brew, `uv run --script` with POSIX paths); the PowerShell/winget instructions were wrong for a WSL-backed setup. Benchmark note: one Claude Code agent hits a media request limit after ~54 frames.
 

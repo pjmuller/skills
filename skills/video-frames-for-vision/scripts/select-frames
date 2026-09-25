@@ -292,8 +292,14 @@ def select_views(views: list[View], pages: list[Page], min_seconds: float, views
             chosen.append((page, v, "page" if v is settled[0] else "scrolled"))
     demoted: list[View] = []
     if len(chosen) > max_frames:
-        # Demote extra scroll views first, then the shortest pages.
-        order = sorted(chosen, key=lambda c: (c[2] == "page", c[1].seconds))
+        # Demote extra scroll views first, then pages that look most like a temporal neighbour
+        # (near-duplicates), then the shortest: a briefly shown but novel screen is still evidence.
+        chosen.sort(key=lambda c: c[1].start)
+        novelty = {}
+        for i, c in enumerate(chosen):
+            neighbours = [chosen[j] for j in (i - 1, i + 1) if 0 <= j < len(chosen)]
+            novelty[id(c[1])] = min((c[1].anchor.phash - n[1].anchor.phash for n in neighbours), default=64)
+        order = sorted(chosen, key=lambda c: (c[2] == "page", novelty[id(c[1])], c[1].seconds))
         demoted = [c[1] for c in order[: len(chosen) - max_frames]]
         demoted_ids = {id(v) for v in demoted}
         chosen = [c for c in chosen if id(c[1]) not in demoted_ids]
@@ -391,8 +397,8 @@ def main() -> None:
     parser.add_argument("--out", type=Path, help="output directory (default: <video>.frames next to the video)")
     parser.add_argument("--fps", type=float, default=1.0, help="analysis sampling rate (default 1)")
     parser.add_argument("--min-seconds", type=float, default=3.0, help="shorter screen views are transient: audit sheet only")
-    parser.add_argument("--max-frames", type=int, default=120, help="cap on full-resolution frames; extra scroll views, then short pages, are demoted")
-    parser.add_argument("--views-per-page", type=int, default=3, help="frames per page: longest view plus extra scroll positions")
+    parser.add_argument("--max-frames", type=int, default=60, help="cap on full-resolution frames; extra scroll views, then short pages, are demoted")
+    parser.add_argument("--views-per-page", type=int, default=1, help="frames per page: longest view plus extra scroll positions")
     parser.add_argument("--phash", type=int, default=6, help="max perceptual-hash Hamming distance for 'same view'")
     parser.add_argument("--ssim", type=float, default=0.90, help="min SSIM (160px grey) for 'same view'")
     parser.add_argument("--band", type=float, default=0.85, help="min SSIM of the top band (browser chrome + page header) for 'same page'")

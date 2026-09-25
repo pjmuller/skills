@@ -37,8 +37,9 @@ uv run --script .agents/skills/video-frames-for-vision/scripts/select-frames .lo
 Then it fills [annotate-prompt.md](annotate-prompt.md) and follows it: transcript first, frames in
 batches of 12–24 with notes persisted to `screen-notes.md`, then `analysis.md`.
 
-Measured (50-minute meeting, 137 frames, `codex exec`, gpt-6-astra): 14 minutes, 3.0M input tokens
-of which 2.6M cache hits, 18k output. A cheaper pass: `select-frames --max-frames 60 --views-per-page 2`.
+Measured (50-minute meeting, 137 frames from the exhaustive pass, `codex exec`, gpt-6-astra): 14 minutes,
+3.0M input tokens of which 2.6M cache hits, 18k output. Defaults now keep ≈100 frames for such a
+meeting; `--max-frames 120 --views-per-page 2` is the exhaustive pass.
 
 Codex sandbox notes: work from the repository root so `.local/` is inside the writable workspace;
 hidden/ignored directories are readable by path, but `rg --files` skips them, so open frames by the

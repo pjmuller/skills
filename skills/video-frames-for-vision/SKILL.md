@@ -12,7 +12,7 @@ transcript. Speech comes from a vendor transcript (sibling skill `leexi`, or Fat
 
 ```sh
 uv run --script scripts/select-frames recording.webm          # any OS; or `select-frames` after scripts/install
-select-frames --max-frames 60 --views-per-page 2 recording.webm  # cheaper pass
+select-frames --max-frames 120 --views-per-page 2 recording.webm  # exhaustive pass (default is few but relevant)
 select-frames --no-crop --features recording.webm                # whole frames, dump features for tuning
 ```
 
@@ -36,8 +36,9 @@ select-frames --no-crop --features recording.webm                # whole frames,
 5. **Pages.** Consecutive views whose top 30 % band (browser chrome + page header) matches
    (SSIM ≥ 0.85, pHash ≤ 20) are one page; glitches up to `--gap` (3 s) do not split a page; a page
    that returns later is a new page. Each page yields its longest settled view plus up to
-   `--views-per-page − 1` other scroll positions, longest first. Over `--max-frames` (120), extra
-   scroll views are demoted first, then the shortest pages. Page identity from cheap features is
+   `--views-per-page − 1` other scroll positions (default 1: one frame per page). Over
+   `--max-frames` (60), extra scroll views are demoted first, then pages that look most like a
+   temporal neighbour (near-duplicates), then the shortest: a briefly shown but novel screen stays. Page identity from cheap features is
    fuzzy (same page scrolled vs a different page overlap on every metric tried), so a **coverage
    rule** adds one frame whenever a screen-share stretch exceeds `--max-gap` (20 s) without one;
    continuous scrolling therefore costs about one frame per 20 s, not one per second.
@@ -45,10 +46,11 @@ select-frames --no-crop --features recording.webm                # whole frames,
    page span, file) and `manifest.json` (same plus pages, transients, demoted, gallery spans),
    `sheets/sheet-NN.jpg` (kept frames, 4×3 with labels) and `sheets/audit-NN.jpg`.
 
-Measured on a 50-minute Google Meet standup (720p, 41 min of screen share): 136 pages, 133 frames
-(120 page + 13 coverage), people-only 8:41 matching a Gemini pass over the same recording; seven
-reference screen events (Dentex site, ClickUp list and task, Gmail, demo site, pricing page, PWA)
-all mapped to a kept frame. Runtime ≈ 40 s on an M-series Mac.
+Measured on a 50-minute Google Meet standup (720p, 41 min of screen share): 136 pages; defaults keep
+≈100 frames (60 page + coverage), people-only 8:41 matching a Gemini pass over the same recording;
+six of seven reference screen events (Dentex site, ClickUp list and task, Gmail, pricing page, PWA;
+the demo home page's first 5 s showing is dropped, it returns later) map to a kept frame; the
+exhaustive pass (`--max-frames 120 --views-per-page 2`, 133 frames) hits all seven. Runtime ≈ 40 s.
 
 ## Limits, stated in every output
 

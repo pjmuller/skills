@@ -24,6 +24,13 @@ settled in the chat thread first, then written as one line. In limbo → write
 nothing. One native mention of the one person who must act. (Same rule as a
 ClickUp handoff comment: skill `clickup-core`, "Comment discipline".)
 
+## Technical → a non-technical reader who works through a coding agent
+They will not run steps themselves; their agent will. Never write "do this, then that".
+Write **one copy-pasteable ```md block addressed to their agent**, in English, concise: goal,
+what to open/install, the exact commands or paths, what "done" looks like. Above it at most one
+line in the reader's language ("Plak dit in Codex."). Machine facts (OS, WSL, where repos live)
+come from the workspace's notes on that person, never assumed. Secrets go through another channel.
+
 ## Non-technical → technical (bug report, feature ask)
 - **North star first.** What should be true when this is done, and for whom?
   A request without a clear intent is not ready: ask the one or two questions
