@@ -1,19 +1,21 @@
 # Keeping colleagues current on shared skills (2026-09-25)
 
+> **Mode 2 implemented in `ac0dbec` (released v0.4.0); whatsapp-bridge fix in `d7f43ce`.** Current docs: [skills-refresh](../../skills/t3-manage-thread/skills-refresh.md), [colleague onboarding](../onboarding/skills-refresh.md). Mode 1 (scheduled `shared-skill-sync` with tag gate) is still open — see Status below.
+
 **Verdict:** a skill that updates *itself* (helper runs `git pull`/`skills update` on use) is an anti-pattern. A *machine-owned, scheduled, release-gated* updater that applies before the workday and tells the human what changed is not. Same split Homebrew, rustup (`check-only`) and Claude Code plugin auto-update make: the package manager updates, the package never does.
 
 ## Facts (measured today)
 
 | Skill (60 d file changes) | Mode | Who depends on it |
 | --- | --- | --- |
-| t3-manage-thread (125) | global | Willem, Thomas (both pinned at commit `4d03fd0`, 2026-09-09) |
+| t3-manage-thread (125) | global | colleagues A, B (both pinned at commit `4d03fd0`, 2026-09-09) |
 | google-workspace-core (112) | hard-copied | all product repos |
 | video-shrink-for-gemini (49) | hard-copied | dentai, redcell |
 | clickup-core (37) | hard-copied | all product repos, 4 different lock hashes today |
 | t3-maintenance (32) · t3-usage-windows (28) | PJ-only (macbook_setup symlink) | nobody else |
-| t3-schedule (26) | repo-local in Willem's setup repo | Willem |
+| t3-schedule (26) | repo-local in colleague A's setup repo | colleague A |
 
-121 commits / 6 release tags in 60 days. Colleague harnesses: Thomas = Codex CLI in WSL + T3; Willem = Claude Code/Desktop → T3; Karel = Claude Code (leerheld copies); Astrid/Tobias/Jelle not yet set up.
+121 commits / 6 release tags in 60 days. Colleague harnesses: B = Codex CLI in WSL + T3; A = Claude Code/Desktop → T3; C = Claude Code (leerheld copies); three more colleagues not yet set up.
 
 Tooling as of 2026-09-25:
 - `skills` CLI 1.7.0: `update [-g|-p] -y` re-fetches HEAD, hash-compares; lockfile = content hash, no version, no pin. **`skills check` silently runs `update`** (probe rewrote rootcause's clickup-core; reverted).
@@ -34,7 +36,7 @@ Mid-task surprise (helper swaps its own docs/binaries under a running agent, ski
 | Apply | auto: commit `[skip ci] chore: skills vX.Y.Z` to each consumer repo | auto: `pnpm dlx skills update -g -y` + rerun each changed skill's `scripts/install --check` |
 | Colleague sees | nothing; next `git pull` carries it. Optional: ClickUp/T3 note listing repos touched | a T3 thread "Skills vX.Y.Z" holding the CHANGELOG entries since their previous tag (rendered from `CHANGELOG.md`), plus one line per install warning |
 | Failure | sync fails on a dirty worktree → skips repo, reports; nothing breaks for colleagues | update fails offline → retries tomorrow; install `--check` fails → thread says "run `scripts/install --relink`", old helpers keep working |
-| Effort | S (½ day): tag gate + `t3-schedule add`; also fixes PJ's own 4-hash drift | M (1–2 days): script, launchd+cron installers, tag-diff of CHANGELOG, test on Willem's Mac and Thomas's WSL |
+| Effort | S (½ day): tag gate + `t3-schedule add`; also fixes PJ's own 4-hash drift | M (1–2 days): script, launchd+cron installers, tag-diff of CHANGELOG, test on colleague A's Mac and colleague B's WSL |
 
 Design points:
 - **Release tag = the unit of distribution.** PJ keeps pushing to `main` at will; only `git tag vX.Y.Z` (already the rule: "tag only verified releases") reaches colleagues. Tag cadence sets colleague churn, not commit cadence.
@@ -52,8 +54,8 @@ Design points:
 ## Ranked next steps
 1. Fix `whatsapp-bridge` frontmatter; run `shared-skill-sync apply && push` once to clear today's drift (minutes).
 2. Mode 1 scheduling with tag gate (S).
-3. Mode 2 `skills-refresh` job in `setup/t3-setup`, roll out to Willem and Thomas via a 3-line prompt (M).
-4. Later: Claude plugin marketplace for Claude-only colleagues (Karel).
+3. Mode 2 `skills-refresh` job in `setup/t3-setup`, roll out to colleagues A and B via a 3-line prompt (M).
+4. Later: Claude plugin marketplace for Claude-only colleagues (C).
 
 ## Astra's review (🏓 thread, 2026-09-25)
 Same verdict: "automate distribution, not self-modification inside a skill". Extra points folded in: the `skills` CLI's `check` dispatches to the same updater as `update` (confirmed in v1.5.24 source, still true in 1.7.0), so pin the CLI version in the job; a content hash proves change, not publisher authenticity, so pin the source commit/tag; stage + validate + activate with last-good rollback; never assume `skills add` installs PATH helpers. Astra prefers update PRs with auto-merge for Mode 1; with shared `main` and no feature branches here, a direct `[skip ci]` commit after a green smoke test is the equivalent.
@@ -64,4 +66,4 @@ Mode 2 shipped: `skills-refresh` in t3-manage-thread ([doc](../../skills/t3-mana
 Mode 1 follow-up (not done: >30 lines, needs `shared-skill-sync` changes in macbook_setup):
 1. `update.py`: `--ref TAG` for `plan`/`apply` — compare consumers against `archived(SOURCE, TAG, …)` instead of `HEAD`, and install with `skills add pjmuller/skills#TAG` (CLI tag refs: see the probe result in the same-day build thread; fallback `git archive TAG | tar -x` into the worktree).
 2. State file `~/.agents/shared-skill-sync.last-tag`; `plan` exits 0 "no new tag" when `git ls-remote --tags` has nothing newer.
-3. `t3-schedule add --name shared-skill-sync --at 05:30 --project ~/code/pjmuller/macbook_setup --model haiku,luna --settle-when-done -- "…plan → apply → check → push; surface only when repos were touched"`; 06:30 is taken by fleet-kampadmin-support on PJ's Mac (slots ≥15 min apart).
+3. `t3-schedule add --name shared-skill-sync --at 05:30 --project ~/code/pjmuller/macbook_setup --model haiku,luna --settle-when-done -- "…plan → apply → check → push; surface only when repos were touched"`; 06:30 is taken by another job on the maintainer's Mac (slots ≥15 min apart).

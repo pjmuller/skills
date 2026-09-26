@@ -5,9 +5,8 @@ description: Verify old-versus-new behavior during rewrites, ports, replatformin
 
 # Migration parity
 
-Register this skill repo-locally and on demand in the project undergoing an active
-migration. Do not register it globally: its guidance should enter context only in
-repositories where old-versus-new parity is current work.
+Register repo-locally, only while a migration is active; global registration would put it in
+context everywhere.
 
 Use the working system as an executable reference. Preserve outcomes users depend on; identify intentional changes explicitly. Scale this guidance to the risk: a small migration may need a few fixtures, not a new harness.
 
@@ -26,7 +25,7 @@ Choose a representative, demanding workflow spanning the real boundaries. For ex
 
 Establish valid fixtures, permissions and an independent old-system baseline before broad implementation. First make one path work through the actual interface and downstream effects. Then expand across **different behaviors**, not arbitrary sample counts. Use existing tools; add small reproducible helpers where repeated manual work or risky mutations justify them.
 
-Where practical, shadow-run old and new against the same real inputs with effects disabled or redirected to isolated targets. Verify that isolation before replaying traffic.
+Where practical, shadow-run old and new against the same real inputs with effects disabled or redirected; [verify isolation](data-and-effects.md#replay-versus-real-execution) before replaying traffic.
 
 ## Compare at the right layers
 
@@ -47,6 +46,6 @@ Ship incrementally within authorization, checking the **deployed version** and i
 
 ## Finish with evidence, not momentum
 
-Report what matched, deliberate deviations, remaining gaps, human testing priorities and links to try. Reconcile test mutations and stop temporary processes. 
+Report what matched, deliberate deviations, remaining gaps, [human testing priorities](user-workflows.md#handoff-and-future-diagnosis) and links to try. Reconcile test mutations ([cleanup rules](data-and-effects.md#replay-versus-real-execution)) and stop temporary processes.
 
 Treat cutover and retirement separately: identify remaining callers, background jobs, stored links and shared data before removing the old system. Record rollback limitations once the new system accepts writes. Reach the agreed stop line; do not infer permission to switch traffic or decommission infrastructure.

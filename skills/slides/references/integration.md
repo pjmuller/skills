@@ -18,7 +18,7 @@ The core reads `project-slides/SKILL.md` under `.agents/skills` or `.claude/skil
 do not recurse when the wrapper points back here. Resolve paths against the repository root;
 symlink aliases are the same file. Do not assume a sibling checkout or a specific username.
 
-Install for the team's harnesses, e.g. `-a claude-code codex`. Verify both discover the core
-and wrapper. With a legacy `.claude/skills` directory, individual relative symlinks can expose
-the core there and the wrapper in `.agents/skills`; a whole-directory migration is unnecessary.
-Commit those links too. A renamed wrapper needs inbound link and skill-name references updated.
+Verify every harness passed to `-a` discovers the core and wrapper. With a legacy
+`.claude/skills` directory, individual relative symlinks can expose the core there and the
+wrapper in `.agents/skills`; a whole-directory migration is unnecessary. Commit those links too.
+A renamed wrapper needs inbound link and skill-name references updated.

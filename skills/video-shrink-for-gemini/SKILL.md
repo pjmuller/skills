@@ -5,162 +5,100 @@ description: Prepare recordings and obtain Markdown transcripts or visual narrat
 
 # Video → Gemini
 
-Prepare `<name>.gemini.mp4` and `<session>.gemini-prompt.md` beside the source.
-When Antigravity is available locally or through T3, run the transcription yourself;
-deliver `<name>.transcript.md` on disk, not just an LLM response or a copy/paste prompt.
-Install commands with `scripts/install`; verify dependencies with `scripts/install --check`.
+Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a copy/paste prompt for the
+user), built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source.
+Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `transcribe-local`,
+`transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
+
+Route: native `agy` (Gemini) when it works → continuous audiovisual narrative. No Gemini, or
+small on-screen text must be exact → [No Gemini available](#no-gemini-available).
 
 ## Fathom input
 
-For a Fathom URL, use [the API download flow](fathom.md) before media inspection.
-For transcript-only requests, run `download-fathom URL --out PRIVATE_DIR --transcript-only`
-and stop before media inspection: it saves raw API JSON and speaker/timestamp Markdown,
-without downloading video, calling Gemini, or running ASR. It needs only `uv` and
-`FATHOM_API_KEY`. Other Fathom requests can download media and optional transcript timings.
-Never change sharing permissions.
+Fathom URL → [fathom.md](fathom.md). Transcript-only requests: `download-fathom URL --out
+PRIVATE_DIR --transcript-only`, then stop (no media, Gemini or ASR). Never change sharing
+permissions.
 
 ## Leexi input
 
-For an `app.leexi.ai/.../calls/UUID` URL, a bare UUID or "the Leexi meeting of today around
-14:00", use the sibling `leexi` skill: `download-leexi URL --out PRIVATE_DIR` (or `--at "today
-14:00"`) saves the raw call JSON, `transcript.md` (Leexi summary, follow-up tasks,
-speaker/timestamp paragraphs) and the recording as `source.webm`; `--transcript-only` stops
-before media. Leexi's timestamped transcript is the speech layer; use Gemini for what happened
-on screen and to check what Leexi heard.
+Leexi URL, UUID or "the Leexi meeting of today around 14:00" → sibling [leexi](../leexi/SKILL.md)
+skill (`download-leexi`). Its timestamped transcript is the speech layer; Gemini adds what
+happened on screen and checks what Leexi heard.
 
 ## ClickUp SyncUp input
 
-ClickUp SyncUp recordings, AI notes and the untimed notetaker transcript come from
-clickup-core's `scripts/syncup.py URL --out PRIVATE_DIR`; then follow the normal route below.
+`clickup-core`'s `scripts/syncup.py URL --out PRIVATE_DIR` fetches recording, AI notes and the
+untimed transcript ([reference](../clickup-core/reference.md#syncup-recordings)); then continue below.
 
 ## Inspect and choose mode
 
-Inspect 3–4 frames across each clip and measure duration with `ffprobe`.
-If audio exists, run `ffmpeg -i INPUT -af silencedetect=noise=-35dB:d=0.3 -f null -`.
-Estimate speech share as `(duration − total silence duration) / duration`, accounting for
-silence continuing to EOF. This measures audible activity, not speech: music, clicks,
-noise and quiet voices need listening checks. No audio stream → visual-first.
-Below roughly 20% speech → propose visual-first; speech-heavy → transcript-first;
-substantial speech plus UI actions → mixed. If unsure, include mode in the single
-question round along with missing project, speakers/language, purpose and skip ranges.
-Infer available context first; use your project's context files and `AGENTS.md`.
+Look at 3–4 frames per clip; get duration from `ffprobe`. With audio, estimate speech share from
+`ffmpeg -i INPUT -af silencedetect=noise=-35dB:d=0.3 -f null -` as `(duration − silence) /
+duration` (count silence running to EOF). It measures audible activity, not speech: music,
+clicks and quiet voices need a listen. No audio or < ~20% → visual-first; speech-heavy →
+transcript-first; speech plus UI actions → mixed. Infer project, speakers, language, purpose
+and skip ranges from context (`AGENTS.md`, project docs); ask one question round only for gaps.
 
 ## Shrink
 
-```sh
-scripts/shrink-video --preset normal "recording.mp4"
-```
-
-Bare filenames resolve in `~/screenshots`, then `~/Downloads`. Keep the original.
-Output uses H.264 slow encoding and mono 16 kHz AAC at 32 kb/s for meeting speech.
-Normal = 0.5 fps / CRF 24 / 1280px cap; compact = same cadence / CRF 28;
-heavy = 0.25 fps / CRF 26 / 1280px; extreme = 0.2 fps / CRF 30 / 854px.
-For 720p screen shares, preserve 720p: try normal, compact, then heavy before chunking.
-Never use extreme when small screen text matters. Rapid actions may require source
-frames or higher fps; inspect output speech and small text before accepting a recipe.
-
-Native `agy` 1.2.5 rejects files over **50 MiB (52,428,800 bytes)**, separately from
-Gemini API limits. A tested 46-minute 720p meeting fit in one file: normal 38.6 MiB,
-compact 29.3 MiB, heavy 24.4 MiB. These are examples, not size guarantees.
-Read [size fitting and chunk fallback](compression.md) when output exceeds the limit.
-Prefer the fewest measured-to-fit clips; do not default to arbitrary ten-minute chunks.
+`shrink-video --preset normal FILE` (presets in the script; keep the original). Hard external
+limit: native `agy` rejects attachments over **50 MiB (52,428,800 bytes)**, separate from Gemini
+API limits. Over it, or unsure which preset keeps text readable: [compression.md](compression.md).
+Never use `extreme` when small screen text matters; rapid actions may need source frames.
 
 ## Prompt
 
-**Ground the vocabulary first, every time.** Before filling the template, collect the words the
-recording will contain and the model must spell right: people (speakers, colleagues, customers),
-company/product/feature names, integrations and vendors, the project's own taxonomies and enums
-(statuses, categories, entity types, ticket prefixes), place and event names, and the language
-variety (e.g. Flemish Dutch). Sources, in this order: the project's `AGENTS.md`/`CLAUDE.md` and
-skill docs, glossary/taxonomy files, the vendor transcript's own summary and speaker list, recent
-meeting notes, ticket titles. Aim for 30–80 terms with their exact spelling; never guess terms you
-have not seen written. Put them in the template's `## Vocabulary` block (the same list is the
-`--hint` for `transcribe-openai`). A 20-word hint alone fixed the vendor's product-name errors in
-the measured run; without it Gemini and OpenAI invent plausible spellings.
+**Ground the vocabulary first, every time.** Collect the exact spellings the recording will
+contain: people, company/product/feature names, vendors, the project's taxonomies/enums, places,
+language variety (e.g. Flemish Dutch). Sources: project `AGENTS.md`/skill docs, glossaries, the
+vendor transcript's summary and speaker list, recent notes, ticket titles. 30–80 terms, only ones
+seen written. Without them Gemini and OpenAI invent plausible spellings.
 
-Fill [prompt-template.md](prompt-template.md): `MODE` = visual-first, transcript-first,
-or mixed; durations/count from ffprobe; situation, language, speakers, skips and a
-short introduction to each context file. Keep the applicable rule blocks.
-
-```sh
-scripts/build-prompt --header /tmp/header.md --out session.gemini-prompt.md \
-  /path/to/project-context.md /path/to/project/AGENTS.md
-```
-
-Reference files are appended verbatim in separate fences. Use the execution path below.
-For opaque URLs/record IDs, read [exact-identifiers.md](exact-identifiers.md):
-candidate-assisted identification is not visual verification.
-For API use, load `GEMINI_API_KEY` from your own environment.
-Check current Gemini video/file limits before choosing upload/chunking settings;
-long recordings may need chunks or lower media resolution.
+Fill [prompt-template.md](prompt-template.md) (`MODE`, ffprobe durations, situation, language,
+speakers, skips, vocabulary, one-line intro per context file; keep applicable rule blocks), then
+`build-prompt --header header.md --out session.gemini-prompt.md CONTEXT_FILE...` appends context
+files verbatim. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
+API route: `GEMINI_API_KEY` from your environment; check current Gemini video limits first.
 
 ## Execute and verify
 
-**Verified: native `agy` 1.2.5, Gemini 3.8 Flash High, paid plan (2026-09-18); 1.2.0 Starter (2026-09-10).**
-A clipboard MP4 produced an aligned speech + visual Markdown file; a 42-minute 720p meeting
-took ~150 s. Driving it headlessly works: `osascript -e 'set the clipboard to (POSIX file "…")'`,
-`agy` inside `tmux`, `tmux send-keys C-v`, confirm `Clipboard file URL read … video/mp4` in the
-latest `~/.gemini/antigravity-cli/log/cli-*.log`, then `tmux load-buffer` + `paste-buffer -p` the
-prompt. The ancillary `media_summary_generation` 503 is harmless; only a main-run 429 is a blocker.
+Verified: native `agy` 1.2.5, Gemini 3.8 Flash High, paid plan (2026-09-18); a 42-minute 720p
+meeting took ~150 s.
 
-1. Check native authentication with `agy models`; T3 login is separate.
-2. Start interactive `agy --model gemini-3.8-flash-high --effort high` in the task folder.
-3. Copy the **video file** in Finder, then send Ctrl+V to the CLI. Verify the attachment
-   indicator shows `video/mp4` (or its actual type) and nonzero bytes before submission.
-   Pasting a pathname as text does not attach media. The submitted message may label
-   video as “image(s)” and later show 0 B; the pre-submit MIME/size is the useful check.
-4. Send the prepared brief with an absolute `<name>.transcript.md` output path.
-   Require direct media perception; prohibit deriving contents from logs or source code.
-   Approve the requested file write within the authorized task, then read it yourself.
-5. Verify spoken words, visual changes, timestamps and coverage against the recording;
-   report gaps. Return the Markdown path, preserve inputs, then exit the CLI.
-   Small-text UI walkthroughs need a real check: on a 29-minute 720p screen share (normal
-   preset, 2026-09-24), Flash made up most of the on-screen text, the example data, the
-   pricing and the screen names while still sounding sure of itself. Check 3–4 source
-   frames first. If they disagree, use `select-frames` output (video-frames-for-vision) as the source and treat
-   the Gemini draft as hypotheses only.
-   If a sandboxed agent's `osascript` clipboard write leaves `clipboard info` empty, it
-   failed silently: run it outside the sandbox.
+1. `agy models` checks native auth (separate from T3 login) and lists model IDs; never silently
+   substitute a model or change billing.
+2. Start `agy --model gemini-3.8-flash-high --effort high` in the task folder.
+3. Attach the **file**, not its path as text: copy the video file to the clipboard, Ctrl+V. Before
+   submitting, confirm the indicator shows `video/mp4` and nonzero bytes (after submit it may say
+   "image(s)" / 0 B). Headless: `osascript -e 'set the clipboard to (POSIX file "…")'`, `agy` in
+   `tmux`, `tmux send-keys C-v`, confirm `Clipboard file URL read … video/mp4` in the newest
+   `~/.gemini/antigravity-cli/log/cli-*.log`, then `tmux load-buffer` + `paste-buffer -p` the
+   prompt. Sandboxed `osascript` can fail silently (empty `clipboard info`): run it unsandboxed.
+   Headless stream-json takes text blocks only; do not invent video attachment JSON
+   ([media-paste docs](https://antigravity.google/docs/cli/prompting/)).
+4. Send the brief with an absolute `<name>.transcript.md` path; require direct media perception
+   (not logs or source code); approve that file write.
+5. Read the file; check speech, visual changes, timestamps and coverage against the recording;
+   report gaps; exit the CLI. A `media_summary_generation` 503 is harmless; a main-run 429 blocks.
 
-Run directly in native `agy` when it works; a T3 worker is optional, not a media
-prerequisite. For model comparisons, use fresh conversations, identical media and
-held-out reference evidence. Discover model IDs with `agy models`; never silently
-substitute models or change billing. `gemini-3.1-pro-high` was authenticated in
-1.2.5, but did not improve small opaque-ID recognition in a two-ticket comparison.
+Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
+screen names on a 29-minute 720p share (2026-09-24). Compare 3–4 source frames first; if they
+disagree, use [video-frames-for-vision](../video-frames-for-vision/SKILL.md) as the source and the
+Gemini draft as hypotheses. `gemini-3.1-pro-high` did not read small opaque IDs better.
 
-Automate the interactive terminal and file clipboard when computer tools allow;
-do not hand the user a copy/paste prompt when this local route works. Headless
-stream-json accepts text blocks only; do not invent video attachment JSON.
-[Official media-paste docs](https://antigravity.google/docs/cli/prompting/).
-
-T3 0.0.40 / ACP 1.1.1 failed the media probe: no video/image inspection tool.
-A T3 orchestrator can run the native CLI workflow above. If a future T3 runtime
-supports media, use `t3-spawn-thread --model gemini` with a `🏓` title and absolute
-input/output paths; verify the file before settling the worker. Never recursively
-delegate. If all automated media-capable routes fail, report the concrete blocker
-and provide the prepared video/prompt for AI Studio. Chat-only output is incomplete.
+T3 0.0.40 / ACP 1.1.1 has no media tool, so T3 workers cannot watch video; an orchestrator runs
+native `agy` itself. If a future runtime supports media: `t3-spawn-thread --model gemini` with a
+`🏓` title and absolute paths; verify the file before settling; never delegate recursively. All
+routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
+Model comparisons: fresh conversations, identical media, held-out reference evidence.
 
 ## No Gemini available
 
-Seen blockers: native `agy` weekly quota 429, video-summary 503, or a machine without
-Antigravity (Windows + Codex, Claude Code on a subscription). Then take the frame route of the
-sibling `video-frames-for-vision` skill: `select-frames source.webm` picks one frame per
-distinct screen state, drops people-only stretches and writes a manifest + contact sheets that
-a vision-only model reads next to the transcript. Speech comes from the vendor transcript
-(Leexi/Fathom) or, without one, `scripts/transcribe-local` ([local route](local-route.md)).
-Sampled frames are not continuous perception; say so in the output.
-When the speech layer matters (names, products, decisions) **and** `OPENAI_API_KEY` is in the
-environment, add a second ASR opinion (enrichment, never a blocker: without the key the script prints
-"skipped" and exits 0, and the flow continues on the vendor transcript alone):
-`transcribe-openai source.webm --align leexi-call.json --hint "<names, products, language variety>"`
-(OpenAI transcription API, needs `OPENAI_API_KEY`; Codex/Claude cannot hear audio themselves). It keeps
-the vendor's speakers and timestamps and replaces the words; the agent reads both, prefers the
-vendor for literal fillers/timing and OpenAI for names, and flags disagreements. Details and
-measurements: [local route](local-route.md).
-
-## PJ's local examples (optional context only)
-
-- Project notes: `~/code/pjmuller/pjcoach/3_business/<n>_<project>.md`.
-- Pilot context: `~/code/rootcause-org/rootcause-brain-<slug>/AGENTS.md`.
-- Local API environment: `~/.config/mise-env/dentai-org/dentai.env`.
-These are operator-specific examples, never required or assumed on another machine.
+Seen blockers: `agy` weekly quota 429, video-summary 503, no Antigravity (Windows + Codex,
+Claude Code on a subscription). Frames: `select-frames` from
+[video-frames-for-vision](../video-frames-for-vision/SKILL.md). Speech: vendor transcript
+(Leexi/Fathom), else `transcribe-local`. Second ASR opinion when names/products/decisions matter
+(optional; prints "skipped" without `OPENAI_API_KEY`):
+`transcribe-openai source.webm --align leexi-call.json --hint "<≤20 riskiest terms>" --out transcript.openai.md`.
+It keeps the vendor's speakers/timestamps and swaps in OpenAI's words: prefer it for names, the
+vendor for fillers/timing, flag disagreements. Evidence and model choices: [local-route.md](local-route.md).

@@ -724,7 +724,7 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
         parts: list[dict] = ([{"text": prefix + " "}] if prefix else []) + [
             {"type": "tag", "user": {"id": mention}}]
         # Separator as its own part: comment_parts trims leading whitespace, which glued the mention
-        # to the first word ("@Astrid Schottekun jij").
+        # to the first word ("@Firstname Lastname jij").
         parts += [{"text": "\n" if prefix else " "}] + comment_parts(text)
     else:
         parts = comment_parts(text.rstrip() + " " if mention else text)

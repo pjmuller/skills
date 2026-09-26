@@ -15,8 +15,8 @@ Two modes, one output shape (`seconds speaker: verbatim text`, one line per turn
 
 Needs OPENAI_API_KEY and ffmpeg. Codex CLI cannot read audio itself (verified 2026-09-25), so this
 runs as a tool from the agent. Measured on Flemish meeting audio: gpt-transcribe + a 20-word hint
-fixed Leexi's product-name errors (Klink→ClickDoc, Dent. admin→DentAdmin, Denti een
-mintgroep→Dentius en Mint Groep); rare names still fail (Digora→"die Nora"). gpt-audio chat models
+fixed most of Leexi's product/company-name errors (split or phonetic misspellings); rare names
+the hint omits still fail. gpt-audio chat models
 produced fluent but partly invented lines and speaker swaps: never use them as the speech layer.
 """
 from __future__ import annotations

@@ -10,10 +10,7 @@ from taste, that any agent reads before drafting in their name. Starter shape an
 anti-AI-slop checklist: [template.md](template.md). The file is theirs: do not send it
 anywhere, do not copy private mail into it beyond short verbatim samples they approved.
 
-Register this skill repo-locally in the personal setup repository for initial
-capture and periodic refresh. Register it in a target project only when that
-project's agents should discover the workflow there. `template.md` is a reusable
-input; the live `tone-of-voice.md` stays outside this replaceable installation.
+The live `tone-of-voice.md` stays outside this installation (skill updates replace it).
 
 ## 1. Collect samples (ask, don't assume)
 Ask which of these they can give, and take every one offered. 10–30 pieces across at least
@@ -21,10 +18,10 @@ two channels is enough; more of the same channel adds little.
 - **Pasted text**: messages, posts, emails they are proud of, and one or two they rewrote
   because the first draft "sounded wrong" (the edit is the strongest signal).
 - **Sent mail** (repo with a `google-workspace-core` wrapper, their own account only):
-  `gmail-search 'from:me -newsletter after:<1 year ago>' -n 200` to list, then
-  `gmail-export '<query>' -o /tmp/tov/<name> -n 60`; prefer mail to people outside the
-  company. Ask before exporting; delete the export folder when done (its skill's clean-up rule).
-- **Google Docs / LinkedIn posts**: `gws.py … docs export <url>` per doc; posts pasted or
+  [search → export](../google-workspace-core/references/gmail-search.md) with
+  `from:me newer_than:1y -newsletter`, ~60 messages, preferring mail to people outside the
+  company. Ask before exporting; clean up the export as that doc says.
+- **Google Docs / LinkedIn posts**: `doc-read <url>` (Markdown) per doc; posts pasted or
   fetched with a LinkedIn skill if one is installed. Slides speaker notes count too.
 - **Recipient split**: mark each sample by audience (peer, customer, colleague, public post)
   and language. Tone often differs per audience; the file must say so.
@@ -44,5 +41,5 @@ sample they would never send today. Iterate until they say "that's me". Two roun
 Write `tone-of-voice.md` where they keep personal docs (setup repo, notes vault), with a
 short summary header, "How I sound", "What I never sound like", the anti-slop checklist from
 the template (trimmed to what applies) and the approved samples. Then add the pointer line in
-their global agent prompt (skill `agents-md`, section "Writing in my name") with the absolute
-path. Refresh later from new samples, never from memory of a conversation.
+their global agent prompt ("Writing in my name" in the
+[agents-md template](../agents-md/global-template.md)) with the absolute path. Refresh later from new samples, never from memory of a conversation.

@@ -1,31 +1,21 @@
 # Fathom URL → transcript or media
 
-For speech-only work, use `download-fathom URL --out /private/run --transcript-only`.
-Outputs: the unedited API response in `fathom-transcript.json`, its segment array in
-`fathom-timings.json`, source metadata, and `transcript.md` (speaker/timestamp/text).
-No media download, yt-dlp, ffmpeg, Gemini, or ASR is involved; stop here. This mode
-also works for an accessible call with no share URL. Preserve speaker labels and
-wording; label interpretations separately because Fathom can misattribute speakers.
+`download-fathom --help` lists modes and artifacts. Needs `FATHOM_API_KEY` from the operator's
+existing environment (mise projects: `mise exec -- download-fathom …`); check the project's
+Fathom integration before asking for a share link. No browser or cookies involved.
 
-For audiovisual work, use `download-fathom 'https://fathom.video/calls/123456' --out /private/run --timings`.
-Load `FATHOM_API_KEY` from the operator's existing environment/secrets setup; for a
-mise-managed project, run via `mise exec -- download-fathom ...`. Do not ask for a
-share link until checking the existing project's Fathom integration/environment.
-PJ's existing integration lives in Rootcause's `fathom-interviews` skill; its mise
-environment already supplies the API key. No browser or cookie extraction is needed.
+- `--transcript-only`: raw API JSON, segment timings and `transcript.md`; no yt-dlp/ffmpeg/Gemini/ASR,
+  so stop there. Works for an accessible call without a share URL. Keep Fathom's speaker labels
+  and wording; label interpretations separately (Fathom can misattribute speakers).
+- Media (`--timings` adds the timing reference): the helper matches the call via
+  `GET /external/v1/meetings` and passes its **existing** `share_url` to yt-dlp. A `/share/TOKEN`
+  URL needs no API unless `--timings`. `--resolve-only` checks resolution only.
 
-The helper lists `GET /external/v1/meetings` with `X-Api-Key`, follows pagination,
-matches the call URL, then passes its existing `share_url` to yt-dlp. A supplied
-`/share/TOKEN` works without API access unless `--timings` is requested. `--resolve-only`
-checks resolution without media download. It never creates sharing permissions.
-Missing access is a specific blocker, not a reason to change account settings.
+Hard rule: never create or change sharing permissions; missing access is a blocker to report,
+not an account setting to flip. `--out` must be git-ignored (the helper refuses otherwise);
+treat all artifacts as private. ffprobe the streams and duration after download.
 
-`--out` must be ignored when inside git; outside git, use a private directory.
-Artifacts: `source.json`, `source.<ext>`, optionally `fathom-timings.json` from
-`GET /external/v1/recordings/{recording_id}/transcript`. Treat all as private. Inspect
-video/audio streams and duration using ffprobe after download.
-
-The timestamped text is the default speech layer when it exists: measured as literal as local
-Whisper, with speakers and timestamps ([local route](local-route.md)). It can still have wrong
-words and speakers, and it sees no screen: it does not replace Gemini audiovisual perception or
-frame reading. Keep its provenance distinct, and preserve Gemini drafts when correcting timings.
+The timestamped text is the default speech layer: as literal as local Whisper, plus speakers
+([local-route.md](local-route.md)). It still has wrong words/speakers and sees no screen, so it
+does not replace Gemini or frame reading. Keep its provenance distinct; preserve Gemini drafts
+when correcting timings.

@@ -32,6 +32,6 @@ For non-idempotent operations, persist intent before execution and journal creat
 
 Clean up only resources proven created by this run, within the authorized scope. Preserve any required comparison evidence first. Report leftovers explicitly; do not turn uncertain ownership into a cleanup delete.
 
-## Useful small tools
+## Evidence reports
 
 Reports should bind code/deployed version, input/schema fingerprint, environment, time and completeness. Keep sensitive captures private; commit sanitized summaries and reusable tooling only.

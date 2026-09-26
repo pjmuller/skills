@@ -1,13 +1,15 @@
 ---
 name: clickup
-description: Use ClickUp for this project's tickets and handoffs; supplies workspace topology and house policies to clickup-core.
+description: Use for this project's ClickUp tickets, comments and handoffs. Supplies workspace config and house policy to the shared clickup-core CLI.
 ---
 
-Uses `clickup-core` installed beside this wrapper at `.agents/skills/clickup-core/SKILL.md`.
-Install/update: `pnpm dlx skills add pjmuller/skills -s clickup-core -y`.
-Read [clickup.toml](clickup.toml) for workspace, lists, status/priority/custom-field enums and members.
-Keep this skill and config outside the replaceable core directory.
+CLI and generic rules: `../clickup-core/SKILL.md` (replaceable core; update with
+`pnpm dlx skills add pjmuller/skills -s clickup-core -y`). This wrapper and
+[clickup.toml](clickup.toml) stay project-owned: workspace, lists, status/priority/custom-field
+enums, members, `[policy]`.
 
-Define project policies here: ticket language, owner, prioritization, handoff recipient,
-closure criteria, notification etiquette and any required custom fields.
-Refresh enums with core `topology`, `statuses`, `fields` and `members` before using stale values.
+Project policy (replace with real values): ticket language, owner, prioritization, handoff
+recipient, closure criteria, notification etiquette, required custom fields, and any overrides of
+core's comment discipline.
+
+Refresh stale enums with core `topology`, `statuses`, `fields` and `members`.

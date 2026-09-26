@@ -1,97 +1,73 @@
 # Local route: ASR + sampled frames (no Gemini)
 
-Two separate signals: local speech transcription, plus scene-change frames read as images by an
-image-capable coding agent. It is **not** continuous audiovisual perception. Sampled frames cannot
-prove a click, a save, or anything that happened between frames — state that limit in the output.
+Two separate signals: speech transcript + scene frames read as images by a vision-capable coding
+agent. Not continuous perception: frames cannot prove a click, save or anything between samples;
+say so in the output.
 
 ## Why local ASR is mandatory on a subscription
 
-Claude's API accepts images (JPEG/PNG/GIF/WebP) and PDF only; no audio or video input
-([vision docs](https://platform.claude.com/docs/en/build-with-claude/vision)). Codex CLI attaches
-images only, via `--image/-i`
-([developer commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli)). So neither
-Claude Code nor Codex can listen to a recording — audio has to go through a local model first.
-Verified 2026-09-18.
+Claude accepts images and PDF, no audio/video
+([vision docs](https://platform.claude.com/docs/en/build-with-claude/vision)); Codex CLI attaches
+images only (0.156/0.157 answer "cannot access audio" for MP3/WAV). Audio must go through a model
+first: vendor transcript, `transcribe-local`, or `transcribe-openai`. Verified 2026-09-25.
 
 ## Measured (Apple M5 / 32 GB, 2026-09-18)
 
-Dutch two-speaker meeting audio, 3-minute spans, reference = a vendor transcript, so the figures are
-**disagreement rates, not pure error rates**.
+Dutch two-speaker meeting, reference = vendor transcript, so figures are **disagreement, not
+error, rates**.
 
-- `mlx-community/whisper-large-v3-turbo`: ≈25× realtime (3 min of audio in ~7 s after the one-time
-  model download; a full 42-minute recording in ~2.5 min), 16–26% word disagreement on spans,
-  17% over the full recording (10–12% in the first ten minutes, 21–25% later). Preferred.
-- Long recordings need `--condition-on-previous-text False` (the script sets it): with the default,
-  the same 42-minute file drifted into repetition loops after ~25 minutes (one filler word emitted
-  143 times) and disagreement rose to 44%.
-- `parakeet-tdt-0.6b-v3`: faster (~4 s) but 26–36%, with many deletions.
-- The shrink preset's 32 kb/s mono audio transcribed as well as the original (16.7% vs 16.2%).
-- No speaker labels from local ASR.
-- **If the call has a Fathom transcript, use it as the speech layer and skip local ASR.** Three-way
-  check on the same recording: Fathom–Whisper 17%, Fathom–Gemini 31%, Whisper–Gemini 33% word
-  disagreement, and a hand-read sample of Fathom/Whisper substitutions split roughly evenly (Whisper
-  makes more nonsense-word errors, Fathom more domain-term errors). Fathom is as literal as local
-  Whisper, adds speakers and timestamps, costs nothing, and `download-fathom --timings` already
-  fetches it. Local ASR is for recordings without a vendor transcript (raw screen captures, Loom,
-  exports) or as a tie-breaker on a disputed passage.
+- **Prefer the vendor transcript (Fathom/Leexi) when it exists.** Fathom–Whisper 17%,
+  Fathom–Gemini 31%, Whisper–Gemini 33%; a hand-read sample split substitutions evenly (Whisper:
+  nonsense words; Fathom: domain terms). The vendor adds speakers and timestamps for free. Local
+  ASR is for recordings without one (screen captures, Loom, exports) or a disputed passage.
+- `mlx-community/whisper-large-v3-turbo` (`transcribe-local` default): ≈25× realtime (42 min in
+  ~2.5 min), 17% over the full file. `--condition-on-previous-text False` (set by the script)
+  is required: with the default, the file looped after ~25 min (one filler 143×, 44%).
+- `parakeet-tdt-0.6b-v3`: faster, 26–36% with many deletions. Rejected.
+- The shrink preset's 32 kb/s mono audio transcribes as well as the original. No speaker labels.
 
-Frames: the sibling `video-frames-for-vision` skill (`select-frames`) replaced the earlier
-scene-change sampler (ffmpeg `select=gt(scene,0.1)`: 41 frames for a 42-minute meeting, but it
-skipped a same-layout page switch and a scrolled form, and it kept talking-head frames). Extract
-frames from the original, never from the shrunk file; at 1280×720 a frame costs ≈1.2k Claude
-visual tokens, and a blind Opus narration of 41 frames cost ≈91k tokens and 4 minutes.
+Frames come from `select-frames` ([video-frames-for-vision](../video-frames-for-vision/SKILL.md)),
+from the original, never the shrunk file. It replaced ffmpeg `select=gt(scene,0.1)`, which missed
+same-layout page switches and scrolled forms and kept talking heads. A 1280×720 frame ≈ 1.2k
+Claude visual tokens.
 
 ## OpenAI transcription API as a second opinion (2026-09-25)
 
-Codex CLI 0.156/0.157 cannot read an attached MP3/WAV (Sol and Astra both answer "cannot access
-audio"), so audio goes through the API: `scripts/transcribe-openai`. Measured on the same Flemish
-standup, 5-minute slice, aligned per Leexi paragraph with a 20-word hint (people, products, "Vlaams"):
-5 s wall, ≈$0.03. It fixed the product names Leexi got wrong (Klink→ClickDoc, Dent. admin→DentAdmin,
-Denti een mintgroep→Dentius en Mint Groep, zoom video→Loom-video), missed a rare device name
-(Digora→"die Nora"), and returned ≈10 % fewer words: it normalises punctuation and drops repeated
-fillers ("Ja. Ja. Check. En." → "Ja, ja, check."), so Leexi stays the literal/timing layer. Model
-notes: `gpt-transcribe` = best words, `json`/`text` only (no timestamps, hence the alignment);
-`gpt-4o-transcribe-diarize` = speakers A/B + timestamps, refuses a prompt, worse names; `whisper-1`
-= segment timestamps, decent names; `gpt-audio-1.5` chat with audio input = fluent lines with
-invented sentences and swapped speakers — never a speech layer. Long monologue paragraphs dilute the
-hint; keep hints short and let the previous turn carry context (the script does).
+`transcribe-openai` (flags and modes: `--help`). Flemish standup, 5-minute slice, aligned per
+Leexi paragraph with a 20-word hint: 5 s, ≈$0.03; fixed every product name Leexi got wrong,
+still missed a rare device name, ≈10% fewer words (normalises punctuation, drops repeated
+fillers), so the vendor stays the literal/timing layer. Models: `gpt-transcribe` best words but
+no timestamps (hence `--align`); `gpt-4o-transcribe-diarize` speakers + timestamps but no prompt
+and worse names; `whisper-1` segment timestamps, decent names; `gpt-audio-1.5` chat invented
+sentences and swapped speakers: never a speech layer. Long paragraphs dilute the hint: keep it
+short (≤20 words) and let the previous turn carry context (the script does).
 
 ## Opaque IDs
 
-Claude Code (Opus, Read tool, ≤3 crops per frame at 3× lanczos upscale) read a 36-character UUID
-from an original 720p share frame with 35 correct characters and one honest `?`. Codex
-(gpt-6-astra, low and high effort, same crops) returned several wrong characters, once at medium
-confidence. Use Claude for ID crops, require `?` for uncertain characters, and treat any fully
-"read" ID as a candidate until independently checked — see
-[exact-identifiers.md](exact-identifiers.md). Synthetic clean address bars at 11–15 px were read
-perfectly by both models, so synthetic tests overstate real fidelity.
+On an original 720p frame with ≤3 crops at 3× lanczos, Claude Code (Opus, Read) read a 36-char
+UUID with 35 correct and one honest `?`; Codex (gpt-6-astra, low/high effort) returned several
+wrong characters, once at medium confidence. Use Claude for ID crops, require `?`, and treat any
+fully "read" ID as a candidate ([exact-identifiers.md](exact-identifiers.md)). Synthetic clean
+address bars were read perfectly by both, so synthetic tests overstate real fidelity.
 
 ## Codex CLI gotchas
 
-Put the prompt **before** `-i`: the variadic `-i` swallows a trailing prompt. Close stdin
-(`</dev/null`) in non-interactive shells, or `codex exec` blocks reading it. `codex exec` prints
-`tokens used` at the end; one 1280×720 frame round trip cost ~12–34k tokens including system
-overhead.
+See [codex-recipe.md](../video-frames-for-vision/codex-recipe.md#codex-cli-gotchas).
 
 ## Gemini versus the local route (same 42-minute recording, 2026-09-18)
 
-Native Gemini 3.8 Flash High wrote a 9.4k-word aligned transcript plus visual timeline in ~150 s
-(thinking 2m17s / 16.9k tokens; input tokens are not exposed by the CLI). Speech disagreement with
-the vendor transcript was 31% (20% early, 56% late): Gemini paraphrases and merges short exchanges,
-so it reads fluently but is not literal. Local Whisper was 17% and literal. Gemini labelled speakers
-(67% agreement with the vendor's labels); Whisper cannot. Gemini quoted no UUIDs at all (honest
-UNREADABLE, but it also missed an editor URL that Opus read exactly from a frame). Gemini's real
-advantage is continuous coverage and one aligned narrative. Use Gemini for the narrative draft when
-quota allows, the local route for the literal transcript and exact on-screen text, and both need
-held-out verification.
+Gemini 3.8 Flash High: 9.4k-word aligned transcript + visual timeline in ~150 s; 31% speech
+disagreement (20% early, 56% late) because it paraphrases and merges short turns; speaker labels
+67% agreement; quoted no UUIDs (honest UNREADABLE, but missed an editor URL Opus read exactly from
+a frame). Whisper: 17%, literal, no speakers. Use Gemini for the continuous narrative when quota
+allows, the local route for literal words and exact on-screen text; both need held-out checks.
 
 ## Recipe
 
 ```sh
-transcribe-local --language nl recording.mp4   # skip when a vendor transcript (Leexi/Fathom) exists
-select-frames recording.mp4                    # video-frames-for-vision: manifest.md + frames/ + sheets/
+transcribe-local --language nl recording.mp4   # only without a vendor transcript
+select-frames recording.mp4                    # manifest.md + frames/ + sheets/
 ```
 
-Then follow `video-frames-for-vision`'s annotation prompt: the agent reads the manifest frames in
-order next to the timestamped transcript and writes the analysis; only then take targeted crops
-for IDs, and finish with held-out verification.
+Then fill [annotate-prompt.md](../video-frames-for-vision/annotate-prompt.md): frames in manifest
+order next to the transcript, targeted ID crops only afterwards, then held-out verification.

@@ -1,46 +1,37 @@
 ## Access checks
 
-Distinguish account identity, offline refresh, granted scopes, and access to the requested resource.
-A successful profile request proves neither refreshability nor write access. To test offline access,
-run `gws.py --config PATH doctor --live` (refresh and identity check without saving); never print tokens.
-Report writes as untested unless the task included a verified write. Don't mutate user data just
-to test permissions. A resource 404 can mean missing access or an obsolete ID; reauthentication
-alone is not a demonstrated fix. Access-token expiry normally refreshes automatically.
+Report account identity, offline refresh, granted scopes and access to the requested resource
+separately: a profile request proves neither refreshability nor write access. `doctor --live`
+tests refresh + identity without saving or printing tokens. Writes stay "untested" unless the task
+included a verified write; never mutate user data to test permissions. A resource 404 can mean
+missing access or an obsolete id, so reauthentication alone is not a demonstrated fix.
 
 ## Composing messages
 
-For new messages, prefer plain text: `gmail-draft --body-file PATH` (or
-`ws.gmail.create_draft(..., body)`) creates a single `text/plain; charset=utf-8` MIME part.
-Use ordinary paragraphs and `- ` bullets, with a blank line between bullets when each point is
-long. Keep lines as you want them read; don't insert fixed-width line breaks to match today's
-composer window. `--html` or `--html-file` is an explicit escape hatch for messages that need
-layout or rich formatting. The Python email library may fold quoted-printable transport lines;
-those soft breaks disappear when MIME is decoded. Gmail's web composer may still rewrap or
-normalize a plain-text draft when a person edits and sends it. Our serializer cannot guarantee
-that the sent message will keep the draft's visual wrapping. For a layout-sensitive message,
-use minimal HTML only when the layout itself matters, and inspect the sent copy when available.
-Use simple paragraphs, line breaks and lists with a readable plain-text alternative; avoid fixed
-widths, layout tables, custom fonts and pasted editor markup. Do not auto-convert Markdown.
-Do not add `format=flowed` as a magic fix: it requires RFC3676 encoding and client support;
-Gmail may rewrite it on send. Diagnose wrapping from the decoded MIME body, not the encoded
-wire lines. Never send a test email without authorization.
+Default: plain text (`gmail-draft --body-file PATH` → one `text/plain; charset=utf-8` part).
+Ordinary paragraphs and `- ` bullets (blank line between long bullets); no fixed-width line
+breaks. `--html` / `--html-file` only when layout itself matters: minimal paragraphs/lists with a
+readable plain alternative, no fixed widths, layout tables, fonts or pasted editor markup; never
+auto-convert Markdown.
 
-References: [Gmail draft MIME requirements](https://developers.google.com/workspace/gmail/api/guides/drafts),
-[Python MIME content handling](https://docs.python.org/3/library/email.contentmanager.html),
-[flowed text semantics](https://www.rfc-editor.org/rfc/rfc3676.html).
+Wrapping gotchas: Python may fold quoted-printable wire lines (soft breaks vanish on decode), and
+Gmail's composer may rewrap a draft a person edits and sends. Diagnose from the decoded MIME body,
+not wire lines. `format=flowed` is not a fix: it needs RFC 3676 encoding and client support, and
+Gmail may rewrite it. Never send a test email without authorization.
+
+Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/drafts),
+[Python MIME](https://docs.python.org/3/library/email.contentmanager.html),
+[RFC 3676](https://www.rfc-editor.org/rfc/rfc3676.html).
 
 ## Existing Gmail drafts (either account)
 
-- Fetch the current draft before composing an edit. Treat its latest text as the base; preserve
-  the user's wording and make the requested change locally. A tone guide is not permission to
-  rewrite unrelated passages. If the user supplies replacement text, use that as the base.
-- Keep the draft ID (`gmail-draft-get`, or `api GET /gmail/v1/users/me/drafts/<id>?format=raw`).
-  Read raw MIME so recipients, subject, reply headers, attachments, and
-  multipart bodies can be preserved. Avoid `set_content` on the whole message when it would
-  discard HTML alternatives or attachments; edit the relevant body parts.
-- Re-fetch immediately before updating and compare with the version read. If it changed,
-  rebase the intended edit on the new version. This reduces races; it is not an atomic lock.
-- Update the existing draft, retaining `message.threadId` for replies. Don't recreate it or send
-  it. If a create request times out, check drafts before retrying to avoid duplicates.
-- Read back and verify the intended text, retained fields/attachments, and `DRAFT` label.
-  Report the verified outcome, not merely that the update request succeeded.
+- Base the edit on the draft's latest text (or user-supplied replacement text); preserve the
+  user's wording. A tone guide is not permission to rewrite unrelated passages.
+- Read raw MIME (`gmail-draft-get`, or `api GET /gmail/v1/users/me/drafts/<id>?format=raw`) to keep
+  recipients, subject, reply headers, attachments and multipart bodies. Edit the relevant body
+  parts; whole-message `set_content` drops HTML alternatives and attachments.
+- Re-fetch right before updating; if it changed, rebase the edit (reduces races, not a lock).
+- Update the existing draft in place (no CLI command yet: `api PUT /gmail/v1/users/me/drafts/<id>`
+  with the edited raw message), keeping `message.threadId`; don't recreate or send it. After
+  a create timeout, list drafts before retrying.
+- Read back: intended text, retained fields/attachments, `DRAFT` label. Report the verified outcome.

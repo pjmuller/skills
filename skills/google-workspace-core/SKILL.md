@@ -1,62 +1,46 @@
 ---
 name: google-workspace-core
-description: One Google Workspace CLI and Python client for Drive, Docs, Sheets, Slides and Gmail. Every repository gets the same commands; its wrapper's workspace.json supplies the account, scopes and credential locations. Read that wrapper first for local policy.
+description: Use when an agent reads or writes Google Drive, Docs, Sheets, Slides or Gmail (search, export, drafts) through the shared CLI or Python client. Read the repository's Workspace wrapper first; its workspace.json supplies the account, scopes and credential locations.
 ---
 
-Read the repository's Google Workspace wrapper first: it owns the account, scopes, credential
-locations and the local rules about what may be written or sent. This core owns loading that
-configuration, authentication, the command surface and the generic implementations. It contains
-no account defaults. Never borrow one account's token for another account.
+Split: the repository's wrapper owns the account, scopes, credential locations and what may be
+written or sent. This core owns config loading, auth, the command surface and generic
+implementations; it has no account defaults. Never borrow one account's token for another.
 
 ```sh
-uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json --help
+uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json --help   # also $GWS_CONFIG
 uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json whoami
 ```
 
-`--config` may also come from `$GWS_CONFIG`. `--help` works without credentials or config, and
-every account gets the identical command set: Drive, Docs, Sheets (including native Tables),
-Slides and Gmail, plus `api` for anything without a dedicated command. Availability is not
-authorization: a command still needs the account's scopes, the user's request and the wrapper's
-policy. Narrow accounts simply get a permission error.
+`--help` needs no credentials. Every account gets the same commands (Drive, Docs, Sheets incl.
+native Tables, Slides, Gmail, plus raw `api`); availability is not authorization. A command still
+needs the account's scopes, the user's request and the wrapper's policy.
 
-- Reads and writes refresh an existing offline token and verify the account first; they never
-  open browser consent. Only `auth mint` does, explicitly.
-- `auth mint [--force] [--port N]` · `auth configure --client-env PATH` (import a desktop client)
-  · `auth export-env` and `auth export-token` print secrets for provisioning only: never log,
-  paste or commit their output.
-- `doctor [--live]` diagnoses credential problems without printing secrets. Never cat or grep
-  `token.json`, `client.json` or a `.env`.
-- Output is compact text; `--json` (before or after the command) gives the raw API payload.
-  Machine callers should always pass `--json`. Commands accept a Google URL or a bare id.
-- Slides: wherever a slide objectId is expected, pass a 1-based slide number or a pasted Slides
-  URL (`?slide=id.X`, which alone supplies deck *and* slide). `slides-resolve <deck-or-url> [ref]`
-  translates either way, `slides-outline <url>` marks the linked slide with `*`.
-- Only perform requested writes, preserve unrelated content, read the result back. Drive deletion
-  is trash; `slides-delete` needs `--yes`; Gmail sending is not idempotent.
+Hard rules:
 
-Python callers import the same implementations instead of re-implementing OAuth:
+- Data commands refresh an existing offline token and verify the account; only `auth mint` opens
+  browser consent. `auth export-env` / `auth export-token` print secrets: provisioning only, never
+  log, paste or commit. Never cat/grep `token.json`, `client.json` or a `.env`; use `doctor`.
+- Only requested writes; preserve unrelated content; read the result back. Drive deletion is
+  trash; `slides-delete` needs `--yes`; Gmail sends are not idempotent. Never send mail or edit a
+  document just to prove access.
 
-```python
-sys.path.insert(0, "<core>/scripts")
-from gws_core import Workspace, credentials, load_config
+Conventions: compact text output, `--json` for the raw payload (machine callers always pass it).
+Commands take a Google URL or bare id. Slide arguments take a 1-based number, an objectId or a
+pasted `?slide=id.X` URL (which alone names deck and slide); `slides-resolve` translates.
 
-config = load_config("<wrapper>/workspace.json")
-with Workspace(config) as ws:
-    ws.gmail.search("newer_than:1d")   # also ws.drive / ws.docs / ws.sheets / ws.slides
-    ws.api("GET", "https://www.googleapis.com/drive/v3/about", params={"fields": "user"})
-creds = credentials(config)            # google.oauth2 Credentials for a Google SDK client
-```
+Python callers import the same client instead of re-implementing OAuth:
+`from gws_core import Workspace, credentials, load_config` (usage in `scripts/gws_core/__init__.py`;
+contract in [integration](references/integration.md#importable-api)).
 
 - [Wrapper configuration and migration](references/integration.md): `workspace.json`, install
-  contract, importable API.
-- [REST details](references/rest.md): compact reads, batch indexes, Slides/Drive workarounds.
-- [Draft preservation and access checks](references/drafts.md): existing drafts, MIME, races.
-- Compose ordinary Gmail drafts as plain text; use HTML only when layout matters. The
-  [draft guidance](references/drafts.md) covers paragraph and bullet formatting in Gmail.
-- [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` to Markdown files → local
-  `grep`; Gmail query cheat sheet and its whole-word gotchas.
-- [Troubleshooting](references/troubleshooting.md): the doctor and first-machine setup.
+  contract, credential resolution, importable API.
+- [REST details](references/rest.md): read order, Slides/Docs/Sheets/Drive API gotchas.
+- [Drafts and access checks](references/drafts.md): plain-text vs HTML composition, editing
+  existing drafts, what an access check proves.
+- [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` → local `grep`;
+  query cheat sheet.
+- [Troubleshooting](references/troubleshooting.md): `doctor`, first-machine setup.
 
-Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`. Live verification uses
-identity and bounded reads: never send mail or edit a document just to prove access. Keep account,
-refreshability, scopes and resource access separate when reporting.
+Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`. `scripts/install --check`
+verifies dependencies.

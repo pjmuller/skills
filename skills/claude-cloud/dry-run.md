@@ -1,12 +1,13 @@
 # Cloud dry runs
 
 Read the project's cloud runbook; publish through its normal workflow and record the full SHA.
-Verify `git ls-remote origin refs/heads/<branch>`; use `create --wait --title 'Cloud dry run'`.
-Use a fresh session after environment changes; warm sessions suffice for affected-check repeats.
+Verify `git ls-remote origin refs/heads/<branch>`, then `create --wait --title 'Cloud dry run' --gate <SHA> '<checks>'`.
+Use a fresh session after environment changes; for repeats of affected checks, `send --gate <newer SHA>
+--branch <b>` re-tests in the warm session (fetch + detached checkout, no cold start).
 
-`create --gate <SHA> '<checks>'` emits this wrapper for you; `send --gate <newer SHA> --branch <b>`
-does the follow-up variant (fetch + `git checkout --detach`, so the warm session tests the fix).
-Composing by hand, replace every placeholder in this prompt:
+`--gate` adds only the SHA gate and read-only footer (`gated()` in `scripts/claude-cloud`); you
+supply repo, runbook, checks and report shape. In the browser, compose the whole prompt by hand
+and replace every placeholder:
 
 > Dry run on <repo/branch>, expected <full SHA>. Read <project runbook>.
 > Print `git rev-parse HEAD`; gate all checks with `git merge-base --is-ancestor <full SHA> HEAD`.
@@ -23,5 +24,4 @@ Composing by hand, replace every placeholder in this prompt:
 - Localhost proxy 405: try Chromium `--proxy-server` and `--proxy-bypass-list=localhost;127.0.0.1`; `<-loopback>` removes bypass. Mocked assets do not establish a pass.
 - Use `domcontentloaded` plus bounded DOM/image/font waits; `networkidle` can hang on excluded analytics/maps. Report exclusions.
 - Stop-hook “unpushed work” can be a false positive: empty `git log origin/<branch>..HEAD` needs no push; the dry-run prohibition wins.
-- Update the canonical recovery runbook after network-domain, secret, setup-script or environment changes; record secret recovery locations, never values.
 - Measure startup separately from optional provisioning. Stop diagnostic monitors; report limitations and the session URL.

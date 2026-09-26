@@ -12,7 +12,7 @@ Run only the recipes needed to explain the load.
 
 ```bash
 ps -axo pid,ppid,pcpu,etime,comm -r | head -25
-top -l 2 -s 2 -n 0 | rg 'CPU usage'
+top -l 2 -s 2 -n 0 | grep 'CPU usage'
 ```
 
 Use the second `top` sample for current system load. A process at 100% uses roughly
@@ -39,8 +39,8 @@ stable large allocations from growth; swap already allocated does not prove
 active thrashing. Compare `vm_stat` pageout/swapout counter deltas over a short
 interval (counters are cumulative; page size is printed at the top).
 
-For a suspicious process, `vmmap -summary "$target_pid"` gives a memory breakdown
-once the PID below is set; access may be restricted. A single snapshot cannot
+For a suspicious process (`target_pid`, next section), `vmmap -summary "$target_pid"`
+gives a memory breakdown; access may be restricted. A single snapshot cannot
 establish a leak. Recheck pressure and growth after stopping the confirmed owner;
 swap usage need not immediately return to zero.
 

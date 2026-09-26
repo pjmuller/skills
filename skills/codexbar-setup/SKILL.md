@@ -1,25 +1,23 @@
 ---
 name: codexbar-setup
-description: Install and troubleshoot CodexBar alongside T3 Code and native Codex/Claude/Antigravity profiles on macOS, including shared account homes, Claude credential synchronization, expiry alerts and Antigravity (Gemini) weekly quota.
+description: Install and troubleshoot CodexBar alongside T3 Code and native Codex/Claude/Antigravity profiles on macOS. Use when setting up or migrating CodexBar, when quota meters are stale or show the wrong account, when Claude credentials drift between isolated homes and claude-swap, for refresh-token expiry alerts, or for Antigravity (Gemini) weekly quota.
 ---
 
 # CodexBar with T3
 
-Register this skill repo-locally in the personal setup repository. Its helper may
-be linked onto the machine's PATH; that does not make the skill globally discoverable.
+Register repo-locally in the personal setup repository; linking the helper onto PATH does not
+make the skill globally discoverable.
 
-Read [installation and profile sharing](install.md) for setup, migration or stale
-quota/login problems. Discover existing homes and jobs first; retain healthy
-accounts. CodexBar is the quota display; native CLI homes remain authentication
-owners. Never switch a global account to make a meter work. Antigravity quota comes
-from the signed-in `agy` CLI (weekly pools only); see install.md.
+Setup, migration, stale quota/login: [installation and profile sharing](install.md). Discover
+existing homes and jobs first; retain healthy accounts.
 
-`scripts/install` links `codexbar-profiles`; `--check` checks dependencies/link.
-Personal mappings live in `~/.config/codexbar-profiles.json`, outside this skill.
-`codexbar-profiles check` and `expiry` read Keychain without refreshing tokens;
-`sync` previews changes, `sync --apply` writes, `install-jobs` enables scheduling.
-No credentials in reports or committed files.
+Invariants: CodexBar is only the quota display; native CLI homes own authentication. Never
+switch a global account to make a meter work. No credentials in reports or committed files;
+personal mappings live in `~/.config/codexbar-profiles.json`, outside this skill.
 
-Implementation: [scripts/codexbar-profiles](scripts/codexbar-profiles) owns
-mapping validation, Keychain service hashing, newer-expiry selection, expiry
-alerts and launchd jobs. Tests use fake credentials and never touch Keychain.
+- `scripts/install [--check|--relink]` links `codexbar-profiles` onto `~/.local/bin`; `--check`
+  covers macOS, uv, cswap, CodexBar.app and the link.
+- [scripts/codexbar-profiles](scripts/codexbar-profiles) (`--help`): mapping validation,
+  Keychain service hashing, newer-expiry sync, expiry alerts, launchd jobs. `check`/`expiry`/`sync`
+  only read Keychain and never refresh tokens; `sync --apply` writes; `install-jobs` schedules.
+- `scripts/test_profiles.py`: fake credentials, never touches Keychain.

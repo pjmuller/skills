@@ -17,8 +17,8 @@ Adaptation sources: `SKILL.md`; reference files `core-syntax`, `core-cli`, `core
 `editor-monaco-run` and `presenter-timer` (all `.md`).
 
 The full [upstream MIT notice](../LICENSE.slidev) travels with this installed skill.
-Use [official documentation](https://sli.dev/) for capabilities outside the curated selection;
-check local version support rather than assuming upstream main matches an older deck.
+Use [official documentation](https://sli.dev/) for capabilities outside the curated selection.
+Spot-checked against `@slidev/cli` 53.0.0 `--help` (2026-09-26).
 
 ## Presentation craft
 
@@ -34,7 +34,6 @@ Original concise synthesis, informed by:
 These sources inform the judgement guidance, not a mandatory narrative formula. No proprietary
 training material, slide assets or source prose is redistributed.
 
-Operational lessons were distilled from existing Rootcause, KampAdmin, DentAI, ProBackup
-ideation, LeerHeld and SaaS event decks: local CLI resolution, headmatter, brand class inheritance,
-CSS collisions, empirical diagram sizing and export verification. Company-specific material
-stays in project wrappers; the public core contains no customer data or private brand assets.
+Operational lessons (local CLI resolution, headmatter, brand class inheritance, CSS collisions,
+empirical diagram sizing, export verification) come from real project decks. Project-specific
+material stays in wrappers; the public core contains no customer data or private brand assets.

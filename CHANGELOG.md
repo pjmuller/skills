@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.4.1 (2026-09-26)
+- Docs-only skill audit across every skill and `setup/t3-setup` (~−700 lines): docs keep trigger, map, intent and gotchas; usage that `--help` prints moved to pointers. File names and `##` anchors that consumer wrappers link to are unchanged, except whatsapp-bridge (`## Map`, `## Safety (hard rules)`, `## History limits`) and removed `setup/t3-setup/codexbar.md` (→ `codexbar-setup/install.md`).
+- Stale claims fixed: account routing covers Claude and Codex; an explicit `--model` gets its house effort; `--self` settles via `t3_supervise`; `transcribe-openai --hint` is ≤20 terms, and the prompt expects `--out transcript.openai.md`; `keychain_service()` lives in `lib/t3_limits.py`; t3-schedule `--once` for one-time routines; clickup appends are verified by `content_signature`; google-workspace sends `supportsAllDrives` on every Drive call and has no draft-update command.
+- Public hygiene: customer, colleague and personal example names neutralized in docs, a `transcribe-openai` docstring and a `clickup.py` comment.
+
 ## v0.4.0 (2026-09-25)
 - t3-manage-thread: `skills-refresh` — release-gated updater for globally installed copies of this repo's skills: applies only new `vX.Y.Z` tags (never `main` HEAD), stages a clone at the tag, `bash -n` pre-check, swaps the skill directories with a last-good rollback, reruns each updated skill's `scripts/install`, writes `~/.agents/pjmuller-skills.version` and prints the CHANGELOG entries between the two tags (exit 0 current · 10 applied · 1 failed). `skills-refresh schedule` registers the daily 06:30 job: macOS via `t3-schedule add --hide --no-notify` on `haiku,luna`, prompt = `skills-refresh --job`, which itself settles the thread (nothing new) or surfaces it once with the changelog (applied) or the error; `--quiet` settles on applied too. Linux/WSL via cron. Symlinked source checkouts are left alone. No `skills update`/`skills check` involved.
 - t3-manage-thread: `t3-spawn-thread --version` / `skills-refresh --version` print the installed release tag from the stamp (or `source checkout <git describe>`); `scripts/install --check` shows it. `--model luna` alias (`gpt-6-luna`).

@@ -31,3 +31,4 @@ t3-spawn-thread --version                                          # must print 
 
 Don't run `pnpm dlx skills update` or `skills check` on these two skills: they re-fetch `main` and bypass the release gate.
 Bug report? Include the output of `t3-spawn-thread --version`.
+How the job works (staging, rollback, lock, env overrides): [skills-refresh](../../skills/t3-manage-thread/skills-refresh.md).

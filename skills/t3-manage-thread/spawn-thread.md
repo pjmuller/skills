@@ -1,154 +1,103 @@
 # Spawning a thread (t3-spawn-thread)
 
-```bash
-t3-spawn-thread --title "Short title" -- "<task brief>"
-```
+Flags: `t3-spawn-thread --help`. `--dry-run` resolves everything and prints the
+routing decision, parent, model, thinking and any appended footer, creating nothing.
 
-Uses the current git root (registers it as a T3 project if needed), inherits the
-calling thread's model/thinking and uses capacity-aware Claude profile selection
-(terminal fallback: project default,
-high), full-access in the local checkout, focuses T3 Code. Refuses to inherit
-from a thread in another T3 project unless `--allow-cross-project-source` — an
-accidental inherit silently runs the work under the wrong project/provider.
+Resolution order in `scripts/t3-spawn-thread`: project (current git root,
+registered if needed) → parent thread (Claude process ancestry, or
+`CODEX_THREAD_ID` inside T3; `--source-thread` overrides) → model/thinking →
+account ([routing](#automatic-profile-routing)). The thread runs full-access in
+the local checkout and gets focus. Inheriting from a parent in another T3
+project is refused unless `--allow-cross-project-source`: an accidental inherit
+silently runs the work under the wrong project/provider.
 
 ## 🏓 round-trip workers
 
-`--title "🏓 <task>"` does two things:
+A `🏓` title appends a ping-back footer with the resolved parent id and hides
+the thread while it runs ([hide-thread.md](hide-thread.md); `--hide` /
+`--no-hide` override, a failed arm only warns). Workers whose brief merely said
+"ping back" silently ended in their own thread, hence the mechanical footer. It
+guarantees the instruction, not compliance: `t3-fleet list --stalled`
+([t3-maintenance](../t3-maintenance/SKILL.md)) detects workers that never pinged.
+Nothing settles the worker: after its report is verified, `t3-settle-thread --wait ID`.
 
-1. Appends the ping-back footer to the brief (resolved parent id; a report
-   never hides a visible orchestrator). Without an address a worker
-   silently ends in its own thread (2026-09-02); the footer is deterministic for *appending*, not for compliance — `t3-fleet --stalled` (`pinged_back`) is the detector. `--dry-run` shows the footer.
-2. Hides the thread while it runs; the agent keeps working
-   ([hide-thread.md](hide-thread.md)). Override `--hide` / `--no-hide`;
-   failing to arm is a warning, not a failure.
-
-Nothing here settles the worker. After its report is verified:
-`t3-settle-thread --wait THREAD_ID`.
-
-Return path is decided per spawn, from what the user asked for that spawn:
-🏓 when the parent needs the result back (review, delegated implementation, any
-sub-task the parent verifies); 📤 standalone when the user said "standalone /
-separate thread / hand off" (visible, nobody pings back, never hidden or settled
-by helpers). Not clearly said → **default to 🏓**; the user can always promote
-it. A thread's own mode never propagates: a standalone thread is a clean slate
-for what it spawns. Hidden ≠ stopped, and neither settle nor archive can hide a
-live worker (both stop its session): use snooze ([hide-thread.md](hide-thread.md)).
+Return path is decided per spawn from what the user asked: 🏓 when the parent
+needs the result back (review, delegated implementation, anything it verifies);
+📤 standalone when the user said "standalone / separate thread / hand off"
+(visible, nobody pings back, never hidden or settled by helpers). Unclear →
+**🏓**; the user can promote it. A thread's own mode never propagates to what it
+spawns. Hidden ≠ stopped; settle and archive both stop a session, so only snooze
+hides a live worker.
 
 ## Fire-and-forget: `--settle-when-done`
 
-For standalone work nobody needs to verify (e.g. a `yt-ingest` batch): hides the
-thread while it runs and appends a footer that makes the worker settle itself
-(`t3-settle-thread --self`, last tool call — [settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread))
-**only on a clean outcome**. Intent: the human is the bottleneck, so a thread that
-finished and verified its work without an unresolved issue shouldn't cost them a
-glance. A correction already incorporated into the requested deliverable does not
-need another review. Blocked or partial work, material failures, unresolved findings,
-and user decisions stay visible: the worker unhides itself and ends with a terse
-report. Use it whenever the user says "…and settle it when done" for a
-spawned thread; the same judgement applies to "…then settle this thread".
-Refused together with a 🏓 title — round-trip workers are settled by their
-orchestrator. Compliance detector is the same as for ping-backs: a thread still
-in "needs you" after it finished didn't run the footer.
+For standalone work nobody needs to verify. Hides the thread and appends a
+footer: on a **clean outcome** the worker runs `t3-settle-thread --self` as its
+last call ([settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread));
+blocked/partial work, material failures, unresolved findings or user decisions →
+it unhides itself and ends with a terse report. Intent: the human is the
+bottleneck; a verified, finished thread shouldn't cost a glance, and a
+correction already folded into the deliverable is still clean. Use it when the
+user says "…and settle it when done". Refused with a 🏓 title (the orchestrator
+settles those). A finished thread still in "needs you" didn't run the footer.
 
-An explicit `--title` is hard-set (no `titleSeed`, re-asserted via
-`thread.meta.update`) so the emoji survives T3's auto-titler. No `--title` →
-Luna auto-titles from the first 72 chars.
+## Titles, models, briefs
 
-## Profiles, models, briefs
-
-Antigravity: `--model gemini` selects provider `antigravity` and
-`gemini-3.8-flash-high`. `--profile antigravity` also defaults to Flash High when
-switching from another provider. Flash thinking lives in the model ID:
-`--thinking low|medium|high` selects its suffix; no separate effort option is sent.
-Explicit full model IDs work too. T3's Google login is separate from native `agy` login.
-
-`--profile` / `--model` / `--thinking` and their aliases: `--help`;
-`t3-list-profiles` prints the enabled accounts per ecosystem with the exact
-`--profile` value (use it when the user names an account, so no typos). When limits are
-tight, `t3-limits` ([limits.md](limits.md)) shows the same cached usage used by routing. Pass
-`--thinking` **only when the user names a level** — an explicitly chosen model
-otherwise gets its house default (sol/opus high · fable/astra medium · haiku low),
-which is the policy we want.
-
-`--model sol` and `--model opus` read T3's locally refreshed model manifest on
-each spawn, then choose the highest numeric version of that family. Sol also
-uses the selected Codex account's recent model cache, so account availability
-can differ. A missing T3 catalog falls back to Sol 6 / Opus 5.5; explicit
-full model IDs stay pinned. This is local deterministic selection, with no LLM
-call. A Codex cache older than one hour is ignored in favor of T3's catalog;
-a fresh account catalog with no Sol model stops the spawn. T3 refreshes its
-manifest and Codex refreshes each account's cache.
-
-Long task: write the spec to a markdown file, keep the brief to path + locked
-decisions + verification expectation ([dispatch-workers.md](dispatch-workers.md) for the
-full brief shape and title rules). Inline briefs are shell arguments — the
-backtick / `$(...)` rule in [cross-thread-ping.md](cross-thread-ping.md) applies.
-
-`T3 provider is missing or disabled: codex` while the UI shows it enabled → the
-settings entry was deleted ("Reset to defaults"); the helper mirrors T3's
-built-in fallback, so fix the script, not settings.json. Don't substitute
-`claude -p`: T3 does not discover arbitrary Claude sessions.
-
-## Screenshots / images in a brief
-
-No first-class attachments: the composer uploads via a WebSocket RPC, and a
-`thread.turn.start` carrying a hand-made attachment id is rejected
-(`invalid_command`, 2026-09-08). Copy the image to a stable path (e.g.
-`/tmp/<topic>-<date>.jpg`, not `~/.t3/userdata/attachments/` which the user may
-clear) and put the path in the brief; every harness can `Read` it. Verified:
-workers do open the file when the brief names it.
+- **Title**: explicit `--title` is hard-set (no `titleSeed`, then
+  `thread.meta.update`) so the emoji survives T3's auto-titler; without it the
+  auto-titler names the thread from the first 72 prompt chars.
+- **Thinking**: no `--model` → inherit the parent's model and effort (terminal:
+  project default, else Opus high). An explicit `--model` gets its house effort
+  (sol/opus high · fable/astra medium · haiku low; case table in the script).
+  Pass `--thinking` only when the user names a level.
+- **`sol` / `opus` aliases** pick the newest version in T3's local model
+  manifest; for Sol a fresh (< 1 h) per-account Codex model cache is
+  authoritative, and a fresh cache without Sol stops the spawn. Full model IDs
+  stay pinned. `scripts/lib/model_resolution.py`, no LLM call.
+- **Gemini**: `--model gemini` → Antigravity Flash High; thinking is encoded in
+  the model ID suffix (`--thinking` swaps it). T3's Google login is separate from
+  native `agy` login.
+- **Brief**: long task → spec in a markdown file, brief = path + locked decisions
+  + verification expectation ([dispatch-workers.md](dispatch-workers.md)).
+  Inline briefs obey the [quoting rule](cross-thread-ping.md).
+- **Images**: no first-class attachments (a `thread.turn.start` with a hand-made
+  attachment id is rejected). Copy the image to a stable path such as `/tmp/…`
+  (not `~/.t3/userdata/attachments/`, which the user may clear) and name it in
+  the brief; workers do open it.
+- `T3 provider is missing or disabled` while the UI shows it enabled → fix the
+  built-in defaults in `scripts/lib/profile_registry.py`, not settings.json.
+  Don't substitute `claude -p`: T3 does not discover arbitrary Claude sessions.
 
 ## Automatic profile routing
 
-Omitted `--profile` (or `auto`) selects among the enabled T3 instances of the resolved
-model's driver — Claude **and** Codex, one policy. Explicit profiles, including
-`T3_SPAWN_PROVIDER`, win unchanged and never poll (`--profile claude` still means the
-built-in `claudeAgent` account). Model, thinking and cross-project checks keep their rules.
+The one home for account-routing policy. Omitted `--profile` (or `auto`) picks among
+the enabled T3 instances of the resolved model's driver — Claude **and** Codex,
+one policy (`scripts/lib/profile_routing.py`, usage from `scripts/lib/t3_limits.py`,
+the same cached numbers `t3-limits` prints; see [limits.md](limits.md) for pace/room).
+Explicit `--profile` or `T3_SPAWN_PROVIDER` wins unchanged and never polls; it is
+also the override when every account is exhausted.
 
-Policy (`scripts/lib/profile_routing.py`, usage from `t3_limits.py` — the same numbers
-`t3-limits` prints, 90 s cache):
+- **Excluded**: any relevant window at 100 % until its reset, including a
+  `<Model> only` cap for the requested family.
+- **Unknown** (unreachable, stale, missing numbers): ranked after every verified
+  account, picked only when nothing is verified.
+- **Ranking**: worst window's pace room first, plus a small bonus for weekly
+  windows about to reset (use-it-or-lose-it), then minimum headroom. `[tight]`
+  (≥ 90 % used) is a label, not a demotion: a weekly at 92 % resetting in two
+  hours beats one burning far ahead of pace.
+- **Ties** keep the inherited account (on a driver switch: its sibling, same
+  display name minus the driver word), then instance id.
+- Paid overage is never capacity. Every automatic route prints its reasoning on
+  stderr.
 
-- **Excluded**: any relevant window at 100 % until its reset (session, weekly, any other
-  top-level Codex window, and a `<Model> only` cap for the requested family). A cached
-  exhausted cap stays excluded even after the cache is too old to serve as a reading.
-- **Unknown**: unreachable account (429, expired token, no login), stale reading, missing
-  percentage, past reset. Ranked after every verified account; picked only when nothing
-  is verified, with "capacity unverified" in the reason.
-- **Ranking**: worst window's pace room (pace − used) first, then minimum headroom. A weekly-length
-  window resetting within 48 hours gets up to 10 extra routing points, increasing linearly
-  toward reset and capped by unused quota. This applies to relevant model-only caps too;
-  bonuses never stack, and a tighter session cap still governs the worst-window score. Raw
-  rooms and the adjusted score appear in the routing explanation. A window ≥ 90 % used is
-  labelled `[tight]` but not demoted — a weekly at
-  92 % that resets in two hours is still the right pick over one burning far ahead of pace.
-  Ties prefer the inherited account (on a driver switch: its sibling, same display name
-  minus the driver word), then the instance id.
-- **All exhausted** → the spawn refuses before creating a thread; `--profile NAME` is the
-  intentional override. Usage can change after selection; no reservation or prediction of
-  in-flight work, and paid overage never counts as capacity.
+Accepted trade-offs: bottleneck ranking ignores a strong second window, and
+near-simultaneous spawns are not spread across equal accounts (the next read,
+≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
 
-Every automatic route prints its decision block on stderr (also under `--dry-run`):
-
-```
-Profile routing for claude-fable-5-1 (usage cached ≤90 s; explicit --profile NAME bypasses this):
-  claudeAgent             session 3% (room +25) · weekly 35% (room +16) · Fable only 50% (room +1)  [weekly window +0.0; worst-window score +1.0]
-  claudeAgent_kampkompas  session 6% (room +22) · weekly 17% (room -4) · Fable only 28% (room -15)  [weekly window +0.0; worst-window score -15.0]
-  claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) · Fable only 31% (room +2)  [weekly window +0.0; worst-window score +2.0]  ← selected
-  → claudeAgent_dentai: best bottleneck score (Fable only +2.0)
-```
-
-Known trade-offs of the single rule: bottleneck ranking ignores a strong second window
-(weekly +45 with session −2 loses to weekly +16 with session +5), and nothing spreads
-near-simultaneous spawns across equal accounts — the next read (≤ 90 s later) sees the
-real consumption instead.
-
-Profile names come from T3's native registry on every invocation: exact instance ID first,
-then a unique case-insensitive ID/display-name match. An explicit model narrows name
-matches to its driver (`--profile beta --model astra` selects Codex Beta even when Claude
-Beta exists). Disabled profiles are excluded. Ambiguous names fail; use an exact ID. Adding
-accounts in T3 needs no helper maintenance. Existing threads are separate: changing their
-instance restarts the session, and T3 rejects Codex continuation across different shared
-homes. Do not patch thread metadata to migrate running work.
-
-Drivers without per-instance usage (Antigravity, forks) keep the inherited account or its
-unique sibling; otherwise "Choose --profile". Missing model caps cannot be inferred.
+Profile names come from T3's native registry on every call (exact id, else a
+unique case-insensitive id/display-name match narrowed by `--model`'s driver),
+so adding accounts in T3 needs no helper change. Drivers without per-instance
+usage (Antigravity, forks) keep the inherited account or its unique sibling.
+Existing threads are separate: changing their instance restarts the session and
+T3 rejects Codex continuation across different homes — don't patch thread
+metadata to migrate running work.

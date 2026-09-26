@@ -120,8 +120,8 @@ and click stages (`{1|2-3|all}`). More advanced code animation, imports and inte
 - PDF normally captures final states. `--with-clicks` adds pages per reveal: use it when those
   stages are part of the handout, and adjust the expected count accordingly.
 - Slide PDF exports do not include speaker notes. Keep the notes in the source/presenter
-  view; for a separate notes deliverable, use `pnpm exec slidev export-notes talk.md` when
-  available (verified in 52.x), checking that command's help for output options.
+  view; for a separate notes deliverable, use `pnpm exec slidev export-notes talk.md`
+  (present in 52.x–53.x), checking that command's help for output options.
 - If a PDF loses images or global-layer state, try `--per-slide --wait-until networkidle
   --wait 1000` when supported. This fixed real deck exports where waiting alone did not.
   Inspect the resulting pages; extra waits are not proof of correctness.
@@ -133,5 +133,5 @@ and click stages (`{1|2-3|all}`). More advanced code animation, imports and inte
   in the target tool, or use native PowerPoint authoring when that is the requirement.
 - To deliver a web deck: `pnpm exec slidev build talk.md --base /talk/`. Match base path and
   routing to the host, and verify assets after deployment. Presenter notes can ship in a
-  static build; use `--without-notes` when supported if they are not intended for viewers.
+  static build; `build --without-notes` (53.x) drops them when not meant for viewers.
   Publish only within the user's requested scope.

@@ -5,27 +5,21 @@ description: Leexi API access for meeting calls. Use for a Leexi call URL or UUI
 
 # Leexi
 
-Speech layer only: find a call, export `transcript.md` (speaker + timestamp paragraphs,
-plus Leexi's summary and tasks), download the recording. What happened **on screen** is
-the job of sibling skills `video-shrink-for-gemini` (Gemini) or `video-frames-for-vision`
-(frames for vision-only models); feed them `source.webm`.
+Speech layer only: find a call, export `transcript.md` (speaker/timestamp paragraphs plus Leexi's
+summary and tasks), download the recording. What happened **on screen**: feed `source.webm` to
+[video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md) (Gemini) or
+[video-frames-for-vision](../video-frames-for-vision/SKILL.md) (frames for vision-only models).
 
-```bash
-leexi-calls [--days 14 | --from ISO --to ISO] [--json] [--min-seconds 60]
-download-leexi URL_OR_UUID [--out DIR] [--transcript-only | --resolve-only]
-download-leexi --at "today 14:00" [--window 90] [--pick N] [--transcript-only]
-```
-
-- `--at`: `today 14:00`, `yesterday 14:00`, `2026-09-25 14:00`, `14:00` (today) pick the
-  call nearest that local time within `--window` minutes; several matches → candidates on
-  stderr, exit 2, rerun with `--pick N`. A bare date (`2026-09-25`) takes that day's latest
-  call. Calls shorter than `--min-seconds` (60) are ignored.
-- Out dir default `./.local/leexi/<uuid>/`; inside git it must be ignored (add `.local/`).
-  Writes `source.json`, `leexi-call.json`, `transcript.md`, `source.webm` (skipped if present).
-- Transcript is raw Leexi ASR; summary/tasks are Leexi-generated notes, not evidence.
-  No `recording_url` → archived or retention off; only the transcript exists.
-- Env: `LEEXI_KEY_ID` / `LEEXI_KEY_SECRET`. Mise-managed projects: `mise exec -- download-leexi ...`.
-- Without the installer (any OS, incl. WSL): `uv run --script path/to/download-leexi --at "today 14:00"`.
-- Install: `scripts/install` (links both helpers into `~/.local/bin`), `--check` verifies.
+- `leexi-calls` lists recent calls; `download-leexi URL|UUID` or `download-leexi --at "today 14:00"`
+  fetches one. Flags, `--at` forms and defaults: `--help`. Several `--at` matches → candidates on
+  stderr, exit 2, rerun with `--pick N`.
+- Output defaults to `./.local/leexi/<uuid>/` and must be git-ignored (the helper refuses otherwise).
+  An existing `source.webm` is not re-downloaded.
+- Transcript is raw Leexi ASR; summary/tasks are Leexi-generated notes, not evidence. No
+  `recording_url` → archived or retention off; only the transcript exists.
+- Env: `LEEXI_KEY_ID` / `LEEXI_KEY_SECRET` (mise projects: `mise exec -- download-leexi …`).
+  Without the installer (any OS, incl. WSL): `uv run --script path/to/download-leexi …`.
+  `scripts/install` links both helpers; `--check` verifies.
+- Python callers: `scripts/leexi_api.py` (stdlib-only client, `--at` resolution, Markdown render).
 
 API facts, auth and key-scope gotchas (404 = out of scope): [api.md](api.md).

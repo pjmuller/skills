@@ -1,7 +1,7 @@
 # Slidev: use only when the explanation benefits
 
-These capabilities are a menu, not a checklist. Adapted from [upstream](sources.md).
-Check the installed version before introducing newer syntax into an existing deck.
+These capabilities are a menu, not a checklist. Adapted from [upstream](sources.md); same
+version caveat as [authoring](slidev.md).
 
 ## Code that changes
 
@@ -46,6 +46,6 @@ work live while appearing empty or frozen in exports.
 and remote controls are optional; use the project's installed CLI help for their exact flags.
 Do not expose remote control just to get a local preview.
 
-Newer upstream features include Comark, editable PPTX and an MCP endpoint. They are not
-prerequisites for this skill; no toolchain upgrade is implied. Consult the linked upstream
-feature reference only when a request needs a capability beyond this bundled guide.
+Newer upstream features (Comark syntax, `pptx-editable` export, `slidev mcp` stdio server) are
+not prerequisites; no toolchain upgrade is implied. Consult [upstream](sources.md) only when a
+request needs a capability beyond this bundled guide.

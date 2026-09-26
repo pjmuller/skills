@@ -12,9 +12,9 @@ Claude Desktop's **local** routines are plain files; read them, re-create each a
 | Routine | t3-schedule |
 |---|---|
 | `cronExpression` `0 9 * * *` | `--at 09:00` daily; `* * 1-5` → `--weekdays`; other day sets → `--days mon,thu` |
-| `fireAt` (one-time) | past → drop; future → `t3-schedule add … --days <that weekday>` and remove after it ran, or just run it once now |
+| `fireAt` (one-time) | past → drop; future → `--once YYYY-MM-DD --at HH:MM` |
 | `cwd` | `--project <cwd>` |
-| `model` | `--model fable|opus|haiku|sol|astra` (closest tier; Claude opus → `opus`) |
+| `model` | closest `--model` alias or ordered fallback list (`t3-schedule add --help`); omit for the default |
 | `enabled: false` / "Paused" | skip, or add and note it as paused |
 | prompt body | `--prompt-file` pointing at the SKILL.md body (drop the frontmatter) |
 

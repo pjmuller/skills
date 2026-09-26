@@ -1,9 +1,7 @@
 # Global agent prompt: template
 
-Merge base for a developer's cross-project file; procedure in [global.md](global.md).
-Replace the few `{…}` (name, role, accounts, paths) from evidence on the machine,
-delete sections for tools you lack, keep your own facts. Model names are explicit and refreshed here when new
-models ship; pull the update. The file starts below the rule.
+Merge base for a developer's cross-project file: fill `{…}` and merge per
+[global.md](global.md#merge-the-template-into-someones-existing-file). The file starts below the rule.
 
 ---
 
@@ -48,10 +46,10 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
-  - No `--profile`/`--thinking`: account and effort follow the parent. Only when I name an account/profile → `t3-list-profiles` for the exact value.
+  - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's) and the model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value.
 
 ### T3 threads (skill `t3-manage-thread`; helpers on PATH)
-`t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles`.
+`t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles` · `t3-find-thread` (fuzzy-find a past thread; skill `t3-find-thread`) → `t3-open-thread <id>`.
 - Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
 

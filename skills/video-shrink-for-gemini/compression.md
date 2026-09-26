@@ -1,40 +1,27 @@
 # Fit readable video into native agy
 
-Start with `shrink-video --preset normal --out /private/normal INPUT`.
-Measure bytes; if needed, try compact then heavy in separate output directories.
-Preserve 720p, compare address-bar text and listen to a short speech sample. Sparse
-frames may miss brief tickets: extract exact original frames for those transitions.
-Do not downscale further just to fit; opaque IDs need independently checked crops.
+Goal: fewest files under the 50 MiB `agy` limit with screen text still readable. Preset
+fps/CRF/width live in `scripts/shrink-video`; audio is mono 16 kHz AAC 32k (enough for meeting
+speech; budget more bytes if audio quality matters). `slow` saves substantial space over
+`veryfast` on screen recordings. No recipe guarantees a size.
 
-The presets use H.264 `slow`, mono 16 kHz AAC 32k. Normal is 0.5 fps / CRF24;
-compact 0.5 fps / CRF28; heavy 0.25 fps / CRF26. The slow encoder saves substantial
-space versus veryfast on screen recordings. For richer audio, preserve higher audio
-quality and budget more bytes. No recipe guarantees a maximum size.
+Try `normal`, then `compact`, then `heavy`, each in its own `--out` dir; measure bytes. Keep
+720p, compare address-bar text, listen to a speech sample. Do not downscale further just to fit:
+opaque IDs need independently checked crops anyway, and sparse frames can miss brief screens
+(extract exact original frames for those). Example: a 46-minute 720p meeting fit in one file at
+normal 38.6 MiB, compact 29.3, heavy 24.4.
 
 ## Fallback: fewest practical chunks
 
-Use a 48 MiB target, leaving headroom below native agy's 50 MiB hard limit.
-From measured encoded bytes B and duration D, start with
-`N = ceil(B / (48 * 1024 * 1024))` equal-duration chunks with ~10 seconds overlap.
-For each chunk, seek in the original source, encode with the accepted recipe and
-measure the actual result. Content varies: shorten only oversized chunks and
-recheck; do not assume proportional bytes guarantee a fit. Combine adjacent chunks
-when their re-encoded union fits. Avoid unnecessary tiny fragments.
+Target 48 MiB (headroom). Start with `N = ceil(bytes / 48 MiB)` equal-duration chunks, ~10 s
+overlap, each seeked from the **original** and encoded with the accepted recipe (same ffmpeg
+arguments as `shrink-video`, plus `-ss START -t LENGTH`). Measure each: shorten only oversized
+chunks, merge neighbours whose union fits, avoid tiny fragments; not arbitrary ten-minute chunks.
 
-Example encode (substitute measured START/LENGTH and the accepted fps/CRF):
+Sparse output holds the last still up to one frame interval past the audio: use the source
+timeline for coverage, not the padded video tail.
 
-```sh
-ffmpeg -ss START -i source.mp4 -t LENGTH -vf fps=1/2 \
-  -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart \
-  -ac 1 -ar 16000 -c:a aac -b:a 32k part.mp4
-```
-
-Sparse output can hold the final still until the next frame boundary (up to one
-frame interval beyond audio). Check audio duration separately; use the source
-recording timeline, not that padded video tail, for transcript coverage.
-
-Save a manifest of each file's start, end, bytes and audio/video properties. Require
-complete coverage with no gaps. Supply absolute offsets and local context to Gemini;
-write distinct drafts. Deduplicate overlap without dropping unfinished sentences.
-Fathom's timestamp reference can help align speech, but crop times only locate visual
-evidence; never use them as spoken-topic start times. Mark uncertain timings.
+Save a manifest (start, end, bytes, audio/video properties per file) and require gap-free
+coverage. Give Gemini absolute offsets and context; write distinct drafts; deduplicate overlap
+without dropping unfinished sentences. Fathom timings help align speech, but crop times only
+locate visual evidence, never spoken-topic starts. Mark uncertain timings.

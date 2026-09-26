@@ -1,32 +1,38 @@
 ---
 name: whatsapp-bridge
-description: "Local Python WhatsApp helper: QR login, read synced chats, find/resolve contacts, allowlisted individual text sends. Read the repository's wrapper skill first for the account, allowed recipients and drafting policy."
+description: "Core mechanics for a locally paired WhatsApp account (Neonize, no browser): QR login, read synced chats, find/resolve contacts, allowlisted individual text sends. Use when an agent must read, draft or send WhatsApp messages; read the repository's wrapper skill first for the account, allowed recipients and drafting policy."
 ---
 
-Install, alternatives and limitations: [README.md](README.md). Read → draft → send semantics: [reply-workflow.md](reply-workflow.md).
+Install, alternatives and live checks: [README.md](README.md). Read → draft → send and result shapes: [reply-workflow.md](reply-workflow.md).
 
 ## Core vs wrapper
 
 This core owns mechanics only: the Neonize build, the session/history store, the `wa` CLI and the Python API. A repo-local **wrapper skill** owns policy: which account is paired, the own number, who may be messaged, tone-of-voice/drafting rules and contact conventions. Read the wrapper first; if a repository has none, treat sending as self-only.
 
-## API
+## Map
 
-`login()`, `read_chat(chat, n=20)`, `send_text(number, text)` from `whatsapp_bridge`; CLI `wa login|read|send|contacts|resolve|context`. Consumers depend on this directory as an editable uv path dependency.
+`wa --help` (run via `uv run --project <this dir> wa …`) lists `login|read|context|contacts|resolve|send`; the same functions are exported from `whatsapp_bridge` for consumers using this directory as an editable uv path dependency. Drafting starts at `conversation_context` / `wa context`.
 
-For "read this chat and draft a reply", start with `conversation_context(chat, n=20)` (bounded context, no send). Unclear names → `find_contacts(query, limit=10)`; exact identity → `resolve_contact(chat)`. Implementation: `__init__.py` (API/budgets), `store.py` (lookup/history/allowlist/pacing), `worker.py` (one native sync per call). No browser, daemon or polling service.
+- `whatsapp_bridge/__init__.py` — public API, CLI, input validation, context budgets.
+- `whatsapp_bridge/store.py` — history DB, name/number resolution, recipient allowlist, send pacing.
+- `whatsapp_bridge/worker.py` — one native session per subprocess call, serialized by a file lock. No browser, daemon or polling service.
 
-## Safety
+## Safety (hard rules)
 
-Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,…` (explicit international numbers, no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes. Never bulk-send, never widen the allowlist just to make a test pass, never auto-retry an uncertain send. Reading any chat is allowed. Do not print or copy session/credential files.
+- Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,…` (explicit international numbers; no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes.
+- Never bulk-send, never widen the allowlist just to make a test pass, never auto-retry an uncertain send (a worker crash can mean it went out).
+- Reading any chat is allowed. Never print or copy session/credential files.
+
+These are the ban/abuse guardrails for an unofficial protocol client; breaking them risks the account, not just a bad message.
 
 ## Neonize pin
 
-Neonize 0.4.7 is built from a pinned, unmodified upstream checkout by `scripts/build-neonize`, then `uv sync`. Consumers' editable installs resolve the local `.build/neonize` source; build it first. Global `uv tool install` needs `--with ./.build/neonize` (README command). The worker forces `NEONIZE_BOT_TAG=off` before starting Go; older PyPI 0.4.3.post0 ignores that variable and stamps WhatsApp's AI badge on every message. Do not downgrade. No compiled artifacts in git; replace the local build with a supported PyPI wheel when upstream publishes one.
+Neonize 0.4.7 is built from a pinned, unmodified upstream checkout by `scripts/build-neonize` into gitignored `.build/neonize`; `pyproject.toml` resolves it from there, so build before any `uv sync` (a fresh checkout or consumer fails otherwise). The API sets `NEONIZE_BOT_TAG=off` before the native worker starts; PyPI's older 0.4.3.post0 ignores that variable and stamps WhatsApp's AI badge on every message, so do not downgrade. No compiled artifacts in git; switch to an upstream PyPI wheel once one ships with the flag.
 
 ## Pairing UX
 
-Run `wa login --window` **first**. It opens a large macOS Terminal immediately; only then ask the human to scan via WhatsApp → Settings → Linked devices → Link a device. Never ask them to hunt for QR codes in hidden agent output. Wait for the terminal to report the own number (no session-file inspection). Codes refresh in place; if expired, rerun. Once paired, reconnect/read works without another scan. The window command returns before pairing finishes; it is not proof of login.
+Run `wa login --window` **first**: it opens a large macOS Terminal immediately; only then ask the human to scan via WhatsApp → Settings → Linked devices → Link a device. Never ask them to hunt for QR codes in hidden agent output. The command returns before pairing finishes, so it is not proof of login: wait for the Terminal to report the own number after initial sync (phone online; no session-file inspection). Codes refresh in place; on timeout, rerun. Once paired, reads reconnect without another scan; an expired/unlinked session needs `wa login --window` again.
 
-## History
+## History limits
 
-Locally synced and potentially incomplete: empty results do not prove an empty chat, and deletions/edits are not mirrored. Name matching is exact and rejects ambiguity; use international numbers when needed. State lives outside git in `~/.config/whatsapp-bridge/`. Session expiry → `wa login`. Media without a caption renders as `[non-text message]`; a forwarded contact card renders as `[contact] Name: +number`.
+Only locally synced history, potentially incomplete: empty results do not prove an empty chat, and deletions/edits/disappearing messages are not mirrored. Name matching is exact (case-folded) and rejects ambiguity; use international numbers when needed. State lives outside git in `~/.config/whatsapp-bridge/` (0700). Media without a caption renders as `[non-text message]`; a forwarded contact card renders as `[contact] Name: +number` (several joined by ` | `).

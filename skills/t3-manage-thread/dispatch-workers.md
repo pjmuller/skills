@@ -7,8 +7,8 @@ add their sources and policies on top of these rules, not instead of them.
 ## Title
 
 `<emoji> <3–6 words the user recognises>`, in the user's language. The emoji is the only
-routing signal: `🏓` round-trip (hidden, pings back, parent settles it) or `📤` standalone
-(visible, never hidden/settled by helpers). No ticket IDs, repo names or phase words in the
+routing signal: `🏓` round-trip or `📤` standalone ([spawn-thread.md](spawn-thread.md#-round-trip-workers)).
+No ticket IDs, repo names or phase words in the
 title: they mean nothing at sidebar width; the ID belongs in the brief. Good:
 `📤 Annulatiepolicy toepassen`. Bad: `🎫 869f4kx78 annulatiepolicy: numeric fields, conditional
 profile, playbook, dashboard tile`. Invented emojis (🎫, 🔧…) are not routing and confuse the

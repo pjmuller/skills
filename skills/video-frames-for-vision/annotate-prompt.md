@@ -13,7 +13,7 @@ Write the result to `{{RUN_DIR}}/analysis.md`; write nothing else outside the ru
 
 ## Inputs (read in this order)
 
-1. `transcript.md` — the speech layer: `MM:SS Speaker: text` paragraphs from the vendor's ASR.
+1. `transcript.md` — the speech layer: timestamped speaker paragraphs from the vendor's ASR.
    It is the reference for what was said; you cannot hear audio, so never "correct" spoken words
    from imagination. A word that contradicts something visible on screen may be flagged as
    `[transcript says X; screen shows Y]`.

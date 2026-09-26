@@ -5,74 +5,53 @@ description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every
 
 # t3-schedule
 
+One helper, `scripts/t3-schedule` (tests: `scripts/test_t3_schedule.py`); subcommands and flags:
+`t3-schedule --help` / `t3-schedule add --help`. Install: `scripts/install` (needs the
+[t3-manage-thread](../t3-manage-thread/SKILL.md) helpers on PATH).
+
 ```bash
-t3-schedule add --name fleet-report-work --at 07:30 --weekdays \
-  --project ~/code/example/example-app --model opus,sol \
-  -- "Run the fleet-report-work skill for yesterday, end to end (ClickUp ticket included)."
-t3-schedule add --name downscale-db --once 2026-09-26 --at 08:00 \
-  --project ~/code/example/example-app -- "Downscale the staging DB to the weekend size."
-t3-schedule list            # jobs · loaded? · profile/model · last run + result
-t3-schedule list --markdown # same as a table — use this when the user asks "what's scheduled?"
-t3-schedule run-now NAME    # launchctl kickstart + prints the runner's log (real spawn)
-t3-schedule show NAME       # spec + prompt
-t3-schedule set-at NAME HH:MM  # move a slot (keeps prompt/profile/model); keep jobs ≥15 min apart
-t3-schedule remove NAME
-t3-schedule catch-up [--dry-run]  # the poller's tick: re-kick jobs whose slot passed today without a spawn
-t3-schedule refresh         # regenerate all runners/plists after a template change; re-arms the poller
+t3-schedule add --name nightly-report --at 07:30 --weekdays \
+  --project ~/code/example/example-app -- "Run the nightly report skill for yesterday."
+t3-schedule list --markdown   # answer "what's scheduled?" with this
 ```
 
-Use `add --settle-when-done` for unattended jobs: forwards the spawn helper's
-[fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done),
-which hides the running thread and appends self-settlement instructions. Do not use a 🏓 title.
-`add --hide --no-notify` = hidden thread without the self-settle footer and without the launch notification: the prompt (or a helper it runs, e.g. `skills-refresh --job`) owns settle/unhide.
-For Sol High, pass `--profile <account> --model sol --thinking high` (account label, e.g. `probackup`; no thread to inherit a sibling from).
+- Unattended jobs: `add --settle-when-done` forwards the spawn helper's
+  [fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done)
+  (no 🏓 title). `--hide --no-notify` = hidden, no self-settle footer, no launch notification: the
+  prompt or a helper it runs (e.g. `skills-refresh --job`) owns settle/unhide.
+- A specific effort needs `--profile <account> --model sol --thinking high`: a root thread has no
+  parent to inherit from.
+- Never edit a runner by hand: `add --force` (one job) or `refresh` (all) regenerates it.
 
-One job = LaunchAgent `com.t3-skills.t3-schedule.<name>` (`~/Library/LaunchAgents`, `ProcessType=Interactive` —
-`Standard` still clamps the t3 CLI to 15-25 s per call, measured 2026-09-09) → runner
-`~/.t3/userdata/scheduled/t3-schedule/<name>.sh` → waits for T3 Code (≤ `--wait-max` min, default 10)
-→ `t3-spawn-thread --project … --no-open --title "⏰ <name> <date>" -- "<prompt>"` → macOS
-notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`. Prompt lives in `<name>.prompt.md`
-(or `--prompt-file`). `--days mon,thu` / `--weekdays` / `--once YYYY-MM-DD` / default daily. `--title` accepts `{date}`.
-
-Install: `scripts/install` (symlink into `~/.local/bin`, needs the
-`t3-manage-thread` helpers on PATH).
+Pipeline: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
+`~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt in `<name>.prompt.md`) → waits for T3 Code
+→ `t3-spawn-thread --no-open` → macOS notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`.
+`ProcessType=Interactive` because `Standard` clamps each t3 CLI call to 15–25 s (2026-09-09).
 
 ## Contract
-- **Spawn is a root thread.** The runner unsets `CODEX_THREAD_ID` etc. and `run-now` goes through
-  launchd, so no parent thread is inherited even when fired from inside a T3 agent.
-- **Model + profile.** `--model a,b` = ordered candidates: at fire time the first whose ecosystem
-  is installed *and* has capacity wins. No `--model` ≡ `--model opus,sol`. Omit `--profile` →
-  `t3-spawn-thread` picks the account with most room
-  ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing)). The runner probes
-  each candidate with the spawn helper's `--dry-run`; the log shows `-- probe model X` + its
-  decision block (`← selected` = account, `→` = why):
-  ```
-  -- probe model opus
-     Profile routing for claude-opus-… (usage cached ≤90 s; explicit --profile NAME bypasses this):
-       claudeAgent_dentai      session 6% (room +22) · weekly 18% (room +15) …  ← selected
-       → claudeAgent_dentai: best bottleneck score (…)
-  ```
-  No candidate available → the runner fails and the catch-up poller retries every 15 min until
-  slot+10h, so the job lands once a window resets instead of sitting as a blocked thread. No spreading of near-equal profiles across jobs:
-  usage is re-read between jobs (90 s cache) and real consumption ranks them.
-- **Spacing.** Slots are ≥15 min apart and the
-  catch-up poller kicks **one job per tick** (earliest slot first, never while another runner is
-  spawning), so limits are re-read between jobs even after a long power-off.
-- **Missed or failed slot ⇒ catch-up, not tomorrow.** One extra LaunchAgent
-  `com.t3-skills.t3-schedule.catch-up` (every 15 min + at login, armed by `add`/`refresh`) kickstarts
-  any job whose slot passed today, has no `<name>.last` for today and is not running — until
-  slot+10h, same calendar day. Covers lid-closed wakes, reboots (launchd never replays after a
-  power-off), T3 down/updating, a broken spawn. **At most one spawn per day** (`<name>.last`,
-  written on success only).
-- **T3 Code not running** ⇒ runner waits `--wait-max` (default 10 min), exits, catch-up retries.
-  Failures notify once per day (`<name>.failed`); success always notifies. Helpers fall back to
-  `~/.t3/userdata/last-server-origin` when `server-runtime.json` is missing but the server answers.
-- **Provider limits / auth** are the thread's problem, same as a manual spawn: a rate-limited
-  thread shows the banner and `t3-usage-windows limited` handles it; expired `rc`/Claude OAuth surfaces in the
-  thread. The daily notification + sidebar thread `⏰ name date` is the ack; nothing else pings the user.
-- **One-shot (`--once`)** = same guarantees, one spawn; catch-up retries until 23:00 that day
-  (no tomorrow to fall back on). launchd
-  has no Year, so the runner skips any other date and any run after `<name>.last` exists; the
-  catch-up poller then retires the job (bootout, plist + runner deleted, spec kept; `list` shows
-  `fired <date>` or `expired (never fired)` + one notification). `run-now` fires it immediately.
-- Never edit `<name>.sh` by hand — `add --force` (one job) or `refresh` (all) regenerates it.
+
+- **Root thread.** The runner unsets inherited thread env and `run-now` goes through launchd, so no
+  parent is inherited even when fired from inside a T3 agent.
+- **Model + profile at fire time.** `--model a,b` = ordered candidates; the first whose ecosystem is
+  installed *and* has capacity wins (default `opus,sol`). Without `--profile`, `t3-spawn-thread`
+  picks the account with most room ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing)).
+  The log shows each `-- probe model X` with the spawn helper's `--dry-run` routing decision.
+  No candidate → the run fails and catch-up retries, so the job lands once a window resets instead
+  of sitting as a blocked thread. No spreading across near-equal profiles: usage is re-read between
+  jobs and real consumption ranks them.
+- **Spacing (convention, not enforced).** Keep slots ≥15 min apart. The catch-up poller kicks one
+  job per tick, earliest first, never while another runner is spawning, so limits are re-read
+  between jobs even after a long power-off.
+- **Missed or failed slot ⇒ catch-up, not tomorrow.** LaunchAgent `com.t3-skills.t3-schedule.catch-up`
+  (armed by `add`/`refresh`; interval and grace are constants in `scripts/t3-schedule`) re-kicks any
+  job whose slot passed today without a spawn, until the grace ends the same calendar day. Covers
+  lid-closed wakes, reboots (launchd never replays after power-off), T3 down/updating, a broken
+  spawn. At most one spawn per day (`<name>.last`, written on success only). Failures notify once
+  per day (`<name>.failed`).
+- **Provider limits / auth** are the thread's problem, same as a manual spawn: the banner shows and
+  [t3-usage-windows](../t3-usage-windows/SKILL.md) recovers it. The notification + sidebar thread
+  `⏰ <name> <date>` is the ack; nothing else pings the user.
+- **One-shot (`--once`).** Same guarantees, one spawn; catch-up retries until 23:00 that day.
+  launchd has no Year, so the runner skips other dates and any run after `<name>.last` exists; the
+  poller then retires the job (plist + runner deleted, spec kept; `list` shows `fired <date>` or
+  `expired (never fired)`).

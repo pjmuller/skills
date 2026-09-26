@@ -5,8 +5,8 @@ Use supported browser tools and the user's authenticated profile; read the proje
 This workflow authorizes agreed test prompts only, not unrelated messages or system changes.
 
 1. Open https://claude.ai/code → **New**; visibly verify environment, repository and branch.
-   Use a fresh session after environment changes; reuse one for warm follow-up checks.
-2. Send the bounded [dry-run prompt](dry-run.md), including full SHA, ancestry gate and exclusions.
+   Fresh vs warm session: same rule as [dry-run.md](dry-run.md).
+2. Send the hand-composed [dry-run prompt](dry-run.md), including full SHA, ancestry gate and exclusions.
    Missing/non-ancestor SHA: stop; fetch/fast-forward only a clean checkout or start again, never reset dirty work.
 3. Inspect the conversation every 30–60 seconds; wait for terminal background-task results and a final report.
    Nudge idle sessions with missing completion notifications. **Send now** interrupts a pending tool;
@@ -14,7 +14,7 @@ This workflow authorizes agreed test prompts only, not unrelated messages or sys
 4. Read the response directly or use **Copy** if clipboard access exists; expand relevant tool failures.
    Inspect screenshots/rendered artifacts when layout matters. Keep the session URL and tested SHA.
 5. Fix locally, publish and repeat affected checks. A plan or partial response is not a pass.
-   Stop diagnostic monitors and return the outcome, limitations and clickable session URL.
+   Return the outcome, limitations and clickable session URL.
 
 ## Editing a cloud environment (allowlist, variables)
 
@@ -37,4 +37,4 @@ changed in the web UI only, and the platform applies them to **new** sessions. R
 5. Changes apply to new sessions only (modal notice); verify with a fresh `create --gate` session.
 
 Change only the agreed line; never read env-var values aloud or into a transcript. Afterwards update
-the project's recovery runbook.
+the project's recovery runbook (domains, secrets, setup script): record where secrets are recovered from, never values.

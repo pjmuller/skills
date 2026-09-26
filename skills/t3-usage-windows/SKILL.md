@@ -1,73 +1,40 @@
 ---
 name: t3-usage-windows
-description: Start provider usage windows with cheap turns, chain them during the workday, and resume or schedule recovery of rate-limited T3 Code threads. Use for warming accounts, daytime top-ups, window status, or unblocking threads after a usage reset. Ordinary stalled workers belong to t3-maintenance.
+description: Start provider usage windows with cheap turns, chain them during the workday, and resume or schedule recovery of rate-limited T3 Code threads. Use for warming accounts, daytime top-ups, window status, banked Codex resets, or unblocking threads after a usage reset. Ordinary stalled workers belong to t3-maintenance.
 ---
 
 # T3 usage windows
 
-A usage window is a provider's rolling quota period, commonly five hours, opened
-by a model turn. Starting a window early makes its next reset arrive earlier;
-a turn inside an active window does not restart its clock.
+A usage window is a provider's rolling quota period (commonly five hours) opened by a model turn.
+Starting one early makes its reset arrive earlier; a turn inside an active window does not restart
+the clock.
 
-Three verbs cover the lifecycle: **start** windows, **topup** expired windows,
-**limited** recovery. **status** combines quota windows and blocked-thread count.
+`t3-usage-windows <verb>`; flags, defaults and signal detection: `--help` on each subcommand.
 
-```bash
-t3-usage-windows start [--profile NAME_OR_ID] [--dry-run] [--json]
-t3-usage-windows topup install [--interval 600]
-t3-usage-windows topup status [--json]
-t3-usage-windows topup remove
-t3-usage-windows limited list --since 7d [--profile NAME_OR_ID] [--json]
-t3-usage-windows limited resume [--profile NAME_OR_ID] --dry-run
-t3-usage-windows limited schedule --profile NAME_OR_ID [--at HH:MM] [--dry-run]
-t3-usage-windows reset [--markdown|--json] [--apply]
-t3-usage-windows status [--profile NAME_OR_ID] [--json]
-```
+- `start` — one cheap turn per enabled Codex/Claude profile (models: `scripts/start.sh`), verifies
+  the selection, settles every child; the calling thread keeps running.
+- `topup install|status|remove|run` — launchd tick that restarts only *expired* session windows
+  during the workday (`scripts/topup.py`). Needs T3 running; never wakes the Mac. Decision preview:
+  `topup run --dry-run --ignore-hours`.
+- `status` — quota windows + blocked-thread count.
+- `limited list|resume|schedule` — rate-limited thread recovery (`scripts/limited.py`). `resume`
+  posts `continue`; it skips monthly caps and pending resets unless `--force` — never `--force` a
+  monthly cap without the user. Run `t3-drafts list --limited` first and pass `--protect-drafts` so
+  threads holding an unsent draft are not buried under a blind `continue`. Re-list right after
+  resuming and report the current inventory. Timed recovery: [scheduled-resume.md](scheduled-resume.md).
+- `reset` — banked reset credits of the logged-in Codex account (`scripts/reset_credit.py`).
+  **Hard rule:** `--apply` spends a scarce credit (resets both the five-hour and weekly window) —
+  only with explicit user authorization. Unrelated to Luna Reserve or API credits.
 
-`start` discovers enabled Codex and Claude profiles from T3 settings. It uses
-Luna/low or Haiku/low, verifies selection, and settles every created child.
-It leaves the calling thread running. `--profile` matches an exact instance ID
-first, otherwise a case-insensitive ID/display-name substring.
+Ordinary stalled (not limited) workers: [t3-maintenance](../t3-maintenance/SKILL.md) `t3-fleet`.
 
-`topup` runs every ten minutes, Monday–Friday 05:00–21:00 in the **system timezone**.
-It starts only expired session windows, with a 60-second grace period. Unknown
-quotas and accounts without session rows are skipped. T3 must be running;
-launchd retries on the next tick. It never wakes the Mac.
-For a manual decision preview: `topup run --dry-run --ignore-hours`.
+## Install
 
-`limited` detects two signals: a short limit banner as the thread's **last
-assistant message**, or a provider session in `error`/`stopped` whose
-`last_error` is a usage/rate limit (sidebar "Failed", no banner; the paired
-`runtime.warning` activity gives the exact reset). A later message on the thread
-means it is no longer blocked. `resume` sends `continue`,
-skipping monthly caps and future resets unless `--force`. Model/API banners with
-no reset time resume when requested. Check `t3-drafts list --limited`; use
-`resume --protect-drafts` to exclude unsent drafts. Re-list immediately after
-resuming to report the current inventory.
+Needs [thread helpers](../t3-manage-thread/SKILL.md) (`t3-limits`, ping/settle/spawn) and
+[t3-maintenance](../t3-maintenance/SKILL.md) (store access, `t3-drafts`) on PATH, then
+`scripts/install` and `--check`. `t3-limited` is a legacy alias for `t3-usage-windows limited`.
+`topup install` migrates the legacy `com.t3-skills.t3-hello-world-topup` LaunchAgent
+(`topup status --json` shows both). Let pending one-shot resumes
+(`com.t3-skills.t3-usage-windows.limited.*`) finish before updating.
 
-Read [scheduled-resume.md](scheduled-resume.md) for one-shot scheduling, reset
-time derivation, bounded retries, draft protection, cancellation and notifications.
-Mutation commands accept `--dry-run`; `limited resume|schedule --json` returns an
-outcome plus audit output. `limited list --json` returns structured thread rows.
-
-`reset` uses Codex's native app-server protocol for the currently logged-in
-Codex account. It lists every banked reset and expiry as Markdown by default;
-`--json` returns the same inventory structurally. `--apply` consumes the earliest
-expiry and verifies the remaining count and weekly usage. This resets both
-eligible five-hour and weekly windows. Do not apply it without explicit user
-authorization. It is unrelated to Luna Reserve or API credits.
-
-## Install and migration
-
-Install [thread helpers](../t3-manage-thread/SKILL.md) and
-[maintenance](../t3-maintenance/SKILL.md) first, then run `scripts/install` and
-`scripts/install --check`. Dependencies resolve through PATH; `t3-limits` stays
-owned by thread helpers. Maintenance supplies store access and draft discovery.
-`t3-limited` is a thin legacy alias for `t3-usage-windows limited`.
-
-Run `topup install` to unload `com.t3-skills.t3-hello-world-topup` and load
-`com.t3-skills.t3-usage-windows.topup`. New one-shot jobs share the label family
-`com.t3-skills.t3-usage-windows.limited.*`. Let existing one-shot resumes finish
-before updating. Check `topup status --json` for loaded/legacy state.
-
-Upstream limitations, workday constants and logs: [notes.md](notes.md).
+Provider quirks, why launchd over in-thread timers, logs: [notes.md](notes.md).
