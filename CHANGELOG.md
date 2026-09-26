@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## v0.4.2 (2026-09-26)
+- t3-manage-thread: show account plan labels in limits JSON/Markdown and spawn routing explanations; clarify account-relative percentages and large-job capacity checks without changing routing. Sync the t3-drafts test fixture with the session/activity tables read by limit detection.
+
 ## v0.4.1 (2026-09-26)
 - Docs-only skill audit across every skill and `setup/t3-setup` (~−700 lines): docs keep trigger, map, intent and gotchas; usage that `--help` prints moved to pointers. File names and `##` anchors that consumer wrappers link to are unchanged, except whatsapp-bridge (`## Map`, `## Safety (hard rules)`, `## History limits`) and removed `setup/t3-setup/codexbar.md` (→ `codexbar-setup/install.md`).
 - Stale claims fixed: account routing covers Claude and Codex; an explicit `--model` gets its house effort; `--self` settles via `t3_supervise`; `transcribe-openai --hint` is ≤20 terms, and the prompt expects `--out transcript.openai.md`; `keychain_service()` lives in `lib/t3_limits.py`; t3-schedule `--once` for one-time routines; clickup appends are verified by `content_signature`; google-workspace sends `supportsAllDrives` on every Drive call and has no draft-update command.

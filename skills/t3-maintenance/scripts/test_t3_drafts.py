@@ -78,6 +78,12 @@ class DraftsTest(unittest.TestCase):
               message_id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, text TEXT,
               created_at TEXT
             );
+            CREATE TABLE projection_thread_sessions (
+              thread_id TEXT, status TEXT, last_error TEXT, updated_at TEXT
+            );
+            CREATE TABLE projection_thread_activities (
+              thread_id TEXT, kind TEXT, payload_json TEXT, created_at TEXT
+            );
             INSERT INTO projection_projects VALUES ('p','fixture');
         """)
 

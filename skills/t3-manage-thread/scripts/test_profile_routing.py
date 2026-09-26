@@ -44,9 +44,14 @@ def test_unknown_stale_and_expired_windows():
 
 
 def test_pace_headroom_and_stable_ties():
-    a, b = account("a"), account("b")
+    a, b = account("a", plan="max_20x"), account("b", plan="pro")
     assert choose([b, a], "claude-fable-5", "a", NOW)[0] == "a"
+    assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "b"  # plan labels do not break a tie
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
+    selected, reason, candidates = choose([b, a], "claude-fable-5", "a", NOW)
+    explanation = explain("claude-fable-5", candidates, NOW, selected, reason)
+    assert "a  [max_20x]" in explanation and "b  [pro]" in explanation
+    assert "Percentages are per account" in explanation
     b.rows[1].resets_at = NOW + timedelta(days=6)
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
 
@@ -103,6 +108,7 @@ def test_single_enabled_and_builtin_fallback(tmp_path):
     collect = Mock(return_value=[Account("a", "a", error="HTTP 429")])
     selected, reason, explanation = route("claude-fable-5", "b", settings, collect)
     assert selected == "a" and "unverified" in reason and "unknown: HTTP 429" in explanation
+    assert "[unknown] unknown: HTTP 429" in explanation
     collect = Mock(return_value=[account("a", 100)])
     with pytest.raises(ValueError, match="--profile") as info:
         route("claude-fable-5", "b", settings, collect)

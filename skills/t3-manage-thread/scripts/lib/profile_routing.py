@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from t3_limits import SETTINGS, WEEKLY_SECONDS, claude_accounts, codex_accounts, provider_profiles, relative
+from t3_limits import PLAN_HINT, SETTINGS, WEEKLY_SECONDS, claude_accounts, codex_accounts, plan_label, provider_profiles, relative
 from profile_registry import registry, compatible
 
 TIGHT_PERCENT = 90  # label only: near a cap, still eligible (ranking already prefers room)
@@ -59,6 +59,7 @@ class Candidate:
     instance_id: str
     label: str
     status: str            # ok | unknown | excluded
+    plan: str = "unknown"
     detail: str = ""       # why unknown/excluded, or "tight" label
     rows: list = field(default_factory=list)
     room: float = 0.0      # worst-window pace room (ok only)
@@ -80,7 +81,7 @@ def weekly_expiry_bonus(row, now):
 
 def assess(account, model, now):
     rows = [r for r in account.rows if relevant(r.window, model)]
-    candidate = Candidate(account.instance_id, account.label, "ok", rows=rows)
+    candidate = Candidate(account.instance_id, account.label, "ok", plan=plan_label(account), rows=rows)
     # A cached exhausted cap remains a reason to avoid an account until its
     # reset, even when a failed refresh makes the rest of the data uncertain.
     exhausted = [r for r in rows if r.used_percent >= 100 and (r.resets_at is None or r.resets_at > now)]
@@ -145,7 +146,7 @@ def choose(accounts, model, preferred, now):
 
 
 def explain(model, candidates, now, selected=None, reason=""):
-    lines = [f"Profile routing for {model} (usage cached ≤90 s; explicit --profile NAME bypasses this):"]
+    lines = [f"Profile routing for {model} (usage cached ≤90 s; explicit --profile NAME bypasses this):", PLAN_HINT]
     width = max((len(c.instance_id) for c in candidates), default=8)
     for c in candidates:
         if c.status == "ok":
@@ -159,7 +160,7 @@ def explain(model, candidates, now, selected=None, reason=""):
             windows = f"{c.status}: {c.detail}"
             tag = ""
         mark = "  ← selected" if c.instance_id == selected else ""
-        lines.append(f"  {c.instance_id:<{width}}  {windows}{tag}{mark}")
+        lines.append(f"  {c.instance_id:<{width}}  [{c.plan}] {windows}{tag}{mark}")
     if selected:
         lines.append(f"  → {selected}: {reason}")
     return "\n".join(lines)

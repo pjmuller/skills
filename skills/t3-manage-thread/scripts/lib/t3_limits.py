@@ -471,6 +471,11 @@ def reset_text(when: datetime | None, now: datetime) -> str:
 
 
 PACE_LEGEND = "pace = % of window elapsed · room = pace − used (+ under pace, − over pace)"
+PLAN_HINT = "Percentages are per account; plan labels are advisory (Claude login may lag; Codex pro has no multiplier); free quota does not reserve running work."
+
+
+def plan_label(account: Account) -> str:
+    return account.plan or "unknown"
 
 
 def relative_age(account: Account, now: datetime) -> str:
@@ -493,12 +498,12 @@ def pace_text(row: Row, now: datetime) -> str:
 def render(accounts: list[Account], now: datetime) -> str:
     rows = [row for account in accounts for row in account.rows]
     width = max((len(row.window) for row in rows), default=7)
-    out = [PACE_LEGEND]
+    out = [PACE_LEGEND, PLAN_HINT]
     for account in accounts:
         head = f"{account.label}  ({account.instance_id})"
         if account.stale:
             head += f"  (cached {relative_age(account, now)} ago)"
-        out.append(f"{head}  {account.plan}".rstrip())
+        out.append(f"{head}  {plan_label(account)}")
         if account.error:
             out.append(f"  {account.error}")
         for row in account.rows:
@@ -514,26 +519,27 @@ def render_markdown(accounts: list[Account], now: datetime) -> str:
     stamp = now.astimezone(TZ).strftime("%a %Y-%m-%d %H:%M %Z")
     out = [
         f"Rate limits at {stamp} — {PACE_LEGEND}",
+        PLAN_HINT,
         "",
-        "| profile | instance | window | used | pace | room | resets |",
-        "|---|---|---|---:|---:|---:|---|",
+        "| profile | instance | plan | window | used | pace | room | resets |",
+        "|---|---|---|---|---:|---:|---:|---|",
     ]
     for account in accounts:
         if account.error:
             out.append(
-                f"| {account.label} | `{account.instance_id}` | — | | | | {account.error} |"
+                f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | — | | | | {account.error} |"
             )
         for row in account.rows:
             pace = row.pace(now)
             expected = f"{pace[0]:.0f}%" if pace else "-"
             room = f"{pace[1]:+.0f}" if pace else "-"
             out.append(
-                f"| {account.label} | `{account.instance_id}` | {row.window} "
+                f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | {row.window} "
                 f"| {used_text(row).strip()}% | {expected} | {room} "
                 f"| {reset_text(row.resets_at, now).removeprefix('resets ')} |"
             )
         for note in account.notes:
-            out.append(f"| {account.label} | `{account.instance_id}` | {note} | | | | |")
+            out.append(f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | {note} | | | | |")
     return "\n".join(out)
 
 
@@ -545,6 +551,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                 {
                     "account": account.label,
                     "instance_id": account.instance_id,
+                    "plan": plan_label(account),
                     "window": None,
                     "error": account.error,
                 }
@@ -555,6 +562,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                 {
                     "account": account.label,
                     "instance_id": account.instance_id,
+                    "plan": plan_label(account),
                     "window": row.window,
                     "used_percent": None if math.isnan(row.used_percent) else row.used_percent,
                     "window_seconds": row.length_seconds,

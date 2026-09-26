@@ -363,6 +363,7 @@ class FormattingTest(unittest.TestCase):
         account = codex_account()
         rows = t3_limits.json_rows([account], NOW)
         self.assertEqual(rows[0]["instance_id"], "codex")
+        self.assertEqual(rows[0]["plan"], "pro · user@example.com")
         self.assertEqual(rows[0]["window"], "weekly")
         self.assertEqual(rows[0]["resets_at"], "2026-09-07T05:25:09Z")
         self.assertEqual(rows[0]["resets_in_seconds"], 166809)
@@ -378,6 +379,7 @@ class FormattingTest(unittest.TestCase):
                 {
                     "account": "Boom",
                     "instance_id": "x",
+                    "plan": "unknown",
                     "window": None,
                     "error": "token expired",
                 }
@@ -402,7 +404,10 @@ class PaceTest(unittest.TestCase):
     def test_markdown_has_one_row_per_window(self):
         account = codex_account()
         text = t3_limits.render_markdown([account], NOW)
-        self.assertIn("| Codex Alpha | `codex` | weekly | 91% | 72% | -19 |", text)
+        self.assertIn("| Codex Alpha | `codex` | pro · user@example.com | weekly | 91% | 72% | -19 |", text)
+        self.assertIn("Percentages are per account", text)
+        error = t3_limits.Account("Unknown", "x", error="token expired")
+        self.assertIn("| Unknown | `x` | unknown | — |", t3_limits.render_markdown([error], NOW))
 
 
 if __name__ == "__main__":

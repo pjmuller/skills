@@ -13,7 +13,12 @@ Glossary:
   of pace. No pace for a stale window (no reset / reset in the past).
 - Plan label = `rateLimitTier`, plus `(subscriptionType)` when they disagree
   (e.g. `max_20x (pro)`); both come from the local credential written at login,
-  so a wrong tier means re-login that home.
+  so reconcile it with the current subscription if the login label looks stale.
+  Codex `pro` does not distinguish
+  a 5x from a 20x allowance; `unknown` means no label was available.
+- Percentages are relative to each account's own allowance. A 1x account at
+  20% and a 20x account at 20% do not have equal quota left. Plan labels are
+  advisory, and a fresh reading does not reserve capacity for running jobs.
 
 Source per enabled T3 provider instance, so each row is the account T3 would run:
 - Claude: Keychain item `Claude Code-credentials`, suffixed

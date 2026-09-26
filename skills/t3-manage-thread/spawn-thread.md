@@ -94,6 +94,13 @@ Accepted trade-offs: bottleneck ranking ignores a strong second window, and
 near-simultaneous spawns are not spread across equal accounts (the next read,
 ≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
 
+For a huge or batched job, check `t3-spawn-thread --dry-run`, `t3-limits`, and
+the active fleet before launch. Percentages are relative to each account's own
+allowance; plan labels are advisory (Claude's login tier can be stale, and Codex
+`pro` does not distinguish 5x/20x). Do not stack several huge jobs on a
+1x, 5x, or unknown account solely because its window has room. Stage them
+sequentially and recheck actual consumption. Explicit `--profile` still wins.
+
 Profile names come from T3's native registry on every call (exact id, else a
 unique case-insensitive id/display-name match narrowed by `--model`'s driver),
 so adding accounts in T3 needs no helper change. Drivers without per-instance
