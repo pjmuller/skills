@@ -7,9 +7,12 @@
 Candidates are the enabled T3 instances of the requested model's driver. Each
 one is assessed from the shared usage cache (t3_limits): an exhausted relevant
 window excludes it until that window resets; an unreachable/stale/malformed
-reading makes it "unknown"; the rest are ranked by their worst window's pace
-room (pace − used), with a small expiry bonus for weekly caps, then by minimum
-headroom. Ties prefer the inherited account
+reading makes it "unknown". Among the rest, **drain-first** wins: an account
+whose weekly-class cap resets within DRAIN_HORIZON_SECONDS and still has
+spendable headroom is capacity that is lost at the reset, so it is used before
+any account whose quota persists (largest perishing headroom first). Then the
+usual ranking: worst window's pace room (pace − used), with a small expiry
+bonus for weekly caps, then minimum headroom. Ties prefer the inherited account
 (or its cross-driver sibling), then the instance id. Verified capacity always
 beats unknown. All candidates exhausted → refuse (an explicit --profile is the
 override and never polls). Paid overage is never capacity.
@@ -30,6 +33,14 @@ from profile_registry import registry, compatible
 TIGHT_PERCENT = 90  # label only: near a cap, still eligible (ranking already prefers room)
 WEEKLY_EXPIRY_SECONDS = 48 * 3600
 MAX_WEEKLY_BONUS = 10.0
+# Drain-first: a weekly-class window (≥ 1 day) resetting within this horizon is
+# use-it-or-lose-it — its headroom is gone at the reset, while every other
+# account's quota is still there afterwards. Overrides pace ranking outright.
+DRAIN_HORIZON_SECONDS = 4 * 3600
+DRAIN_WINDOW_MIN_SECONDS = 24 * 3600
+# Below this headroom (on ANY relevant window) an account cannot absorb a real
+# job before hitting a cap, so it is not worth draining.
+DRAIN_MIN_HEADROOM = 10.0
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
 
@@ -67,6 +78,9 @@ class Candidate:
     expiry_bonus: float = 0.0  # largest weekly bonus applied (ok only)
     headroom: float = 0.0  # min(100 - used) (ok only)
     bottleneck: str = ""
+    drain: float = 0.0     # perishing headroom lost at an imminent weekly reset (ok only)
+    drain_window: str = ""
+    drain_resets_in: float = 0.0
 
 
 def weekly_expiry_bonus(row, now):
@@ -77,6 +91,19 @@ def weekly_expiry_bonus(row, now):
     if not 0 < remaining < WEEKLY_EXPIRY_SECONDS:
         return 0.0
     return min(MAX_WEEKLY_BONUS * (1 - remaining / WEEKLY_EXPIRY_SECONDS), 100 - row.used_percent)
+
+
+def perishing(rows, headroom, now):
+    """(lost headroom, window, seconds to reset) for the tightest weekly-class
+    window resetting within the drain horizon, or None. Gated on every relevant
+    window keeping DRAIN_MIN_HEADROOM: a tight 5 h session blocks the drain too."""
+    if headroom < DRAIN_MIN_HEADROOM:
+        return None
+    soon = [(100 - r.used_percent, r.window, (r.resets_at - now).total_seconds())
+            for r in rows
+            if r.resets_at and (r.length_seconds or 0) >= DRAIN_WINDOW_MIN_SECONDS
+            and 0 < (r.resets_at - now).total_seconds() <= DRAIN_HORIZON_SECONDS]
+    return min(soon) if soon else None
 
 
 def assess(account, model, now):
@@ -112,6 +139,9 @@ def assess(account, model, now):
         candidate.routing_score, candidate.bottleneck = min(
             (room + bonus, window) for room, window, bonus in paced)
         candidate.expiry_bonus = max(bonus for _, _, bonus in paced)
+    drain = perishing(rows, candidate.headroom, now)
+    if drain:
+        candidate.drain, candidate.drain_window, candidate.drain_resets_in = drain
     if any(r.used_percent >= TIGHT_PERCENT for r in rows):
         candidate.detail = "tight"
     return candidate
@@ -130,8 +160,12 @@ def choose(accounts, model, preferred, now):
     unknown = [c for c in candidates if c.status == "unknown"]
     tie = lambda c: (c.instance_id != preferred, c.instance_id)
     if ok:
-        best = min(ok, key=lambda c: (-c.routing_score, -c.headroom, *tie(c)))
-        why = f"best bottleneck score ({best.bottleneck} {best.routing_score:+.1f})" if best.bottleneck else "unused capacity"
+        best = min(ok, key=lambda c: (-c.drain, -c.routing_score, -c.headroom, *tie(c)))
+        if best.drain:
+            why = (f"drain-first: {best.drain_window} resets {relative(best.drain_resets_in)} "
+                   f"with {best.drain:.0f}% left that is lost at the reset")
+        else:
+            why = f"best bottleneck score ({best.bottleneck} {best.routing_score:+.1f})" if best.bottleneck else "unused capacity"
         if len(ok) > 1 and best.instance_id == preferred and any(
                 (c.routing_score, c.headroom) == (best.routing_score, best.headroom) for c in ok if c is not best):
             why += ", tie → inherited account"
@@ -155,6 +189,8 @@ def explain(model, candidates, now, selected=None, reason=""):
                                  for r in c.rows)
             if c.bottleneck:
                 windows += f"  [weekly window +{c.expiry_bonus:.1f}; worst-window score {c.routing_score:+.1f}]"
+            if c.drain:
+                windows += f"  [drain {c.drain:.0f}% of {c.drain_window} before reset {relative(c.drain_resets_in)}]"
             tag = "  [tight]" if c.detail == "tight" else ""
         else:
             windows = f"{c.status}: {c.detail}"

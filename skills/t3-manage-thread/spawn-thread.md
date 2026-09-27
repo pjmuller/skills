@@ -81,8 +81,14 @@ also the override when every account is exhausted.
   `<Model> only` cap for the requested family.
 - **Unknown** (unreachable, stale, missing numbers): ranked after every verified
   account, picked only when nothing is verified.
-- **Ranking**: worst window's pace room first, plus a small bonus for weekly
-  windows about to reset (use-it-or-lose-it), then minimum headroom. `[tight]`
+- **Drain-first** (PJ, 2026-09-27): an account whose weekly-class cap resets
+  within 4 h and still has ≥ 10 % headroom on every relevant window is picked
+  before any other — that quota is gone at the reset, the others' is not.
+  Largest perishing headroom first. If the job outlives the window, the thread
+  simply pauses until the reset (`t3-usage-windows`), on an account that is
+  then fully fresh.
+- **Ranking** otherwise: worst window's pace room first, plus a small bonus for
+  weekly windows about to reset within 48 h, then minimum headroom. `[tight]`
   (≥ 90 % used) is a label, not a demotion: a weekly at 92 % resetting in two
   hours beats one burning far ahead of pace.
 - **Ties** keep the inherited account (on a driver switch: its sibling, same

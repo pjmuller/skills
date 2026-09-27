@@ -162,3 +162,38 @@ def test_scoped_display_names_and_unknown_scopes():
     assert not relevant("Claude Opus 5 only", "claude-fable-5-1")
     assert relevant("future-model only", "claude-fable-5-1")
     assert relevant("scoped only", "claude-fable-5-1")
+
+
+def test_drain_first_uses_capacity_that_expires_within_hours():
+    """PJ 2026-09-27: an account whose weekly cap resets in 2h30 must be drained
+    before a fresher account, even when a just-started session window reads as
+    'ahead of pace' and the other account has more pace room."""
+    dentai = Account("dentai", "dentai", rows=[
+        Row("session", 8, NOW + timedelta(hours=4, minutes=50), 18000),      # pace 3% → room −5 (noise)
+        Row("weekly", 57, NOW + timedelta(hours=2, minutes=30), 604800),
+        Row("Fable only", 86, NOW + timedelta(hours=2, minutes=30), 604800),
+    ])
+    kamp = Account("kamp", "kamp", rows=[
+        Row("session", 1, NOW + timedelta(hours=2, minutes=50), 18000),
+        Row("weekly", 32, NOW + timedelta(hours=35), 604800),
+        Row("Fable only", 52, NOW + timedelta(hours=35), 604800),
+    ])
+    selected, reason, candidates = choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)
+    assert selected == "dentai" and reason.startswith("drain-first: Fable only resets in 2h")
+    assert candidates[1].drain == 14
+    assert "[drain 14% of Fable only before reset" in explain("claude-fable-5-1", candidates, NOW, selected, reason)
+    # An Opus route ignores the Fable-only cap: the weekly's 43% is what perishes.
+    assert choose([kamp, dentai], "claude-opus-5", "kamp", NOW)[2][1].drain == 43
+    # Too little headroom to absorb a job → no drain, normal ranking picks kamp.
+    dentai.rows[2].used_percent = 95
+    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
+    dentai.rows[2].used_percent = 86
+    dentai.rows[0].used_percent = 95  # a tight session blocks the drain as well
+    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
+    dentai.rows[0].used_percent = 8
+    dentai.rows[1].resets_at = dentai.rows[2].resets_at = NOW + timedelta(hours=9)  # beyond the horizon
+    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
+    # Two draining accounts: the one losing more goes first.
+    other = Account("other", "other", rows=[Row("weekly", 30, NOW + timedelta(hours=1), 604800)])
+    dentai.rows[1].resets_at = dentai.rows[2].resets_at = NOW + timedelta(hours=2)
+    assert choose([dentai, other], "claude-fable-5-1", "dentai", NOW)[0] == "other"
