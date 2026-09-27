@@ -4,18 +4,20 @@
 # ///
 """Automatic account routing for T3 spawns: one policy for Claude and Codex.
 
-Candidates are the enabled T3 instances of the requested model's driver. Each
-one is assessed from the shared usage cache (t3_limits): an exhausted relevant
-window excludes it until that window resets; an unreachable/stale/malformed
-reading makes it "unknown". Among the rest, **drain-first** wins: an account
-whose weekly-class cap resets within DRAIN_HORIZON_SECONDS and still has
-spendable headroom is capacity that is lost at the reset, so it is used before
-any account whose quota persists (largest perishing headroom first). Then the
-usual ranking: worst window's pace room (pace − used), with a small expiry
-bonus for weekly caps, then minimum headroom. Ties prefer the inherited account
-(or its cross-driver sibling), then the instance id. Verified capacity always
-beats unknown. All candidates exhausted → refuse (an explicit --profile is the
-override and never polls). Paid overage is never capacity.
+Three rules (spawn-thread.md §Automatic profile routing):
+
+1. Exclude an account with an exhausted relevant window until it resets; an
+   unreachable/stale/malformed reading makes it "unknown" (ranked after every
+   verified account). A verified account whose 5 h session is ≥ SESSION_TIGHT_PERCENT
+   used ranks after the ones that still have session room.
+2. Score = the tightest relevant weekly-class window's headroom per hour until
+   its reset (`headroom% / max(hours, 1)`; an untouched window counts as
+   100 % over its full length). Highest wins: quota that expires soonest is
+   worth the most, growing continuously as the reset nears — the same thing a
+   human reads off the reset times. A heuristic for urgency, not a throughput
+   estimate: percentages are per account and plan sizes are invisible.
+3. Ties prefer the inherited account (or its cross-driver sibling), then the
+   instance id. Paid overage is never capacity.
 
     profile_routing.py MODEL PREFERRED_INSTANCE SETTINGS_JSON   # prints the chosen id;
                                                                  # the explanation goes to stderr
@@ -30,17 +32,9 @@ from pathlib import Path
 from t3_limits import PLAN_HINT, SETTINGS, WEEKLY_SECONDS, claude_accounts, codex_accounts, plan_label, provider_profiles, relative
 from profile_registry import registry, compatible
 
-TIGHT_PERCENT = 90  # label only: near a cap, still eligible (ranking already prefers room)
-WEEKLY_EXPIRY_SECONDS = 48 * 3600
-MAX_WEEKLY_BONUS = 10.0
-# Drain-first: a weekly-class window (≥ 1 day) resetting within this horizon is
-# use-it-or-lose-it — its headroom is gone at the reset, while every other
-# account's quota is still there afterwards. Overrides pace ranking outright.
-DRAIN_HORIZON_SECONDS = 4 * 3600
-DRAIN_WINDOW_MIN_SECONDS = 24 * 3600
-# Below this headroom (on ANY relevant window) an account cannot absorb a real
-# job before hitting a cap, so it is not worth draining.
-DRAIN_MIN_HEADROOM = 10.0
+SESSION_TIGHT_PERCENT = 90  # a 5 h window this full ranks the account after the others
+WEEKLY_CLASS_SECONDS = 24 * 3600  # windows at least this long carry the urgency score
+MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
 
@@ -73,37 +67,21 @@ class Candidate:
     plan: str = "unknown"
     detail: str = ""       # why unknown/excluded, or "tight" label
     rows: list = field(default_factory=list)
-    room: float = 0.0      # worst-window pace room (ok only)
-    routing_score: float = 0.0  # worst adjusted room (ok only)
-    expiry_bonus: float = 0.0  # largest weekly bonus applied (ok only)
-    headroom: float = 0.0  # min(100 - used) (ok only)
+    score: float = 0.0     # tightest weekly-class window's headroom per hour to reset (ok only)
     bottleneck: str = ""
-    drain: float = 0.0     # perishing headroom lost at an imminent weekly reset (ok only)
-    drain_window: str = ""
-    drain_resets_in: float = 0.0
+    session_tight: bool = False
 
 
-def weekly_expiry_bonus(row, now):
-    """Spend weekly quota near reset, without inventing more than its headroom."""
-    if row.length_seconds != WEEKLY_SECONDS or not row.resets_at:
-        return 0.0
-    remaining = (row.resets_at - now).total_seconds()
-    if not 0 < remaining < WEEKLY_EXPIRY_SECONDS:
-        return 0.0
-    return min(MAX_WEEKLY_BONUS * (1 - remaining / WEEKLY_EXPIRY_SECONDS), 100 - row.used_percent)
-
-
-def perishing(rows, headroom, now):
-    """(lost headroom, window, seconds to reset) for the tightest weekly-class
-    window resetting within the drain horizon, or None. Gated on every relevant
-    window keeping DRAIN_MIN_HEADROOM: a tight 5 h session blocks the drain too."""
-    if headroom < DRAIN_MIN_HEADROOM:
+def hourly_headroom(row, now):
+    """Headroom % per hour until the window resets, or None without a usable reading."""
+    if math.isnan(row.used_percent):
         return None
-    soon = [(100 - r.used_percent, r.window, (r.resets_at - now).total_seconds())
-            for r in rows
-            if r.resets_at and (r.length_seconds or 0) >= DRAIN_WINDOW_MIN_SECONDS
-            and 0 < (r.resets_at - now).total_seconds() <= DRAIN_HORIZON_SECONDS]
-    return min(soon) if soon else None
+    if row.resets_at is None:
+        if row.used_percent == 0 and row.length_seconds:
+            return 100.0 / (row.length_seconds / 3600)  # untouched: its full length is ahead
+        return None
+    hours = (row.resets_at - now).total_seconds() / 3600
+    return (100 - row.used_percent) / max(hours, MIN_HOURS)
 
 
 def assess(account, model, now):
@@ -130,20 +108,15 @@ def assess(account, model, now):
         candidate.status, candidate.detail = "unknown", "no usable windows (missing % or past reset)"
         return candidate
     candidate.headroom = min(100 - r.used_percent for r in rows)
-    paced = [(r.pace(now)[1], r.window, weekly_expiry_bonus(r, now))
-             for r in rows if r.pace(now) is not None]
-    # Bottleneck pace first, then absolute headroom. No-reset zero windows are
-    # unused capacity, but carry no invented pacing signal.
-    if paced:
-        candidate.room = min(room for room, _, _ in paced)
-        candidate.routing_score, candidate.bottleneck = min(
-            (room + bonus, window) for room, window, bonus in paced)
-        candidate.expiry_bonus = max(bonus for _, _, bonus in paced)
-    drain = perishing(rows, candidate.headroom, now)
-    if drain:
-        candidate.drain, candidate.drain_window, candidate.drain_resets_in = drain
-    if any(r.used_percent >= TIGHT_PERCENT for r in rows):
-        candidate.detail = "tight"
+    weekly = [r for r in rows if (r.length_seconds or 0) >= WEEKLY_CLASS_SECONDS] or rows
+    rated = [(hourly_headroom(r, now), r.window) for r in weekly]
+    rated = [(rate, window) for rate, window in rated if rate is not None]
+    if rated:
+        candidate.score, candidate.bottleneck = min(rated)
+    candidate.session_tight = any(
+        (r.length_seconds or 0) < WEEKLY_CLASS_SECONDS and r.used_percent >= SESSION_TIGHT_PERCENT for r in rows)
+    if candidate.session_tight:
+        candidate.detail = "session tight"
     return candidate
 
 
@@ -160,14 +133,13 @@ def choose(accounts, model, preferred, now):
     unknown = [c for c in candidates if c.status == "unknown"]
     tie = lambda c: (c.instance_id != preferred, c.instance_id)
     if ok:
-        best = min(ok, key=lambda c: (-c.drain, -c.routing_score, -c.headroom, *tie(c)))
-        if best.drain:
-            why = (f"drain-first: {best.drain_window} resets {relative(best.drain_resets_in)} "
-                   f"with {best.drain:.0f}% left that is lost at the reset")
-        else:
-            why = f"best bottleneck score ({best.bottleneck} {best.routing_score:+.1f})" if best.bottleneck else "unused capacity"
+        best = min(ok, key=lambda c: (c.session_tight, -c.score, *tie(c)))
+        why = (f"{best.bottleneck} {best.score:.1f} %/h — highest headroom per hour to reset"
+               if best.bottleneck else "unused capacity")
+        if best.session_tight:
+            why += " (every verified account's session is tight)"
         if len(ok) > 1 and best.instance_id == preferred and any(
-                (c.routing_score, c.headroom) == (best.routing_score, best.headroom) for c in ok if c is not best):
+                (c.session_tight, c.score) == (best.session_tight, best.score) for c in ok if c is not best):
             why += ", tie → inherited account"
         return best.instance_id, why, candidates
     if unknown:
@@ -188,10 +160,8 @@ def explain(model, candidates, now, selected=None, reason=""):
                                  (f" (room {r.pace(now)[1]:+.0f})" if r.pace(now) else "")
                                  for r in c.rows)
             if c.bottleneck:
-                windows += f"  [weekly window +{c.expiry_bonus:.1f}; worst-window score {c.routing_score:+.1f}]"
-            if c.drain:
-                windows += f"  [drain {c.drain:.0f}% of {c.drain_window} before reset {relative(c.drain_resets_in)}]"
-            tag = "  [tight]" if c.detail == "tight" else ""
+                windows += f"  [{c.bottleneck} {c.score:.1f} %/h]"
+            tag = "  [session tight]" if c.session_tight else ""
         else:
             windows = f"{c.status}: {c.detail}"
             tag = ""

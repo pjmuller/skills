@@ -43,58 +43,79 @@ def test_unknown_stale_and_expired_windows():
     assert choose([stale, unknown], "claude-fable-5", "a", NOW)[0] == "a"
 
 
-def test_pace_headroom_and_stable_ties():
+def test_score_headroom_per_hour_and_stable_ties():
     a, b = account("a", plan="max_20x"), account("b", plan="pro")
     assert choose([b, a], "claude-fable-5", "a", NOW)[0] == "a"
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "b"  # plan labels do not break a tie
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
     selected, reason, candidates = choose([b, a], "claude-fable-5", "a", NOW)
     explanation = explain("claude-fable-5", candidates, NOW, selected, reason)
-    assert "a  [max_20x]" in explanation and "b  [pro]" in explanation
-    assert "Percentages are per account" in explanation
-    b.rows[1].resets_at = NOW + timedelta(days=6)
+    assert "a  [max_20x]" in explanation and "b  [pro]" in explanation and "%/h" in explanation
+    assert "Percentages are per account" in explanation and "tie → inherited" in reason
+    b.rows[1].resets_at = NOW + timedelta(days=6)  # same headroom, later reset → less urgent
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
 
 
-def test_expiring_weekly_preference_and_scope():
-    expiring = Account("a", "a", rows=[
-        Row("session", 20, NOW + timedelta(hours=2), 18000),
-        Row("Fable only", 70, NOW + timedelta(hours=24), 604800),
-    ])
-    other = Account("b", "b", rows=[
-        Row("session", 20, NOW + timedelta(hours=2), 18000),
-        Row("Fable only", 51, NOW + timedelta(hours=48), 604800),
-    ])
-    selected, reason, candidates = choose([expiring, other], "claude-fable-5", "b", NOW)
-    assert selected == "a" and "score" in reason
-    assert candidates[0].room < candidates[1].room
-    assert candidates[0].routing_score > candidates[1].routing_score
-    assert "weekly window +5.0; worst-window score +20.7" in explain(
-        "claude-fable-5", candidates, NOW, selected, reason)
-    # An unrelated scoped cap cannot supply a bonus to an Opus route.
-    assert choose([expiring, other], "claude-opus-5", "b", NOW)[0] == "b"
+def test_soonest_weekly_reset_wins_and_grows_continuously():
+    """PJ 2026-09-27: the first weekly cap to expire gets priority, more the closer
+    it gets — already from ~36 h out, not only in the last hours."""
+    soon = Account("soon", "soon", rows=[Row("session", 8, NOW + timedelta(hours=4), 18000),
+                                         Row("weekly", 57, NOW + timedelta(hours=36), 604800)])
+    later = Account("later", "later", rows=[Row("session", 1, NOW + timedelta(hours=3), 18000),
+                                            Row("weekly", 32, NOW + timedelta(days=5), 604800)])
+    assert choose([later, soon], "claude-fable-5", "later", NOW)[0] == "soon"  # 43/36 > 68/120
+    later.rows[1].used_percent = 0  # fully fresh, five days ahead: still less urgent
+    assert choose([later, soon], "claude-fable-5", "later", NOW)[0] == "soon"
+    soon.rows[1].resets_at = NOW + timedelta(days=6)  # now the later reset → later wins
+    assert choose([later, soon], "claude-fable-5", "later", NOW)[0] == "later"
+    # Within the last hour the priority stops growing (1 h floor), but stays highest.
+    soon.rows[1].resets_at = NOW + timedelta(minutes=10)
+    _, _, candidates = choose([later, soon], "claude-fable-5", "later", NOW)
+    assert candidates[1].score == 43
 
 
-def test_session_bottleneck_and_expiry_safeguards():
-    expiring = Account("a", "a", rows=[
-        Row("session", 58, NOW + timedelta(hours=2), 18000),
-        Row("weekly", 75, NOW + timedelta(hours=24), 604800),
+def test_session_never_masks_an_expiring_weekly_but_tight_session_demotes():
+    a = Account("a", "a", rows=[Row("session", 89, NOW + timedelta(hours=5), 18000),
+                                Row("weekly", 60, NOW + timedelta(hours=2), 604800)])
+    b = Account("b", "b", rows=[Row("session", 5, NOW + timedelta(hours=5), 18000),
+                                Row("weekly", 60, NOW + timedelta(hours=20), 604800)])
+    selected, reason, candidates = choose([a, b], "gpt-6-sol", "b", NOW)
+    assert selected == "a" and candidates[0].score == 20 and candidates[0].bottleneck == "weekly"
+    a.rows[0].used_percent = 95  # session tight: b goes first even though a expires sooner
+    selected, reason, candidates = choose([a, b], "gpt-6-sol", "b", NOW)
+    assert selected == "b" and "[session tight]" in explain("gpt-6-sol", candidates, NOW, selected, reason)
+    b.rows[0].used_percent = 97  # everyone tight → best score again, with a warning
+    selected, reason, _ = choose([a, b], "gpt-6-sol", "b", NOW)
+    assert selected == "a" and "session is tight" in reason
+    a.rows[1].used_percent = 100
+    assert choose([a, b], "gpt-6-sol", "b", NOW)[2][0].status == "excluded"
+
+
+def test_model_only_cap_is_the_bottleneck_for_its_family_only():
+    dentai = Account("dentai", "dentai", rows=[
+        Row("session", 8, NOW + timedelta(hours=4, minutes=50), 18000),
+        Row("weekly", 57, NOW + timedelta(hours=2, minutes=30), 604800),
+        Row("Fable only", 86, NOW + timedelta(hours=2, minutes=30), 604800),
     ])
-    other = Account("b", "b", rows=[
-        Row("session", 57, NOW + timedelta(hours=2), 18000),
-        Row("weekly", 40, NOW + timedelta(days=3), 604800),
+    kamp = Account("kamp", "kamp", rows=[
+        Row("session", 1, NOW + timedelta(hours=2, minutes=50), 18000),
+        Row("weekly", 32, NOW + timedelta(hours=35), 604800),
+        Row("Fable only", 52, NOW + timedelta(hours=35), 604800),
     ])
-    selected, _, candidates = choose([expiring, other], "gpt-6-sol", "a", NOW)
-    assert selected == "b"  # session +2 stays tighter than expiring weekly +15
-    assert candidates[0].routing_score == candidates[0].room == 2
-    expiring.rows[0].used_percent = 20
-    expiring.rows[1].resets_at = NOW + timedelta(days=3)
-    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].expiry_bonus == 0
-    expiring.rows[1].resets_at = NOW + timedelta(hours=1)
-    expiring.rows[1].used_percent = 99
-    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].expiry_bonus == 1
-    expiring.rows[1].used_percent = 100
-    assert choose([expiring, other], "gpt-6-sol", "a", NOW)[2][0].status == "excluded"
+    selected, reason, candidates = choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)
+    assert selected == "dentai" and candidates[1].bottleneck == "Fable only"
+    assert round(candidates[1].score, 1) == 5.6 and round(candidates[0].score, 1) == 1.4
+    assert choose([kamp, dentai], "claude-opus-5", "kamp", NOW)[2][1].bottleneck == "weekly"
+
+
+def test_untouched_weekly_counts_as_its_full_length():
+    fresh = Account("fresh", "fresh", rows=[Row("session", 0, None, 18000), Row("weekly", 0, None, 604800)])
+    used = Account("used", "used", rows=[Row("weekly", 40, NOW + timedelta(days=6), 604800)])
+    _, _, candidates = choose([fresh, used], "claude-fable-5", "fresh", NOW)
+    assert round(candidates[0].score, 3) == round(100 / 168, 3)  # 0.595 %/h
+    assert choose([fresh, used], "claude-fable-5", "fresh", NOW)[0] == "fresh"  # 0.595 > 60/144
+    used.rows[0].resets_at = NOW + timedelta(days=2)
+    assert choose([fresh, used], "claude-fable-5", "fresh", NOW)[0] == "used"
 
 
 def test_single_enabled_and_builtin_fallback(tmp_path):
@@ -127,7 +148,7 @@ def test_codex_windows_and_nonstandard_caps():
     selected, reason, _ = choose([a, b], "gpt-6-astra", "codex_b", NOW)
     assert selected == "codex_a" and "weekly" in reason  # the odd-length cap still excludes b
     b.rows[1].used_percent = 0
-    b.rows[0].resets_at = NOW + timedelta(days=1)  # 21% used with 86% of the week gone: room +65
+    b.rows[0].resets_at = NOW + timedelta(days=1)  # 79 % left with one day to go: 3.3 %/h beats 0.6
     assert choose([a, b], "gpt-6-astra", "codex_b", NOW)[0] == "codex_b"
     nan = Account("Codex C", "codex_c", rows=[Row("weekly", float("nan"), NOW + timedelta(days=1), 604800)])
     assert choose([nan], "gpt-6-astra", "codex_c", NOW)[1].startswith("usage unknown")
@@ -164,36 +185,3 @@ def test_scoped_display_names_and_unknown_scopes():
     assert relevant("scoped only", "claude-fable-5-1")
 
 
-def test_drain_first_uses_capacity_that_expires_within_hours():
-    """PJ 2026-09-27: an account whose weekly cap resets in 2h30 must be drained
-    before a fresher account, even when a just-started session window reads as
-    'ahead of pace' and the other account has more pace room."""
-    dentai = Account("dentai", "dentai", rows=[
-        Row("session", 8, NOW + timedelta(hours=4, minutes=50), 18000),      # pace 3% → room −5 (noise)
-        Row("weekly", 57, NOW + timedelta(hours=2, minutes=30), 604800),
-        Row("Fable only", 86, NOW + timedelta(hours=2, minutes=30), 604800),
-    ])
-    kamp = Account("kamp", "kamp", rows=[
-        Row("session", 1, NOW + timedelta(hours=2, minutes=50), 18000),
-        Row("weekly", 32, NOW + timedelta(hours=35), 604800),
-        Row("Fable only", 52, NOW + timedelta(hours=35), 604800),
-    ])
-    selected, reason, candidates = choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)
-    assert selected == "dentai" and reason.startswith("drain-first: Fable only resets in 2h")
-    assert candidates[1].drain == 14
-    assert "[drain 14% of Fable only before reset" in explain("claude-fable-5-1", candidates, NOW, selected, reason)
-    # An Opus route ignores the Fable-only cap: the weekly's 43% is what perishes.
-    assert choose([kamp, dentai], "claude-opus-5", "kamp", NOW)[2][1].drain == 43
-    # Too little headroom to absorb a job → no drain, normal ranking picks kamp.
-    dentai.rows[2].used_percent = 95
-    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
-    dentai.rows[2].used_percent = 86
-    dentai.rows[0].used_percent = 95  # a tight session blocks the drain as well
-    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
-    dentai.rows[0].used_percent = 8
-    dentai.rows[1].resets_at = dentai.rows[2].resets_at = NOW + timedelta(hours=9)  # beyond the horizon
-    assert choose([kamp, dentai], "claude-fable-5-1", "kamp", NOW)[0] == "kamp"
-    # Two draining accounts: the one losing more goes first.
-    other = Account("other", "other", rows=[Row("weekly", 30, NOW + timedelta(hours=1), 604800)])
-    dentai.rows[1].resets_at = dentai.rows[2].resets_at = NOW + timedelta(hours=2)
-    assert choose([dentai, other], "claude-fable-5-1", "dentai", NOW)[0] == "other"

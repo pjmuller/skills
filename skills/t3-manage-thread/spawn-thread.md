@@ -81,16 +81,14 @@ also the override when every account is exhausted.
   `<Model> only` cap for the requested family.
 - **Unknown** (unreachable, stale, missing numbers): ranked after every verified
   account, picked only when nothing is verified.
-- **Drain-first** (PJ, 2026-09-27): an account whose weekly-class cap resets
-  within 4 h and still has ≥ 10 % headroom on every relevant window is picked
-  before any other — that quota is gone at the reset, the others' is not.
-  Largest perishing headroom first. If the job outlives the window, the thread
-  simply pauses until the reset (`t3-usage-windows`), on an account that is
-  then fully fresh.
-- **Ranking** otherwise: worst window's pace room first, plus a small bonus for
-  weekly windows about to reset within 48 h, then minimum headroom. `[tight]`
-  (≥ 90 % used) is a label, not a demotion: a weekly at 92 % resetting in two
-  hours beats one burning far ahead of pace.
+- **Score** (PJ, 2026-09-27): the tightest relevant weekly-class window's
+  **headroom per hour until its reset** (`headroom% / max(hours, 1)`; an
+  untouched window counts as 100 % over its full length). Highest wins. This is
+  what a human reads off the reset times: the first weekly cap to expire gets
+  priority, growing continuously as the reset nears (36 h out already counts,
+  the last hour no longer adds). Quota left at a reset is lost; the other
+  account's is not. 5 h session windows never enter the score — a session
+  ≥ 90 % used only ranks the account after the ones with session room.
 - **Ties** keep the inherited account (on a driver switch: its sibling, same
   display name minus the driver word), then instance id.
 - Paid overage is never capacity. Every automatic route prints its reasoning on
