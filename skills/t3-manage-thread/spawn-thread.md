@@ -21,11 +21,19 @@ guarantees the instruction, not compliance: `t3-fleet list --stalled`
 ([t3-maintenance](../t3-maintenance/SKILL.md)) detects workers that never pinged.
 Nothing settles the worker: after its report is verified, `t3-settle-thread --wait ID`.
 
-Return path is decided per spawn from what the user asked: 🏓 when the parent
-needs the result back (review, delegated implementation, anything it verifies);
-📤 standalone when the user said "standalone / separate thread / hand off"
-(visible, nobody pings back, never hidden or settled by helpers). Unclear →
-**🏓**; the user can promote it. A thread's own mode never propagates to what it
+Return path is decided per spawn from what the user asked: 🏓 when the result
+feeds back into **this thread's deliverable** (review, delegated sub-step,
+anything this thread still has to verify before it can finish); 📤 standalone
+(visible, nobody pings back, never hidden or settled by helpers) when:
+- the user said "standalone / separate thread / separate process / own job /
+  hand off", or
+- the task is a **new, orthogonal scope** the user will follow on its own (new
+  tooling, a new feature), even if it also happens to re-check something this
+  thread built. Test: would this thread's answer change when the result lands?
+  No → 📤.
+Unclear *sub-step* of the current task → **🏓**; the user can promote it.
+Misfired? Convert in place, don't respawn: `t3-hide-thread --unhide`, rename to
+`📤 …`, ping the thread that it is standalone and must ignore its ping-back footer. A thread's own mode never propagates to what it
 spawns. Hidden ≠ stopped; settle and archive both stop a session, so only snooze
 hides a live worker.
 

@@ -20,7 +20,7 @@ t3-settle-thread --self                                       # "…then settle 
 t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-profiles · t3-delete-thread --yes <id> · t3-mail-link
 ```
 
-- 🏓 unless the user said standalone; hidden ≠ stopped; settle a 🏓 worker only
+- 🏓 only when the result feeds back into this thread's deliverable; a "separate process/job" or a new orthogonal scope → 📤 ([return path](spawn-thread.md#-round-trip-workers)); hidden ≠ stopped; settle a 🏓 worker only
   after its ping-back is verified ([spawn-thread.md](spawn-thread.md)).
 - A 🏓 title hides the thread while it runs. When the user asks for a "separate / own /
   standalone thread" (they want to watch or talk to it), spawn it visible: `--no-hide` keeps the
