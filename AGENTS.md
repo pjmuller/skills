@@ -33,4 +33,4 @@ Linux/WSL thread helpers are supported by code paths but not live-tested here.
 | **Profile** | A provider instance/account used to run a thread; distinct from the model and thinking effort. [Routing](skills/t3-manage-thread/spawn-thread.md#automatic-profile-routing). |
 | **Round-trip worker / ping-back** | A separate T3 thread marked 🏓 / its report to the orchestrator. Not an in-session sub-agent. [Worker contract](skills/t3-manage-thread/SKILL.md). |
 | **Hide / settle** | Hide removes a live thread from the sidebar; settle stops its session and sub-agents. Neither means deleting its history. [Hide](skills/t3-manage-thread/hide-thread.md), [settle](skills/t3-manage-thread/settle-thread.md). |
-| **Scheduled job** | A wall-clock launcher that spawns a T3 thread; distinct from that thread's work or an in-session timer. [Scheduling](skills/t3-schedule/SKILL.md). |
+| **Scheduled job** | A wall-clock launcher that spawns a T3 thread (or wakes an existing one: continuation); distinct from that thread's work or an in-session timer. [Scheduling](skills/t3-schedule/SKILL.md). |

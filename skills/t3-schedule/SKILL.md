@@ -1,6 +1,6 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent. Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "list/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
+description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
 ---
 
 # t3-schedule
@@ -22,6 +22,24 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
 - A specific effort needs `--profile <account> --model sol --thinking high`: a root thread has no
   parent to inherit from.
 - Never edit a runner by hand: `add --force` (one job) or `refresh` (all) regenerates it.
+
+## Continuation (`--resume-thread ID`)
+
+Wakes an existing thread with the prompt as a user turn (`t3-ping-thread`, framed "Scheduled
+follow-up (<date>), as agreed earlier in this thread: …") instead of spawning; `--project`
+defaults to that thread's. Choose it when the follow-up needs this thread's context
+(investigation state, decisions, evidence); standalone when the prompt is self-contained or
+recurring. Usually `--once`; recurring works too (pings the same thread daily).
+
+- **Resumable** = `t3-read-thread` finds it, not deleted/archived, its provider instance is in
+  `t3-list-profiles`, and the ping lands (settled is fine: the turn wakes it; busy is fine: T3
+  queues, the ping helper retries a refused dispatch). Checked at `add` and again at fire time. A failed ping first re-reads the thread for its dated marker turn (lost ack ≠ not delivered), so a job never both resumes and spawns.
+- **Otherwise fallback**: a normal spawn (`--model/--profile/--thinking/--title/--project`
+  shape only this thread) whose prompt = the scheduled prompt + a bounded context pack (original
+  brief, latest messages, original id). `--hide` applies to both paths; `--settle-when-done` is
+  refused (the thread owns its lifecycle, say it in the prompt).
+- Log/notification: `resumed <title> (<id>)` vs `fallback (<reason>): spawned …`. `.last` and
+  catch-up behave as for spawns.
 
 Pipeline: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
 `~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt in `<name>.prompt.md`) → waits for T3 Code

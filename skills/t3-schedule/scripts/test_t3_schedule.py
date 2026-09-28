@@ -202,6 +202,119 @@ def test_hide_and_no_notify(tmp_path, monkeypatch):
     base = {"name": "job", "project": "/r", "profile": None, "model": "haiku", "thinking": None, "title": "t", "wait_max": 1}
     body = mod.runner_script({**base, "hide": True, "notify": False}, p)
     assert "--no-open --hide" in body and "--settle-when-done" not in body
-    assert body.count("display notification") == 2 and '\n  : osascript' in body  # success notification disabled, fail() kept
+    assert body.count("display notification") == 2 and '\n    : osascript' in body  # success notification disabled, fail() kept
     default = mod.runner_script(base, p)
     assert "--hide" not in default and ": osascript" not in default
+
+
+# --- continuation (--resume-thread) -------------------------------------------------
+TID = "11111111-2222-3333-4444-555555555555"
+
+
+def thread_data(**thread):
+    msgs = [{"role": "user", "created_at": "2026-09-27T10:00:00", "text": "BRIEF investigate the outage"}]
+    msgs += [{"role": r, "created_at": f"2026-09-27T11:{i:02d}:00", "text": f"msg{i} " + "x" * 50}
+             for i, r in enumerate(["assistant", "user"] * 5)]
+    return {"thread": {"thread_id": TID, "title": "Outage", "workspace_root": "/repo", "project_title": "repo",
+                       "archived_at": None, "deleted_at": None,
+                       "model_selection": {"instanceId": "claudeAgent", "model": "m"}, **thread},
+            "messages": msgs}
+
+
+def resume_job(tmp_path, monkeypatch, data, instances=frozenset({"claudeAgent"}), ping_rc=0, **spec):
+    import json
+    import subprocess
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("fu")
+    p["spec"].parent.mkdir(parents=True)
+    p["spec"].write_text(json.dumps({"name": "fu", "resume_thread": TID, **spec}))
+    p["prompt"].write_text("Check the deploy.\n")
+    monkeypatch.setattr(mod, "read_thread", lambda tid: (data, "" if data else f"No T3 thread matches {tid}"))
+    monkeypatch.setattr(mod, "registered_instances", lambda: set(instances))
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, ping_rc, "Pinged\n" if ping_rc == 0 else "", "")
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    import argparse
+    return mod.cmd_resume(argparse.Namespace(name="fu")), calls, p
+
+
+def test_resume_healthy_pings(tmp_path, monkeypatch, capsys):
+    rc, calls, p = resume_job(tmp_path, monkeypatch, thread_data(settled_at="2026-09-27"), hide=True)
+    assert rc == 0 and not p["fallback"].exists()
+    argv = calls[0]
+    assert argv[:4] == ["t3-ping-thread", "--thread", TID, "--allow-cross-project"] and "--hide" in argv
+    assert argv[-1].startswith("Scheduled follow-up (") and "as agreed earlier in this thread:\n\nCheck the deploy." in argv[-1]
+    assert f"resumed Outage ({TID})" in capsys.readouterr().out
+
+
+def test_resume_unhealthy_falls_back_with_context(tmp_path, monkeypatch, capsys):
+    cases = [
+        (None, {"claudeAgent"}, 0, "thread not found"),
+        (thread_data(deleted_at="2026-09-28"), {"claudeAgent"}, 0, "thread deleted"),
+        (thread_data(), {"codex"}, 0, "profile claudeAgent no longer registered"),
+        (thread_data(), {"claudeAgent"}, 1, "ping failed (exit 1)"),
+    ]
+    for data, instances, ping_rc, reason in cases:
+        rc, calls, p = resume_job(tmp_path, monkeypatch, data, instances, ping_rc)
+        assert rc == mod.FALLBACK_EXIT and f"fallback: {reason}" in capsys.readouterr().out
+        assert bool(calls) == (ping_rc != 0)  # unhealthy → no ping attempted
+        pack = p["fallback"].read_text()
+        assert pack.startswith("Check the deploy.\n\n---\nContext:") and TID in pack and reason in pack
+        if data:
+            assert "## Original brief\nBRIEF investigate" in pack and "msg9" in pack and "msg3" not in pack
+        import shutil
+        shutil.rmtree(tmp_path / ".t3")
+
+
+def test_resume_failed_ping_that_landed_does_not_double_fire(tmp_path, monkeypatch, capsys):
+    from datetime import date
+    data = thread_data()
+    marker = mod.resume_marker("fu", date.today().isoformat())
+    data["messages"].append({"role": "user", "created_at": "2026-09-28T10:00:00", "text": marker + ", as agreed…"})
+    rc, _, p = resume_job(tmp_path, monkeypatch, data, ping_rc=1)  # ack lost, turn delivered
+    assert rc == 0 and not p["fallback"].exists() and "resumed Outage" in capsys.readouterr().out
+
+
+def test_resume_accepts_legacy_provider_selection():
+    data = thread_data(model_selection={"provider": "claudeAgent", "model": "m"})
+    assert mod.resume_blocker(data, "", {"claudeAgent"}) is None
+
+
+def test_context_pack_is_bounded():
+    data = thread_data()
+    for m in data["messages"]:
+        m["text"] = "y" * 50000
+    pack = mod.context_pack(TID, data, "thread deleted")
+    assert len(pack) <= mod.PACK_MAX_CHARS + 500 and "## Original brief" in pack and "more chars]" in pack
+
+
+def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
+    import argparse
+    import pytest
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("fu")
+    base = {"name": "fu", "project": "/r", "profile": None, "model": None, "thinking": None, "title": "t", "wait_max": 1}
+    plain = mod.runner_script(base, p)
+    assert "t3-schedule resume" not in plain and '-- "$(cat "$prompt_file")"' in plain
+    body = mod.runner_script({**base, "resume_thread": TID}, p)
+    assert body.index("t3-schedule resume fu") < body.index("for candidate in")  # resume before any spawn
+    assert f"(( rc == {mod.FALLBACK_EXIT} )) || fail" in body and f"prompt_file={p['fallback']}" in body
+    assert body.count(str(p["last"])) == 3  # daily guard + resume success + spawn success
+
+    monkeypatch.setattr(mod, "registered_instances", lambda: {"claudeAgent"})
+    monkeypatch.setattr(mod, "read_thread", lambda tid: (thread_data(workspace_root=str(tmp_path)), ""))
+    add = lambda **kw: mod.cmd_add(argparse.Namespace(**{
+        "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
+        "profile": None, "model": None, "thinking": None, "settle_when_done": False, "hide": False,
+        "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
+        "force": False, "dry_run": True, "resume_thread": TID, **kw}))
+    assert add() == 0 and "t3-schedule resume fu" in capsys.readouterr().out  # project from the thread
+    with pytest.raises(SystemExit, match="settle-when-done"):
+        add(settle_when_done=True)
+    with pytest.raises(SystemExit, match="--project is required"):
+        add(resume_thread=None)
+    monkeypatch.setattr(mod, "read_thread", lambda tid: (None, "No T3 thread matches x"))
+    with pytest.raises(SystemExit, match="thread not found"):
+        add()

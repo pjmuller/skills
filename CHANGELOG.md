@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-schedule: `add --resume-thread ID` schedules a continuation: at fire time the job pings that thread with the prompt; if it is deleted/archived/unreadable, its profile is gone or the ping fails, it spawns a fallback thread with the prompt + a bounded context pack. `t3-read-thread` exposes `deleted_at`.
 - t3-manage-thread: a requested "separate/standalone thread" is spawned visible (`--no-hide` or 📤); 🏓 alone hides it while running.
 - t3-manage-thread: `t3-mail-link` links a T3 thread to a Gmail thread (URL, hex id or `--search`; `FMfcg` web ids via the Chrome tab title). A weekday LaunchAgent poller pings the thread on new inbound mail (own/sent mail marks seen, no wake); the woken agent drafts, asks or settles per [mail-link.md](skills/t3-manage-thread/mail-link.md). Account via a google-workspace-core wrapper config.
 

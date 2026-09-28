@@ -6,8 +6,9 @@
 """Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS LaunchAgents.
 
 Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
-T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`. Nothing here
-touches T3's store; the only T3 contact is the spawn helper.
+T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`, or, for a continuation job
+(`--resume-thread`), wakes that thread via `t3-ping-thread` and only spawns when it cannot.
+Nothing here touches T3's store; the only T3 contact is the t3-manage-thread helpers.
 """
 
 from __future__ import annotations
@@ -39,6 +40,11 @@ DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_NAMES = {v: k for k, v in DAYS.items()}
 WEEKDAYS = [1, 2, 3, 4, 5]
 DEFAULT_MODELS = "opus,sol"            # no --model: Claude when installed with capacity, else Codex
+FALLBACK_EXIT = 3                      # `t3-schedule resume` → runner: thread not resumable, spawn instead
+PACK_BRIEF_CHARS = 3000                # context pack for a fallback spawn: first user message …
+PACK_LAST_MSGS = 6                     # … plus the latest messages,
+PACK_MSG_CHARS = 2000                  # each capped,
+PACK_MAX_CHARS = 12000                 # whole pack capped (oldest of the latest dropped first)
 
 
 # --- paths --------------------------------------------------------------------
@@ -59,6 +65,7 @@ def paths(name: str) -> dict[str, Path]:
         "sh": base / f"{name}.sh",
         "last": base / f"{name}.last",
         "failed": base / f"{name}.failed",
+        "fallback": base / f"{name}.fallback.md",
         "log": home() / ".t3/userdata/logs" / f"t3-schedule.{name}.log",
     }
 
@@ -156,6 +163,27 @@ def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Pa
     )
 
 
+def resume_block(spec: dict, p: dict[str, Path]) -> str:
+    """Continuation job: `t3-schedule resume` pings the thread (exit 0 → done) or writes a
+    fallback prompt with a context pack (exit FALLBACK_EXIT → fall through to the spawn)."""
+    if not spec.get("resume_thread"):
+        return ""
+    name = spec["name"]
+    return f"""  resumed=$(t3-schedule resume {shlex.quote(name)} 2>&1)
+  rc=$?
+  echo "$resumed" | sed 's/^/   /'
+  if (( rc == 0 )); then
+    echo "$today" > {shlex.quote(str(p["last"]))}
+    rm -f {shlex.quote(str(p["failed"]))}
+    notify "{name}: $(echo "$resumed" | grep '^resumed ' | tail -1)"
+    exit 0
+  fi
+  (( rc == {FALLBACK_EXIT} )) || fail "{name}: resume FAILED (exit $rc) - see log"
+  prompt_file={shlex.quote(str(p["fallback"]))}
+  outcome="fallback ($(echo "$resumed" | sed -n 's/^fallback: //p' | tail -1)): spawned"
+"""
+
+
 def runner_script(spec: dict, p: dict[str, Path]) -> str:
     name = spec["name"]
     spawn = ["t3-spawn-thread", "--project", spec["project"], "--no-open"]
@@ -213,6 +241,10 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     fi
     exit 1
   }}
+  notify() {{
+    echo "-- $1"
+    {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n    : '}osascript -e "display notification \\"$1\\" with title \\"t3-schedule\\"" || true
+  }}
   waited=0
   until t3_up; do
     if (( waited >= {spec["wait_max"]} )); then
@@ -228,7 +260,9 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   profile_flag=()
   [[ -n "$profile" ]] && profile_flag=(--profile "$profile")
   title="${{title//\\{{date\\}}/$(date +%F)}}"
-  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
+  prompt_file={shlex.quote(str(p["prompt"]))}
+  outcome=spawned
+{resume_block(spec, p)}  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
   # own dry-run decides (same routing as the real spawn); its decision block lands here.
   chosen=
   for candidate in {candidates}; do
@@ -240,16 +274,14 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     [[ -n "$chosen" ]] && break
   done
   [[ -n "$chosen" ]] || fail "{name}: no model candidate available ({spec.get("model") or DEFAULT_MODELS})"
-  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat {shlex.quote(str(p["prompt"]))})" 2>&1)
+  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
   rc=$?
   echo "$out"
   (( rc == 0 )) || fail "{name}: spawn FAILED (exit $rc) - see log"
   echo "$today" > {shlex.quote(str(p["last"]))}
   rm -f {shlex.quote(str(p["failed"]))}
   thread=$(echo "$out" | sed -n 's/^Thread ID: *//p' | head -1)
-  msg="{name}: spawned $title ${{thread:+($thread)}}"
-  echo "-- $msg"
-  {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n  : '}osascript -e "display notification \\"$msg\\" with title \\"t3-schedule\\"" || true
+  notify "{name}: $outcome $title ${{thread:+($thread)}}"
 }} >> {shlex.quote(str(p["log"]))} 2>&1
 """
 
@@ -296,6 +328,112 @@ def read_prompt(args: argparse.Namespace) -> str:
     raise SystemExit("prompt required: `-- \"<prompt>\"`, --prompt-file, or stdin")
 
 
+# --- continuation (--resume-thread) ------------------------------------------------
+def read_thread(thread_id: str) -> tuple[dict | None, str]:
+    """`t3-read-thread --json`: thread row (archived/deleted, model_selection, project) + messages."""
+    result = subprocess.run(["t3-read-thread", thread_id, "--json"], capture_output=True, text=True)
+    if result.returncode:
+        return None, (result.stderr or result.stdout).strip() or f"t3-read-thread exit {result.returncode}"
+    return json.loads(result.stdout), ""
+
+
+def registered_instances() -> set[str] | None:
+    """Enabled provider instance ids; None when unknown (then the ping decides)."""
+    result = subprocess.run(["t3-list-profiles", "--json"], capture_output=True, text=True)
+    if result.returncode:
+        return None
+    return {row["instance_id"] for row in json.loads(result.stdout)}
+
+
+def resume_blocker(data: dict | None, err: str, instances: set[str] | None) -> str | None:
+    """Why the thread cannot take a new turn, or None. A settled thread is fine: a turn wakes it.
+    Every thread is bound to one provider instance; a removed/disabled one cannot run it."""
+    if data is None:
+        return "thread not found" if "No T3 thread matches" in err else f"thread not readable ({err[:200]})"
+    thread = data["thread"]
+    if thread.get("deleted_at"):
+        return "thread deleted"
+    if thread.get("archived_at"):
+        return "thread archived"
+    selection = thread.get("model_selection") or {}
+    instance = selection.get("instanceId") or selection.get("provider")  # legacy rows: provider only, as ping/spawn accept
+    if not instance:
+        return "thread has no model selection"
+    if instances is not None and instance not in instances:
+        return f"profile {instance} no longer registered"
+    return None
+
+
+def resume_marker(name: str, day: str) -> str:
+    return f"Scheduled follow-up ({day}, t3-schedule job {name})"
+
+
+def resume_message(prompt: str, name: str, day: str) -> str:
+    return f"{resume_marker(name, day)}, as agreed earlier in this thread:\n\n{prompt}"
+
+
+def turn_landed(thread_id: str, marker: str) -> bool:
+    """A failed ping may still have delivered (lost/late HTTP ack): look for this job's turn before a fallback."""
+    data, _ = read_thread(thread_id)
+    return any(m["role"] == "user" and marker in (m.get("text") or "") for m in (data or {}).get("messages") or [])
+
+
+def clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit] + f"\n…[{len(text) - limit} more chars]"
+
+
+def context_pack(thread_id: str, data: dict | None, reason: str) -> str:
+    """Bounded handoff from the original thread: its brief + latest messages + how to read more."""
+    head = (f"---\nContext: scheduled as a follow-up of T3 thread {thread_id}, which could not be resumed "
+            f"({reason}). ")
+    if data is None:
+        return head + "Its transcript is not readable; work from the prompt above.\n"
+    thread, messages = data["thread"], data.get("messages") or []
+    head += (f"Handoff from it ('{thread.get('title') or 'untitled'}', project "
+             f"{thread.get('project_title') or thread.get('workspace_root')}); read more with "
+             f"t3-read-thread {thread_id} --outline / --msg N.\n")
+    brief = next((m for m in messages if m["role"] == "user"), None)
+    parts = [f"\n## Original brief\n{clip(brief['text'], PACK_BRIEF_CHARS)}\n"] if brief else []
+    latest = [m for m in messages[-PACK_LAST_MSGS:] if m is not brief]
+    blocks = [f"### {m['role']} · {m['created_at'][:16]}\n{clip(m['text'], PACK_MSG_CHARS)}\n" for m in latest]
+    while blocks and len(head) + sum(map(len, parts + blocks)) > PACK_MAX_CHARS:
+        blocks.pop(0)
+    if blocks:
+        parts.append(f"\n## Latest {len(blocks)} of {len(messages)} messages\n" + "\n".join(blocks))
+    return head + "".join(parts)
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """Runner step of a continuation job. Exit 0 = pinged; FALLBACK_EXIT = fallback prompt written."""
+    p = require_spec(args.name)
+    spec = json.loads(p["spec"].read_text())
+    thread_id = spec["resume_thread"]
+    prompt = p["prompt"].read_text().strip()
+    data, err = read_thread(thread_id)
+    reason = resume_blocker(data, err, registered_instances())
+    if not reason:
+        # Busy thread: T3 queues the turn; the ping helper retries a refused dispatch itself.
+        day = date.today().isoformat()
+        ping = subprocess.run(
+            ["t3-ping-thread", "--thread", thread_id, "--allow-cross-project", *(["--hide"] if spec.get("hide") else []),
+             "--", resume_message(prompt, spec["name"], day)],
+            capture_output=True, text=True, cwd=home(),
+        )
+        print((ping.stdout + ping.stderr).strip())
+        if ping.returncode == 0 or turn_landed(thread_id, resume_marker(spec["name"], day)):
+            print(f"resumed {data['thread'].get('title') or 'untitled'} ({thread_id})")
+            return 0
+        reason = f"ping failed (exit {ping.returncode})"
+    p["fallback"].write_text(f"{prompt}\n\n{context_pack(thread_id, data, reason)}")
+    print(f"fallback: {reason}")
+    return FALLBACK_EXIT
+
+
+def describe_resume(spec: dict) -> str:
+    return f" · resumes {spec['resume_thread']}" if spec.get("resume_thread") else ""
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     name = valid_name(args.name)
     p = paths(name)
@@ -306,6 +444,18 @@ def cmd_add(args: argparse.Namespace) -> int:
     days = None if once else parse_days(args)
     if args.settle_when_done and (args.title or "").startswith("🏓"):
         raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
+    resume = None
+    if args.resume_thread:
+        if args.settle_when_done:
+            raise SystemExit("--resume-thread keeps the thread's own lifecycle; drop --settle-when-done (say it in the prompt)")
+        data, err = read_thread(args.resume_thread)
+        blocker = resume_blocker(data, err, registered_instances())
+        if blocker:
+            raise SystemExit(f"--resume-thread {args.resume_thread}: {blocker}")
+        resume = data["thread"]
+        args.project = args.project or resume.get("workspace_root")
+    if not args.project:
+        raise SystemExit("--project is required (optional with --resume-thread: defaults to the thread's project)")
     project = Path(args.project).expanduser().resolve()
     if not project.is_dir():
         raise SystemExit(f"--project is not a directory: {project}")
@@ -326,6 +476,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         "days": days,
         "once": once,
         "wait_max": args.wait_max,
+        "resume_thread": resume["thread_id"] if resume else None,
+        "resume_title": resume.get("title") if resume else None,
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
     body = runner_script(spec, p)
@@ -347,6 +499,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     bootstrap(p["plist"])
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
+    if resume:
+        print(f"resumes  {resume['thread_id']} ({resume.get('title') or 'untitled'}); if not resumable, a fallback thread:")
     print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={describe_models(spec)}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     return 0
@@ -387,7 +541,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             name = spec["name"]
             prompt = paths(name)["prompt"].read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
-                f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name} "
+                f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name}{describe_resume(spec)} "
                 f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
                 f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
@@ -400,6 +554,8 @@ def cmd_list(args: argparse.Namespace) -> int:
             f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
             f"{spec.get('profile') or '-'}/{describe_models(spec)}  {spec['project']}"
         )
+        if spec.get("resume_thread"):
+            print(f"{'':<28}{describe_resume(spec)}")
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
     return 0
 
@@ -414,7 +570,7 @@ def require_spec(name: str) -> dict[str, Path]:
 def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     bootout(args.name)
-    for key in ("plist", "spec", "prompt", "sh", "last"):
+    for key in ("plist", "spec", "prompt", "sh", "last", "fallback"):
         p[key].unlink(missing_ok=True)
     print(f"removed  {label_for(args.name)} (log kept: {p['log']})")
     return 0
@@ -423,16 +579,22 @@ def cmd_remove(args: argparse.Namespace) -> int:
 def cmd_run_now(args: argparse.Namespace) -> int:
     """Default: launchctl kickstart (same env as the scheduled run — no parent thread
     inherited from the caller's process ancestry), then tail the log until the runner
-    reports. --foreground runs the script directly."""
+    reports. Once-jobs need T3_SCHEDULE_FORCE, which kickstart cannot pass: they run
+    orphaned (reparented to launchd), so t3-spawn-thread's ancestry walk finds no parent
+    agent either. --foreground runs the script directly (inherits the caller's parent)."""
     p = require_spec(args.name)
     spec = json.loads(p["spec"].read_text())
     if spec.get("retired"):
         raise SystemExit(f"{args.name} is retired ({spec['retired']}); re-arm with add --force")
     before = p["log"].stat().st_size if p["log"].exists() else 0
-    if args.foreground or spec.get("once"):
-        # kickstart cannot pass env, and a once-job's runner skips any day but its own unless forced
-        env = {**os.environ, "T3_SCHEDULE_FORCE": "1"} if spec.get("once") else None
+    env = {**os.environ, "T3_SCHEDULE_FORCE": "1"} if spec.get("once") else None
+    finished = False
+    if args.foreground:
         status = subprocess.run(["/bin/zsh", "-lc", str(p["sh"])], env=env).returncode
+        finished = True
+    elif spec.get("once"):
+        subprocess.run(["/bin/zsh", "-c", f"{shlex.quote(str(p['sh']))} >/dev/null 2>&1 &"], env=env)
+        status = 0
     else:
         result = launchctl("kickstart", f"{domain()}/{label_for(args.name)}")
         if result.returncode != 0:
@@ -442,7 +604,7 @@ def cmd_run_now(args: argparse.Namespace) -> int:
     deadline = time.time() + args.timeout
     printed = before
     done = False
-    while not done and time.time() < deadline:
+    while not done and (time.time() < deadline or finished):
         if p["log"].exists() and p["log"].stat().st_size > printed:
             with p["log"].open() as fh:
                 fh.seek(printed)
@@ -450,11 +612,12 @@ def cmd_run_now(args: argparse.Namespace) -> int:
             printed += len(chunk.encode())
             print(chunk, end="")
             done = any(
-                l.startswith("-- ") and any(k in l for k in ("spawned", "FAILED", "NOT spawned", "skipping"))
+                l.startswith("-- ") and any(k in l for k in ("spawned", "resumed", "FAILED", "no model candidate", "skipping"))
                 for l in chunk.splitlines()
             )
-            if "FAILED" in chunk or "NOT spawned" in chunk:
+            if "FAILED" in chunk or "NOT spawned" in chunk or "no model candidate" in chunk:
                 status = 1
+        done = done or finished
         if not done:
             time.sleep(1)
     if not done:
@@ -660,7 +823,10 @@ def build_parser() -> argparse.ArgumentParser:
     when.add_argument("--weekdays", action="store_true", help="Mon-Fri")
     when.add_argument("--days", help="comma list mon,tue,... (default: every day)")
     when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
-    add.add_argument("--project", required=True, help="repo path the thread runs in")
+    add.add_argument("--project", help="repo path the thread runs in (with --resume-thread: the fallback's; default = that thread's project)")
+    add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: wake this thread with the prompt instead of spawning; "
+                     "--project/--profile/--model/--thinking/--title then shape only the fallback thread spawned when it "
+                     "cannot be resumed; --hide applies to both")
     add.add_argument("--profile", help="T3 provider instance; omit → t3-spawn-thread routes by capacity at fire time")
     add.add_argument("--model", help=f"ordered comma list, first installed with capacity wins: opus,sol · fable · MODEL (default {DEFAULT_MODELS})")
     add.add_argument("--thinking", help="low|medium|high (omit → model's house default)")
@@ -702,6 +868,11 @@ def build_parser() -> argparse.ArgumentParser:
     at.add_argument("name")
     at.add_argument("at")
     at.set_defaults(func=cmd_set_at)
+
+    resume = sub.add_parser("resume", help="(runner-internal) wake a --resume-thread job's thread, or write its fallback prompt "
+                            f"and exit {FALLBACK_EXIT}")
+    resume.add_argument("name")
+    resume.set_defaults(func=cmd_resume)
 
     show = sub.add_parser("show", help="spec + prompt")
     show.add_argument("name")

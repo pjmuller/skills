@@ -97,7 +97,7 @@ def resolve_thread(conn: sqlite3.Connection, thread_id: str) -> sqlite3.Row:
     if len(thread_id) < 8:
         sys.exit("THREAD_ID prefix must be at least 8 characters")
     rows = conn.execute(
-        "SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, "
+        "SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, t.deleted_at, "
         "t.model_selection_json, p.title AS project_title, "
         "p.workspace_root FROM projection_threads t LEFT JOIN projection_projects p ON p.project_id = t.project_id "
         "WHERE t.thread_id LIKE ? ORDER BY t.updated_at DESC",
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"# {thread['title'] or '<untitled>'}")
         shown = f"{len(picked)} of {len(rows)}" if len(picked) != len(rows) else str(len(rows))
         print(f"thread {thread['thread_id']} · project {thread['project_title'] or thread['workspace_root']} · "
-              f"updated {thread['updated_at'][:19]} · {shown} message(s){' (archived)' if thread['archived_at'] else ''}\n")
+              f"updated {thread['updated_at'][:19]} · {shown} message(s){' (archived)' if thread['archived_at'] else ''}{' (deleted)' if thread['deleted_at'] else ''}\n")
         for i, r in picked:
             text = r["text"] or ""
             if a.outline:
