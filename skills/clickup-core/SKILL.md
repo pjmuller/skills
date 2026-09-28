@@ -53,6 +53,8 @@ attention.
 - Reader acts through a coding agent: one ```md block addressed to their agent, English,
   copy-paste whole. Reverse direction (reporter → developer): symptoms, data, intended outcome.
   Patterns: skill `agents-md` → `handoff.md`.
+- Before escalating a ticket to a developer: [triage.md](triage.md)
+  (investigate first; escalate with findings and env gaps).
 
 ## Rich content and media
 

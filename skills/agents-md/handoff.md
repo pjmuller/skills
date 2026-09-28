@@ -32,6 +32,7 @@ line in the reader's language ("Plak dit in Codex."). Machine facts (OS, WSL, wh
 come from the workspace's notes on that person, never assumed. Secrets go through another channel.
 
 ## Non-technical → technical (bug report, feature ask)
+Before escalating, apply skill `clickup-core` → `triage.md` when available.
 - **North star first.** What should be true when this is done, and for whom?
   A request without a clear intent is not ready: ask the one or two questions
   that pin it down *before* handing off, not after a build starts.
