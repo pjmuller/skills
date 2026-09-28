@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+
+## v0.4.2 (2026-09-28)
+- google-workspace-core: `gmail-draft-update <draft-id> (--body TEXT | --body-file PATH|-) [--html-file PATH] [--expect-message ID]` edits a draft body in place, never sends. Draft id, threadId, headers and every other MIME part stay byte-identical (no header refolding, original line endings, body Content-ID/Disposition kept); the candidate is checked before the PUT, so unsupported shapes are refused without writing, and verified again on read-back.
+- video-shrink-for-gemini: `shrink-video --max-bytes 48M` splits output over the limit into overlapping `<name>.gemini.partNN.mp4` + `<name>.chunks.md` (absolute start/end per part); re-encodes once with 30 s keyframes, then stream-copies.
+- resource-audit: read-only `resource_snapshot.sh` (CPU via top's second sample, memory pressure, paging, process swarms; printed suggestions only) + `scripts/install`.
+- t3-manage-thread: `skills-refresh --version` reports "source checkout" only for this repo's own checkout (a managed copy inside a setup repo now shows its tag); `t3-spawn-thread` house effort by model family; `t3-rename-thread --help` corrected.
+- claude-cloud: `--help` documents defaults, env fallbacks and exit codes. t3-maintenance: t3-drafts tests hermetic.
 - t3-schedule: `add --resume-thread ID` schedules a continuation: at fire time the job pings that thread with the prompt; if it is deleted/archived/unreadable, its profile is gone or the ping fails, it spawns a fallback thread with the prompt + a bounded context pack. `t3-read-thread` exposes `deleted_at`.
 - t3-manage-thread: a requested "separate/standalone thread" is spawned visible (`--no-hide` or 📤); 🏓 alone hides it while running.
 - t3-manage-thread: `t3-mail-link` links a T3 thread to a Gmail thread (URL, hex id or `--search`; `FMfcg` web ids via the Chrome tab title). A weekday LaunchAgent poller pings the thread on new inbound mail (own/sent mail marks seen, no wake); the woken agent drafts, asks or settles per [mail-link.md](skills/t3-manage-thread/mail-link.md). Account via a google-workspace-core wrapper config.

@@ -28,4 +28,5 @@ Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/dr
 Edit the latest text from `gmail-draft-get`, keeping the user's wording outside the requested change;
 `gmail-draft-update <draft-id> --body-file PATH --expect-message <message-id>` swaps only the body
 in place (HTML part = escaped text unless `--html-file`), never sends and verifies the read-back.
-After a `gmail-draft` timeout, list drafts before retrying.
+MIME shapes it cannot rewrite without touching other parts are refused before writing
+(`update_draft` in `scripts/gws_core/gmail.py`). After a `gmail-draft` timeout, list drafts before retrying.

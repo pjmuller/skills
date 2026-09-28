@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import html as html_module
 import mimetypes
 import re
@@ -525,7 +524,8 @@ class GmailClient:
         seen = expect_message or base["message"]["id"]
         _refuse_if_changed(draft_id, base, seen)
         thread_id = base["message"]["threadId"]
-        message = message_from_bytes(decode_websafe(base["message"]["raw"]), policy=default)
+        original = decode_websafe(base["message"]["raw"])
+        message = message_from_bytes(original, policy=default)
         plain, html = message.get_body(("plain",)), message.get_body(("html",))
         if plain is None and html is None:
             raise WorkspaceError(f"draft {draft_id} has no text body part to replace")
@@ -533,14 +533,23 @@ class GmailClient:
             raise WorkspaceError(f"draft {draft_id} has no HTML part; drop --html-file")
         kept = _kept_facts(message)
         expected = {}
-        # MIMEPart.set_content: EmailMessage's would also stamp MIME-Version on a body subpart.
         if plain is not None:
-            MIMEPart.set_content(plain, body)
             expected["plain"] = body
+            _replace_text(plain, body, "plain")
         if html is not None:
             expected["html"] = html_body if html_body is not None else _text_html(body)
-            MIMEPart.set_content(html, expected["html"], subtype="html")
-        raw = base64.urlsafe_b64encode(message.as_bytes(policy=SMTP)).decode("ascii")
+            _replace_text(html, expected["html"], "html")
+        # Write the parsed tree back as it came in: source headers keep their folding and the
+        # draft keeps its line separator, so only the replaced bodies change. Whatever the
+        # generator still normalises (a mixed-newline part, header spacing) is caught below and
+        # refused before anything is written.
+        linesep = "\r\n" if original.split(b"\n", 1)[0].endswith(b"\r") else "\n"
+        candidate = message.as_bytes(policy=default.clone(refold_source="none", linesep=linesep))
+        problems = _changes(message_from_bytes(candidate, policy=default), expected, kept)
+        if problems:
+            raise WorkspaceError(f"draft {draft_id} not updated: its MIME layout would change "
+                                 f"{', '.join(problems)}; edit this draft in Gmail instead")
+        raw = base64.urlsafe_b64encode(candidate).decode("ascii")
         _refuse_if_changed(draft_id, self.session.api(
             "GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "minimal"}), seen)
         updated = self.session.api("PUT", f"{GMAIL}/drafts/{draft_id}", json={
@@ -549,16 +558,12 @@ class GmailClient:
         back = self.session.api("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "raw"})
         stored = message_from_bytes(decode_websafe(back["message"]["raw"]), policy=default)
         problems = [] if back["message"].get("threadId") == thread_id else ["threadId"]
-        for subtype, text in expected.items():
-            part = stored.get_body((subtype,))
-            if part is None or _text_key(part.get_content()) != _text_key(text):
-                problems.append(f"text/{subtype} body")
-        if _kept_facts(stored) != kept:
-            problems.append("headers or file parts")
+        problems += _changes(stored, expected, kept)
         if problems:
             raise WorkspaceError(f"draft {draft_id} was updated but the read-back differs in "
                                  f"{', '.join(problems)}; inspect it with gmail-draft-get")
-        return {**updated, "verified": {"threadId": thread_id, "files": len(kept[1])}}
+        files = sum(1 for fact in kept[1] if fact[1] != "body" and fact[2] is not None)
+        return {**updated, "verified": {"threadId": thread_id, "files": files}}
 
     def send_draft(self, draft_id: str) -> dict:
         return self.session.api("POST", f"{GMAIL}/drafts/send", json={"id": draft_id})
@@ -629,16 +634,68 @@ def _refuse_if_changed(draft_id: str, current: dict, seen: str) -> None:
                              f"{now}); re-read it with gmail-draft-get and rebase the edit")
 
 
+def _replace_text(part: MIMEPart, text: str, subtype: str) -> None:
+    """set_content clears every Content-* header; put back the ones that identify the part
+    (the Content-ID a multipart/related start= points at, Content-Disposition, ...).
+    MIMEPart.set_content: EmailMessage's would also stamp MIME-Version on a body subpart."""
+    identity = [(name, value) for name, value in part.items()
+                if name.lower().startswith("content-") and name.lower() not in _REPLACED]
+    MIMEPart.set_content(part, text, subtype=subtype)
+    for name, value in identity:
+        part[name] = value
+
+
+_REPLACED = ("content-type", "content-transfer-encoding")
+
+
+def _changes(message: EmailMessage, expected: dict[str, str], kept: tuple[dict, list]) -> list[str]:
+    problems = []
+    for subtype, text in expected.items():
+        part = message.get_body((subtype,))
+        if part is None or _text_key(part.get_content()) != _text_key(text):
+            problems.append(f"text/{subtype} body")
+    if _kept_facts(message) != kept:
+        problems.append("headers or file parts")
+    return problems
+
+
 def _kept_facts(message: EmailMessage) -> tuple[dict, list]:
-    """What a body edit must leave alone: key headers and every non-body leaf part's bytes."""
+    """What a body edit must leave alone: key headers, the MIME tree, each related container's
+    root, the body parts' identity headers and, as parsed from the source, the exact headers and
+    payload of every other part (attached emails included, headers and all).
+
+    Top-level headers beyond KEPT_HEADERS stay out: Gmail restamps e.g. Date on every save."""
     bodies = [part for part in (message.get_body(("plain",)), message.get_body(("html",)))
               if part is not None]
+    parts: list[tuple] = []
+
+    def visit(part: EmailMessage, path: tuple[int, ...]) -> None:
+        if any(part is body for body in bodies):
+            parts.append((path, "body", sorted(
+                (name.lower(), " ".join(str(value).split())) for name, value in part.items()
+                if name.lower().startswith("content-") and name.lower() not in _REPLACED)))
+            return
+        children = part.get_payload() if part.is_multipart() else []  # incl. message/rfc822
+        parts.append((path, list(part.raw_items()) if path else [],
+                      None if children else part.get_payload(),
+                      part.preamble, part.epilogue, _related_root(part)))
+        for index, child in enumerate(children):
+            visit(child, (*path, index))
+
+    visit(message, ())
     headers = {name: " ".join(str(message.get(name, "")).split()) for name in KEPT_HEADERS}
-    files = sorted((part.get_content_type(), part.get_filename() or "",
-                    hashlib.sha256(part.get_payload(decode=True) or b"").hexdigest())
-                   for part in message.walk()
-                   if not part.is_multipart() and all(part is not body for body in bodies))
-    return headers, files
+    return headers, parts
+
+
+def _related_root(part: EmailMessage) -> int | None:
+    """Index of the part a multipart/related container renders: start=<cid>, else the first."""
+    if part.get_content_type() != "multipart/related":
+        return None
+    start = part.get_param("start")
+    if not start:
+        return 0
+    return next((index for index, child in enumerate(part.get_payload())
+                 if str(child.get("Content-ID", "")).strip() == start.strip()), -1)
 
 
 def _stamp(when: datetime | None) -> str:

@@ -225,6 +225,74 @@ def test_gmail_draft_update_fails_when_the_read_back_lost_a_file_or_the_thread()
         GmailClient(session, sender=ACCOUNT).update_draft("d1", "Nieuw")
 
 
+def websafe(raw):
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def put_raw(session):
+    return decode_websafe(next(kw for method, _, kw in session.calls if method == "PUT")
+                          ["json"]["message"]["raw"])
+
+
+def mixed_draft(attachment, sep=b"\r\n"):
+    return sep.join([b"From: a@example.org", b"To: b@example.org", b"MIME-Version: 1.0",
+                     b"Content-Type: multipart/mixed; boundary=x", b"", b"--x",
+                     b"Content-Type: text/plain", b"", b"old", b"--x", attachment, b"--x--", b""])
+
+
+ATTACHED_EML = b"\r\n".join([
+    b"Content-Type: message/rfc822", b"Content-Disposition: attachment; filename=forward.eml", b"",
+    b"From: attached@example.org", b"Subject: " + b"Long subject " * 12,
+    b"Content-Type: text/plain", b"", b"Attached body"])
+
+
+def test_gmail_draft_update_keeps_the_content_id_a_related_start_points_at():
+    raw = (b"From: a@example.org\r\nTo: b@example.org\r\nMIME-Version: 1.0\r\n"
+           b'Content-Type: multipart/related; boundary=x; start="<body>"\r\n\r\n'
+           b"--x\r\nContent-Type: image/png\r\nContent-ID: <image>\r\n"
+           b"Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n"
+           b"--x\r\nContent-Type: text/html; charset=utf-8\r\nContent-ID: <body>\r\n\r\n"
+           b"<p>Old</p>\r\n--x--\r\n")
+    session = DraftSession(websafe(raw))
+    GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+    stored = message_from_bytes(put_raw(session), policy=default)
+    image, root = stored.get_payload()
+    assert root["Content-ID"] == "<body>" and stored.get_body(("html",)) is root
+    assert image.get_content() == b"hello" and "Updated" in root.get_content()
+
+
+def test_gmail_draft_update_leaves_an_attached_email_byte_identical():
+    session = DraftSession(websafe(mixed_draft(ATTACHED_EML)))
+    GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+    assert ATTACHED_EML in put_raw(session)  # the long Subject is not refolded
+
+
+def test_gmail_draft_update_verifies_the_headers_inside_an_attached_email():
+    def renamed(message):
+        raw = decode_websafe(message["raw"]).replace(b"Subject: Long", b"Subject: Changed")
+        return {**message, "raw": websafe(raw)}
+
+    session = DraftSession(websafe(mixed_draft(ATTACHED_EML)), store=renamed)
+    with pytest.raises(WorkspaceError, match="read-back differs in headers or file parts"):
+        GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+
+
+def test_gmail_draft_update_keeps_lf_line_endings_and_refuses_a_part_it_would_rewrite():
+    head = [b"Content-Type: text/plain", b"Content-Transfer-Encoding: 7bit",
+            b"Content-Disposition: attachment; filename=notes.txt", b""]
+    notes = b"\n".join([*head, b"line one", b"line two"])
+    session = DraftSession(websafe(mixed_draft(notes, sep=b"\n")))
+    GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+    assert notes in put_raw(session)
+
+    # A CRLF draft whose 7bit attachment uses bare LF: the generator would normalise it.
+    session = DraftSession(websafe(mixed_draft(b"\r\n".join(head) + b"\r\nline one\nline two")))
+    with pytest.raises(WorkspaceError, match="not updated: its MIME layout would change headers "
+                                             "or file parts"):
+        GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+    assert "PUT" not in [method for method, _, _ in session.calls]
+
+
 def test_gmail_view_trims_quotes_only_when_asked():
     message = {"id": "m1", "threadId": "t1", "payload": {
         "headers": [{"name": "Subject", "value": "Code"}],
