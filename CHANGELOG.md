@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-manage-thread: a requested "separate/standalone thread" is spawned visible (`--no-hide` or 📤); 🏓 alone hides it while running.
 - t3-manage-thread: `t3-mail-link` links a T3 thread to a Gmail thread (URL, hex id or `--search`; `FMfcg` web ids via the Chrome tab title). A weekday LaunchAgent poller pings the thread on new inbound mail (own/sent mail marks seen, no wake); the woken agent drafts, asks or settles per [mail-link.md](skills/t3-manage-thread/mail-link.md). Account via a google-workspace-core wrapper config.
 
 ## v0.4.2 (2026-09-26)
