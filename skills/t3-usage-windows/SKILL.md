@@ -1,6 +1,6 @@
 ---
 name: t3-usage-windows
-description: Start provider usage windows with cheap turns, chain them during the workday, and resume or schedule recovery of rate-limited T3 Code threads. Use for warming accounts, daytime top-ups, window status, banked Codex resets, or unblocking threads after a usage reset. Ordinary stalled workers belong to t3-maintenance.
+description: Start provider usage windows with cheap turns, chain them through the day, and resume or schedule recovery of rate-limited T3 Code threads. Use for warming accounts, daytime top-ups, window status, banked Codex resets, or unblocking threads after a usage reset. Ordinary stalled workers belong to t3-maintenance.
 ---
 
 # T3 usage windows
@@ -13,16 +13,11 @@ the clock.
 
 - `start` — one cheap turn per enabled Codex/Claude profile (models: `scripts/start.sh`), verifies
   the selection, settles every child; the calling thread keeps running.
-- `warmup install [--project REPO] [--at 05:00]` — daily morning warm-up: a
-  [t3-schedule](../t3-schedule/SKILL.md) job (`usage-window-warmup`) that runs `start` at 05:00.
-  Why: the five-hour clock starts on the first turn, so an early warm-up lands the first reset by
-  mid-morning instead of five hours after you start. Writes the shipped definition
-  ([warmup/](warmup/)) into the repo's `.agents/schedules/` (commit it) and arms it via
-  `t3-schedule adopt`; re-run after a skill update to refresh the prompt. Disarm:
-  `t3-schedule remove usage-window-warmup`.
-- `topup install|status|remove|run` — launchd tick that restarts only *expired* session windows
-  during the workday (`scripts/topup.py`). Needs T3 running; never wakes the Mac. Decision preview:
-  `topup run --dry-run --ignore-hours`.
+- `topup install|status|remove|run` — the one automatic flow: launchd tick every 10 min, daily
+  05:00–21:00 (`scripts/topup.py`). Expired session windows get `start`; accounts without a session
+  window (Codex: weekly only, start unknown) get one turn per local day on the first tick from
+  05:00 (state: `t3-usage-windows-topup.state.json` beside the log). Needs T3 running; never wakes
+  the Mac. Preview: `topup run --dry-run [--ignore-hours]`.
 - `status` — quota windows + blocked-thread count.
 - `limited list|resume|schedule` — rate-limited thread recovery (`scripts/limited.py`). `resume`
   posts `continue`; it skips monthly caps and pending resets unless `--force` — never `--force` a

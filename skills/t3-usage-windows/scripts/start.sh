@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME]
 
-Starts one low-cost warm-up turn on OpenAI and every enabled Claude profile
+Starts one low-cost warm-up turn on every enabled Codex and Claude profile
 registered in T3 Code, then settles all successfully created child threads.
 
   --only  restrict to these provider instance ids ("codex", "claudeAgent",
@@ -44,7 +44,8 @@ settings_file="$t3_base_dir/userdata/settings.json"
 }
 
 # Mirror T3/t3-spawn-thread enablement semantics. Built-in Codex and Claude are
-# enabled by default; named Claude instances come directly from the registry.
+# enabled by default; named Codex/Claude instances come directly from the registry.
+# Rows: instance id, label, driver.
 providers=()
 while IFS= read -r provider; do
   providers+=("$provider")
@@ -58,17 +59,18 @@ done < <(jq -r '
         else ($instance.enabled // $instance.config.enabled // default_enabled($driver)) end
       else (($settings.providers // {})[$id].enabled // default_enabled($driver)) end;
 
-  (if enabled("codex"; "codex") then
-     ["codex", "OpenAI"] | @tsv
+  (if enabled("codex"; "codex") and
+      (($settings.providerInstances // {})["codex"] == null) then
+     ["codex", "OpenAI", "codex"] | @tsv
    else empty end),
   (if enabled("claudeAgent"; "claudeAgent") and
       (($settings.providerInstances // {})["claudeAgent"] == null) then
-     ["claudeAgent", "Claude"] | @tsv
+     ["claudeAgent", "Claude", "claudeAgent"] | @tsv
    else empty end),
   (($settings.providerInstances // {}) | to_entries[]
-    | select(.value.driver == "claudeAgent")
-    | select(enabled(.key; "claudeAgent"))
-    | [.key, (.value.displayName // .key)] | @tsv)
+    | select(.value.driver == "codex" or .value.driver == "claudeAgent")
+    | select(enabled(.key; .value.driver))
+    | [.key, (.value.displayName // .key), .value.driver] | @tsv)
 ' "$settings_file")
 
 ((${#providers[@]})) || {
@@ -121,8 +123,8 @@ created_labels=()
 failures=0
 
 for provider_entry in "${providers[@]}"; do
-  IFS=$'\t' read -r profile label <<< "$provider_entry"
-  if [[ "$profile" == "codex" ]]; then
+  IFS=$'\t' read -r profile label driver <<< "$provider_entry"
+  if [[ "$driver" == "codex" ]]; then
     model="gpt-5.6-luna"
     model_label="Luna"
   else

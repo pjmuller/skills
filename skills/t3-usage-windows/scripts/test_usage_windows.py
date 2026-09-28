@@ -86,17 +86,42 @@ def test_topup_preview_never_waits_or_launches(tmp_path, monkeypatch):
     assert topup.main(['run', '--dry-run', '--ignore-hours', '--json']) == 0
 
 
+def test_topup_morning_start_fires_once_per_day(tmp_path, monkeypatch):
+    class Clock(datetime):
+        now_value = datetime(2026, 9, 12, 5, 3)  # a Saturday
+        @classmethod
+        def now(cls, tz=None):
+            return cls.now_value.replace(tzinfo=tz)
+    monkeypatch.setattr(topup, 'datetime', Clock)
+    monkeypatch.setattr(topup, 'LOG', tmp_path / 'log')
+    monkeypatch.setattr(topup, 'STATE', tmp_path / 'state.json')
+    monkeypatch.setattr(topup, 't3_up', lambda: True)
+    monkeypatch.setattr(topup, 'limits_rows', lambda: [
+        {'instance_id': 'claude', 'window': 'session', 'resets_in_seconds': 9000},
+        {'instance_id': 'codex', 'window': 'weekly', 'resets_in_seconds': 9000}])
+    calls = []
+    monkeypatch.setattr(topup.subprocess, 'run', lambda cmd, **kw: calls.append(cmd[1:]) or SimpleNamespace(returncode=0, stdout='', stderr=''))
+    assert topup.main(['run']) == 0
+    assert calls == [['start', '--profile', 'codex']]
+    Clock.now_value = datetime(2026, 9, 12, 20, 50)
+    assert topup.main(['run']) == 0 and len(calls) == 1  # same day: no refire
+    Clock.now_value = datetime(2026, 9, 13, 5, 1)
+    assert topup.main(['run']) == 0 and len(calls) == 2  # next day
+
+
 def test_start_friendly_profile_and_settle(tmp_path):
     config = tmp_path / 'userdata/settings.json'
     config.parent.mkdir()
     config.write_text(json.dumps({'providerInstances': {
         'claudeAgent_team': {'driver':'claudeAgent', 'enabled':True, 'displayName':'Team'},
         'claudeAgent_disabled': {'driver':'claudeAgent', 'enabled':False},
+        'codex_team': {'driver':'codex', 'enabled':True, 'displayName':'Codex Team'},
     }}))
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     for name, body in {
-        't3-spawn-thread': 'echo "Provider: claudeAgent_team · Model: claude-haiku-4-5 · Thinking: low"\necho "Thread ID: child-id"',
+        't3-spawn-thread': 'while [ $# -gt 0 ]; do case "$1" in --profile) p=$2;; --model) m=$2;; esac; shift; done\n'
+                           'echo "Provider: $p · Model: $m · Thinking: low"\necho "Thread ID: child-id"',
         't3-settle-thread': 'echo "$*" > "$T3CODE_HOME/settled"\necho "Settled at: 2026-09-09T12:00:00Z"',
     }.items():
         path = bin_dir / name
@@ -110,6 +135,9 @@ def test_start_friendly_profile_and_settle(tmp_path):
     result = subprocess.run([str(HERE/'t3-usage-windows'), 'start', '--profile', 'disabled', '--dry-run', '--json'], env=env, text=True, check=False, capture_output=True)
     assert result.returncode == 1
     assert not json.loads(result.stdout)['ok']
+    result = subprocess.run([str(HERE/'t3-usage-windows'), 'start', '--profile', 'codex_team', '--dry-run'], env=env, text=True, check=False, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'Provider: codex_team · Model: gpt-5.6-luna · Thinking: low' in result.stdout
 
 
 def test_empty_profile_parts_never_expand_scope(monkeypatch):
@@ -118,34 +146,3 @@ def test_empty_profile_parts_never_expand_scope(monkeypatch):
     assert profiles.matching('work,', {'work', 'other'}) == {'work'}
     assert profiles.matching(', ,', {'work', 'other'}) == set()
 
-
-def test_warmup_install_writes_repo_spec_and_adopts(tmp_path, monkeypatch, capsys):
-    import warmup
-    calls = []
-    real_run = subprocess.run
-    monkeypatch.setattr(warmup.subprocess, 'run', lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0)
-                        if cmd[0] == 't3-schedule' else real_run(cmd, **kw))
-    spec_file = tmp_path / '.agents/schedules/usage-window-warmup.json'
-    assert warmup.main(['install', '--project', str(tmp_path), '--dry-run']) == 0
-    assert not spec_file.exists() and not calls
-    assert warmup.main(['install', '--project', str(tmp_path), '--at', '05:30', '--profile', 'work']) == 0
-    assert calls[-1] == ['t3-schedule', 'adopt', str(spec_file), '--profile', 'work']
-    spec = json.loads(spec_file.read_text())
-    assert spec['at'] == '05:30' and spec['title'] == '⏰ usage-window-warmup {date}'
-    assert 't3-usage-windows start' in spec_file.with_name('usage-window-warmup.prompt.md').read_text()
-    assert warmup.main(['install', '--project', str(tmp_path)]) == 0  # re-install keeps the chosen time
-    assert json.loads(spec_file.read_text())['at'] == '05:30'
-    try:
-        warmup.main(['install', '--project', str(tmp_path), '--at', '5am'])
-        raise AssertionError('bad --at accepted')
-    except SystemExit as exc:
-        assert 'HH:MM' in str(exc)
-
-
-def test_warmup_shipped_spec_is_a_valid_schedule():
-    from importlib.machinery import SourceFileLoader
-    import warmup
-    schedule = SourceFileLoader('t3_schedule', str(HERE.parents[1] / 't3-schedule/scripts/t3-schedule')).load_module()
-    spec = json.loads((warmup.SHIPPED / 'usage-window-warmup.json').read_text())
-    assert set(spec) == set(schedule.REPO_KEYS)
-    assert schedule.repo_spec_problem(spec, warmup.SHIPPED / 'usage-window-warmup.prompt.md') is None

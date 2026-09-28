@@ -3,12 +3,13 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Keep the five-hour provider windows chained during the workday.
+"""Open usage windows from 05:00 and keep the five-hour ones chained all day.
 
-A LaunchAgent ticks every ~10 min; when a profile's session window has expired and
-nothing re-opened it, fire `t3-usage-windows start --profile <ids>` so a fresh window starts.
-Deterministic, no LLM thread in the loop (in-thread timers die with T3's session
-reaper or a Mac sleep).
+A LaunchAgent ticks every ~10 min, 05:00-21:00 every day. A profile whose session window
+expired gets `t3-usage-windows start --profile <ids>` so a fresh window starts; a profile
+with no session window (Codex: weekly only, start unknown) gets one turn per local day on the
+first tick at/after 05:00. Deterministic, no LLM thread in the loop (in-thread timers die with
+T3's session reaper or a Mac sleep).
 
     t3-usage-windows topup run [--dry-run] [--force] [--ignore-hours]
     t3-usage-windows topup install [--interval 600] | remove | status
@@ -39,6 +40,7 @@ PATH_ENV = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/us
 HERE = Path(__file__).resolve()
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / ".t3/userdata/logs/t3-usage-windows-topup.log"
+STATE = LOG.with_name("t3-usage-windows-topup.state.json")  # {instance: last morning-start date}
 RUNTIME = Path.home() / ".t3/userdata/server-runtime.json"
 HELLO_WORLD = HERE.with_name("t3-usage-windows")
 START_HOUR, END_HOUR = 5, 21
@@ -49,17 +51,25 @@ THREAD_VARS = ("T3_SOURCE_THREAD_ID", "CODEX_THREAD_ID", "T3_MCP_BEARER_TOKEN")
 
 # --- pure functions (unit-tested) ---------------------------------------------
 def within_hours(now: datetime) -> bool:
-    """Mon-Fri, 05:00 <= now < 21:00 system local time."""
-    return now.weekday() < 5 and START_HOUR <= now.hour < END_HOUR
+    """05:00 <= now < 21:00 system local time, every day."""
+    return START_HOUR <= now.hour < END_HOUR
+
+
+def morning_due(no_window: list[str], started: dict, now: datetime) -> list[str]:
+    """No-session-window instances not yet started today (local date), from 05:00 on."""
+    if now.hour < START_HOUR:
+        return []
+    today = now.date().isoformat()
+    return [instance for instance in no_window if started.get(instance) != today]
 
 
 def classify(rows: list[dict], force: bool = False) -> tuple[list[str], list[str], list[str]]:
     """(stale, unknown, no-window) instance ids from `t3-limits --json` rows.
     Stale = a session window whose reset is null or expired more than GRACE ago.
-    Accounts that report no session window at all (Codex Pro on the OAuth usage
-    endpoint, observed 2026-09-08 even right after a turn) are never topped up: a
-    missing row is not evidence of an expired one, and treating it as stale would
-    re-fire a hello every tick."""
+    Accounts that report no session window at all (Codex on the OAuth usage endpoint,
+    observed 2026-09-08 even right after a turn) are never stale: a missing row is not
+    evidence of an expired one and would re-fire every tick. They get one morning start
+    per day instead (morning_due)."""
     sessions: dict[str, dict | None] = {}
     unknown: list[str] = []
     for row in rows:
@@ -103,6 +113,18 @@ def log(message: str) -> None:
     with LOG.open("a") as handle:
         handle.write(line + "\n")
     print(line)  # launchd discards stdout; a terminal run sees the same line
+
+
+def load_started() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_started(instances: list[str], now: datetime) -> None:
+    started = load_started() | dict.fromkeys(instances, now.date().isoformat())
+    STATE.write_text(json.dumps(started, indent=2, sort_keys=True) + "\n")
 
 
 def clean_env() -> dict:
@@ -169,7 +191,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
 
     stale, unknown, no_window = classify(rows, args.force)
-    if not stale:
+    due = no_window if args.force else morning_due(no_window, load_started(), now)
+    if not stale and not due:
         wait = wait_seconds(rows, args.interval or installed_interval())
         if wait and not args.dry_run:
             log(f"all fresh, waiting {wait}s for the next session reset")
@@ -186,21 +209,31 @@ def cmd_run(args: argparse.Namespace) -> int:
                 from profiles import filter_rows
                 rows = filter_rows(rows, args.profile)
             stale, unknown, no_window = classify(rows, args.force)
+            now = datetime.now(TZ)
+            due = no_window if args.force else morning_due(no_window, load_started(), now)
 
     note = f" · unknown, skipped: {','.join(unknown)}" if unknown else ""
-    note += f" · no session window: {','.join(no_window)}" if no_window else ""
-    if not stale:
+    done_today = [i for i in no_window if i not in due]
+    note += f" · no session window, started today: {','.join(done_today)}" if done_today else ""
+    if not stale and not due:
         log(f"all windows fresh, nothing to do{note}")
         return 0
 
-    command = [str(HELLO_WORLD), "start", "--profile", ",".join(stale)]
-    if args.dry_run:
-        log(f"dry-run: stale {','.join(stale)}{note} → {' '.join(command)}")
-        return 0
-    result = subprocess.run(command, check=False, capture_output=True, text=True, env=clean_env())
-    log((result.stdout + result.stderr).strip())
-    log(f"topup: {','.join(stale)} → {'ok' if result.returncode == 0 else 'FAILED'}{note}")
-    return result.returncode
+    # Separate starts so a failing Claude profile never re-fires the once-a-day ones.
+    batches = [(label, ids) for label, ids in (("stale", stale), ("morning", due)) if ids]
+    code = 0
+    for label, ids in batches:
+        command = [str(HELLO_WORLD), "start", "--profile", ",".join(ids)]
+        if args.dry_run:
+            log(f"dry-run: {label} {','.join(ids)}{note} → {' '.join(command)}")
+            continue
+        result = subprocess.run(command, check=False, capture_output=True, text=True, env=clean_env())
+        log((result.stdout + result.stderr).strip())
+        if result.returncode == 0 and label == "morning":
+            save_started(ids, now)  # a failed start retries next tick
+        log(f"topup: {label} {','.join(ids)} → {'ok' if result.returncode == 0 else 'FAILED'}{note}")
+        code = code or result.returncode
+    return code
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -231,7 +264,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     result = launchctl("bootstrap", f"gui/{os.getuid()}", str(PLIST))
     if result.returncode != 0:
         raise SystemExit(f"launchctl bootstrap failed: {result.stderr.strip()}")
-    print(f"armed  {LABEL}  every {args.interval}s (Mon-Fri {START_HOUR}:00-{END_HOUR}:00)")
+    print(f"armed  {LABEL}  every {args.interval}s (daily {START_HOUR}:00-{END_HOUR}:00)")
     print(f"log    {LOG}")
     return 0
 
@@ -268,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--json", action="store_true")
     run.add_argument("--profile")
     run.add_argument("--force", action="store_true", help="treat every known account as stale")
-    run.add_argument("--ignore-hours", action="store_true", help="skip the weekday/hour gate")
+    run.add_argument("--ignore-hours", action="store_true", help="skip the 05:00-21:00 gate")
     run.add_argument("--interval", type=int, help="tick length for the smart wait (default: the plist's)")
     run.set_defaults(func=cmd_run)
 

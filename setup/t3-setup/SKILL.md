@@ -113,7 +113,7 @@ pnpm dlx skills add pjmuller/skills -s agents-md -y
 pnpm dlx skills add pjmuller/skills -s tone-of-voice -y          # when selected
 pnpm dlx skills add pjmuller/skills -s codexbar-setup -y         # when selected
 pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y       # when selected (+ t3-maintenance), then its scripts/install
-t3-usage-windows warmup install --project <setup-repo>           # macOS: 05:00 warm-up job; commit .agents/schedules/
+t3-usage-windows topup install                                   # macOS: open usage windows from 05:00, chain all day
 ```
 
 Mechanics and exit codes: [skills-refresh.md](../../skills/t3-manage-thread/skills-refresh.md).
@@ -131,7 +131,7 @@ one canonical tree.
   `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,
   then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered and
   settled. Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
-- `t3-schedule list` shows `skills-refresh` (+ `usage-window-warmup` when selected; Linux/WSL: `crontab -l`);
+- `t3-schedule list` shows `skills-refresh` (Linux/WSL: `crontab -l`); `t3-usage-windows topup status` loaded when selected;
   `skills-refresh --version` prints a tag.
 - SETUP.md in the setup repo: bootstrap URL + full revision, installed skill
   revisions/locks, tested T3 version, home layout, update procedure

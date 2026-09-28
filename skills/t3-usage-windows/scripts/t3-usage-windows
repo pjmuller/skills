@@ -36,7 +36,7 @@ def start(argv):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['start', 'warmup', 'topup', 'limited', 'reset', 'status'])
+    parser.add_argument('command', choices=['start', 'topup', 'limited', 'reset', 'status'])
     if not argv or argv[0] in ('-h', '--help'):
         parser.print_help()
         return 0
@@ -44,9 +44,6 @@ def main(argv=None):
     rest = argv[1:]
     if args.command == 'start':
         return start(rest)
-    if args.command == 'warmup':
-        import warmup
-        return warmup.main(rest)
     if args.command == 'topup':
         import topup
         return topup.main(rest)

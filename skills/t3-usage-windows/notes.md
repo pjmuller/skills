@@ -1,11 +1,12 @@
 # Provider and T3 limitations
 
-- Rolling windows are provider behavior, not a T3 defect. Workday gate, tick interval and grace
+- Rolling windows are provider behavior, not a T3 defect. Hour gate, tick interval and grace
   period: constants in `scripts/topup.py`; system timezone with DST.
-- Codex OAuth sometimes reports no session row even after a turn (2026-09-08). A missing or error
-  row is unknown, not expired: skip it, or warm-up repeats forever.
+- Codex OAuth reports no session row even after a turn (2026-09-08), only a weekly window whose
+  start is unknown up front. A missing row is not expired (re-firing every tick); topup gives such
+  accounts one morning turn per day instead. Error rows are unknown: skipped.
 - A reset inside the next poll interval gets one bounded wait until reset + grace. Dry-run never
-  waits; after waiting, the workday gate is checked again.
+  waits; after waiting, the hour gate is checked again.
 - LaunchAgents use `ProcessType=Interactive`: `Standard` got utility QoS, making T3 CLI calls take
   15–25 s and leaving children visible ~90 s (2026-09-09); a multi-GB store plus Chromium draft
   scan can then miss the operational window.

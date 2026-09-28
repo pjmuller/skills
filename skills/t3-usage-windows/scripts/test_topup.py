@@ -16,14 +16,31 @@ def at(day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 9, 6 + day, hour, minute, tzinfo=TZ)
 
 
-def test_gate_hours_and_weekend():
+def test_gate_hours_every_day():
     assert not mod.within_hours(at(1, 4, 59))
     assert mod.within_hours(at(1, 5, 0))
     assert mod.within_hours(at(1, 20, 59))
     assert not mod.within_hours(at(1, 21, 0))
-    assert mod.within_hours(at(5, 12))  # Friday
-    assert not mod.within_hours(at(6, 12))  # Saturday
-    assert not mod.within_hours(at(0, 12))  # Sunday
+    assert mod.within_hours(at(6, 12))  # Saturday
+    assert mod.within_hours(at(0, 5))  # Sunday
+
+
+def test_morning_due_once_per_local_day():
+    ids = ["codex", "codex_work"]
+    assert mod.morning_due(ids, {}, at(1, 4, 59)) == []  # before 05:00
+    assert mod.morning_due(ids, {}, at(1, 5, 0)) == ids  # first tick at 05:00
+    started = {"codex": "2026-09-07"}
+    assert mod.morning_due(ids, started, at(1, 16)) == ["codex_work"]  # same day: no refire
+    assert mod.morning_due(ids, started, at(2, 5, 10)) == ids  # next day
+    assert mod.morning_due(ids, started, at(2, 4, 50)) == []
+
+
+def test_save_started_merges(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE", tmp_path / "state.json")
+    assert mod.load_started() == {}
+    mod.save_started(["codex"], at(1, 5))
+    mod.save_started(["codex_work"], at(2, 5))
+    assert mod.load_started() == {"codex": "2026-09-07", "codex_work": "2026-09-08"}
 
 
 def session(instance, left):
