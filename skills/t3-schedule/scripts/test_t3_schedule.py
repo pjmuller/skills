@@ -441,7 +441,9 @@ def test_migrate_moves_local_recurring_only(tmp_path, monkeypatch):
     src, prompt = mod.repo_files(repo, "legacy")
     assert json.loads(p["spec"].read_text()) == {"name": "legacy", "source": str(src), "profile": "work"}
     assert prompt.read_text() == "legacy prompt\n" and not p["prompt"].exists()
-    assert "profile" not in json.loads(src.read_text()) and json.loads(src.read_text())["wait_max"] == mod.DEFAULT_WAIT_MAX
+    repo_spec = json.loads(src.read_text())  # pre-versioning specs lack hide/notify/wait_max: defaults, never null
+    assert "profile" not in repo_spec and repo_spec["wait_max"] == mod.DEFAULT_WAIT_MAX
+    assert repo_spec["notify"] is True and repo_spec["hide"] is False and repo_spec["settle_when_done"] is False
     assert not mod.repo_files(repo, "oneoff")[0].exists()  # one-shots stay machine-local
 
 

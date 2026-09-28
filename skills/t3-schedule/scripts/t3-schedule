@@ -51,9 +51,10 @@ PACK_LAST_MSGS = 6                     # … plus the latest messages,
 PACK_MSG_CHARS = 2000                  # each capped,
 PACK_MAX_CHARS = 12000                 # whole pack capped (oldest of the latest dropped first)
 SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the project repo
-# Portable job fields committed to the repo; name = file stem, project = the repo. Profile (an
-# account label) and everything else stay in the machine-local pointer.
-REPO_KEYS = ("at", "days", "title", "model", "thinking", "settle_when_done", "hide", "notify", "wait_max")
+# Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
+# repo. Profile (an account label) and everything else stay in the machine-local pointer.
+REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
+             "settle_when_done": False, "hide": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX}
 
 
 # --- paths --------------------------------------------------------------------
@@ -99,7 +100,7 @@ def merge_pointer(local: dict) -> dict:
         repo["days"]
     except (OSError, ValueError, KeyError, TypeError, SystemExit) as exc:
         return {**merged, "missing": "not found" if isinstance(exc, FileNotFoundError) else f"invalid ({exc!r:.80})"}
-    return {**repo, **merged}
+    return {**repo, **{k: d for k, d in REPO_KEYS.items() if repo.get(k) is None}, **merged}
 
 
 def load_spec(local: Path) -> dict:
@@ -119,7 +120,8 @@ def versionable(spec: dict) -> bool:
 def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
     src, prompt_file = repo_files(project, name)
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(json.dumps({k: spec.get(k) for k in REPO_KEYS}, indent=2, ensure_ascii=False) + "\n")
+    fields = {k: default if spec.get(k) is None else spec[k] for k, default in REPO_KEYS.items()}
+    src.write_text(json.dumps(fields, indent=2, ensure_ascii=False) + "\n")
     prompt_file.write_text(prompt)
     return src
 
@@ -991,7 +993,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         src = repo_files(project, name)[0]
         if src.exists() and not args.force:
             raise SystemExit(f"{src} exists; `t3-schedule adopt {src}` or migrate --force to overwrite it")
-        write_repo_job(project, name, {"wait_max": DEFAULT_WAIT_MAX, **spec}, p["prompt"].read_text())
+        write_repo_job(project, name, spec, p["prompt"].read_text())
         local = pointer(name, src, spec.get("profile"))
         p["spec"].write_text(json.dumps(local, indent=2) + "\n")
         rearm(merge_pointer(local))
