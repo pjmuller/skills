@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- agents-md: global template gains the in-worktree session commit rule, minimal global skill registration, and same-session refresh of committed shared-skill copies.
 - agents-md: global template env rule tightened: values only in `~/.config/mise-env/<org>/<repo>.env` (chmod 600), never a repo `.env` or `source .env`.
 - t3-usage-windows: `warmup install [--project REPO] [--at HH:MM] [--profile X]` arms the daily 05:00 `usage-window-warmup` job (ships in `warmup/`: `haiku,luna`, thinking low, runs `t3-usage-windows start`, reports per provider, self-settles). Writes the definition into the repo's `.agents/schedules/` and arms it via `t3-schedule adopt`; re-run refreshes the prompt, keeps the time. Replaces hand-made `hello-world` jobs (`t3-schedule remove hello-world` + `git rm` its two files). Warm-up child threads are titled `Warm-up — <profile> <model>`.
 - t3-schedule: recurring job definitions are versioned in the project repo (`.agents/schedules/<name>.json` + `.prompt.md`; no path, no profile); the runtime dir keeps a machine-local pointer + artefacts. `adopt <repo|spec>` opts a machine in (never on clone), `migrate` moves pre-versioning jobs, `list` flags untracked/uncommitted/missing specs and stale runners. `--once`/`--resume-thread` stay local.

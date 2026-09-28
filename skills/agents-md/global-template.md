@@ -60,11 +60,14 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - Other agents ship to `main` while you work: pull before you start and again before you push; build on their landed work.
 - Leave other agents' in-flight changes alone. Races are fine: a shared file commits whole; your file already committed by someone else is expected.
 - Never `checkout`/`reset`/`stash` in the shared checkout (promote/deploy/compare): other agents have uncommitted edits there. Use a throwaway `git worktree add --detach /tmp/<x> origin/<branch>`, remove it when done.
+- Session already running inside a worktree: commit there, cherry-pick onto a detached `/tmp` worktree at `origin/main`, `git push origin HEAD:main`, verify with `git cherry`; leave the session worktree for explicit cleanup. Ignored local config a worktree needs → repo-root `.worktreeinclude` allowlist, never bulk-copy ignored files.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
+Register as few skills globally as possible. Occasional machine/prompt maintenance belongs in a **personal setup repository**; product workflows belong in their **project repository**. A **skill source repository** distributes templates/tools, not live personal configuration. Global commands on PATH do not require global skill registration.
 High-level map for future agents: the **INTENT** behind each architecture/feature/component, and which source files to open. Progressive disclosure (no "god" md files); link related skill files. Code stays the source of truth: reference filenames/methods, not snippets. After a coding task, create/update relevant skill files.
 Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory which stays user bound (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
 Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets the core fix in code/config, not a workaround note.
+Pushed a change to a shared skill core that projects carry as a committed copy? Same session: refresh every consumer repo now, not in two weeks.
 
 ## Tooling: one tool per job
 - Python: `uv` only (no pip/poetry/venv/pyenv). Node/JS: `pnpm` only (`pnpm dlx` replaces npx).
