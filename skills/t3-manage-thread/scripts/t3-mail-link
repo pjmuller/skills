@@ -175,27 +175,46 @@ def header(message: dict, name: str) -> str:
     return ""
 
 
-def unique_thread(hits: list[dict], subject: str | None = None) -> str:
-    """Exactly one Gmail thread among search hits, else print candidates and exit 3."""
-    from gws_core.gmail import normalized_subject
+THREAD_CAP = 25  # candidate threads read per search; more = ambiguous, fail closed
+
+
+def norm_subject(subject: str) -> str:
+    return re.sub(r"^(?:(?:re|fw|fwd|aw|sv):\s*)+", "", subject.strip(), flags=re.IGNORECASE).casefold()
+
+
+def search_threads(ws, query: str) -> tuple[list[dict], bool]:
+    """Thread-level search: one candidate per thread (all its subjects) + whether more threads exist."""
+    page = ws.api("GET", "https://gmail.googleapis.com/gmail/v1/users/me/threads",
+                  params={"q": query, "maxResults": THREAD_CAP})
+    candidates = []
+    for stub in page.get("threads", []):
+        messages = thread_metadata(ws, stub["id"]).get("messages", [])
+        last = messages[-1] if messages else {}
+        candidates.append({"threadId": stub["id"], "subjects": [header(m, "Subject") for m in messages],
+                           "date": header(last, "Date"), "from": header(last, "From")})
+    return candidates, bool(page.get("nextPageToken"))
+
+
+def unique_thread(candidates: list[dict], truncated: bool, subject: str | None = None) -> str:
+    """Exactly one Gmail thread, else print candidates and exit 3. A capped result is never unique."""
     if subject:
-        hits = [h for h in hits if normalized_subject(h["subject"]) == normalized_subject(subject)]
-    threads: dict[str, dict] = {}
-    for hit in hits:
-        threads.setdefault(hit["threadId"], hit)
-    if len(threads) == 1:
-        return next(iter(threads))
-    if not threads:
+        want = norm_subject(subject)
+        candidates = [c for c in candidates if any(norm_subject(s) == want for s in c["subjects"])]
+    if len(candidates) == 1 and not truncated:
+        return candidates[0]["threadId"]
+    if not candidates:
         raise SystemExit("no matching Gmail thread; retry with --search QUERY")
-    print("Several Gmail threads match; ask the user which one, then rerun with its id:", file=sys.stderr)
-    for tid, hit in threads.items():
-        print(f"  {tid}  {hit['date'][:31]}  {hit['from'][:40]}  {hit['subject'][:70]}", file=sys.stderr)
+    more = f" (first {THREAD_CAP}; more exist, narrow the query)" if truncated else ""
+    print(f"Several Gmail threads match{more}; ask the user which one, then rerun with its id:", file=sys.stderr)
+    for c in candidates:
+        print(f"  {c['threadId']}  {c['date'][:31]}  {c['from'][:40]}  {(c['subjects'] or [''])[0][:70]}",
+              file=sys.stderr)
     raise SystemExit(3)
 
 
 def resolve_thread(ws, account: str, ref: str | None, search: str | None) -> str:
     if search:
-        return unique_thread(ws.gmail.search(search, limit=50))
+        return unique_thread(*search_threads(ws, search))
     kind, value = parse_gmail_ref(ref or "")
     if kind == "hex":
         from gws_core import ApiError
@@ -207,7 +226,7 @@ def resolve_thread(ws, account: str, ref: str | None, search: str | None) -> str
     if title_account != account.lower():
         raise SystemExit(f"that Gmail tab belongs to {title_account}, not {account}; wrong --config?")
     quoted = subject.replace('"', " ")
-    return unique_thread(ws.gmail.search(f'subject:"{quoted}"', limit=50), subject)
+    return unique_thread(*search_threads(ws, f'subject:"{quoted}"'), subject)
 
 
 # --- Chrome (FMfcg web ids are server tokens, not offline-decodable) ----------
@@ -460,6 +479,45 @@ def cmd_poll(args) -> int:
     return 1 if errors else 0
 
 
+def draft_fingerprint(view: dict) -> dict:
+    """What Gmail persisted for a draft (recipients, subject, whitespace-normalized body incl. the
+    quoted original, attachments). Date/ids excluded: they do not signal a human edit."""
+    headers = view.get("headers", {})
+    return {"to": headers.get("To", ""), "cc": headers.get("Cc", ""), "subject": headers.get("Subject", ""),
+            "body": " ".join(view.get("body", "").split()),
+            "attachments": sorted((a.get("filename") or "", a.get("mimeType") or "", a.get("size") or 0)
+                                  for a in view.get("attachments", []))}
+
+
+def draft_file(draft_id: str) -> Path:
+    return mail_dir() / "drafts" / f"{draft_id}.json"
+
+
+def cmd_draft(args) -> int:
+    """snapshot: record the agent draft as Gmail stored it. unchanged: exit 0 same, 1 edited, 2 unknown/gone."""
+    path = draft_file(args.draft_id)
+    if args.action == "unchanged" and not path.exists():
+        print(f"no snapshot for draft {args.draft_id}: not an agent draft, leave it")
+        return 2
+    ws = workspace(config_arg(args))
+    from gws_core import ApiError
+    try:
+        now = draft_fingerprint(ws.gmail.get_draft(args.draft_id)["message"])
+    except ApiError:
+        print(f"draft {args.draft_id} is gone (sent or deleted by the user)")
+        return 2
+    if args.action == "snapshot":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(now, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"snapshot {path}")
+        return 0
+    if json.loads(path.read_text(encoding="utf-8")) == json.loads(json.dumps(now)):
+        print(f"draft {args.draft_id} unchanged since the agent wrote it: safe to replace")
+        return 0
+    print(f"draft {args.draft_id} was edited by the user: leave it")
+    return 1
+
+
 def plist_path() -> Path:
     return Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 
@@ -515,12 +573,15 @@ def main(argv: list[str] | None = None) -> int:
     unlink.add_argument("id", help="T3 thread id or Gmail thread id")
     poll = sub.add_parser("poll", help="check linked threads, ping on new inbound mail")
     poll.add_argument("--dry-run", action="store_true")
+    draft = sub.add_parser("draft", help="snapshot an agent draft / check it is still unedited")
+    draft.add_argument("action", choices=["snapshot", "unchanged"])
+    draft.add_argument("draft_id")
     sub.add_parser("schedule", help="arm the weekday LaunchAgent poller")
     sub.add_parser("unschedule", help="remove the LaunchAgent poller")
     args = parser.parse_args(argv)
     if args.command in ("add", "new") and bool(args.ref) == bool(args.search):
         parser.error("give exactly one of REF or --search")
-    return {"add": cmd_add, "new": cmd_new, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll,
+    return {"add": cmd_add, "new": cmd_new, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll, "draft": cmd_draft,
             "schedule": cmd_schedule, "unschedule": cmd_unschedule}[args.command](args)
 
 

@@ -61,3 +61,26 @@ def test_ping_text_is_shell_safe():
     link = {"subject": "Price `rm` $(x)", "account": "a@x", "gmail_thread": "t1", "config": "/c.json", "policy": None, "t3_thread": "id1"}
     text = ml.ping_text(link, Path("/tmp/m.md"), ["m1", "m2"])
     assert "`" not in text and "$(" not in text and "m2" in text and "UNTRUSTED" in text
+
+
+def cand(tid, *subjects):
+    return {"threadId": tid, "subjects": list(subjects), "date": "", "from": ""}
+
+
+def test_unique_thread_subject_filter_and_fail_closed(capsys):
+    hits = [cand("a", "Offer", "Re: Offer"), cand("b", "Other")]
+    assert ml.unique_thread(hits, False, "RE: offer") == "a"
+    with pytest.raises(SystemExit) as exc:  # older same-subject thread beyond the cap: never unique
+        ml.unique_thread(hits, True, "Offer")
+    assert exc.value.code == 3 and "more exist" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as exc:
+        ml.unique_thread([cand("a", "Offer"), cand("c", "Fwd: Offer")], False, "Offer")
+    assert exc.value.code == 3
+
+
+def test_draft_fingerprint_ignores_ids_and_whitespace():
+    view = {"id": "m1", "headers": {"To": "a@x", "Subject": "Re: Offer", "Date": "d1"},
+            "body": "Hi,\n\nfine.\n\nOn Mon wrote:\n> quoted", "attachments": []}
+    same = {**view, "id": "m2", "headers": {**view["headers"], "Date": "d2"}, "body": "Hi,\nfine.\nOn Mon wrote:\n> quoted"}
+    edited = {**view, "body": "Hi, fine, but 10% less.\nOn Mon wrote:\n> quoted"}
+    assert ml.draft_fingerprint(view) == ml.draft_fingerprint(same) != ml.draft_fingerprint(edited)
