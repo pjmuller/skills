@@ -28,6 +28,9 @@ Example: "new fields don't appear in the builder" smells like cache → investig
 with findings unless the cause is clear and local.
 
 ## The escalation carries the investigation
+Open with one line the developer (and a later retro) can grade: **Needs developer because:**
+`env gap` · `authority` · `cross-boundary` · `unresolved doubt` · `incident`, plus five words of why.
+An escalation without that line goes back to the PO's agent for a first attempt.
 Symptoms + repro steps, what was checked (logs, data, recent commits), hypotheses ruled in/out,
 the branch/diff of any attempt, and the doubt that made you stop. Shape: skill `agents-md` →
 `handoff.md` (non-technical → technical).

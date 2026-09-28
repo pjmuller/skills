@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- clickup-core: `triage.md` escalations open with a gradable `Needs developer because:` reason (env gap · authority · cross-boundary · unresolved doubt · incident); a bare escalation goes back to the PO's agent.
 - agents-md: global template gains the in-worktree session commit rule, minimal global skill registration, and same-session refresh of committed shared-skill copies.
 - agents-md: global template env rule tightened: values only in `~/.config/mise-env/<org>/<repo>.env` (chmod 600), never a repo `.env` or `source .env`.
 - t3-usage-windows: `topup` is the single automatic flow: runs daily 05:00–21:00 (was Mon–Fri) and gives accounts without a session window (Codex, weekly only) one `start` per local day on the first tick from 05:00 (state beside the log). `start` covers named Codex instances. The short-lived `warmup install` / `usage-window-warmup` job is gone: `t3-schedule remove usage-window-warmup`, `git rm` its two `.agents/schedules/` files, rerun `t3-usage-windows topup install`. Warm-up child threads are titled `Warm-up — <profile> <model>`.
