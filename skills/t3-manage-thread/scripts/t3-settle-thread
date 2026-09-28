@@ -193,8 +193,8 @@ if ((dry_run)); then
 fi
 
 # --- --detach: pre-armed self-settle for the current turn ---------------------
-# Kept for the "settle this thread when its current turn ends" request (the
-# t3-hello-world warm-up uses it). Settle stops the session, so this is only
+# Kept for the "settle this thread when its current turn ends" request.
+# Settle stops the session, so this is only
 # correct when the user explicitly asked for it.
 if [[ "$mode" == "detach" ]]; then
   t3_require sqlite3

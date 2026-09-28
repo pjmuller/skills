@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME]
 
-Starts one low-cost hello-world turn on OpenAI and every enabled Claude profile
+Starts one low-cost warm-up turn on OpenAI and every enabled Claude profile
 registered in T3 Code, then settles all successfully created child threads.
 
   --only  restrict to these provider instance ids ("codex", "claudeAgent",
@@ -112,7 +112,7 @@ fi
 
 # Prefer the caller's repo, then the source repo. CLI global installs have no git
 # root; a launchd cwd of / must never become a T3 project, so fall back to home.
-hello_project="$(git rev-parse --show-toplevel 2>/dev/null ||
+warmup_project="$(git rev-parse --show-toplevel 2>/dev/null ||
   git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel 2>/dev/null ||
   { [[ "$PWD" != / ]] && pwd -P || printf '%s\n' "$HOME"; })"
 
@@ -130,7 +130,7 @@ for provider_entry in "${providers[@]}"; do
     model_label="Haiku"
   fi
 
-  command=(t3-spawn-thread --no-open --project "$hello_project" --title "Hello world — $label $model_label"
+  command=(t3-spawn-thread --no-open --project "$warmup_project" --title "Warm-up — $label $model_label"
     --profile "$profile" --model "$model" --thinking low)
   ((dry_run)) && command+=(--dry-run)
   command+=(-- "Reply only: Hello world.")
@@ -180,7 +180,7 @@ if ((! dry_run)); then
 fi
 
 if ((failures)); then
-  echo "Hello-world run finished with $failures failure(s)." >&2
+  echo "Warm-up run finished with $failures failure(s)." >&2
   exit 1
 fi
 

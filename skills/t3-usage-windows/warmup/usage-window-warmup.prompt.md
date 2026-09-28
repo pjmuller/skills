@@ -1,0 +1,1 @@
+Morning usage-window warm-up (t3-usage-windows skill): run `t3-usage-windows start`, then report the result per provider in one line each (warmed / failed + reason). Settle yourself: `t3-settle-thread --self` as the last tool call.

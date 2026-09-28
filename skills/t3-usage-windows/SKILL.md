@@ -13,6 +13,13 @@ the clock.
 
 - `start` — one cheap turn per enabled Codex/Claude profile (models: `scripts/start.sh`), verifies
   the selection, settles every child; the calling thread keeps running.
+- `warmup install [--project REPO] [--at 05:00]` — daily morning warm-up: a
+  [t3-schedule](../t3-schedule/SKILL.md) job (`usage-window-warmup`) that runs `start` at 05:00.
+  Why: the five-hour clock starts on the first turn, so an early warm-up lands the first reset by
+  mid-morning instead of five hours after you start. Writes the shipped definition
+  ([warmup/](warmup/)) into the repo's `.agents/schedules/` (commit it) and arms it via
+  `t3-schedule adopt`; re-run after a skill update to refresh the prompt. Disarm:
+  `t3-schedule remove usage-window-warmup`.
 - `topup install|status|remove|run` — launchd tick that restarts only *expired* session windows
   during the workday (`scripts/topup.py`). Needs T3 running; never wakes the Mac. Decision preview:
   `topup run --dry-run --ignore-hours`.

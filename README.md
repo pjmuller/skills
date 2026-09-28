@@ -57,6 +57,10 @@ Dependencies: t3-schedule and t3-manage-thread are installed together by setup; 
 claude-cloud needs t3-manage-thread for profile → Keychain resolution (macOS only).
 T3 Code must be running for the T3 skills. Thread helpers work on macOS and Linux/WSL; launchd scheduling and the top-up daemon are macOS-only.
 
+First scheduled job, once t3-manage-thread, t3-schedule and t3-usage-windows are installed: open every
+account's five-hour window at 05:00 so the first reset lands mid-morning,
+`t3-usage-windows warmup install --project <personal setup repo>` (then commit its `.agents/schedules/` files).
+
 Paste-to-your-agent version:
 
 ```
@@ -75,7 +79,8 @@ The daily `skills-refresh` job applies new release tags of t3-manage-thread + t3
 Installers refuse to replace commands from another checkout; use `--relink` to choose a new canonical copy.
 `--check` prints its resolved source directory first.
 Updates replace installed files; keep personal customizations outside them. After updating
-t3-schedule run `t3-schedule refresh`; with an enabled top-up daemon rerun `t3-usage-windows topup install`.
+t3-schedule run `t3-schedule refresh`; with an enabled top-up daemon rerun `t3-usage-windows topup install`; with the morning warm-up rerun
+`t3-usage-windows warmup install` (refreshes its prompt, keeps its time).
 Releases and breaking changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Multiple Claude homes

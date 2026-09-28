@@ -117,3 +117,35 @@ def test_empty_profile_parts_never_expand_scope(monkeypatch):
     monkeypatch.setattr(profiles, 'settings', lambda: {'providerInstances': {}})
     assert profiles.matching('work,', {'work', 'other'}) == {'work'}
     assert profiles.matching(', ,', {'work', 'other'}) == set()
+
+
+def test_warmup_install_writes_repo_spec_and_adopts(tmp_path, monkeypatch, capsys):
+    import warmup
+    calls = []
+    real_run = subprocess.run
+    monkeypatch.setattr(warmup.subprocess, 'run', lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0)
+                        if cmd[0] == 't3-schedule' else real_run(cmd, **kw))
+    spec_file = tmp_path / '.agents/schedules/usage-window-warmup.json'
+    assert warmup.main(['install', '--project', str(tmp_path), '--dry-run']) == 0
+    assert not spec_file.exists() and not calls
+    assert warmup.main(['install', '--project', str(tmp_path), '--at', '05:30', '--profile', 'work']) == 0
+    assert calls[-1] == ['t3-schedule', 'adopt', str(spec_file), '--profile', 'work']
+    spec = json.loads(spec_file.read_text())
+    assert spec['at'] == '05:30' and spec['title'] == '⏰ usage-window-warmup {date}'
+    assert 't3-usage-windows start' in spec_file.with_name('usage-window-warmup.prompt.md').read_text()
+    assert warmup.main(['install', '--project', str(tmp_path)]) == 0  # re-install keeps the chosen time
+    assert json.loads(spec_file.read_text())['at'] == '05:30'
+    try:
+        warmup.main(['install', '--project', str(tmp_path), '--at', '5am'])
+        raise AssertionError('bad --at accepted')
+    except SystemExit as exc:
+        assert 'HH:MM' in str(exc)
+
+
+def test_warmup_shipped_spec_is_a_valid_schedule():
+    from importlib.machinery import SourceFileLoader
+    import warmup
+    schedule = SourceFileLoader('t3_schedule', str(HERE.parents[1] / 't3-schedule/scripts/t3-schedule')).load_module()
+    spec = json.loads((warmup.SHIPPED / 'usage-window-warmup.json').read_text())
+    assert set(spec) == set(schedule.REPO_KEYS)
+    assert schedule.repo_spec_problem(spec, warmup.SHIPPED / 'usage-window-warmup.prompt.md') is None
