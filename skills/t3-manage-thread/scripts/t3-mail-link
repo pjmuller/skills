@@ -53,11 +53,14 @@ def core_scripts() -> Path:
 
 # --- pure logic (tested) ------------------------------------------------------
 def parse_gmail_ref(text: str) -> tuple[str, str]:
-    """('hex', id) for API ids, thread-f:/msg-f: decimals, hex / Show-original / Print-all URLs; ('web', token) for FMfcg ids."""
+    """('hex', id) for API ids, thread-f:/msg-f: decimals, hex / Show-original / Print-all URLs; ('draft', id) for msg-a: drafts; ('web', token) for FMfcg ids."""
     token = text.strip()
     # "Show original" (permmsgid=msg-f:…) and "Print all" (permthid=thread-f:…) URLs carry the id.
     if m := re.search(r"[?&]perm(?:msg|th)id=(?:msg|thread)-f(?::|%3A)(\d+)", token):
         return "hex", format(int(m.group(1)), "x")
+    # Show original on a draft: msg-a:r-<n> is the draft id (API drafts.get), gone once sent.
+    if m := re.search(r"[?&]permmsgid=msg-a(?::|%3A)(r-?\d+)", token):
+        return "draft", m.group(1)
     match = re.search(r"#[^/]+(?:/[^/]+)*/([A-Za-z0-9_:-]+)/?$", token)
     if match:
         token = match.group(1)
@@ -225,6 +228,12 @@ def resolve_thread(ws, account: str, ref: str | None, search: str | None) -> str
             return thread_metadata(ws, value)["id"]
         except ApiError:  # a message id rather than a thread id
             return ws.gmail.get(value)["threadId"]
+    if kind == "draft":
+        from gws_core import ApiError
+        try:
+            return ws.gmail.get_draft(value)["message"]["threadId"]
+        except ApiError:
+            raise SystemExit("draft id not found (already sent?); use the URL of ⋮ → Print all instead")
     subject, title_account = chrome_subject(value, ref, account)
     if title_account != account.lower():
         raise SystemExit(f"that Gmail tab belongs to {title_account}, not {account}; wrong --config?")

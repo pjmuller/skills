@@ -16,7 +16,8 @@ t3-mail-link list · unlink <t3-or-gmail-id> · poll [--dry-run] · draft snapsh
   per link, so `poll` needs no flags. `--policy` = the consumer wrapper's rules; the ping names it.
 - **Default T3 thread** = the caller (same resolution as `t3-settle-thread --self`).
 - **URL ids**: hex / `thread-f:` / `msg-f:` resolve offline, as do the URLs of Gmail's ⋮ menu
-  **Show original** (`permmsgid=`) and **Print all** (`permthid=`): exact, no browser. Gmail's `FMfcg…` web ids are
+  **Show original** (`permmsgid=`; on a draft `msg-a:r-…` = draft id, gone once sent) and
+  **Print all** (`permthid=`): exact, no browser. Gmail's `FMfcg…` web ids are
   server tokens: the helper reads the Chrome tab title (open tab, else opens and closes one) for
   subject + account, then searches `subject:"…"` per thread. Several threads (or more than 25) → candidates, exit 3:
   ask the user. Chrome's "Allow JavaScript from Apple Events" is not needed. `--search` always works.

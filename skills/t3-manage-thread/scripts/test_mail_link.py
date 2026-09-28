@@ -19,6 +19,8 @@ loader.exec_module(ml)
     ("1866870901077892614", ("hex", format(1866870901077892614, "x"))),
     ("https://mail.google.com/mail/u/0/?ik=abc123&view=om&permmsgid=msg-f:1866870901077892614",
      ("hex", format(1866870901077892614, "x"))),
+    ("https://mail.google.com/mail/u/0/?ik=abc123&view=om&permmsgid=msg-a:r-8150541756871935074",
+     ("draft", "r-8150541756871935074")),
     ("https://mail.google.com/mail/u/0/?ik=abc123&view=pt&search=all&permthid=thread-f%3A1866870901077892614&simpl=msg-f%3A1",
      ("hex", format(1866870901077892614, "x"))),
     ("https://mail.google.com/mail/u/0/#inbox/FMfcgzQhWTsMxrbPlmQHFRGDvlgCtzdB",
