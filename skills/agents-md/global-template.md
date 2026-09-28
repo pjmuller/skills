@@ -68,7 +68,7 @@ Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets th
 
 ## Tooling: one tool per job
 - Python: `uv` only (no pip/poetry/venv/pyenv). Node/JS: `pnpm` only (`pnpm dlx` replaces npx).
-- Versions: `mise` only (check `mise.toml`). Env vars: `mise.toml` `[env]` loading `~/.config/mise-env/<org>/<repo>.env` (`redact = true`); no direnv. Vars not loaded → `mise exec -- <cmd>`.
+- Versions: `mise` only (check `mise.toml`). Env vars: `mise.toml` `[env]` → `~/.config/mise-env/<org>/<repo>.env` (`redact = true`, chmod 600); never a repo `.env` or `source .env`; no direnv. Vars not loaded → `mise exec -- <cmd>`.
 - Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
 - Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
