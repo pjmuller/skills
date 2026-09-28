@@ -10,9 +10,9 @@ usage() {
 Usage: t3-rename-thread [options] THREAD_ID -- "New title"
        t3-rename-thread [options] --title "New title" THREAD_ID
 
-Hard-sets a thread's title via thread.meta.update. T3's auto-titler only
-replaces a title that still equals the seed it was given, so a renamed thread
-keeps its name (emoji included). Prefix ids (>= 8 chars) resolve.
+Hard-sets a thread's title via thread.meta.update. Since T3 v0.0.42 that
+title is marked manual and the auto-titler never overwrites it, so a renamed
+thread keeps its name (emoji included). Prefix ids (>= 8 chars) resolve.
 
 Options:
   --title TEXT      New title (alternative to the trailing -- "title")

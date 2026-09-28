@@ -488,30 +488,51 @@ def export_sessions(api, since, directory):
     print(f"Exported {written}; skipped {skipped}; total {len(index)}; index {index_path}")
 
 
+EXITS = """exit codes:
+  0    success
+  1    transport, schema or API error
+  2    bad arguments; profile/environment missing or ambiguous
+  3    auth: no/invalid/expired credentials, 401/403
+  4    session not found (404)
+  5    turn failed, session failed/archived, or needs interaction (web UI)
+  124  timeout (cloud session keeps running)
+  130  interrupted (cloud session keeps running)"""
+PROFILE_HELP = ("T3 Claude profile: case-insensitive substring of instance id or display name; "
+                "unset → CLAUDE_CLOUD_PROFILE → CLAUDE_CONFIG_DIR → the only T3 Claude profile")
+SINCE_HELP = "Nd or YYYY-MM-DD (UTC); filters by creation date"
+TIMEOUT_HELP = "seconds (default %(default)g); cloud work keeps running on timeout"
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", help="T3 Claude profile; then CLAUDE_CLOUD_PROFILE, "
-                                          "CLAUDE_CONFIG_DIR, or the only profile")
+    parser = argparse.ArgumentParser(description=__doc__, epilog=EXITS,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--profile", help=PROFILE_HELP)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("envs")
-    sessions = commands.add_parser("sessions")
-    sessions.add_argument("--since")
-    sessions.add_argument("--limit", type=int)
+
+    def command(name):
+        return commands.add_parser(name, epilog=EXITS,
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    command("envs")
+    sessions = command("sessions")
+    sessions.add_argument("--since", help=SINCE_HELP + " (default: all)")
+    sessions.add_argument("--limit", type=int, help="stop after N matching rows, in API (activity) order (default: all)")
     sessions.add_argument("--json", action="store_true")
-    export = commands.add_parser("export")
-    export.add_argument("--since", default="7d")
+    export = command("export")
+    export.add_argument("--since", default="7d", help=SINCE_HELP + " (default %(default)s)")
     export.add_argument("--dir", required=True)
-    create = commands.add_parser("create")
-    create.add_argument("--env")
-    create.add_argument("--repo", help="GitHub owner/repo or https://github.com/owner/repo")
-    create.add_argument("--branch")
-    create.add_argument("--title")
-    create.add_argument("--wait", action="store_true")
-    create.add_argument("--timeout", type=float, default=1800)
+    create = command("create")
+    create.add_argument("--env", help="exact environment name or ID; unset → CLAUDE_CLOUD_ENV → the only environment")
+    create.add_argument("--repo", help="GitHub owner/repo or https://github.com/owner/repo; "
+                                       "unset → CLAUDE_CLOUD_REPO → none (no git source)")
+    create.add_argument("--branch", help="unset → CLAUDE_CLOUD_BRANCH → main")
+    create.add_argument("--title", help="default: first 120 characters of the prompt")
+    create.add_argument("--wait", action="store_true", help="wait for the turn, then print the transcript")
+    create.add_argument("--timeout", type=float, default=1800, help="with --wait: " + TIMEOUT_HELP)
     create.add_argument("--gate", metavar="SHA", help="wrap the prompt in the standard SHA-ancestry gate + read-only footer")
     create.add_argument("prompt")
     for name in ("send", "wait", "read", "archive"):
-        sub = commands.add_parser(name)
+        sub = command(name)
         sub.add_argument("id", type=session_id)
         if name == "read":
             sub.add_argument("--json", action="store_true")
@@ -520,10 +541,10 @@ def main():
             sub.add_argument("--gate", metavar="SHA", help="prefix a fetch + detached checkout of SHA and the read-only footer")
             sub.add_argument("--branch", help="branch to fetch for --gate")
         if name == "wait":
-            sub.add_argument("--timeout", type=float, default=1800)
+            sub.add_argument("--timeout", type=float, default=1800, help=TIMEOUT_HELP)
     # Accept profile before or after the subcommand.
     for sub in commands.choices.values():
-        sub.add_argument("--profile", default=argparse.SUPPRESS)
+        sub.add_argument("--profile", default=argparse.SUPPRESS, help=PROFILE_HELP)
     args = parser.parse_args()
     if hasattr(args, "timeout") and (not math.isfinite(args.timeout) or args.timeout <= 0):
         raise Failure("--timeout must be positive", 2)

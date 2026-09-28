@@ -407,8 +407,8 @@ fi
 if [[ "$model_choice" != "auto" && "$thinking_choice" == "auto" ]]; then
   case "$model_name" in
     gpt-*-sol|claude-opus-*) thinking_choice="high" ;;
-    claude-fable-5-1|claude-fable-5|gpt-6-astra) thinking_choice="medium" ;;
-    claude-haiku-4-5) thinking_choice="low" ;;
+    claude-fable-*|gpt-*-astra*) thinking_choice="medium" ;;
+    claude-haiku-*) thinking_choice="low" ;;
   esac
 fi
 

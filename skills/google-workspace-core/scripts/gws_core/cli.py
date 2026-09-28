@@ -433,6 +433,14 @@ def cmd_gmail_draft_get(a, ws):
     out(draft, a.json, f"draft {draft['id']}\n" + format_message(draft["message"], a.max_chars))
 
 
+def cmd_gmail_draft_update(a, ws):
+    draft = ws.gmail.update_draft(a.id, body_text(a), html_body=alternative_html(a),
+                                  expect_message=a.expect_message)
+    message = draft.get("message") or {}
+    out(draft, a.json, f"draft updated and read back: {draft['id']}  message={message.get('id')}  "
+                       f"thread={message.get('threadId')}  files={draft['verified']['files']}")
+
+
 def cmd_gmail_draft_send(a, ws):
     sent = ws.gmail.send_draft(a.id)
     out(sent, a.json, f"sent draft {a.id} as message {sent.get('id')}")
@@ -942,6 +950,17 @@ def build_parser() -> argparse.ArgumentParser:
     command = add("gmail-draft-get", cmd_gmail_draft_get, "read one draft")
     command.add_argument("id", help="draft id")
     command.add_argument("--max-chars", type=int, default=12000)
+
+    command = add("gmail-draft-update", cmd_gmail_draft_update,
+                  "replace a draft's body text in place, keeping headers, thread and files "
+                  "(never sends)")
+    command.add_argument("id", help="draft id")
+    body = command.add_mutually_exclusive_group(required=True)
+    body.add_argument("--body", help="new body text (the whole text, quotes included)")
+    body.add_argument("--body-file", help="read the new body from a UTF-8 file, or - for stdin")
+    command.add_argument("--html-file", help="new HTML part; default: the body text, escaped")
+    command.add_argument("--expect-message",
+                         help="message id gmail-draft-get showed; refuse if the draft changed since")
 
     command = add("gmail-draft-send", cmd_gmail_draft_send, "send an existing draft by id")
     command.add_argument("id", help="draft id")

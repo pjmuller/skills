@@ -43,7 +43,8 @@ and skip ranges from context (`AGENTS.md`, project docs); ask one question round
 
 `shrink-video --preset normal FILE` (presets in the script; keep the original). Hard external
 limit: native `agy` rejects attachments over **50 MiB (52,428,800 bytes)**, separate from Gemini
-API limits. Over it, or unsure which preset keeps text readable: [compression.md](compression.md).
+API limits. Over it: add `--max-bytes 48M` (splits into overlapping parts + `<name>.chunks.md`);
+preset choice and stitching part transcripts: [compression.md](compression.md).
 Never use `extreme` when small screen text matters; rapid actions may need source frames.
 
 ## Prompt

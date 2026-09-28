@@ -56,7 +56,8 @@ settles those). A finished thread still in "needs you" didn't run the footer.
   auto-titler names the thread from the first 72 prompt chars.
 - **Thinking**: no `--model` → inherit the parent's model and effort (terminal:
   project default, else Opus high). An explicit `--model` gets its house effort
-  (sol/opus high · fable/astra medium · haiku low; case table in the script).
+  (sol/opus high · fable/astra medium · haiku low; family-glob `case` in the
+  script, so new versions match; other models inherit).
   Pass `--thinking` only when the user names a level.
 - **`sol` / `opus` aliases** pick the newest version in T3's local model
   manifest; for Sol a fresh (< 1 h) per-account Codex model cache is

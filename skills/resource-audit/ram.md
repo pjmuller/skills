@@ -2,22 +2,14 @@
 
 ## Footprint versus RSS
 
-`top -l 1 -o mem -n 20 -stats pid,command,mem,cmprs` ranks physical footprint and
-shows compressed memory. A process with modest RSS can still own tens of GB
-compressed. Inspect its full command and ancestry before blaming the GUI app
+The snapshot's footprint ranking shows compressed memory (CMPRS). A process with
+modest RSS can still own tens of GB compressed. Inspect its full command and ancestry before blaming the GUI app
 hosting it: agent-launched text tools, builds, and workers are separate suspects.
-`top` memory values carry units and sometimes trailing `+`/`-`; do not sort those
-strings numerically without normalizing them.
 
 ## Many small workers
 
-```bash
-ps -axo ppid= | sort | uniq -c | sort -nr | head -15
-ps -axo comm= | sort | uniq -c | sort -nr | head -15
-```
-
-The first ranks parents by direct child count; the second counts identical
-executable names/paths. Inspect the leading group with full commands and elapsed
+The snapshot's PROCESS SWARMS section ranks parents by direct child count and counts
+identical executable names. Inspect the leading group with full commands and elapsed
 times from the main skill. Repeat briefly: rapidly growing counts and young
 workers suggest a spawn/restart loop even if no single worker looks huge.
 Trace the launcher and its errors; clearing children alone may restart the storm.

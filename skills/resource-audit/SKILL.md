@@ -5,47 +5,30 @@ description: Diagnose macOS CPU and RAM pressure, identify responsible processes
 
 # CPU and RAM troubleshooting (macOS)
 
-Start with live measurements; screenshots identify candidates, not current PID ownership.
-Run only the recipes needed to explain the load.
+Split of labour: the **script** measures, the **LLM** interprets and finds the owner.
+`scripts/resource_snapshot.sh [seconds]` is read-only: current CPU (top's second sample),
+memory pressure, swap, paging deltas, top physical footprint, process swarms, then
+SUGGESTED FOLLOW-UPS (printed, never run). `scripts/install` links it onto `~/.local/bin`
+(`--check` verifies). Screenshots identify candidates, not current PID ownership: rerun
+the snapshot before acting, and once more to tell a spike or growth from a stable state.
+Thresholds sit at the bottom of the script; tune them there, not in ad-hoc commands.
 
 ## CPU
 
-```bash
-ps -axo pid,ppid,pcpu,etime,comm -r | head -25
-top -l 2 -s 2 -n 0 | grep 'CPU usage'
-```
-
-Use the second `top` sample for current system load. A process at 100% uses roughly
-one core; several busy workers add up. Load average decays slowly after stopping
-work, so verify recovery with CPU idle percentage. Repeat the ranking if a spike
-could be transient.
+A process at 100% uses roughly one core. Load average decays slowly after work stops,
+so judge recovery by idle percentage. High `kernel_task` or WindowServer means
+thermal/device/display activity: investigate, never kill. Low CPU and low pressure but
+still slow → disk activity (`iostat -w 1 -c 3`); storage capacity belongs to `disk-audit`.
 
 ## RAM
 
-```bash
-memory_pressure
-sysctl vm.swapusage
-vm_stat
-top -l 1 -o mem -n 20 -stats pid,command,mem,cmprs
-ps -axo pid,ppid,rss,etime,comm | sort -k3,3nr | head -25
-```
-
-Use memory pressure to judge whether RAM is constrained; low free RAM alone is
-normal with caching. Prefer `top` MEM (physical footprint, including compressed
-memory); RSS alone can hide the largest offender. RSS is in KiB, and shared pages
-mean summing RSS overstates physical usage. Activity Monitor's Memory tab helps
-confirm pressure and group app helpers. Repeat measurements to distinguish
-stable large allocations from growth; swap already allocated does not prove
-active thrashing. Compare `vm_stat` pageout/swapout counter deltas over a short
-interval (counters are cumulative; page size is printed at the top).
-
-For a suspicious process (`target_pid`, next section), `vmmap -summary "$target_pid"`
-gives a memory breakdown; access may be restricted. A single snapshot cannot
-establish a leak. Recheck pressure and growth after stopping the confirmed owner;
-swap usage need not immediately return to zero.
-
-For compressed-memory discrepancies, process swarms, or abandoned dev servers,
-see [RAM investigation recipes](ram.md).
+Memory pressure, not free RAM, says whether RAM is constrained (caching fills RAM).
+Allocated swap is history; only swapout deltas during the sample mean active thrashing.
+The footprint ranking includes compressed memory; RSS can hide the largest offender and
+summing RSS overcounts shared pages. One snapshot cannot establish a leak: compare two.
+`vmmap -summary <pid>` breaks a suspect down (may be restricted). After stopping the owner,
+pressure should drop; swap need not return to zero. Compressed-memory discrepancies,
+swarms, abandoned dev servers, existing watchdogs: [RAM investigation recipes](ram.md).
 
 ## Identify the owner and work
 
@@ -74,10 +57,7 @@ sample "$target_pid" 3 -file "$sample_file"
 
 Inspect the busiest stacks for repeated computation, polling, or retries. For
 browser helpers, use the browser's task manager to identify the tab/extension;
-for a VM/container, inspect workloads inside it. High `kernel_task` or WindowServer
-usage calls for investigating thermal/device/display activity, not killing them.
-If CPU and memory pressure are low, inspect disk activity (`iostat -w 1 -c 3`)
-before blaming the largest process; use `disk-audit` for storage capacity.
+for a VM/container, inspect workloads inside it.
 
 ## Stop and verify
 
@@ -87,7 +67,7 @@ killing a parent does not guarantee its workers exit. Target confirmed PIDs,
 not every process with a common name such as `node` or `zsh`.
 
 After a brief wait, check `ps -p "$target_pid" -o pid,stat,pcpu,comm` and repeat
-the relevant CPU or RAM measurements above. Use `kill -KILL` only for a verified surviving culprit.
+`resource_snapshot.sh`. Use `kill -KILL` only for a verified surviving culprit.
 If it respawns, identify and stop its supervisor rather than repeatedly killing
 children. Report the owner, likely cause, and measured recovery; distinguish an
 observed cause from a hypothesis.

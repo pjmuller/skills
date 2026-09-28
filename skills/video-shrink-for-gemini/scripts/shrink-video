@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Shrink a screen recording so Gemini swallows it whole while speech stays transcribable.
-# Usage: shrink-video [--preset normal|compact|heavy|extreme] [--out DIR] FILE...
+# Usage: shrink-video [--preset normal|compact|heavy|extreme] [--out DIR] [--max-bytes SIZE] FILE...
 #   FILE may be a bare name; it is looked up in ~/screenshots and ~/Downloads.
+#   --max-bytes SIZE (bytes, or K/M/G = KiB/MiB/GiB, e.g. 48M): if the output is larger, also
+#     write overlapping parts <name>.gemini.partNN.mp4, each <= SIZE, and <name>.chunks.md
+#     (absolute start/end per part). Default: off. Native agy's hard limit is 50M.
 # Output: <name>.gemini.mp4 next to the source (or in --out DIR).
 set -euo pipefail
 
-preset=normal; outdir=""
+preset=normal; outdir=""; max_bytes=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --preset) preset=$2; shift 2 ;;
     --out) outdir=$2; shift 2 ;;
-    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+    --max-bytes) max_bytes=$2; shift 2 ;;
+    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -36,6 +40,87 @@ resolve() {
   echo "not found: $f" >&2; return 1
 }
 
+if [[ -n $max_bytes ]]; then
+  max_bytes=$(awk -v s="$max_bytes" 'BEGIN {
+    u = toupper(substr(s, length(s))); n = s; m = 1
+    if (u == "K") m = 1024; else if (u == "M") m = 1048576; else if (u == "G") m = 1073741824
+    if (m > 1) n = substr(s, 1, length(s) - 1)
+    if (n !~ /^[0-9]+(\.[0-9]+)?$/) exit 1
+    printf "%d", n * m }') || { echo "bad --max-bytes (e.g. 48M, 50000000)" >&2; exit 1; }
+fi
+
+# Split points must land on keyframes so parts are stream copies (fast, no generation loss).
+# x264's default GOP at 0.5 fps is ~8 min, too coarse, so an oversized output is re-encoded once
+# with a keyframe every key_every s. Only then: forced keyframes cost bytes on static screens.
+key_every=30
+overlap=10    # seconds shared by neighbouring parts; the keyframe snap adds up to key_every more
+margin=0.92   # plan parts at 92% of SIZE: bitrate varies along the recording
+
+calc() { awk "BEGIN { printf \"%.3f\", $* }"; }
+hms() { awk -v t="$1" 'BEGIN { printf "%02d:%02d:%04.1f", t / 3600, (t % 3600) / 60, t - int(t / 60) * 60 }'; }
+
+# encode IN OUT [FFMPEG_ARG...]: the preset recipe.
+encode() {
+  ffmpeg -hide_banner -loglevel error -stats -y \
+    -i "$1" \
+    -vf "fps=$fps,scale='min($width,iw)':-2:flags=lanczos" \
+    -c:v libx264 -preset slow -crf "$crf" -pix_fmt yuv420p "${@:3}" \
+    -movflags +faststart \
+    -ac 1 -ar 16000 -c:a aac -b:a 32k \
+    "$2"
+}
+
+# split IN OUT: consecutive parts of OUT <= max_bytes plus a Markdown chunk list.
+split_parts() {
+  local in=$1 out=$2 stem=${2%.mp4} dur size keys rate budget s=0 n=1 left count len last psize end next part
+  local manifest="${stem%.gemini}.chunks.md"
+  rm -f "$stem".part[0-9][0-9].mp4 "$manifest"
+  size=$(wc -c <"$out" | tr -d ' ')
+  (( size > max_bytes )) || return 0
+  echo "   over $max_bytes bytes: re-encoding with a keyframe every ${key_every}s, then splitting"
+  encode "$in" "$out" -force_key_frames "expr:gte(t,n_forced*$key_every)"
+  size=$(wc -c <"$out" | tr -d ' ')
+  # Coverage uses the source timeline: sparse output pads the last still past the audio.
+  dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$in")
+  keys=$(ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,flags -of csv=p=0 "$out" |
+    awk -F, '$2 ~ /K/ { print $1 }')
+  rate=$(calc "$size / $dur"); budget=$(calc "$max_bytes * $margin")
+  {
+    echo "# Chunks of $(basename "$out")"
+    echo
+    echo "Add each part's start to its timestamps; neighbours overlap by ${overlap}-$((overlap + key_every)) s."
+    echo
+    echo "| part | start | end | bytes |"
+    echo "| --- | --- | --- | --- |"
+  } >"$manifest"
+  while :; do
+    left=$(calc "$dur - $s")
+    count=$(awk -v l="$left" -v r="$rate" -v b="$budget" 'BEGIN { n = l * r / b; print (n == int(n)) ? n : int(n) + 1 }')
+    # Even lengths over the remaining parts avoid a tiny last fragment.
+    if (( count <= 1 )); then last=1; len=$left; else last=0; len=$(calc "$left / $count + $overlap"); fi
+    part=$(printf '%s.part%02d.mp4' "$stem" "$n")
+    for _ in 1 2 3 4 5 6; do
+      if (( last )); then
+        ffmpeg -hide_banner -loglevel error -y -ss "$s" -i "$out" -c copy -movflags +faststart "$part"
+      else
+        ffmpeg -hide_banner -loglevel error -y -ss "$s" -i "$out" -t "$len" -c copy -movflags +faststart "$part"
+      fi
+      psize=$(wc -c <"$part" | tr -d ' ')
+      (( psize <= max_bytes )) && break
+      last=0; len=$(calc "$len * $budget / $psize")
+    done
+    (( psize <= max_bytes )) || { echo "part $n still over --max-bytes: $part" >&2; return 1; }
+    if (( last )); then end=$dur; else end=$(calc "$s + $len"); fi
+    echo "| $(basename "$part") | $(hms "$s") | $(hms "$end") | $psize |" >>"$manifest"
+    (( last )) && break
+    next=$(awk -v lim="$(calc "$end - $overlap")" '$1 <= lim { k = $1 } END { print k + 0 }' <<<"$keys")
+    awk -v a="$next" -v b="$s" 'BEGIN { exit !(a > b) }' ||
+      { echo "cannot split $out: --max-bytes too small for ${key_every}s keyframe spacing" >&2; return 1; }
+    s=$next; n=$((n + 1))
+  done
+  printf '   split into %d parts ≤ %s bytes → %s\n' "$n" "$max_bytes" "$manifest"
+}
+
 for arg in "$@"; do
   in=$(resolve "$arg")
   base=$(basename "${in%.*}")
@@ -43,12 +128,7 @@ for arg in "$@"; do
   mkdir -p "$dir"
   out="$dir/$base.gemini.mp4"
   echo "→ $in  [$preset: ${fps}fps ${width}w crf$crf]"
-  ffmpeg -hide_banner -loglevel error -stats -y \
-    -i "$in" \
-    -vf "fps=$fps,scale='min($width,iw)':-2:flags=lanczos" \
-    -c:v libx264 -preset slow -crf "$crf" -pix_fmt yuv420p \
-    -movflags +faststart \
-    -ac 1 -ar 16000 -c:a aac -b:a 32k \
-    "$out"
+  encode "$in" "$out"
   printf '   %s → %s  (%s)\n' "$(du -h "$in" | cut -f1)" "$(du -h "$out" | cut -f1)" "$out"
+  if [[ -n $max_bytes ]]; then split_parts "$in" "$out"; fi
 done

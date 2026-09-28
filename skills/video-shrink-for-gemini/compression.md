@@ -13,15 +13,12 @@ normal 38.6 MiB, compact 29.3, heavy 24.4.
 
 ## Fallback: fewest practical chunks
 
-Target 48 MiB (headroom). Start with `N = ceil(bytes / 48 MiB)` equal-duration chunks, ~10 s
-overlap, each seeked from the **original** and encoded with the accepted recipe (same ffmpeg
-arguments as `shrink-video`, plus `-ss START -t LENGTH`). Measure each: shorten only oversized
-chunks, merge neighbours whose union fits, avoid tiny fragments; not arbitrary ten-minute chunks.
+Still over after `heavy`: `shrink-video --max-bytes 48M` (headroom under 50 MiB) keeps
+`<name>.gemini.mp4` and adds balanced, overlapping `<name>.gemini.partNN.mp4` stream-copy parts
+plus `<name>.chunks.md` (absolute start/end, bytes). Sizing, overlap and keyframe logic:
+`split_parts` in `scripts/shrink-video`.
 
-Sparse output holds the last still up to one frame interval past the audio: use the source
-timeline for coverage, not the padded video tail.
-
-Save a manifest (start, end, bytes, audio/video properties per file) and require gap-free
-coverage. Give Gemini absolute offsets and context; write distinct drafts; deduplicate overlap
-without dropping unfinished sentences. Fathom timings help align speech, but crop times only
-locate visual evidence, never spoken-topic starts. Mark uncertain timings.
+Merging: one Gemini run per part; give each its absolute start offset and context, write
+distinct drafts, then stitch. Deduplicate the overlap without dropping unfinished sentences.
+Fathom timings help align speech, but crop times only locate visual evidence, never spoken-topic
+starts. Mark uncertain timings.

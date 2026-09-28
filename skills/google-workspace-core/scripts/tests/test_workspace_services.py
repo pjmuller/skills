@@ -2,12 +2,14 @@
 
 import base64
 from email import message_from_bytes
+from email.message import EmailMessage
+from email.policy import default
 
 import pytest
 
 from gws_core.drive import DriveClient
 from gws_core.errors import WorkspaceError
-from gws_core.gmail import GmailClient, extract_codes, trim_quotes
+from gws_core.gmail import GmailClient, decode_websafe, extract_codes, trim_quotes
 from gws_core.sheets import SheetsClient
 from gws_core.slides import SlidesClient
 
@@ -150,6 +152,77 @@ def test_gmail_keeps_an_authored_plain_text_body_beside_an_html_alternative():
              for part in message.walk() if part.get_content_type().startswith("text/")}
     assert parts["text/plain"].strip() == "Plain report"
     assert parts["text/html"].strip() == "<h1>Rich report</h1>"
+
+
+class DraftSession(FakeSession):
+    """One stored draft: GET returns it, PUT replaces it under a new message id, as Gmail does."""
+
+    def __init__(self, raw, *, autosave_on_get=None, store=None):
+        super().__init__()
+        self.draft = {"id": "d1", "message": {"id": "m1", "threadId": "t1", "raw": raw}}
+        self.autosave_on_get, self.store = autosave_on_get, store or (lambda message: message)
+        self.gets = 0
+
+    def api(self, method, url, **kw):
+        self.calls.append((method, url, kw))
+        if method == "PUT":
+            self.draft = {"id": "d1", "message": self.store({"id": "m2", **kw["json"]["message"]})}
+            return {"id": "d1", "message": {"id": "m2", "threadId": self.draft["message"]["threadId"]}}
+        self.gets += 1
+        if self.gets == self.autosave_on_get:
+            self.draft["message"]["id"] = "m1-autosaved"
+        return {"id": "d1", "message": dict(self.draft["message"])}
+
+
+def reply_draft_with_attachment():
+    message = EmailMessage()
+    for name, value in (("From", ACCOUNT), ("To", "her@example.com"), ("Subject", "Re: Offerte"),
+                        ("In-Reply-To", "<abc@mail>"), ("References", "<abc@mail>")):
+        message[name] = value
+    message.set_content("Oude tekst.\n\n> Graag een offerte.")
+    message.add_alternative("<div>Oude tekst.</div><blockquote>Graag</blockquote>", subtype="html")
+    message.add_attachment(b"%PDF-1.4 bytes", maintype="application", subtype="pdf",
+                           filename="offerte.pdf")
+    return base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+
+def test_gmail_draft_update_replaces_only_the_body_and_keeps_thread_headers_and_files():
+    session = DraftSession(reply_draft_with_attachment())
+    result = GmailClient(session, sender=ACCOUNT).update_draft("d1", "Nieuwe tekst & meer.\n\n> Graag")
+    assert [method for method, _, _ in session.calls] == ["GET", "GET", "PUT", "GET"]
+    sent = session.calls[2][2]["json"]
+    assert sent["id"] == "d1" and sent["message"]["threadId"] == "t1"
+    stored = message_from_bytes(base64.urlsafe_b64decode(sent["message"]["raw"]), policy=default)
+    assert stored["In-Reply-To"] == "<abc@mail>" and stored["Subject"] == "Re: Offerte"
+    text = {kind: stored.get_body((kind,)).get_content().replace("\r\n", "\n").rstrip()
+            for kind in ("plain", "html")}
+    assert text == {"plain": "Nieuwe tekst & meer.\n\n> Graag",
+                    "html": "Nieuwe tekst &amp; meer.<br><br>&gt; Graag"}
+    pdf = next(stored.iter_attachments())
+    assert pdf.get_filename() == "offerte.pdf" and pdf.get_content() == b"%PDF-1.4 bytes"
+    assert result["verified"] == {"threadId": "t1", "files": 1}
+
+
+@pytest.mark.parametrize("kw, autosave_on_get", [({"expect_message": "m0"}, None), ({}, 2)])
+def test_gmail_draft_update_refuses_a_draft_that_changed_since_it_was_read(kw, autosave_on_get):
+    session = DraftSession(reply_draft_with_attachment(), autosave_on_get=autosave_on_get)
+    with pytest.raises(WorkspaceError, match="changed since it was read"):
+        GmailClient(session, sender=ACCOUNT).update_draft("d1", "Nieuw", **kw)
+    assert "PUT" not in [method for method, _, _ in session.calls]
+
+
+def test_gmail_draft_update_fails_when_the_read_back_lost_a_file_or_the_thread():
+    def lossy(message):
+        stored = message_from_bytes(decode_websafe(message["raw"]), policy=default)
+        stored.clear_content()
+        stored.set_content("Nieuw")  # the attachment and HTML part are gone
+        return {**message, "threadId": "t-other",
+                "raw": base64.urlsafe_b64encode(stored.as_bytes()).decode()}
+
+    session = DraftSession(reply_draft_with_attachment(), store=lossy)
+    with pytest.raises(WorkspaceError, match="read-back differs in threadId, text/html body, "
+                                             "headers or file parts"):
+        GmailClient(session, sender=ACCOUNT).update_draft("d1", "Nieuw")
 
 
 def test_gmail_view_trims_quotes_only_when_asked():

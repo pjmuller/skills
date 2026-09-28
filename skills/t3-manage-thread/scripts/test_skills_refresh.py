@@ -146,3 +146,22 @@ def test_job_outside_t3_passes_exit_code_through(env):
     result = subprocess.run(["bash", str(SCRIPT), "--job"], env=e, text=True, capture_output=True)
     assert result.returncode == 10 and "not inside a T3 thread" in result.stdout
     assert subprocess.run(["bash", str(SCRIPT), "--job", "--quiet"], env=e, text=True, capture_output=True).returncode == 0
+
+
+def test_version_source_checkout_vs_copy_inside_other_repo(env, tmp_path):
+    # Managed copy: ~/.agents/skills symlinked into a setup repo's ai/skills (a real dir in git).
+    setup = tmp_path / "setup"
+    (setup / "ai/skills/t3-manage-thread").mkdir(parents=True)
+    (setup / "ai/skills/t3-manage-thread/SKILL.md").write_text("x\n")
+    git(setup, "init", "-q")
+    git(setup, "add", "-A")
+    git(setup, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "setup")
+    home = tmp_path / "copy-home"
+    home.mkdir()
+    (home / "skills").symlink_to(setup / "ai/skills")
+    (home / "pjmuller-skills.version").write_text("v0.2.0 2026-02-01\n")
+    assert run(env, "--version", SKILLS_REFRESH_HOME=str(home)).stdout.startswith("v0.2.0 (applied 2026-02-01)")
+    # Source checkout: the skill dir symlinks to <this repo>/skills/t3-manage-thread.
+    (env["repo"] / "skills/t3-manage-thread").mkdir()
+    (env["home"] / "skills/t3-manage-thread").symlink_to(env["repo"] / "skills/t3-manage-thread")
+    assert run(env, "--version").stdout.startswith("source checkout v0.2.0")

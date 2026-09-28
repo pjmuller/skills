@@ -46,7 +46,7 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
-  - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's) and the model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value.
+  - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value.
 
 ### T3 threads (skill `t3-manage-thread`; helpers on PATH)
 `t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles` · `t3-find-thread` (fuzzy-find a past thread; skill `t3-find-thread`) → `t3-open-thread <id>`.

@@ -12,7 +12,9 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   any swap or `scripts/install` failure restores every skill from `last-good/`.
   `install --check` failures only warn.
 - **Version**: stamp `~/.agents/pjmuller-skills.version`, shown by
-  `skills-refresh --version`, `t3-spawn-thread --version` and `scripts/install --check`.
+  `skills-refresh --version`, `t3-spawn-thread --version` and `scripts/install --check`
+  (`source checkout <describe>` only when the skill dir is this repo's own
+  `skills/t3-manage-thread`, see `version()`).
 - **Job thread** (macOS, via [t3-schedule](../t3-schedule/SKILL.md), hidden,
   cheap model): the script, not the model, decides the thread's fate — settle
   when nothing changed, surface it with the changelog on an update or the error

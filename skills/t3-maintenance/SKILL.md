@@ -12,7 +12,8 @@ Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Fl
 - `t3-fleet` — orchestrator view of worker threads; bulk unsettle/ping.
 - `t3-drafts` — unsent composer text per thread, read-only. The user keeps per-thread sticky notes
   there ("DONE", "TODO read") as well as half-written prompts, so listing across threads is the
-  point. `--limited` needs `t3-usage-windows` on PATH.
+  point. The rate-limited marker and `--limited` come from `t3-usage-windows` on PATH; without it
+  listing still works and `--limited` fails closed.
 - `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
 - `t3-purge-threads` — delete old threads + provider transcripts (they hold secrets).
 - Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).

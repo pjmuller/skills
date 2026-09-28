@@ -54,14 +54,24 @@ PNG = base64.b64encode(b"pretend-image").decode()
 
 class DraftsTest(unittest.TestCase):
     def setUp(self) -> None:
-        scripts = SCRIPT.parents[2] / 't3-usage-windows/scripts'
-        env = patch.dict(os.environ, PATH=f"{scripts}:{SCRIPT.parent}:" + os.environ['PATH'])
-        env.start()
-        self.addCleanup(env.stop)
         self.module = load_cli()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = Path(self.temp.name) / "state.sqlite"
+        # Stub the detector so the test never runs whatever t3-usage-windows is
+        # installed; it answers only the exact argv t3-drafts must send.
+        bin_dir = Path(self.temp.name) / "bin"
+        bin_dir.mkdir()
+        detector = bin_dir / "t3-usage-windows"
+        detector.write_text(
+            "#!/bin/sh\n"
+            f'[ "$*" = "limited --store {self.store} list --since 1970-01-01 --json" ] || exit 3\n'
+            f"echo '[{{\"thread_id\": \"{IDS['limited']}\"}}]'\n"
+        )
+        detector.chmod(0o755)
+        env = patch.dict(os.environ, PATH=f"{bin_dir}:" + os.environ["PATH"])
+        env.start()
+        self.addCleanup(env.stop)
         now = datetime.now(timezone.utc)
         self.now = now
         connection = sqlite3.connect(self.store)
@@ -73,16 +83,6 @@ class DraftsTest(unittest.TestCase):
               thread_id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
               created_at TEXT, updated_at TEXT, deleted_at TEXT, archived_at TEXT,
               model_selection_json TEXT
-            );
-            CREATE TABLE projection_thread_messages (
-              message_id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, text TEXT,
-              created_at TEXT
-            );
-            CREATE TABLE projection_thread_sessions (
-              thread_id TEXT, status TEXT, last_error TEXT, updated_at TEXT
-            );
-            CREATE TABLE projection_thread_activities (
-              thread_id TEXT, kind TEXT, payload_json TEXT, created_at TEXT
             );
             INSERT INTO projection_projects VALUES ('p','fixture');
         """)
@@ -109,16 +109,6 @@ class DraftsTest(unittest.TestCase):
         thread("empty", "no draft", profile="codex", hours=1)
         thread("twin_a", "twin a", profile="codex", hours=4)
         thread("twin_b", "twin b", profile="codex", hours=5)
-        connection.execute(
-            "INSERT INTO projection_thread_messages VALUES (?,?,?,?,?)",
-            (
-                "m1",
-                IDS["limited"],
-                "assistant",
-                "You've hit your session limit · resets 8pm (Europe/Brussels)",
-                stamp(now - timedelta(hours=3)),
-            ),
-        )
         connection.commit()
         connection.close()
 

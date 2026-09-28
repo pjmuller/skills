@@ -4,7 +4,7 @@
 `export --since 7d --dir DIR` (Markdown per session + `index.json`). Row/turn fields:
 `session_rows` and `review_turns` in `scripts/claude-cloud`.
 
-- `--since` filters by creation date across all pages; the API lists by activity, not creation.
+- `--since` (format: `--help`) scans all pages: the API lists by activity, not creation.
 - Transcripts omit thinking and lifecycle events; failed tools keep a 300-character error excerpt.
 - Export is a snapshot cache: files already indexed are not refetched (delete one to refresh), an
   interrupted run resumes, and the index keeps older windows.

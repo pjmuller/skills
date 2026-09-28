@@ -25,13 +25,7 @@ Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/dr
 
 ## Existing Gmail drafts (either account)
 
-- Base the edit on the draft's latest text (or user-supplied replacement text); preserve the
-  user's wording. A tone guide is not permission to rewrite unrelated passages.
-- Read raw MIME (`gmail-draft-get`, or `api GET /gmail/v1/users/me/drafts/<id>?format=raw`) to keep
-  recipients, subject, reply headers, attachments and multipart bodies. Edit the relevant body
-  parts; whole-message `set_content` drops HTML alternatives and attachments.
-- Re-fetch right before updating; if it changed, rebase the edit (reduces races, not a lock).
-- Update the existing draft in place (no CLI command yet: `api PUT /gmail/v1/users/me/drafts/<id>`
-  with the edited raw message), keeping `message.threadId`; don't recreate or send it. After
-  a create timeout, list drafts before retrying.
-- Read back: intended text, retained fields/attachments, `DRAFT` label. Report the verified outcome.
+Edit the latest text from `gmail-draft-get`, keeping the user's wording outside the requested change;
+`gmail-draft-update <draft-id> --body-file PATH --expect-message <message-id>` swaps only the body
+in place (HTML part = escaped text unless `--html-file`), never sends and verifies the read-back.
+After a `gmail-draft` timeout, list drafts before retrying.

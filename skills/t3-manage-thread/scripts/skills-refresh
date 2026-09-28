@@ -24,8 +24,11 @@ USAGE
 die() { echo "skills-refresh: $*" >&2; exit 1; }
 
 version() {
-  local dir="$SKILLS/t3-manage-thread"
-  if [[ -d "$dir" ]] && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  local dir="$SKILLS/t3-manage-thread" top
+  # Source checkout only when the (symlinked) dir is <repo>/skills/t3-manage-thread of the repo
+  # itself: a managed copy inside some other repo (a setup repo's ai/skills) reads the stamp.
+  if [[ -d "$dir" ]] && top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" &&
+    [[ "$top" == "$(cd -P "$dir/../.." && pwd -P)" ]]; then
     echo "source checkout $(git -C "$dir" describe --tags --always)"
   elif [[ -s "$STAMP" ]]; then
     read -r tag day _ < "$STAMP" || true; echo "$tag (applied $day)"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import html as html_module
 import mimetypes
 import re
@@ -11,8 +12,9 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from email.message import EmailMessage
-from email.policy import SMTP
+from email import message_from_bytes
+from email.message import EmailMessage, MIMEPart
+from email.policy import SMTP, default
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -22,6 +24,7 @@ from .errors import ApiError, WorkspaceError
 from .session import GMAIL, Session
 
 HEADER_ORDER = ("Date", "From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References")
+KEPT_HEADERS = ("From", "To", "Cc", "Bcc", "Subject", "In-Reply-To", "References")
 # A 4-10 character run of letters+digits containing at least one digit: 123456, A1B2C3, 9F4K2.
 CODE_RE = re.compile(r"\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,10}\b")
 QUOTE_MARKERS = (
@@ -470,7 +473,7 @@ class GmailClient:
             quote_html = (
                 f'<br><br><div class="gmail_quote">{html_module.escape(lead)}'
                 '<blockquote style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">'
-                f'{html_module.escape(original["body"]).replace(chr(10), "<br>")}</blockquote></div>')
+                f'{_text_html(original["body"])}</blockquote></div>')
         if html and html_body:
             raise WorkspaceError("pass either --html (the body is HTML) or --html-file, not both")
         if html:
@@ -506,6 +509,56 @@ class GmailClient:
     def get_draft(self, draft_id: str) -> dict:
         data = self.session.api("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "full"})
         return {"id": data.get("id"), "message": self.view(data.get("message", {}), trim=False)}
+
+    def update_draft(self, draft_id: str, body: str, *, html_body: str | None = None,
+                     expect_message: str | None = None) -> dict:
+        """Replace only the body text of a draft in place; headers, thread and files stay. Never sends.
+
+        The text/plain part gets `body`; an existing text/html part gets `html_body`, else `body`
+        escaped (the transform build() uses for quoted text) so both alternatives say the same.
+        """
+        base = self.session.api("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "raw"})
+        # Gmail gives a draft a new message id on every save (API or composer autosave), so that
+        # id is a compare-and-swap token. `expect_message` (the id the caller's gmail-draft-get
+        # showed) stretches the guard back to when the edit was based; the re-fetch right before
+        # the PUT catches a save during this call. Narrows the race, not a lock.
+        seen = expect_message or base["message"]["id"]
+        _refuse_if_changed(draft_id, base, seen)
+        thread_id = base["message"]["threadId"]
+        message = message_from_bytes(decode_websafe(base["message"]["raw"]), policy=default)
+        plain, html = message.get_body(("plain",)), message.get_body(("html",))
+        if plain is None and html is None:
+            raise WorkspaceError(f"draft {draft_id} has no text body part to replace")
+        if html_body is not None and html is None:
+            raise WorkspaceError(f"draft {draft_id} has no HTML part; drop --html-file")
+        kept = _kept_facts(message)
+        expected = {}
+        # MIMEPart.set_content: EmailMessage's would also stamp MIME-Version on a body subpart.
+        if plain is not None:
+            MIMEPart.set_content(plain, body)
+            expected["plain"] = body
+        if html is not None:
+            expected["html"] = html_body if html_body is not None else _text_html(body)
+            MIMEPart.set_content(html, expected["html"], subtype="html")
+        raw = base64.urlsafe_b64encode(message.as_bytes(policy=SMTP)).decode("ascii")
+        _refuse_if_changed(draft_id, self.session.api(
+            "GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "minimal"}), seen)
+        updated = self.session.api("PUT", f"{GMAIL}/drafts/{draft_id}", json={
+            "id": draft_id, "message": self._payload(raw, thread_id)})
+
+        back = self.session.api("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "raw"})
+        stored = message_from_bytes(decode_websafe(back["message"]["raw"]), policy=default)
+        problems = [] if back["message"].get("threadId") == thread_id else ["threadId"]
+        for subtype, text in expected.items():
+            part = stored.get_body((subtype,))
+            if part is None or _text_key(part.get_content()) != _text_key(text):
+                problems.append(f"text/{subtype} body")
+        if _kept_facts(stored) != kept:
+            problems.append("headers or file parts")
+        if problems:
+            raise WorkspaceError(f"draft {draft_id} was updated but the read-back differs in "
+                                 f"{', '.join(problems)}; inspect it with gmail-draft-get")
+        return {**updated, "verified": {"threadId": thread_id, "files": len(kept[1])}}
 
     def send_draft(self, draft_id: str) -> dict:
         return self.session.api("POST", f"{GMAIL}/drafts/send", json={"id": draft_id})
@@ -558,6 +611,34 @@ def _patient(call: Callable[[], Any]) -> Any:
             if attempt == 6 or not quota:
                 raise
             time.sleep(2 ** (attempt + 1))  # 2 … 128 s, outlasting the per-minute window
+
+
+def _text_html(text: str) -> str:
+    return html_module.escape(text).replace("\n", "<br>")
+
+
+def _text_key(text: str) -> str:
+    """MIME re-encoding normalises line endings and the trailing newline; the words must match."""
+    return text.replace("\r\n", "\n").rstrip()
+
+
+def _refuse_if_changed(draft_id: str, current: dict, seen: str) -> None:
+    now = (current.get("message") or {}).get("id")
+    if now != seen:
+        raise WorkspaceError(f"draft {draft_id} changed since it was read (message {seen} is now "
+                             f"{now}); re-read it with gmail-draft-get and rebase the edit")
+
+
+def _kept_facts(message: EmailMessage) -> tuple[dict, list]:
+    """What a body edit must leave alone: key headers and every non-body leaf part's bytes."""
+    bodies = [part for part in (message.get_body(("plain",)), message.get_body(("html",)))
+              if part is not None]
+    headers = {name: " ".join(str(message.get(name, "")).split()) for name in KEPT_HEADERS}
+    files = sorted((part.get_content_type(), part.get_filename() or "",
+                    hashlib.sha256(part.get_payload(decode=True) or b"").hexdigest())
+                   for part in message.walk()
+                   if not part.is_multipart() and all(part is not body for body in bodies))
+    return headers, files
 
 
 def _stamp(when: datetime | None) -> str:

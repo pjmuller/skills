@@ -32,14 +32,10 @@ Pick the flow: pushed-commit verification → [dry-run.md](dry-run.md) (`create 
 re-test via `send --gate NEWER_SHA --branch B`); past sessions, cost, export → [review.md](review.md);
 permission prompts, uploads, rendered artifacts, environment edits → [browser-fallback.md](browser-fallback.md).
 
-Defaults; stderr prints each resolved choice and its source:
-- Profile: `--profile` (case-insensitive substring of a T3 Claude instance id or display name, same
-  rule as `t3-spawn-thread --profile`) → `CLAUDE_CLOUD_PROFILE` → `CLAUDE_CONFIG_DIR` → the only
-  T3 Claude profile; ambiguity → exit 2 listing candidates.
-- `create`: `--env`/`CLAUDE_CLOUD_ENV` (exact name or ID) → the only environment; `--repo`/`CLAUDE_CLOUD_REPO`
-  → none (environments carry no repo default, so the session starts without a git source);
-  `--branch`/`CLAUDE_CLOUD_BRANCH` → `main`. Put per-repo defaults in `mise.toml` `[env]`.
-  Anthropic-hosted environments only.
+Defaults, env-var fallbacks (`--profile`, `create --env/--repo/--branch`), `--since` format and
+exit codes: `claude-cloud [<cmd>] --help`. stderr prints each resolved choice and its source. Put
+per-repo defaults in `mise.toml` `[env]`; environments carry no repo default, so `create` without a
+repo starts with no git source. Anthropic-hosted environments only.
 
 Behaviour `--help` does not show:
 - `create` needs no local checkout, prints ID + URL first; `--wait` then prints the full transcript.
@@ -50,9 +46,6 @@ Behaviour `--help` does not show:
 - Interaction requests (exit 5 "needs interaction") require the web UI.
 - Cloud startup hooks run before the prompt: read-only wording is not a sandbox, keep cloud
   instructions in scope.
-
-Exit: 0 success; 1 transport/schema/API error; 2 arguments/profile/environment ambiguity; 3 auth;
-4 missing session; 5 failed/archived/interaction-required turn; 124 timeout; 130 interrupted.
 
 ## Auth
 
