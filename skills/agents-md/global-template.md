@@ -27,6 +27,10 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
 - My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
+- Propose the 80/20 cut before building; list bigger options, don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
+- External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
+- Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
+- Writing instructions for a colleague's agent → first read that person's machine/profile notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
 
 ## Verify your own work
 - Frontend → browser; backend → unit/integration/e2e tests. Minimal set covering the critical paths; don't test to test.

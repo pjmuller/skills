@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- agents-md: global template gains four rules from PJ's first prompt retro: 80/20 cut first + opposite-model opinion on consequential design, web-verified external facts, Downloads + short thread titles, read the colleague's machine notes before writing instructions for their agent.
 - clickup-core: `triage.md` escalations open with a gradable `Needs developer because:` reason (env gap · authority · cross-boundary · unresolved doubt · incident); a bare escalation goes back to the PO's agent.
 - agents-md: global template gains the in-worktree session commit rule, minimal global skill registration, and same-session refresh of committed shared-skill copies.
 - agents-md: global template env rule tightened: values only in `~/.config/mise-env/<org>/<repo>.env` (chmod 600), never a repo `.env` or `source .env`.
