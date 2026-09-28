@@ -1,8 +1,6 @@
 # Changelog
 
 ## Unreleased
-
-## v0.4.2 (2026-09-28)
 - google-workspace-core: `gmail-draft-update <draft-id> (--body TEXT | --body-file PATH|-) [--html-file PATH] [--expect-message ID]` edits a draft body in place, never sends. Draft id, threadId, headers and every other MIME part stay byte-identical (no header refolding, original line endings, body Content-ID/Disposition kept); the candidate is checked before the PUT, so unsupported shapes are refused without writing, and verified again on read-back.
 - video-shrink-for-gemini: `shrink-video --max-bytes 48M` splits output over the limit into overlapping `<name>.gemini.partNN.mp4` + `<name>.chunks.md` (absolute start/end per part); re-encodes once with 30 s keyframes, then stream-copies.
 - resource-audit: read-only `resource_snapshot.sh` (CPU via top's second sample, memory pressure, paging, process swarms; printed suggestions only) + `scripts/install`.
