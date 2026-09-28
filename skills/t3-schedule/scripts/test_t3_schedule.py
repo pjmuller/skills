@@ -318,3 +318,139 @@ def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, "read_thread", lambda tid: (None, "No T3 thread matches x"))
     with pytest.raises(SystemExit, match="thread not found"):
         add()
+
+
+# --- versioned job definitions (<project>/.agents/schedules) -------------------------
+def no_launchd(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for fn, value in (("loaded", False), ("running", False)):
+        monkeypatch.setattr(mod, fn, lambda name, v=value: v)
+    for fn in ("bootout", "bootstrap"):
+        monkeypatch.setattr(mod, fn, lambda *a: None)
+    monkeypatch.setattr(mod, "arm_catch_up", lambda: None)
+    import subprocess
+    monkeypatch.setattr(mod, "launchctl", lambda *a: subprocess.CompletedProcess(a, 1, "", ""))
+
+
+def add_args(**kw):
+    import argparse
+    return argparse.Namespace(**{
+        "name": "nightly", "at": "07:30", "once": None, "weekdays": True, "days": None, "project": None,
+        "profile": "work", "model": "fable", "thinking": None, "settle_when_done": True, "hide": False,
+        "no_notify": False, "title": None, "prompt_file": None, "prompt": ["Run the report."], "wait_max": 10,
+        "force": False, "dry_run": False, "resume_thread": None, **kw})
+
+
+def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
+    import json
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert mod.cmd_add(add_args(project=str(repo))) == 0
+    src, prompt = mod.repo_files(repo, "nightly")
+    assert json.loads(src.read_text()) == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable",
+                                           "thinking": None, "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10}
+    assert prompt.read_text() == "Run the report.\n"
+    p = mod.paths("nightly")
+    assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
+    assert not p["prompt"].exists() and f"prompt_file={prompt}" in p["sh"].read_text()
+    spec = mod.load_spec(p["spec"])
+    assert spec["project"] == str(repo) and spec["profile"] == "work" and mod.artefacts(spec)[0] == p["sh"].read_text()
+
+    assert mod.cmd_add(add_args(name="oneoff", project=str(repo), weekdays=False, once="2099-01-01")) == 0
+    assert not mod.repo_files(repo, "oneoff")[0].exists() and mod.paths("oneoff")["prompt"].exists()
+    assert json.loads(mod.paths("oneoff")["spec"].read_text())["project"] == str(repo)
+
+
+def write_repo_job(repo, name="nightly", at="06:00"):
+    import json
+    src, prompt = mod.repo_files(repo, name)
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(json.dumps({"at": at, "days": None, "title": "t", "model": "fable", "wait_max": 10}))
+    prompt.write_text("go\n")
+    return src
+
+
+def test_adopt_is_explicit_and_refuses_foreign_name(tmp_path, monkeypatch):
+    import json
+    import pytest
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    adopt = lambda path, **kw: mod.cmd_adopt(type("A", (), {"path": str(path), "profile": None, "force": False, **kw}))
+    assert mod.specs() == []  # a clone arms nothing
+    adopt(repo, profile="work")
+    p = mod.paths("nightly")
+    assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
+    assert "--project " + str(repo) in p["sh"].read_text() and p["plist"].exists()
+    adopt(src)  # re-adopt keeps the machine-local profile
+    assert json.loads(p["spec"].read_text())["profile"] == "work"
+    other = tmp_path / "other"
+    write_repo_job(other)
+    with pytest.raises(SystemExit, match="already exists"):
+        adopt(other)
+    adopt(other, force=True)
+    assert mod.load_spec(p["spec"])["project"] == str(other)
+    (other / mod.SCHEDULES_DIR / "nightly.prompt.md").unlink()
+    with pytest.raises(SystemExit, match="prompt"):
+        adopt(other)
+    with pytest.raises(SystemExit, match="no job specs"):
+        adopt(tmp_path / "home")
+
+
+def test_list_flags_git_state(tmp_path, monkeypatch):
+    import subprocess
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                    check=True, capture_output=True)
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    p = mod.paths("nightly")
+    assert mod.job_flag(mod.load_spec(p["spec"])) == "not in git"
+    git("init", "-q")
+    assert mod.job_flag(mod.load_spec(p["spec"])).startswith("untracked")
+    git("add", ".")
+    git("commit", "-qm", "job")
+    assert mod.job_flag(mod.load_spec(p["spec"])) is None
+    (repo / mod.SCHEDULES_DIR / "nightly.prompt.md").write_text("changed\n")
+    assert mod.job_flag(mod.load_spec(p["spec"])).startswith("uncommitted")
+    git("commit", "-qam", "prompt")
+    src.write_text(src.read_text().replace("06:00", "06:30"))  # e.g. a pulled time change
+    git("commit", "-qam", "time")
+    assert mod.job_flag(mod.load_spec(p["spec"])) == "stale runner (t3-schedule refresh)"
+    src.unlink()
+    spec = mod.load_spec(p["spec"])
+    assert spec["missing"] and mod.job_flag(spec).startswith("MISSING") and not mod.due_now(spec, None, None)
+
+
+def test_migrate_moves_local_recurring_only(tmp_path, monkeypatch):
+    import json
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mod.cmd_add(add_args(project=str(repo), weekdays=False))
+    mod.cmd_add(add_args(name="oneoff", project=str(repo), weekdays=False, once="2099-01-01"))
+    # simulate a pre-versioning job: full spec + prompt in the runtime dir
+    p = mod.paths("legacy")
+    p["spec"].write_text(json.dumps({"name": "legacy", "project": str(repo), "profile": "work", "model": "fable",
+                                     "thinking": None, "title": "t", "at": "05:00", "days": None, "created": "x"}))
+    p["prompt"].write_text("legacy prompt\n")
+    assert mod.job_flag(mod.load_spec(p["spec"])).startswith("local-only")
+    mod.cmd_migrate(type("A", (), {"names": [], "force": False}))
+    src, prompt = mod.repo_files(repo, "legacy")
+    assert json.loads(p["spec"].read_text()) == {"name": "legacy", "source": str(src), "profile": "work"}
+    assert prompt.read_text() == "legacy prompt\n" and not p["prompt"].exists()
+    assert "profile" not in json.loads(src.read_text()) and json.loads(src.read_text())["wait_max"] == mod.DEFAULT_WAIT_MAX
+    assert not mod.repo_files(repo, "oneoff")[0].exists()  # one-shots stay machine-local
+
+
+def test_broken_repo_spec_is_isolated(tmp_path, monkeypatch):
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    src.write_text("<<<<<<< HEAD\n{}")  # conflict markers after a pull
+    [spec] = mod.specs()
+    assert spec["missing"].startswith("invalid") and not mod.due_now(spec, None, None)
+    mod.cmd_refresh(type("A", (), {})())  # skips it instead of crashing

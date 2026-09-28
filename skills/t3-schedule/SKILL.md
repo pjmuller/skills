@@ -23,6 +23,22 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
   parent to inherit from.
 - Never edit a runner by hand: `add --force` (one job) or `refresh` (all) regenerates it.
 
+## Versioned definitions
+
+A recurring job's definition lives in its project repo so it survives a machine reset and gets
+reviewed: `<project>/.agents/schedules/<name>.json` (portable fields only: no path, no profile) +
+`<name>.prompt.md`. `add` writes both; **the caller commits them** (the helper never commits).
+The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, plist and state.
+
+- Prompt edits apply at the next fire (the runner reads the repo file); time/model/flag edits need
+  `refresh`. `list` flags `untracked`/`uncommitted`/`MISSING` specs, stale runners and
+  `local-only` jobs.
+- Cloning a repo arms nothing: `t3-schedule adopt <repo | spec.json> [--profile X]` opts a machine in
+  (colleagues never inherit jobs by accident).
+- `remove` disarms this machine only; `git rm` the two files to drop the job for everyone.
+- `--once` and `--resume-thread` jobs stay machine-local (ephemeral).
+- Pre-versioning jobs: `t3-schedule migrate [name…]` writes their repo files, then commit.
+
 ## Continuation (`--resume-thread ID`)
 
 Wakes an existing thread with the prompt as a user turn (`t3-ping-thread`, framed "Scheduled
@@ -42,7 +58,8 @@ recurring. Usually `--once`; recurring works too (pings the same thread daily).
   catch-up behave as for spawns.
 
 Pipeline: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
-`~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt in `<name>.prompt.md`) → waits for T3 Code
+`~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt: repo file, or `<name>.prompt.md` there for
+local jobs) → waits for T3 Code
 → `t3-spawn-thread --no-open` → macOS notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`.
 `ProcessType=Interactive` because `Standard` clamps each t3 CLI call to 15–25 s (2026-09-09).
 

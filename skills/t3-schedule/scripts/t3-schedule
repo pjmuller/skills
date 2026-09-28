@@ -9,6 +9,11 @@ Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits
 T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`, or, for a continuation job
 (`--resume-thread`), wakes that thread via `t3-ping-thread` and only spawns when it cannot.
 Nothing here touches T3's store; the only T3 contact is the t3-manage-thread helpers.
+
+A recurring job's definition is versioned in its project repo (`<project>/.agents/schedules/<name>.json`
++ `<name>.prompt.md`); the runtime dir holds a machine-local pointer (`source`, `profile`), generated
+artefacts and state. A machine only runs a repo's jobs after an explicit `adopt`. One-shot and
+continuation jobs stay machine-local (ephemeral).
 """
 
 from __future__ import annotations
@@ -45,6 +50,10 @@ PACK_BRIEF_CHARS = 3000                # context pack for a fallback spawn: firs
 PACK_LAST_MSGS = 6                     # … plus the latest messages,
 PACK_MSG_CHARS = 2000                  # each capped,
 PACK_MAX_CHARS = 12000                 # whole pack capped (oldest of the latest dropped first)
+SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the project repo
+# Portable job fields committed to the repo; name = file stem, project = the repo. Profile (an
+# account label) and everything else stay in the machine-local pointer.
+REPO_KEYS = ("at", "days", "title", "model", "thinking", "settle_when_done", "hide", "notify", "wait_max")
 
 
 # --- paths --------------------------------------------------------------------
@@ -68,6 +77,97 @@ def paths(name: str) -> dict[str, Path]:
         "fallback": base / f"{name}.fallback.md",
         "log": home() / ".t3/userdata/logs" / f"t3-schedule.{name}.log",
     }
+
+
+def runtime_dir() -> Path:
+    return home() / ".t3/userdata/scheduled/t3-schedule"
+
+
+def repo_files(project: Path, name: str) -> tuple[Path, Path]:
+    return project / SCHEDULES_DIR / f"{name}.json", project / SCHEDULES_DIR / f"{name}.prompt.md"
+
+
+def merge_pointer(local: dict) -> dict:
+    """Pointer + its repo spec; project = the repo holding it. An absent or unreadable repo spec (repo
+    moved, conflict markers after a pull) sets `missing` so one bad file never stalls other jobs."""
+    source = Path(local["source"])
+    project = source.parents[2]
+    merged = {**local, "project": str(project), "prompt_path": str(repo_files(project, local["name"])[1])}
+    try:
+        repo = json.loads(source.read_text())
+        parse_at(repo["at"])
+        repo["days"]
+    except (OSError, ValueError, KeyError, TypeError, SystemExit) as exc:
+        return {**merged, "missing": "not found" if isinstance(exc, FileNotFoundError) else f"invalid ({exc!r:.80})"}
+    return {**repo, **merged}
+
+
+def load_spec(local: Path) -> dict:
+    spec = json.loads(local.read_text())
+    return merge_pointer(spec) if spec.get("source") else spec
+
+
+def prompt_path(spec: dict) -> Path:
+    return Path(spec.get("prompt_path") or paths(spec["name"])["prompt"])
+
+
+def versionable(spec: dict) -> bool:
+    """Recurring spawns are versioned; one-shots and continuations are ephemeral."""
+    return not spec.get("once") and not spec.get("resume_thread")
+
+
+def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
+    src, prompt_file = repo_files(project, name)
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(json.dumps({k: spec.get(k) for k in REPO_KEYS}, indent=2, ensure_ascii=False) + "\n")
+    prompt_file.write_text(prompt)
+    return src
+
+
+def pointer(name: str, source: Path, profile: str | None) -> dict:
+    return {"name": name, "source": str(source), "profile": profile}
+
+
+def git_state(spec: dict) -> str | None:
+    """None = committed and clean; else why the repo spec is not (yet) versioned."""
+    if spec.get("missing"):
+        return f"MISSING {spec['source']}: {spec['missing']}"
+    files = [spec["source"], spec["prompt_path"]]
+    repo = spec["project"]
+    git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True)
+    if git("rev-parse", "--git-dir").returncode:
+        return "not in git"
+    if git("ls-files", "--error-unmatch", "--", *files).returncode:
+        return f"untracked (commit {SCHEDULES_DIR}/{spec['name']}.*)"
+    if git("status", "--porcelain", "--", *files).stdout.strip():
+        return f"uncommitted (commit {SCHEDULES_DIR}/{spec['name']}.*)"
+    return None
+
+
+def artefacts(spec: dict) -> tuple[str, bytes]:
+    p = paths(spec["name"])
+    hour, minute = parse_at(spec["at"])
+    return runner_script(spec, p), plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once"))
+
+
+def job_flag(spec: dict) -> str | None:
+    """What `list` warns about: unversioned/dirty repo spec, stale runner, local recurring job."""
+    if spec.get("retired"):
+        return None
+    if spec.get("source"):
+        state = git_state(spec)
+        if spec.get("missing"):
+            return state
+    else:
+        state = "local-only (t3-schedule migrate)" if versionable(spec) else None
+    p = paths(spec["name"])
+    try:
+        sh, plist = artefacts({"wait_max": DEFAULT_WAIT_MAX, **spec})
+        stale = not p["sh"].exists() or p["sh"].read_text() != sh or p["plist"].read_bytes() != plist
+    except (OSError, KeyError, SystemExit):
+        stale = True
+    flags = [f for f in (state, "stale runner (t3-schedule refresh)" if stale else None) if f]
+    return " · ".join(flags) or None
 
 
 # --- parsing ------------------------------------------------------------------
@@ -260,7 +360,8 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   profile_flag=()
   [[ -n "$profile" ]] && profile_flag=(--profile "$profile")
   title="${{title//\\{{date\\}}/$(date +%F)}}"
-  prompt_file={shlex.quote(str(p["prompt"]))}
+  prompt_file={shlex.quote(str(prompt_path(spec)))}
+  [[ -r "$prompt_file" ]] || fail "{name}: prompt missing ($prompt_file) - repo moved? t3-schedule list"
   outcome=spawned
 {resume_block(spec, p)}  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
   # own dry-run decides (same routing as the real spawn); its decision block lands here.
@@ -407,7 +508,7 @@ def context_pack(thread_id: str, data: dict | None, reason: str) -> str:
 def cmd_resume(args: argparse.Namespace) -> int:
     """Runner step of a continuation job. Exit 0 = pinged; FALLBACK_EXIT = fallback prompt written."""
     p = require_spec(args.name)
-    spec = json.loads(p["spec"].read_text())
+    spec = load_spec(p["spec"])
     thread_id = spec["resume_thread"]
     prompt = p["prompt"].read_text().strip()
     data, err = read_thread(thread_id)
@@ -480,10 +581,13 @@ def cmd_add(args: argparse.Namespace) -> int:
         "resume_title": resume.get("title") if resume else None,
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
+    versioned = versionable(spec)
+    if versioned:  # the repo holds the definition; the runtime dir only a pointer
+        spec.update(prompt_path=str(repo_files(project, name)[1]), source=str(repo_files(project, name)[0]))
     body = runner_script(spec, p)
     plist = plist_body(name, hour, minute, days, p["sh"], once)
     if args.dry_run:
-        print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {p['prompt']}\n{prompt}")
+        print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {prompt_path(spec)}\n{prompt}")
         return 0
     for path in p.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -491,8 +595,13 @@ def cmd_add(args: argparse.Namespace) -> int:
         bootout(name)
     if once:  # a re-armed once-job must not look fired already
         p["last"].unlink(missing_ok=True)
-    p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
-    p["prompt"].write_text(prompt)
+    if versioned:
+        source = write_repo_job(project, name, spec, prompt)
+        p["spec"].write_text(json.dumps(pointer(name, source, args.profile), indent=2) + "\n")
+        p["prompt"].unlink(missing_ok=True)
+    else:
+        p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
+        p["prompt"].write_text(prompt)
     p["sh"].write_text(body)
     p["sh"].chmod(0o755)
     p["plist"].write_bytes(plist)
@@ -503,6 +612,9 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"resumes  {resume['thread_id']} ({resume.get('title') or 'untitled'}); if not resumable, a fallback thread:")
     print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={describe_models(spec)}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
+    if versioned:
+        print(f"commit   git -C {shlex.quote(str(project))} add {SCHEDULES_DIR}/{name}.json {SCHEDULES_DIR}/{name}.prompt.md "
+              f"(definition lives in the repo; other machines opt in with `t3-schedule adopt {project}`)")
     return 0
 
 
@@ -518,8 +630,8 @@ def last_run(log: Path) -> str:
 
 
 def specs() -> list[dict]:
-    base = home() / ".t3/userdata/scheduled/t3-schedule"
-    return [json.loads(path.read_text()) for path in sorted(base.glob("*.json"))] if base.exists() else []
+    base = runtime_dir()
+    return [load_spec(path) for path in sorted(base.glob("*.json"))] if base.exists() else []
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -528,6 +640,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         for spec in rows:
             spec["loaded"] = loaded(spec["name"])
             spec["last_run"] = last_run(paths(spec["name"])["log"])
+            spec["flag"] = job_flag(spec)
         print(json.dumps(rows, indent=2))
         return 0
     if not rows:
@@ -535,20 +648,26 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 0
     print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h\n")
     if args.markdown:
-        print("| job | when | project | profile / model | loaded | last run | prompt |")
-        print("|---|---|---|---|---|---|---|")
+        print("| job | when | project | profile / model | loaded | last run | flag | prompt |")
+        print("|---|---|---|---|---|---|---|---|")
         for spec in rows:
             name = spec["name"]
-            prompt = paths(name)["prompt"].read_text().strip().replace("\n", " ").replace("|", "\\|")
+            if spec.get("missing"):
+                print(f"| {name} | | {Path(spec['project']).name} | | | | {job_flag(spec)} | |")
+                continue
+            prompt = prompt_path(spec).read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
                 f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name}{describe_resume(spec)} "
                 f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
                 f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
-                f"| {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
+                f"| {job_flag(spec) or ('repo' if spec.get('source') else 'local')} | {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
         return 0
     for spec in rows:
         name = spec["name"]
+        if spec.get("missing"):
+            print(f"{name:<28} ! {job_flag(spec)}")
+            continue
         state = spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
         print(
             f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
@@ -556,6 +675,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         )
         if spec.get("resume_thread"):
             print(f"{'':<28}{describe_resume(spec)}")
+        if flag := job_flag(spec):
+            print(f"{'':<28} ! {flag}")
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
     return 0
 
@@ -569,10 +690,14 @@ def require_spec(name: str) -> dict[str, Path]:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
+    spec = load_spec(p["spec"])
     bootout(args.name)
     for key in ("plist", "spec", "prompt", "sh", "last", "fallback"):
         p[key].unlink(missing_ok=True)
-    print(f"removed  {label_for(args.name)} (log kept: {p['log']})")
+    print(f"removed  {label_for(args.name)} from this machine (log kept: {p['log']})")
+    if spec.get("source"):
+        print(f"repo     definition kept; to drop it for everyone: git -C {shlex.quote(spec['project'])} rm "
+              f"{SCHEDULES_DIR}/{args.name}.json {SCHEDULES_DIR}/{args.name}.prompt.md")
     return 0
 
 
@@ -583,7 +708,7 @@ def cmd_run_now(args: argparse.Namespace) -> int:
     orphaned (reparented to launchd), so t3-spawn-thread's ancestry walk finds no parent
     agent either. --foreground runs the script directly (inherits the caller's parent)."""
     p = require_spec(args.name)
-    spec = json.loads(p["spec"].read_text())
+    spec = load_spec(p["spec"])
     if spec.get("retired"):
         raise SystemExit(f"{args.name} is retired ({spec['retired']}); re-arm with add --force")
     before = p["log"].stat().st_size if p["log"].exists() else 0
@@ -632,10 +757,26 @@ def cmd_run_now(args: argparse.Namespace) -> int:
 # poller every CATCH_UP_INTERVAL re-kicks any job whose slot passed today without a spawn.
 def write_artefacts(spec: dict) -> None:
     p = paths(spec["name"])
-    hour, minute = parse_at(spec["at"])
-    p["sh"].write_text(runner_script(spec, p))
+    sh, plist = artefacts(spec)
+    p["sh"].write_text(sh)
     p["sh"].chmod(0o755)
-    p["plist"].write_bytes(plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once")))
+    p["plist"].write_bytes(plist)
+
+
+def rearm(spec: dict) -> bool:
+    """Regenerate runner + plist and reload the LaunchAgent; False (untouched) while a runner is active:
+    bootout would kill a spawn in flight, and zsh reads its script lazily."""
+    name = spec["name"]
+    if running(name):
+        print(f"skipped   {label_for(name)} (runner active; rerun refresh later)")
+        return False
+    if loaded(name):
+        bootout(name)
+    write_artefacts({"wait_max": DEFAULT_WAIT_MAX, **spec})
+    if spec.get("source"):
+        paths(name)["prompt"].unlink(missing_ok=True)  # pre-migration copy; the runner reads the repo prompt
+    bootstrap(paths(name)["plist"])
+    return True
 
 
 def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, datetime]:
@@ -650,7 +791,7 @@ def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, dateti
 def due_now(spec: dict, now: datetime, last: str | None) -> bool:
     """Slot passed today, still inside the grace window, and nothing spawned today
     (once-jobs: today is their date and they never fired)."""
-    if spec.get("retired"):
+    if spec.get("retired") or spec.get("missing"):
         return False
     if spec.get("once"):
         if last or spec["once"] != now.strftime("%Y-%m-%d"):
@@ -770,16 +911,11 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         name = spec["name"]
         if spec.get("retired"):
             continue  # never re-arm a spent once-job
-        if running(name):  # bootout would kill a spawn in flight; zsh reads its script lazily
-            print(f"skipped   {label_for(name)} (runner active; rerun refresh later)")
+        if spec.get("missing"):
+            print(f"skipped   {label_for(name)} (MISSING {spec['source']}: {spec['missing']}; fix it or `t3-schedule remove {name}`)")
             continue
-        spec.setdefault("wait_max", DEFAULT_WAIT_MAX)
-        if loaded(name):
-            bootout(name)
-        paths(name)["spec"].write_text(json.dumps(spec, indent=2) + "\n")
-        write_artefacts(spec)
-        bootstrap(paths(name)["plist"])
-        print(f"refreshed {label_for(name)}")
+        if rearm(spec):
+            print(f"refreshed {label_for(name)}")
     arm_catch_up()
     print(f"armed     {label_for(CATCH_UP)} (every {CATCH_UP_INTERVAL // 60} min + at login)")
     return 0
@@ -788,24 +924,86 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def cmd_set_at(args: argparse.Namespace) -> int:
     """Move a job's slot without re-typing the prompt: rewrites spec + plist, keeps everything else."""
     p = require_spec(args.name)
-    spec = json.loads(p["spec"].read_text())
+    spec = load_spec(p["spec"])
     if spec.get("retired"):
         raise SystemExit(f"{args.name} is retired ({spec['retired']}); re-arm with add --force")
     hour, minute = parse_at(args.at)
     spec["at"] = f"{hour:02d}:{minute:02d}"
-    if loaded(args.name):
-        bootout(args.name)
-    p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
-    write_artefacts(spec)
-    bootstrap(p["plist"])
+    target = Path(spec["source"]) if spec.get("source") else p["spec"]
+    stored = json.loads(target.read_text())
+    stored["at"] = spec["at"]
+    target.write_text(json.dumps(stored, indent=2, ensure_ascii=False) + "\n")
+    rearm(spec)
     print(f"moved    {label_for(args.name)} → {describe_when(spec)} at {spec['at']}")
+    if spec.get("source"):
+        print(f"commit   {target}")
+    return 0
+
+
+def adopt_sources(target: Path) -> list[Path]:
+    """A spec file, a project repo, or its schedules dir → the repo specs it names."""
+    if target.is_file():
+        found = [target]
+    else:
+        found = sorted((target / SCHEDULES_DIR if (target / SCHEDULES_DIR).is_dir() else target).glob("*.json"))
+    for src in found:
+        if src.parent.parts[-2:] != tuple(SCHEDULES_DIR.split("/")):
+            raise SystemExit(f"{src}: not a repo job spec (expected <project>/{SCHEDULES_DIR}/<name>.json)")
+        if not repo_files(src.parents[2], src.stem)[1].exists():
+            raise SystemExit(f"{src}: prompt {src.stem}.prompt.md missing")
+    if not found:
+        raise SystemExit(f"no job specs in {target} (looked for {SCHEDULES_DIR}/*.json)")
+    return found
+
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """Opt this machine into jobs committed to a repo. Never implicit: a clone alone arms nothing."""
+    for src in adopt_sources(Path(args.path).expanduser().resolve()):
+        name = valid_name(src.stem)
+        p = paths(name)
+        old = json.loads(p["spec"].read_text()) if p["spec"].exists() else None
+        if old and old.get("source") != str(src) and not args.force:
+            raise SystemExit(f"{name} already exists ({old.get('source') or 'machine-local'}); add --force to replace it")
+        profile = args.profile if args.profile is not None else (old or {}).get("profile")
+        local = pointer(name, src, profile)
+        spec = merge_pointer(local)
+        if spec.get("missing"):
+            raise SystemExit(f"{src}: {spec['missing']}")
+        p["spec"].parent.mkdir(parents=True, exist_ok=True)
+        p["plist"].parent.mkdir(parents=True, exist_ok=True)
+        p["spec"].write_text(json.dumps(local, indent=2) + "\n")
+        if rearm(spec):
+            print(f"adopted  {label_for(name)} · {describe_when(spec)} {spec['at']} · profile={profile or 'auto'}")
+    arm_catch_up()
+    return 0
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    """Move machine-local recurring jobs into their project repos (writes files, never commits)."""
+    names = args.names or [s["name"] for s in specs() if not s.get("source") and versionable(s)]
+    for name in names:
+        p = require_spec(name)
+        spec = json.loads(p["spec"].read_text())
+        if spec.get("source") or not versionable(spec):
+            print(f"skipped  {name} ({'already versioned' if spec.get('source') else 'one-shot/continuation stays local'})")
+            continue
+        project = Path(spec["project"])
+        src = repo_files(project, name)[0]
+        if src.exists() and not args.force:
+            raise SystemExit(f"{src} exists; `t3-schedule adopt {src}` or migrate --force to overwrite it")
+        write_repo_job(project, name, {"wait_max": DEFAULT_WAIT_MAX, **spec}, p["prompt"].read_text())
+        local = pointer(name, src, spec.get("profile"))
+        p["spec"].write_text(json.dumps(local, indent=2) + "\n")
+        rearm(merge_pointer(local))
+        print(f"migrated {name} → {src} (commit it)")
     return 0
 
 
 def cmd_show(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
-    print(p["spec"].read_text(), end="")
-    print(f"--- prompt ({p['prompt']})\n{p['prompt'].read_text()}", end="")
+    spec = load_spec(p["spec"])
+    print(json.dumps(spec, indent=2, ensure_ascii=False))
+    print(f"--- prompt ({prompt_path(spec)})\n{prompt_path(spec).read_text()}", end="")
     return 0
 
 
@@ -816,7 +1014,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    add = sub.add_parser("add", help="arm a job: t3-schedule add --name X --at 07:30 --weekdays --project P -- \"prompt\"")
+    add = sub.add_parser("add", help="arm a job: t3-schedule add --name X --at 07:30 --weekdays --project P -- \"prompt\" "
+                         f"(recurring: definition written to P/{SCHEDULES_DIR}, you commit it)")
     add.add_argument("--name", required=True, help="job id → com.t3-skills.t3-schedule.<name>")
     add.add_argument("--at", required=True, help="HH:MM local (Europe/Brussels = machine clock)")
     when = add.add_mutually_exclusive_group()
@@ -827,7 +1026,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: wake this thread with the prompt instead of spawning; "
                      "--project/--profile/--model/--thinking/--title then shape only the fallback thread spawned when it "
                      "cannot be resumed; --hide applies to both")
-    add.add_argument("--profile", help="T3 provider instance; omit → t3-spawn-thread routes by capacity at fire time")
+    add.add_argument("--profile", help="T3 provider instance (machine-local, not versioned); omit → t3-spawn-thread routes by capacity at fire time")
     add.add_argument("--model", help=f"ordered comma list, first installed with capacity wins: opus,sol · fable · MODEL (default {DEFAULT_MODELS})")
     add.add_argument("--thinking", help="low|medium|high (omit → model's house default)")
     add.add_argument("--settle-when-done", action="store_true", help="hide the thread while running and instruct it to settle itself when done")
@@ -873,6 +1072,17 @@ def build_parser() -> argparse.ArgumentParser:
                             f"and exit {FALLBACK_EXIT}")
     resume.add_argument("name")
     resume.set_defaults(func=cmd_resume)
+
+    adopt = sub.add_parser("adopt", help=f"arm the jobs committed to a repo on this machine (<repo>, <repo>/{SCHEDULES_DIR} or one <name>.json)")
+    adopt.add_argument("path")
+    adopt.add_argument("--profile", help="machine-local T3 provider instance for these jobs; omit → capacity routing")
+    adopt.add_argument("--force", action="store_true", help="replace a same-named job defined elsewhere")
+    adopt.set_defaults(func=cmd_adopt)
+
+    migrate = sub.add_parser("migrate", help=f"move machine-local recurring jobs into <project>/{SCHEDULES_DIR} (you commit)")
+    migrate.add_argument("names", nargs="*", help="default: every machine-local recurring job")
+    migrate.add_argument("--force", action="store_true", help="overwrite an existing repo spec")
+    migrate.set_defaults(func=cmd_migrate)
 
     show = sub.add_parser("show", help="spec + prompt")
     show.add_argument("name")
