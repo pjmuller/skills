@@ -456,3 +456,60 @@ def test_broken_repo_spec_is_isolated(tmp_path, monkeypatch):
     [spec] = mod.specs()
     assert spec["missing"].startswith("invalid") and not mod.due_now(spec, None, None)
     mod.cmd_refresh(type("A", (), {})())  # skips it instead of crashing
+
+
+def test_malformed_pulled_definitions_are_isolated(tmp_path, monkeypatch):
+    """Review P1: wrong field types must mark only that job invalid, never crash specs()/catch-up."""
+    import json
+    from datetime import datetime
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    good = write_repo_job(repo, "good", at="05:00")
+    src = write_repo_job(repo, "bad", at="06:00")
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    base = json.loads(src.read_text())
+    for field, value in (("at", 730), ("days", "mon,fri"), ("days", [7]), ("days", []), ("model", ["fable"]),
+                         ("model", "bad model"), ("notify", "yes"), ("wait_max", "10"), ("wait_max", True)):
+        src.write_text(json.dumps({**base, field: value}))
+        by_name = {s["name"]: s for s in mod.specs()}
+        assert by_name["bad"]["missing"].startswith("invalid"), (field, value)
+        assert not mod.due_now(by_name["bad"], datetime(2026, 9, 9, 7, 0), None)
+        assert mod.due_now(by_name["good"], datetime(2026, 9, 9, 7, 0), None)
+    src.write_text("[1, 2]")
+    assert mod.load_spec(mod.paths("bad")["spec"])["missing"].startswith("invalid")
+    assert good.exists()
+
+
+def test_missing_prompt_marks_job_and_list_renders(tmp_path, monkeypatch, capsys):
+    """Review P1: a deleted repo prompt must not stay due (starving later jobs) nor crash list --markdown."""
+    from datetime import datetime
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    write_repo_job(repo, "early", at="05:00")
+    write_repo_job(repo, "late", at="06:00")
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    (repo / mod.SCHEDULES_DIR / "early.prompt.md").unlink()
+    early = mod.load_spec(mod.paths("early")["spec"])
+    assert early["missing"] == "prompt not found (early.prompt.md)"
+    now = datetime(2026, 9, 9, 7, 0)
+    assert [s["name"] for s in mod.specs() if mod.due_now(s, now, None)] == ["late"]
+    for flags in ({"json": False, "markdown": True}, {"json": False, "markdown": False}, {"json": True, "markdown": False}):
+        mod.cmd_list(type("A", (), flags))
+    assert "prompt not found" in capsys.readouterr().out
+
+
+def test_add_refuses_to_overwrite_repo_definition(tmp_path, monkeypatch):
+    """Review P2: a fresh clone (or `remove`, which keeps repo files) has no pointer; add must not clobber."""
+    import pytest
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    before = src.read_text()
+    with pytest.raises(SystemExit, match="adopt"):
+        mod.cmd_add(add_args(project=str(repo)))
+    assert src.read_text() == before and (repo / mod.SCHEDULES_DIR / "nightly.prompt.md").read_text() == "go\n"
+    (repo / mod.SCHEDULES_DIR / "nightly.json").unlink()  # prompt alone (someone's WIP) also blocks
+    with pytest.raises(SystemExit, match="already defines"):
+        mod.cmd_add(add_args(project=str(repo)))
+    assert mod.cmd_add(add_args(project=str(repo), force=True)) == 0
+    assert mod.cmd_add(add_args(name="nightly", project=str(repo), weekdays=False, once="2099-01-01", force=True)) == 0

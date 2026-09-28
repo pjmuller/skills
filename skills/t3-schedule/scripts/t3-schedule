@@ -88,18 +88,55 @@ def repo_files(project: Path, name: str) -> tuple[Path, Path]:
     return project / SCHEDULES_DIR / f"{name}.json", project / SCHEDULES_DIR / f"{name}.prompt.md"
 
 
+def repo_spec_problem(repo: object, prompt: Path) -> str | None:
+    """Why a pulled definition cannot run, or None. Checked on every load: a colleague's hand edit
+    must never crash `list`/catch-up for the other jobs, nor keep a doomed job 'due'."""
+    if not isinstance(repo, dict):
+        return "invalid (not a JSON object)"
+    at, days = repo.get("at"), repo.get("days")
+    try:
+        if not isinstance(at, str):
+            raise SystemExit(f"at must be \"HH:MM\", got {at!r}")
+        parse_at(at)
+        if days is not None and not (isinstance(days, list) and days and all(
+                type(d) is int and 0 <= d <= 6 for d in days) and len(set(days)) == len(days)):
+            raise SystemExit(f"days must be null or a list of launchd weekdays 0-6 (0=Sun), got {days!r}")
+        if repo.get("model") is not None:
+            if not isinstance(repo["model"], str):
+                raise SystemExit(f"model must be a string, got {repo['model']!r}")
+            valid_models(repo["model"])
+        for key in ("title", "thinking"):
+            if repo.get(key) is not None and not isinstance(repo[key], str):
+                raise SystemExit(f"{key} must be a string, got {repo[key]!r}")
+        for key in ("settle_when_done", "hide", "notify"):
+            if repo.get(key) is not None and not isinstance(repo[key], bool):
+                raise SystemExit(f"{key} must be true/false, got {repo[key]!r}")
+        wait = repo.get("wait_max")
+        if wait is not None and not (type(wait) is int and wait > 0):
+            raise SystemExit(f"wait_max must be a positive integer, got {wait!r}")
+    except SystemExit as exc:
+        return f"invalid ({str(exc)[:120]})"
+    try:
+        if not prompt.read_text().strip():
+            return f"prompt empty ({prompt.name})"
+    except OSError as exc:
+        return f"prompt {'not found' if isinstance(exc, FileNotFoundError) else 'unreadable'} ({prompt.name})"
+    return None
+
+
 def merge_pointer(local: dict) -> dict:
-    """Pointer + its repo spec; project = the repo holding it. An absent or unreadable repo spec (repo
-    moved, conflict markers after a pull) sets `missing` so one bad file never stalls other jobs."""
+    """Pointer + its repo spec; project = the repo holding it. An absent, malformed or prompt-less repo
+    spec (repo moved, conflict markers after a pull, bad hand edit) sets `missing`: that job is skipped,
+    the others run."""
     source = Path(local["source"])
     project = source.parents[2]
     merged = {**local, "project": str(project), "prompt_path": str(repo_files(project, local["name"])[1])}
     try:
         repo = json.loads(source.read_text())
-        parse_at(repo["at"])
-        repo["days"]
-    except (OSError, ValueError, KeyError, TypeError, SystemExit) as exc:
+    except (OSError, ValueError) as exc:
         return {**merged, "missing": "not found" if isinstance(exc, FileNotFoundError) else f"invalid ({exc!r:.80})"}
+    if problem := repo_spec_problem(repo, Path(merged["prompt_path"])):
+        return {**merged, "missing": problem}
     return {**repo, **{k: d for k, d in REPO_KEYS.items() if repo.get(k) is None}, **merged}
 
 
@@ -562,6 +599,10 @@ def cmd_add(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve()
     if not project.is_dir():
         raise SystemExit(f"--project is not a directory: {project}")
+    existing = [f for f in repo_files(project, name) if f.exists()]
+    if existing and not once and not args.resume_thread and not args.force:
+        raise SystemExit(f"{existing[0]} already defines {name} (committed or someone's WIP): "
+                         f"`t3-schedule adopt {existing[0].with_name(name + '.json')}` to arm it, or add --force to overwrite")
     prompt = read_prompt(args).strip() + "\n"
     if not prompt.strip():
         raise SystemExit("empty prompt")
