@@ -58,7 +58,7 @@ def parse_gmail_ref(text: str) -> tuple[str, str]:
     # "Show original" (permmsgid=msg-f:…) and "Print all" (permthid=thread-f:…) URLs carry the id.
     if m := re.search(r"[?&]perm(?:msg|th)id=(?:msg|thread)-f(?::|%3A)(\d+)", token):
         return "hex", format(int(m.group(1)), "x")
-    # Show original on a draft: msg-a:r-<n> is the draft id (API drafts.get), gone once sent.
+    # Show original on mail written in Gmail web: msg-a:r-<n> is its compose (draft) id; drafts.get resolves it.
     if m := re.search(r"[?&]permmsgid=msg-a(?::|%3A)(r-?\d+)", token):
         return "draft", m.group(1)
     match = re.search(r"#[^/]+(?:/[^/]+)*/([A-Za-z0-9_:-]+)/?$", token)
@@ -73,6 +73,9 @@ def parse_gmail_ref(text: str) -> tuple[str, str]:
     if re.fullmatch(r"[A-Za-z0-9_-]{20,}", token):
         return "web", token
     raise SystemExit(f"not a Gmail URL or id: {text!r} (use --search QUERY)")
+
+
+EXACT_URL_HINT = "next time paste the URL of the mail's ⋮ → Print all: exact thread id, no browser lookup"
 
 
 TITLE_RE = re.compile(r"^(?P<subject>.*) - (?P<account>[^\s@]+@[^\s@]+) - .*$")
@@ -233,7 +236,8 @@ def resolve_thread(ws, account: str, ref: str | None, search: str | None) -> str
         try:
             return ws.gmail.get_draft(value)["message"]["threadId"]
         except ApiError:
-            raise SystemExit("draft id not found (already sent?); use the URL of ⋮ → Print all instead")
+            raise SystemExit(f"msg-a id not resolvable; {EXACT_URL_HINT}")
+    print(f"💡 {EXACT_URL_HINT}", file=sys.stderr)
     subject, title_account = chrome_subject(value, ref, account)
     if title_account != account.lower():
         raise SystemExit(f"that Gmail tab belongs to {title_account}, not {account}; wrong --config?")
