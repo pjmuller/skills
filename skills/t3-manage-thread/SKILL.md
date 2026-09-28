@@ -1,6 +1,6 @@
 ---
 name: t3-manage-thread
-description: Spawn, ping, read, hide, rename, or settle a separate T3 Code thread from an agent or terminal. Use when the user asks to spawn/delegate/hand off an independent task in T3 Code, to send a cross-thread message (ping-back) to another T3 thread, to read another thread's transcript/brief/progress, to run an opposite-model code review as a worker thread, to check Claude/Codex rate-limit windows before routing work, or to settle/clear/acknowledge a finished thread so it leaves the "needs you" inbox. Do not use for Claude Desktop or Codex tasks.
+description: Spawn, ping, read, hide, rename, or settle a separate T3 Code thread from an agent or terminal. Use when the user asks to spawn/delegate/hand off an independent task in T3 Code, to send a cross-thread message (ping-back) to another T3 thread, to read another thread's transcript/brief/progress, to run an opposite-model code review as a worker thread, to check Claude/Codex rate-limit windows before routing work, to settle/clear/acknowledge a finished thread so it leaves the "needs you" inbox, or to link a Gmail thread to a T3 thread so new mail wakes it (t3-mail-link). Do not use for Claude Desktop or Codex tasks.
 ---
 
 # T3 Manage Thread
@@ -17,7 +17,7 @@ t3-ping-thread --thread <id> --from "<label>" -- "<report>"   # arrives as a use
 t3-read-thread <id> --outline                                 # read before pinging
 t3-settle-thread --wait <id>                                  # settle = kill session + its sub-agents
 t3-settle-thread --self                                       # "…then settle this thread": LAST tool call
-t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-profiles · t3-delete-thread --yes <id>
+t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-profiles · t3-delete-thread --yes <id> · t3-mail-link
 ```
 
 - 🏓 unless the user said standalone; hidden ≠ stopped; settle a 🏓 worker only
@@ -38,6 +38,7 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 | Settle / unsettle / settle yourself (settle = kill) | [settle-thread.md](settle-thread.md) |
 | Hide / unhide a live worker (snooze keeper) | [hide-thread.md](hide-thread.md) |
 | Rename an existing thread | [rename-thread.md](rename-thread.md) |
+| Link a Gmail thread so new inbound mail pings the T3 thread (mail cases) | [mail-link.md](mail-link.md) |
 | Rate-limit windows per Claude + Codex profile (the numbers routing uses) | [limits.md](limits.md) |
 | Fleet view of workers, bulk repair, hard purge | [t3-maintenance](../t3-maintenance/SKILL.md) |
 | Stay on the newest release (`skills-refresh`) | [skills-refresh.md](skills-refresh.md) |
