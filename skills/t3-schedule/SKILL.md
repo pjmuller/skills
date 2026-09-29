@@ -1,6 +1,6 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
+description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/pause/resume/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
 ---
 
 # t3-schedule
@@ -36,6 +36,12 @@ The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, pli
 - Cloning a repo arms nothing: `t3-schedule adopt <repo | spec.json> [--profile X]` opts a machine in
   (colleagues never inherit jobs by accident).
 - `remove` disarms this machine only; `git rm` the two files to drop the job for everyone.
+- `pause <name> [--until YYYY-MM-DD]` marks the repo spec paused on every machine after pull;
+  `resume <name>` clears it. Commit + push the spec. `--until` resumes at local midnight at the
+  start of that date on each machine; the spec remains paused until `resume` clears it. LaunchAgents
+  and `adopted_by` stay intact. Run `refresh` once after upgrading old runners; subsequent
+  pause/resume changes need no refresh. Runners and catch-up read the spec at fire time.
+  `list` and `show` display effective status. Existing spawned threads are untouched.
 - `--once` and `--resume-thread` jobs stay machine-local (ephemeral).
 
 ### One machine or many

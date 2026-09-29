@@ -50,7 +50,7 @@ DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_NAMES = {v: k for k, v in DAYS.items()}
 WEEKDAYS = [1, 2, 3, 4, 5]
 DEFAULT_MODELS = "opus,sol"            # no --model: Claude when installed with capacity, else Codex
-FALLBACK_EXIT = 3                      # `t3-schedule resume` → runner: thread not resumable, spawn instead
+FALLBACK_EXIT = 3                      # `t3-schedule resume-thread` → runner: thread not resumable, spawn instead
 PACK_BRIEF_CHARS = 3000                # context pack for a fallback spawn: first user message …
 PACK_LAST_MSGS = 6                     # … plus the latest messages,
 PACK_MSG_CHARS = 2000                  # each capped,
@@ -60,9 +60,10 @@ SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the pr
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
 REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
              "settle_when_done": False, "hide": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
-             "machines": "one", "adopted_by": None}  # absent = pre-registration (runs); [] = nobody (skips)
+             "machines": "one", "adopted_by": None, "paused": False, "pause_until": None}  # [] = nobody (skips)
 MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
 OWNER_SKIP_EXIT = 5                    # `t3-schedule owner-check` → runner: another machine owns this job, skip
+PAUSED_SKIP_EXIT = 6                   # `t3-schedule pause-check` → runner: repo job is paused, skip
 
 
 # --- paths --------------------------------------------------------------------
@@ -124,6 +125,14 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
         for key in ("settle_when_done", "hide", "notify"):
             if repo.get(key) is not None and not isinstance(repo[key], bool):
                 raise SystemExit(f"{key} must be true/false, got {repo[key]!r}")
+        if repo.get("paused") is not None and not isinstance(repo["paused"], bool):
+            raise SystemExit(f"paused must be true/false, got {repo['paused']!r}")
+        until = repo.get("pause_until")
+        if until is not None:
+            if not isinstance(until, str) or date.fromisoformat(until).isoformat() != until:
+                raise SystemExit(f"pause_until must be YYYY-MM-DD, got {until!r}")
+            if not repo.get("paused"):
+                raise SystemExit("pause_until requires paused=true")
         wait = repo.get("wait_max")
         if wait is not None and not (type(wait) is int and wait > 0):
             raise SystemExit(f"wait_max must be a positive integer, got {wait!r}")
@@ -139,7 +148,7 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
                 raise SystemExit("adopted_by lists a machine id twice")
             if (repo.get("machines") or "one") == "one" and len(owners) > 1:
                 raise SystemExit(f"machines=one but {len(owners)} adopters (keep one, or set machines: many)")
-    except SystemExit as exc:
+    except (SystemExit, ValueError) as exc:
         return f"invalid ({str(exc)[:120]})"
     try:
         if not prompt.read_text().strip():
@@ -178,6 +187,16 @@ def prompt_path(spec: dict) -> Path:
 def versionable(spec: dict) -> bool:
     """Recurring spawns are versioned; one-shots and continuations are ephemeral."""
     return not spec.get("once") and not spec.get("resume_thread")
+
+
+def pause_label(spec: dict, today: date | None = None) -> str | None:
+    """A deadline resumes the job at local midnight on that date, without rewriting the spec."""
+    if not spec.get("paused"):
+        return None
+    until = spec.get("pause_until")
+    if until and (today or date.today()) >= date.fromisoformat(until):
+        return None
+    return f"paused until {until}" if until else "paused"
 
 
 def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
@@ -449,7 +468,7 @@ def resume_block(spec: dict, p: dict[str, Path]) -> str:
     if not spec.get("resume_thread"):
         return ""
     name = spec["name"]
-    return f"""  resumed=$(t3-schedule resume {shlex.quote(name)} 2>&1)
+    return f"""  resumed=$(t3-schedule resume-thread {shlex.quote(name)} 2>&1)
   rc=$?
   echo "$resumed" | sed 's/^/   /'
   if (( rc == 0 )); then
@@ -496,6 +515,18 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     exit 0
   fi"""
     if spec.get("source"):
+        pause_def = f"""  # Read the repo spec each time: pause/resume needs no runner refresh.
+  pause_check() {{
+    reason=$(t3-schedule pause-check {shlex.quote(name)} 2>&1)
+    rc=$?
+    (( rc == 0 )) && return 0
+    (( rc == {PAUSED_SKIP_EXIT} )) || fail "{name}: pause-check FAILED (exit $rc) - see log"
+    echo "-- {name}: skipping, $reason"
+    exit 0
+  }}
+  pause_check
+"""
+        pause_again = "  pause_check\n"
         owner_def = f"""  # Registration (repo spec `adopted_by`): a one-machine job registered to another machine skips here,
   # checked before the T3 wait and again right before the spawn (a pull may land in between).
   owner_check() {{
@@ -511,7 +542,7 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
 """
         owner_again = "  owner_check\n"
     else:
-        owner_def = owner_again = ""
+        pause_def = pause_again = owner_def = owner_again = ""
     return f"""#!/bin/zsh
 # {'one-shot' if spec.get('once') else 'recurring'} T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
@@ -542,7 +573,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     echo "-- $1"
     {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n    : '}osascript -e "display notification \\"$1\\" with title \\"t3-schedule\\"" || true
   }}
-{owner_def}  waited=0
+{pause_def}{owner_def}  waited=0
   until t3_up; do
     if (( waited >= {spec["wait_max"]} )); then
       fail "{name}: T3 Code unreachable for ${{waited}}m, thread NOT spawned"
@@ -560,7 +591,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   prompt_file={shlex.quote(str(prompt_path(spec)))}
   [[ -r "$prompt_file" ]] || fail "{name}: prompt missing ($prompt_file) - repo moved? t3-schedule list"
   outcome=spawned
-{resume_block(spec, p)}  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
+{pause_again}{resume_block(spec, p)}  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
   # own dry-run decides (same routing as the real spawn); its decision block lands here.
   chosen=
   for candidate in {candidates}; do
@@ -572,7 +603,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     [[ -n "$chosen" ]] && break
   done
   [[ -n "$chosen" ]] || fail "{name}: no model candidate available ({spec.get("model") or DEFAULT_MODELS})"
-{owner_again}  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
+{pause_again}{owner_again}  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
   rc=$?
   echo "$out"
   (( rc == 0 )) || fail "{name}: spawn FAILED (exit $rc) - see log"
@@ -788,6 +819,14 @@ def cmd_add(args: argparse.Namespace) -> int:
     others: list = []
     if versioned:  # the repo holds the definition; the runtime dir only a pointer
         src = repo_files(project, name)[0]
+        if src.exists():
+            try:
+                previous = json.loads(src.read_text())
+            except (OSError, ValueError):
+                previous = {}
+            if not isinstance(previous, dict):
+                previous = {}
+            spec.update(paused=previous.get("paused", False), pause_until=previous.get("pause_until"))
         me = ensure_identity()
         machines = "many" if args.many_machines else "one"
         owners, others = registration(existing_owners(src), machines, me, git_user(project))
@@ -851,6 +890,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.json:
         for spec in rows:
             spec["loaded"] = loaded(spec["name"])
+            spec["pause_status"] = pause_label(spec)
             spec["last_run"] = last_run(paths(spec["name"])["log"])
             spec["flag"] = job_flag(spec)
         print(json.dumps(rows, indent=2))
@@ -862,19 +902,19 @@ def cmd_list(args: argparse.Namespace) -> int:
     print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h")
     print(f"this machine: {me['label']} ({me['id'][:8]})\n" if me else "this machine: no identity yet (add/adopt creates one)\n")
     if args.markdown:
-        print("| job | when | project | profile / model | runs on | loaded | last run | flag | prompt |")
-        print("|---|---|---|---|---|---|---|---|---|")
+        print("| job | when | project | profile / model | runs on | status | loaded | last run | flag | prompt |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
         for spec in rows:
             name = spec["name"]
             if spec.get("missing"):
-                print(f"| {name} | | {Path(spec['project']).name} | | | | | {job_flag(spec)} | |")
+                print(f"| {name} | | {Path(spec['project']).name} | | | | | | {job_flag(spec)} | |")
                 continue
             prompt = prompt_path(spec).read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
                 f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name}{describe_resume(spec)} "
                 f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
                 f"| {describe_registration(spec) if spec.get('source') else 'this machine (local)'} "
-                f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
+                f"| {pause_label(spec) or 'active'} | {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {job_flag(spec) or ('repo' if spec.get('source') else 'local')} | {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
         return 0
@@ -883,7 +923,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         if spec.get("missing"):
             print(f"{name:<28} ! {job_flag(spec)}")
             continue
-        state = spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
+        state = pause_label(spec) or spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
         print(
             f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
             f"{spec.get('profile') or '-'}/{describe_models(spec)}  {spec['project']}"
@@ -1019,7 +1059,7 @@ def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, dateti
 def due_now(spec: dict, now: datetime, last: str | None) -> bool:
     """Slot passed today, still inside the grace window, and nothing spawned today
     (once-jobs: today is their date and they never fired)."""
-    if spec.get("retired") or spec.get("missing") or spec.get("displaced"):
+    if spec.get("retired") or spec.get("missing") or spec.get("displaced") or pause_label(spec, now.date()):
         return False
     if spec.get("once"):
         if last or spec["once"] != now.strftime("%Y-%m-%d"):
@@ -1254,10 +1294,69 @@ def cmd_owner_check(args: argparse.Namespace) -> int:
     if spec.get("missing"):
         print(f"MISSING {spec['source']}: {spec['missing']}")
         return 1
+    # Older installed runners only call owner-check. Keep pauses effective until refresh replaces them.
+    if label := pause_label(spec):
+        print(label)
+        return OWNER_SKIP_EXIT
     if spec.get("displaced"):
         print(spec["displaced"])
         return OWNER_SKIP_EXIT
     return 0
+
+
+def cmd_pause_check(args: argparse.Namespace) -> int:
+    spec = load_spec(require_spec(args.name)["spec"])
+    if spec.get("missing"):
+        print(f"MISSING {spec['source']}: {spec['missing']}")
+        return 1
+    if label := pause_label(spec):
+        print(label)
+        return PAUSED_SKIP_EXIT
+    return 0
+
+
+def cmd_pause(args: argparse.Namespace) -> int:
+    spec = load_spec(require_spec(args.name)["spec"])
+    if not spec.get("source"):
+        raise SystemExit("pause applies to recurring repo jobs only")
+    if spec.get("missing"):
+        raise SystemExit(f"{args.name}: {spec['missing']}")
+    until = None
+    if args.until:
+        try:
+            until = date.fromisoformat(args.until)
+            if until.isoformat() != args.until:
+                raise ValueError
+        except ValueError:
+            raise SystemExit("--until must be YYYY-MM-DD") from None
+        if until <= date.today():
+            raise SystemExit("--until must be after today (job resumes at local midnight on that date)")
+    src = Path(spec["source"])
+    stored = json.loads(src.read_text())
+    stored.update(paused=True, pause_until=until.isoformat() if until else None)
+    src.write_text(json.dumps(stored, indent=2, ensure_ascii=False) + "\n")
+    print(f"{args.name}: {pause_label(stored)} (commit {src})")
+    return 0
+
+
+def cmd_unpause(args: argparse.Namespace) -> int:
+    spec = load_spec(require_spec(args.name)["spec"])
+    if not spec.get("source"):
+        raise SystemExit("resume applies to recurring repo jobs only")
+    if spec.get("missing"):
+        raise SystemExit(f"{args.name}: {spec['missing']}")
+    src = Path(spec["source"])
+    stored = json.loads(src.read_text())
+    stored.update(paused=False, pause_until=None)
+    src.write_text(json.dumps(stored, indent=2, ensure_ascii=False) + "\n")
+    print(f"{args.name}: active (commit {src})")
+    return 0
+
+
+def cmd_resume_public(args: argparse.Namespace) -> int:
+    # Compatibility: old generated continuation runners invoke `resume NAME`.
+    spec = load_spec(require_spec(args.name)["spec"])
+    return cmd_resume(args) if spec.get("resume_thread") else cmd_unpause(args)
 
 
 def cmd_machine(args: argparse.Namespace) -> int:
@@ -1273,6 +1372,7 @@ def cmd_machine(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
+    spec["pause_status"] = pause_label(spec) or "active"
     print(json.dumps(spec, indent=2, ensure_ascii=False))
     print(f"--- prompt ({prompt_path(spec)})\n{prompt_path(spec).read_text()}", end="")
     return 0
@@ -1343,10 +1443,18 @@ def build_parser() -> argparse.ArgumentParser:
     at.add_argument("at")
     at.set_defaults(func=cmd_set_at)
 
-    resume = sub.add_parser("resume", help="(runner-internal) wake a --resume-thread job's thread, or write its fallback prompt "
-                            f"and exit {FALLBACK_EXIT}")
+    pause = sub.add_parser("pause", help="pause a recurring repo job on every machine, keeping its registration")
+    pause.add_argument("name")
+    pause.add_argument("--until", metavar="YYYY-MM-DD", help="resume at local midnight on this date")
+    pause.set_defaults(func=cmd_pause)
+
+    resume = sub.add_parser("resume", help="resume a paused recurring repo job")
     resume.add_argument("name")
-    resume.set_defaults(func=cmd_resume)
+    resume.set_defaults(func=cmd_resume_public)
+
+    continuation = sub.add_parser("resume-thread", help="(runner-internal) wake a --resume-thread job or prepare fallback")
+    continuation.add_argument("name")
+    continuation.set_defaults(func=cmd_resume)
 
     adopt = sub.add_parser("adopt", help=f"arm the jobs committed to a repo on this machine (<repo>, <repo>/{SCHEDULES_DIR} or one <name>.json)")
     adopt.add_argument("path")
@@ -1365,6 +1473,10 @@ def build_parser() -> argparse.ArgumentParser:
     owner = sub.add_parser("owner-check", help=f"(runner-internal) exit {OWNER_SKIP_EXIT} when a one-machine job is registered elsewhere")
     owner.add_argument("name")
     owner.set_defaults(func=cmd_owner_check)
+
+    paused = sub.add_parser("pause-check", help=f"(runner-internal) exit {PAUSED_SKIP_EXIT} while a repo job is paused")
+    paused.add_argument("name")
+    paused.set_defaults(func=cmd_pause_check)
 
     machine = sub.add_parser("machine", help="this machine's registration identity (random id + label recorded in adopted_by)")
     machine.add_argument("--label", help="set a readable label (default machine-<id>); no host/user names in public repos")

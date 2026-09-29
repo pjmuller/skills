@@ -297,9 +297,9 @@ def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
     p = mod.paths("fu")
     base = {"name": "fu", "project": "/r", "profile": None, "model": None, "thinking": None, "title": "t", "wait_max": 1}
     plain = mod.runner_script(base, p)
-    assert "t3-schedule resume" not in plain and '-- "$(cat "$prompt_file")"' in plain
+    assert "t3-schedule resume-thread" not in plain and '-- "$(cat "$prompt_file")"' in plain
     body = mod.runner_script({**base, "resume_thread": TID}, p)
-    assert body.index("t3-schedule resume fu") < body.index("for candidate in")  # resume before any spawn
+    assert body.index("t3-schedule resume-thread fu") < body.index("for candidate in")  # resume before any spawn
     assert f"(( rc == {mod.FALLBACK_EXIT} )) || fail" in body and f"prompt_file={p['fallback']}" in body
     assert body.count(str(p["last"])) == 3  # daily guard + resume success + spawn success
 
@@ -310,7 +310,7 @@ def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
         "profile": None, "model": None, "thinking": None, "settle_when_done": False, "hide": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
         "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
-    assert add() == 0 and "t3-schedule resume fu" in capsys.readouterr().out  # project from the thread
+    assert add() == 0 and "t3-schedule resume-thread fu" in capsys.readouterr().out  # project from the thread
     with pytest.raises(SystemExit, match="settle-when-done"):
         add(settle_when_done=True)
     with pytest.raises(SystemExit, match="--project is required"):
@@ -352,7 +352,8 @@ def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
     me = mod.machine_identity()
     assert stored.pop("adopted_by") == [{"machine": me["label"], "user": None, "since": mod.date.today().isoformat(), "id": me["id"]}]
     assert stored == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable", "thinking": None,
-                      "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10, "machines": "one"}
+                      "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10, "machines": "one",
+                      "paused": False, "pause_until": None}
     assert prompt.read_text() == "Run the report.\n"
     p = mod.paths("nightly")
     assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
@@ -372,6 +373,79 @@ def write_repo_job(repo, name="nightly", at="06:00"):
     src.write_text(json.dumps({"at": at, "days": None, "title": "t", "model": "fable", "wait_max": 10}))
     prompt.write_text("go\n")
     return src
+
+
+def test_add_force_repairs_bad_repo_spec(tmp_path, monkeypatch):
+    import json
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    src, _ = mod.repo_files(repo, "nightly")
+    src.parent.mkdir(parents=True)
+    for bad in ("{broken", "[]"):
+        src.write_text(bad)
+        assert mod.cmd_add(add_args(project=str(repo), force=True)) == 0
+        repaired = json.loads(src.read_text())
+        assert repaired["paused"] is False and repaired["pause_until"] is None
+
+
+def test_pause_resume_keeps_registration_and_skips_catch_up(tmp_path, monkeypatch, capsys):
+    import argparse
+    import json
+    from datetime import datetime
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    src = write_repo_job(repo)
+    mod.cmd_adopt(argparse.Namespace(path=str(src), profile=None, force=False, takeover=False))
+    before = json.loads(src.read_text())["adopted_by"]
+    until = "2099-01-01"
+    assert mod.main(["pause", "nightly", "--until", until]) == 0
+    stored = json.loads(src.read_text())
+    assert stored["adopted_by"] == before and stored["paused"] is True and stored["pause_until"] == until
+    spec = mod.load_spec(mod.paths("nightly")["spec"])
+    assert mod.pause_label(spec, datetime(2026, 9, 29).date()) == f"paused until {until}"
+    assert mod.pause_label(spec, datetime(2099, 1, 1).date()) is None
+    assert not mod.due_now(spec, datetime(2026, 9, 29, 7), None)
+    assert mod.due_now(spec, datetime(2099, 1, 1, 7), None)
+    assert mod.cmd_pause_check(argparse.Namespace(name="nightly")) == mod.PAUSED_SKIP_EXIT
+    assert mod.cmd_owner_check(argparse.Namespace(name="nightly")) == mod.OWNER_SKIP_EXIT  # old runner
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 9, 29, 7)
+    monkeypatch.setattr(mod, "datetime", FixedDateTime)
+    mod.cmd_catch_up(argparse.Namespace(dry_run=True))
+    assert "nothing due" in capsys.readouterr().out
+    runner = mod.paths("nightly")["sh"].read_text()
+    assert runner.count("pause_check") >= 3 and runner.index("pause_check") < runner.index("until t3_up")
+    mod.cmd_list(argparse.Namespace(json=False, markdown=False))
+    assert f"paused until {until}" in capsys.readouterr().out
+    assert mod.main(["resume", "nightly"]) == 0
+    stored = json.loads(src.read_text())
+    assert stored["adopted_by"] == before and stored["paused"] is False and stored["pause_until"] is None
+    assert mod.cmd_pause_check(argparse.Namespace(name="nightly")) == 0
+
+
+def test_pause_validation_and_old_continuation_resume(tmp_path, monkeypatch):
+    import argparse
+    import json
+    import pytest
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    src = write_repo_job(repo)
+    mod.cmd_adopt(argparse.Namespace(path=str(src), profile=None, force=False, takeover=False))
+    for bad in ("tomorrow", "2026-02-30", "2000-01-01"):
+        with pytest.raises(SystemExit):
+            mod.main(["pause", "nightly", "--until", bad])
+    for bad in ({"paused": "yes"}, {"paused": True, "pause_until": "2026-02-30"},
+                {"paused": False, "pause_until": "2099-01-01"}):
+        assert mod.repo_spec_problem({**json.loads(src.read_text()), **bad}, mod.repo_files(repo, "nightly")[1])
+    local = mod.paths("fu")["spec"]
+    local.write_text(json.dumps({"name": "fu", "resume_thread": "thread-id"}))
+    monkeypatch.setattr(mod, "cmd_resume", lambda args: 77)
+    assert mod.main(["resume", "fu"]) == 77  # existing generated runner compatibility
 
 
 def test_adopt_is_explicit_and_refuses_foreign_name(tmp_path, monkeypatch):
