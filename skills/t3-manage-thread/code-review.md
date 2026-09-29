@@ -28,6 +28,12 @@ only when the user names an account). Always this spawn flow, never a vendor han
 the review. The reviewer is read-only on the shared checkout;
 another revision needed → `/tmp` worktree.
 
+**Reuse a live opposite-model thread.** If this builder thread already used an
+opposite-model worker for planning or a second opinion (not yet settled), ping
+*that* thread for the review (`t3-ping-thread`, brief path in the message)
+instead of spawning a new one: it already holds the intent and the rejected
+alternatives. Settle it once, after the final review.
+
 ## Brief the reviewer (file on disk, path in the spawn argument)
 - **Macro before micro:** top-level goal, approach chosen, alternatives rejected —
   the reviewer may fault the plan, not only the code.
