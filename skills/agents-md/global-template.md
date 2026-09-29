@@ -20,6 +20,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - 👀 needs review/course-change
 - 🚫 blocked
 - 🏓 awaiting a ping-back from a **separate T3 thread**: keep this thread open, nothing to do yet
+- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread self`, give the date): keep it open
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
@@ -56,6 +57,7 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 `t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles` · `t3-find-thread` (fuzzy-find a past thread; skill `t3-find-thread`) → `t3-open-thread <id>`.
 - Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
+- Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread self`, skill `t3-schedule`) and report ⏰ with the date.
 
 ## Commit (parallel agents on shared `main`, no feature branches)
 - One commit per high-level task (cherry-pick friendly), not per small step.

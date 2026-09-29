@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- agents-md: global template gains self-armed follow-ups: when the next step needs time to pass, the agent schedules `t3-schedule add --once <date> --resume-thread self` and reports a new ⏰ status. `t3-schedule` accepts `--resume-thread self` (the calling thread).
 - t3-schedule: `pause <name> [--until YYYY-MM-DD]` and `resume <name>` keep recurring repo jobs registered while runners and catch-up skip them; an until date resumes at local midnight. `list`/`show` display effective status.
 - t3-schedule: repo specs record `machines` (`one` default · `many` via `add --many-machines`) and `adopted_by` (label, git user.name, since, random id; `t3-schedule machine --label`). Adopting a one-machine job registered elsewhere asks for confirmation at a terminal and needs `--takeover` unattended (`--force` never implies it, also on `add`/`migrate --force`); repo-wide adopt checks every job before writing. A one-machine job no longer listing this machine skips at fire time (before the T3 wait and right before the spawn) and in catch-up; `list` shows who runs what. Intent from the local checkout, not a lock: the old machine stops once it pulls. Run `t3-schedule refresh` so existing runners get the check, then `adopt` each job once to record the machine.
 - agents-md: global template gains four rules from PJ's first prompt retro: 80/20 cut first + opposite-model opinion on consequential design, web-verified external facts, Downloads + short thread titles, read the colleague's machine notes before writing instructions for their agent.
