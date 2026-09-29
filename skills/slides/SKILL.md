@@ -9,7 +9,9 @@ Make the audience understand, remember or decide something. A beautiful deck tha
 them unsure of the point has failed. These are north stars, not a mandatory template.
 
 Read the project's `project-slides` wrapper when present: it owns deck locations, brand, audience,
-local commands and delivery conventions. This shared skill owns craft and Slidev mechanics.
+local commands, delivery conventions and the house style guide (what a good slide is *here*).
+Apply that guide before asking. This shared skill owns craft, Slidev mechanics and the
+[corrections loop](#learn-from-corrections) that grows both.
 For new wrappers or installation, see [integration](references/integration.md).
 
 ## Shape the story before styling
@@ -71,5 +73,23 @@ Verify the delivered format, not just the dev view: exports can differ. Confirm 
 slide/page count (accounting for intentional click pages), notes and asset rendering. A build
 success is not visual QA. Fix problems and recheck; state any verification limitation plainly.
 Deliver the requested artifact or preview with only the remaining decision/action for the user.
+
+## Learn from corrections
+
+Feedback during an edit round is micro (this title, that bullet); its value is the macro rule
+behind it. Keep a running list of corrections while you work. A pattern is the same preference
+shown on independent slides or decks, or an explicit general instruction ("always…"); two fixes on
+one odd slide are not. When you see one, or at the end of the round for the patterns collected,
+propose the rule in one line: exact wording plus target file. Write it once the user agrees, or
+straight away when their instructions say to act autonomously, and say what was burned in.
+
+- Universal craft (any deck, any company): a sentence in the matching section of this file,
+  proposed upstream in `pjmuller/skills`, not only in the local copy.
+- Brand, language, audience, naming, deck mechanics, verification quirks: the wrapper's style
+  guide (`project-slides/style.md`).
+- A rule states the intent and the test ("titles fit beside the logo: at most 40 characters"),
+  never the instance that triggered it. No example lists, no changelog. Fold into an existing rule
+  when one covers the case. An exception narrows a rule's scope; delete a rule only when the user
+  states a superseding one.
 
 [Sources and upstream license](references/sources.md).
