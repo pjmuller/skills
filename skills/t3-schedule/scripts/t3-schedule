@@ -658,6 +658,23 @@ def read_prompt(args: argparse.Namespace) -> str:
 
 
 # --- continuation (--resume-thread) ------------------------------------------------
+def calling_thread_id() -> str:
+    """`--resume-thread self`: the T3 thread running this command. Codex exports its provider thread
+    id, Claude its session id; T3 maps both in provider_session_runtime (as t3-settle-thread --self)."""
+    own = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    db = Path(os.environ.get("T3CODE_HOME", str(Path.home() / ".t3"))) / "userdata" / "state.sqlite"
+    if not own or not db.exists():
+        raise SystemExit("--resume-thread self: not running inside a T3 thread (no CODEX_THREAD_ID/CLAUDE_CODE_SESSION_ID)")
+    import sqlite3
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+        row = conn.execute(
+            "SELECT thread_id FROM provider_session_runtime WHERE json_valid(resume_cursor_json)"
+            " AND (json_extract(resume_cursor_json, '$.threadId') = ? OR json_extract(resume_cursor_json, '$.resume') = ?)"
+            " ORDER BY last_seen_at DESC LIMIT 1", (own, own)).fetchone()
+    if not row:
+        raise SystemExit(f"--resume-thread self: no T3 thread owns session {own}")
+    return row[0]
+
 def read_thread(thread_id: str) -> tuple[dict | None, str]:
     """`t3-read-thread --json`: thread row (archived/deleted, model_selection, project) + messages."""
     result = subprocess.run(["t3-read-thread", thread_id, "--json"], capture_output=True, text=True)
@@ -774,6 +791,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     if args.settle_when_done and (args.title or "").startswith("🏓"):
         raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
     resume = None
+    if args.resume_thread == "self":
+        args.resume_thread = calling_thread_id()
     if args.resume_thread:
         if args.settle_when_done:
             raise SystemExit("--resume-thread keeps the thread's own lifecycle; drop --settle-when-done (say it in the prompt)")
@@ -1394,7 +1413,7 @@ def build_parser() -> argparse.ArgumentParser:
     when.add_argument("--days", help="comma list mon,tue,... (default: every day)")
     when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
     add.add_argument("--project", help="repo path the thread runs in (with --resume-thread: the fallback's; default = that thread's project)")
-    add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: wake this thread with the prompt instead of spawning; "
+    add.add_argument("--resume-thread", metavar="THREAD_ID|self", help="continuation (self = the calling thread): wake this thread with the prompt instead of spawning; "
                      "--project/--profile/--model/--thinking/--title then shape only the fallback thread spawned when it "
                      "cannot be resumed; --hide applies to both")
     add.add_argument("--profile", help="T3 provider instance (machine-local, not versioned); omit → t3-spawn-thread routes by capacity at fire time")
