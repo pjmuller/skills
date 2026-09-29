@@ -37,6 +37,23 @@ The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, pli
   (colleagues never inherit jobs by accident).
 - `remove` disarms this machine only; `git rm` the two files to drop the job for everyone.
 - `--once` and `--resume-thread` jobs stay machine-local (ephemeral).
+
+### One machine or many
+
+The repo spec records `machines` (`one` default; `add --many-machines` → `many`) and `adopted_by`
+(`machine` label, repo `git user.name`, `since`, random `id` from `~/.t3/userdata/scheduled/t3-schedule/meta/machine.json`;
+no hostname/serial; `t3-schedule machine --label X` sets a readable label). `add`/`adopt`/`remove` update it; commit + push.
+
+- **one**: adopting a job registered to another machine asks "confirm it no longer runs there" at a terminal;
+  unattended it fails unless `--takeover`. `--force` never implies takeover (also on `add`/`migrate --force`).
+- **many**: every adopter is appended; no prompt.
+- **Displaced**: a one-machine job whose `adopted_by` no longer lists this machine skips (runner checks before
+  waiting for T3 and right before the spawn; catch-up ignores it; `list` flags it). Lost identity file = skip too;
+  recover with `adopt --takeover`. `adopted_by: []` (last machine removed it) skips everywhere until someone adopts;
+  specs without the key (pre-registration) run as before.
+- **Limits**: registration is intent in the local checkout, not a lock. The old machine stops only after it pulls
+  the takeover; an offline/stale checkout or two machines adopting at once can still double-fire until then.
+  Threads already running are untouched.
 - Pre-versioning jobs: `t3-schedule migrate [name…]` writes their repo files, then commit.
 
 ## Continuation (`--resume-thread ID`)

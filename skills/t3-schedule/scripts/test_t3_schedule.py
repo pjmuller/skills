@@ -309,7 +309,7 @@ def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
         "profile": None, "model": None, "thinking": None, "settle_when_done": False, "hide": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
-        "force": False, "dry_run": True, "resume_thread": TID, **kw}))
+        "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
     assert add() == 0 and "t3-schedule resume fu" in capsys.readouterr().out  # project from the thread
     with pytest.raises(SystemExit, match="settle-when-done"):
         add(settle_when_done=True)
@@ -338,7 +338,7 @@ def add_args(**kw):
         "name": "nightly", "at": "07:30", "once": None, "weekdays": True, "days": None, "project": None,
         "profile": "work", "model": "fable", "thinking": None, "settle_when_done": True, "hide": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["Run the report."], "wait_max": 10,
-        "force": False, "dry_run": False, "resume_thread": None, **kw})
+        "force": False, "dry_run": False, "resume_thread": None, "many_machines": False, "takeover": False, **kw})
 
 
 def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
@@ -348,8 +348,11 @@ def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
     repo.mkdir()
     assert mod.cmd_add(add_args(project=str(repo))) == 0
     src, prompt = mod.repo_files(repo, "nightly")
-    assert json.loads(src.read_text()) == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable",
-                                           "thinking": None, "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10}
+    stored = json.loads(src.read_text())
+    me = mod.machine_identity()
+    assert stored.pop("adopted_by") == [{"machine": me["label"], "user": None, "since": mod.date.today().isoformat(), "id": me["id"]}]
+    assert stored == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable", "thinking": None,
+                      "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10, "machines": "one"}
     assert prompt.read_text() == "Run the report.\n"
     p = mod.paths("nightly")
     assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
@@ -377,7 +380,7 @@ def test_adopt_is_explicit_and_refuses_foreign_name(tmp_path, monkeypatch):
     no_launchd(monkeypatch, tmp_path)
     repo = tmp_path / "repo"
     src = write_repo_job(repo)
-    adopt = lambda path, **kw: mod.cmd_adopt(type("A", (), {"path": str(path), "profile": None, "force": False, **kw}))
+    adopt = lambda path, **kw: mod.cmd_adopt(type("A", (), {"path": str(path), "profile": None, "force": False, "takeover": False, **kw}))
     assert mod.specs() == []  # a clone arms nothing
     adopt(repo, profile="work")
     p = mod.paths("nightly")
@@ -405,7 +408,7 @@ def test_list_flags_git_state(tmp_path, monkeypatch):
     src = write_repo_job(repo)
     git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],
                                     check=True, capture_output=True)
-    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False, "takeover": False}))
     p = mod.paths("nightly")
     assert mod.job_flag(mod.load_spec(p["spec"])) == "not in git"
     git("init", "-q")
@@ -437,7 +440,7 @@ def test_migrate_moves_local_recurring_only(tmp_path, monkeypatch):
                                      "thinking": None, "title": "t", "at": "05:00", "days": None, "created": "x"}))
     p["prompt"].write_text("legacy prompt\n")
     assert mod.job_flag(mod.load_spec(p["spec"])).startswith("local-only")
-    mod.cmd_migrate(type("A", (), {"names": [], "force": False}))
+    mod.cmd_migrate(type("A", (), {"names": [], "force": False, "takeover": False}))
     src, prompt = mod.repo_files(repo, "legacy")
     assert json.loads(p["spec"].read_text()) == {"name": "legacy", "source": str(src), "profile": "work"}
     assert prompt.read_text() == "legacy prompt\n" and not p["prompt"].exists()
@@ -451,7 +454,7 @@ def test_broken_repo_spec_is_isolated(tmp_path, monkeypatch):
     no_launchd(monkeypatch, tmp_path)
     repo = tmp_path / "repo"
     src = write_repo_job(repo)
-    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False, "takeover": False}))
     src.write_text("<<<<<<< HEAD\n{}")  # conflict markers after a pull
     [spec] = mod.specs()
     assert spec["missing"].startswith("invalid") and not mod.due_now(spec, None, None)
@@ -466,7 +469,7 @@ def test_malformed_pulled_definitions_are_isolated(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     good = write_repo_job(repo, "good", at="05:00")
     src = write_repo_job(repo, "bad", at="06:00")
-    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False, "takeover": False}))
     base = json.loads(src.read_text())
     for field, value in (("at", 730), ("days", "mon,fri"), ("days", [7]), ("days", []), ("model", ["fable"]),
                          ("model", "bad model"), ("notify", "yes"), ("wait_max", "10"), ("wait_max", True)):
@@ -487,7 +490,7 @@ def test_missing_prompt_marks_job_and_list_renders(tmp_path, monkeypatch, capsys
     repo = tmp_path / "repo"
     write_repo_job(repo, "early", at="05:00")
     write_repo_job(repo, "late", at="06:00")
-    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False}))
+    mod.cmd_adopt(type("A", (), {"path": str(repo), "profile": None, "force": False, "takeover": False}))
     (repo / mod.SCHEDULES_DIR / "early.prompt.md").unlink()
     early = mod.load_spec(mod.paths("early")["spec"])
     assert early["missing"] == "prompt not found (early.prompt.md)"
@@ -513,3 +516,144 @@ def test_add_refuses_to_overwrite_repo_definition(tmp_path, monkeypatch):
         mod.cmd_add(add_args(project=str(repo)))
     assert mod.cmd_add(add_args(project=str(repo), force=True)) == 0
     assert mod.cmd_add(add_args(name="nightly", project=str(repo), weekdays=False, once="2099-01-01", force=True)) == 0
+
+
+# --- machine registration (machines: one|many, adopted_by) ---------------------------
+def adopt_as(monkeypatch, tmp_path, machine, path, **kw):
+    """Each simulated machine = its own HOME (identity + pointers), sharing one checkout."""
+    monkeypatch.setenv("HOME", str(tmp_path / machine))
+    return mod.cmd_adopt(type("A", (), {"path": str(path), "profile": None, "force": False, "takeover": False, **kw}))
+
+
+def test_one_machine_takeover_displaces_old_primary(tmp_path, monkeypatch, capsys):
+    import json
+    import pytest
+    from datetime import datetime
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    adopt_as(monkeypatch, tmp_path, "a", repo)
+    a = mod.machine_identity()
+    [owner] = json.loads(src.read_text())["adopted_by"]
+    assert owner["id"] == a["id"] and owner["machine"] == f"machine-{a['id'][:8]}"
+    assert mod.specs()[0]["displaced"] is None and mod.specs()[0]["name"] == "nightly"  # meta/machine.json is no job
+
+    monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+    for kw in ({}, {"force": True}):  # unattended: refused, and --force is no takeover
+        with pytest.raises(SystemExit, match="--takeover"):
+            adopt_as(monkeypatch, tmp_path, "b", repo, **kw)
+    assert not mod.paths("nightly")["spec"].exists() and json.loads(src.read_text())["adopted_by"] == [owner]
+    adopt_as(monkeypatch, tmp_path, "b", repo, takeover=True)
+    assert [o["id"] for o in json.loads(src.read_text())["adopted_by"]] == [mod.machine_identity()["id"]]
+    assert "keeps firing until its checkout pulls" in capsys.readouterr().out
+
+    monkeypatch.setenv("HOME", str(tmp_path / "a"))  # the old primary, after pulling the takeover
+    spec = mod.load_spec(mod.paths("nightly")["spec"])
+    assert spec["displaced"].startswith("displaced") and "displaced" in mod.job_flag(spec)
+    assert not mod.due_now(spec, datetime(2026, 9, 9, 7, 0), None)
+    assert mod.cmd_owner_check(type("A", (), {"name": "nightly"})) == mod.OWNER_SKIP_EXIT
+    mod.identity_path().unlink()  # lost identity never mints a new one silently: still skips
+    assert "identity missing" in mod.load_spec(mod.paths("nightly")["spec"])["displaced"]
+
+    monkeypatch.setenv("HOME", str(tmp_path / "b"))
+    assert mod.cmd_owner_check(type("A", (), {"name": "nightly"})) == 0
+    mod.cmd_remove(type("A", (), {"name": "nightly"}))  # b leaves: a (displaced earlier) must stay skipped
+    assert json.loads(src.read_text())["adopted_by"] == []
+    monkeypatch.setenv("HOME", str(tmp_path / "a"))
+    assert "no machine registered" in mod.load_spec(mod.paths("nightly")["spec"])["displaced"]
+    adopt_as(monkeypatch, tmp_path, "b", repo)  # nobody registered: adopting needs no takeover
+    monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: True)  # a terminal asks instead
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    with pytest.raises(SystemExit, match="not taken over"):
+        adopt_as(monkeypatch, tmp_path, "c", repo)
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    adopt_as(monkeypatch, tmp_path, "c", repo)
+    assert json.loads(src.read_text())["adopted_by"][0]["id"] == mod.machine_identity()["id"]
+
+
+def test_many_machines_and_idempotent_readopt(tmp_path, monkeypatch):
+    import json
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    src.write_text(json.dumps({**json.loads(src.read_text()), "machines": "many"}))
+    adopt_as(monkeypatch, tmp_path, "a", repo)
+    first = json.loads(src.read_text())["adopted_by"][0]
+    adopt_as(monkeypatch, tmp_path, "b", repo)
+    owners = json.loads(src.read_text())["adopted_by"]
+    assert len(owners) == 2 and owners[0] == first
+    owners[0]["since"] = "2020-01-01"
+    src.write_text(json.dumps({**json.loads(src.read_text()), "adopted_by": owners}))
+    before = src.read_text()
+    adopt_as(monkeypatch, tmp_path, "a", repo)  # re-adopt keeps `since`, writes nothing
+    assert src.read_text() == before
+    for home in ("a", "b"):
+        monkeypatch.setenv("HOME", str(tmp_path / home))
+        assert mod.load_spec(mod.paths("nightly")["spec"])["displaced"] is None
+
+
+def test_legacy_spec_runs_and_registration_is_validated(tmp_path, monkeypatch):
+    import json
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    base = json.loads(src.read_text())
+    monkeypatch.setenv("HOME", str(tmp_path / "a"))
+    mod.paths("nightly")["spec"].parent.mkdir(parents=True)
+    mod.paths("nightly")["spec"].write_text(json.dumps(mod.pointer("nightly", src, None)))
+    assert mod.load_spec(mod.paths("nightly")["spec"])["displaced"] is None  # nobody recorded, no identity: runs
+    o = lambda i: {"machine": f"m{i}", "user": None, "since": "2026-01-01", "id": f"id{i}"}
+    for bad in ({"machines": "some"}, {"adopted_by": [o(1), o(2)]}, {"machines": "many", "adopted_by": [o(1), o(1)]},
+                {"adopted_by": [{"machine": "m"}]}, {"adopted_by": "m1"}):
+        src.write_text(json.dumps({**base, **bad}))
+        assert mod.load_spec(mod.paths("nightly")["spec"])["missing"].startswith("invalid"), bad
+
+
+def test_repo_adopt_preflights_before_writing(tmp_path, monkeypatch):
+    import json
+    import pytest
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    write_repo_job(repo, "early")
+    late = write_repo_job(repo, "late")
+    late.write_text(json.dumps({**json.loads(late.read_text()),
+                                "adopted_by": [{"machine": "m", "user": "X", "since": "2026-01-01", "id": "other"}]}))
+    monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit, match="late: one-machine job registered to m"):
+        adopt_as(monkeypatch, tmp_path, "a", repo)
+    assert mod.specs() == [] and "adopted_by" not in json.loads(mod.repo_files(repo, "early")[0].read_text())
+    assert not mod.identity_path().exists()
+
+
+def test_add_force_needs_takeover_and_remove_unregisters(tmp_path, monkeypatch, capsys):
+    import json
+    import pytest
+    no_launchd(monkeypatch, tmp_path)
+    repo = tmp_path / "repo"
+    src = write_repo_job(repo)
+    adopt_as(monkeypatch, tmp_path, "a", repo)
+    monkeypatch.setenv("HOME", str(tmp_path / "b"))
+    monkeypatch.setattr(mod.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit, match="--takeover"):
+        mod.cmd_add(add_args(project=str(repo), force=True))
+    assert mod.cmd_add(add_args(project=str(repo), force=True, takeover=True, many_machines=True)) == 0
+    stored = json.loads(src.read_text())
+    assert stored["machines"] == "many" and len(stored["adopted_by"]) == 2  # many keeps a's registration
+    mod.cmd_remove(type("A", (), {"name": "nightly"}))
+    assert len(json.loads(src.read_text())["adopted_by"]) == 1 and "registry dropped" in capsys.readouterr().out
+    monkeypatch.setenv("HOME", str(tmp_path / "a"))
+    src.write_text("{broken")
+    mod.cmd_remove(type("A", (), {"name": "nightly"}))  # disarms locally even when the repo spec is unreadable
+    assert not mod.paths("nightly")["spec"].exists() and "registry NOT updated" in capsys.readouterr().out
+
+
+def test_runner_checks_owner_before_wait_and_spawn(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("job")
+    base = {"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None, "title": "t", "wait_max": 1}
+    assert "owner_check" not in mod.runner_script(base, p)  # machine-local jobs have no registration
+    body = mod.runner_script({**base, "source": "/r/.agents/schedules/job.json"}, p)
+    calls = [i for i, line in enumerate(body.splitlines()) if line.strip() == "owner_check"]
+    lines = body.splitlines()
+    assert len(calls) == 2 and calls[0] < lines.index("  waited=0") and lines[calls[1] + 1].startswith("  out=$(")
+    assert f"(( rc == {mod.OWNER_SKIP_EXIT} )) || fail" in body and "skipping" in body

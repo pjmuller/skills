@@ -14,12 +14,17 @@ A recurring job's definition is versioned in its project repo (`<project>/.agent
 + `<name>.prompt.md`); the runtime dir holds a machine-local pointer (`source`, `profile`), generated
 artefacts and state. A machine only runs a repo's jobs after an explicit `adopt`. One-shot and
 continuation jobs stay machine-local (ephemeral).
+
+The repo spec also records which machines adopted a job (`adopted_by`) and whether it may run on
+several (`machines: one|many`). That registration is intent read from the local checkout, not a lock:
+a one-machine job skips on a machine it no longer lists, once that checkout has pulled the takeover.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import uuid
 import os
 import plistlib
 import shlex
@@ -54,7 +59,10 @@ SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the pr
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
 REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
-             "settle_when_done": False, "hide": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX}
+             "settle_when_done": False, "hide": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
+             "machines": "one", "adopted_by": None}  # absent = pre-registration (runs); [] = nobody (skips)
+MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
+OWNER_SKIP_EXIT = 5                    # `t3-schedule owner-check` → runner: another machine owns this job, skip
 
 
 # --- paths --------------------------------------------------------------------
@@ -82,6 +90,11 @@ def paths(name: str) -> dict[str, Path]:
 
 def runtime_dir() -> Path:
     return home() / ".t3/userdata/scheduled/t3-schedule"
+
+
+def identity_path() -> Path:
+    # Subdirectory: `specs()` globs the runtime dir's *.json as jobs (and a job may be named `machine`).
+    return runtime_dir() / "meta" / "machine.json"
 
 
 def repo_files(project: Path, name: str) -> tuple[Path, Path]:
@@ -114,6 +127,18 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
         wait = repo.get("wait_max")
         if wait is not None and not (type(wait) is int and wait > 0):
             raise SystemExit(f"wait_max must be a positive integer, got {wait!r}")
+        if repo.get("machines") is not None and repo["machines"] not in MACHINES:
+            raise SystemExit(f"machines must be one of {'/'.join(MACHINES)}, got {repo['machines']!r}")
+        owners = repo.get("adopted_by")
+        if owners is not None:
+            if not isinstance(owners, list) or not all(
+                    isinstance(o, dict) and all(isinstance(o.get(k), str) and o[k] for k in ("id", "machine", "since"))
+                    and (o.get("user") is None or isinstance(o["user"], str)) for o in owners):
+                raise SystemExit("adopted_by must be a list of {machine, user, since, id}")
+            if len({o["id"] for o in owners}) != len(owners):
+                raise SystemExit("adopted_by lists a machine id twice")
+            if (repo.get("machines") or "one") == "one" and len(owners) > 1:
+                raise SystemExit(f"machines=one but {len(owners)} adopters (keep one, or set machines: many)")
     except SystemExit as exc:
         return f"invalid ({str(exc)[:120]})"
     try:
@@ -137,7 +162,8 @@ def merge_pointer(local: dict) -> dict:
         return {**merged, "missing": "not found" if isinstance(exc, FileNotFoundError) else f"invalid ({exc!r:.80})"}
     if problem := repo_spec_problem(repo, Path(merged["prompt_path"])):
         return {**merged, "missing": problem}
-    return {**repo, **{k: d for k, d in REPO_KEYS.items() if repo.get(k) is None}, **merged}
+    spec = {**repo, **{k: d for k, d in REPO_KEYS.items() if repo.get(k) is None}, **merged}
+    return {**spec, "displaced": owner_problem(spec, machine_identity())}
 
 
 def load_spec(local: Path) -> dict:
@@ -165,6 +191,121 @@ def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
 
 def pointer(name: str, source: Path, profile: str | None) -> dict:
     return {"name": name, "source": str(source), "profile": profile}
+
+
+# --- machine registration (`machines`, `adopted_by` in the repo spec) ----------------
+def machine_identity() -> dict | None:
+    """This machine's registration identity, read-only (list/refresh/runner never create one).
+    A random id, never hardware/host/user data: the record may land in a public repo."""
+    try:
+        me = json.loads(identity_path().read_text())
+    except (OSError, ValueError):
+        return None
+    ok = isinstance(me, dict) and all(isinstance(me.get(k), str) and me[k] for k in ("id", "label"))
+    return me if ok else None
+
+
+def ensure_identity() -> dict:
+    """Identity for an explicit add/adopt/migrate: created when absent (saved by `save_identity` once
+    the caller mutates), never silently replaced when unreadable (that would displace this machine everywhere)."""
+    if me := machine_identity():
+        return me
+    if identity_path().exists():
+        raise SystemExit(f"{identity_path()} is unreadable; fix it (keys id, label) or delete it, then adopt --takeover")
+    uid = str(uuid.uuid4())
+    return {"id": uid, "label": f"machine-{uid[:8]}"}
+
+
+def save_identity(me: dict) -> None:
+    if machine_identity() == me:
+        return
+    identity_path().parent.mkdir(parents=True, exist_ok=True)
+    identity_path().write_text(json.dumps(me, indent=2) + "\n")
+
+
+def git_user(project: Path) -> str | None:
+    """Attribution as the repo's commits already carry it; never the OS user or an email."""
+    out = subprocess.run(["git", "-C", str(project), "config", "user.name"], capture_output=True, text=True)
+    return out.stdout.strip() or None
+
+
+def describe_owner(owner: dict, me: dict | None = None) -> str:
+    this = " = this machine" if me and owner["id"] == me["id"] else ""
+    return f"{owner['machine']} ({owner.get('user') or 'unknown user'}, since {owner['since']}{this})"
+
+
+def describe_registration(spec: dict) -> str:
+    me, owners = machine_identity(), spec.get("adopted_by")
+    listed = ("; ".join(describe_owner(o, me) for o in owners) or "nobody (removed; adopt to run it)") if owners is not None \
+        else "not recorded yet (re-run adopt to record this machine)"
+    return f"{spec.get('machines') or 'one'} machine{'s' if spec.get('machines') == 'many' else ''}: {listed}"
+
+
+def owner_problem(spec: dict, me: dict | None) -> str | None:
+    """Why this machine must skip a one-machine job another machine is registered for, or None.
+    Pre-registration specs (no `adopted_by` key) and many-machine jobs always run. An empty list means
+    its last machine removed it: a machine displaced earlier must not resume firing on that pull."""
+    owners = spec.get("adopted_by")
+    if (spec.get("machines") or "one") == "many" or owners is None:
+        return None
+    takeover = f"t3-schedule remove {spec['name']}, or adopt {spec['source']} --takeover"
+    if not owners:
+        return f"no machine registered (its last one removed it): t3-schedule adopt {spec['source']}, or remove {spec['name']}"
+    if me is None:
+        return f"machine identity missing ({identity_path()}); job registered to {describe_owner(owners[0])}: {takeover}"
+    if owners[0]["id"] == me["id"]:
+        return None
+    return f"displaced: registered to {describe_owner(owners[0])}: {takeover}"
+
+
+def registration(owners: list, machines: str, me: dict, user: str | None) -> tuple[list, list]:
+    """(new adopted_by, machines this takes the job away from). Re-adopting keeps `since`."""
+    owners = owners or []
+    mine = next((o for o in owners if o.get("id") == me["id"]), None)
+    entry = {"machine": me["label"], "user": user, "since": (mine or {}).get("since") or date.today().isoformat(),
+             "id": me["id"]}
+    if machines == "many":
+        return [entry if o is mine else o for o in owners] + ([] if mine else [entry]), []
+    return [entry], [o for o in owners if o is not mine]
+
+
+def confirm_takeover(name: str, others: list, takeover: bool) -> None:
+    """A one-machine job registered elsewhere: explicit --takeover, or a y at a terminal. `--force` never implies it."""
+    if not others or takeover:
+        return
+    who = "; ".join(map(describe_owner, others))
+    if not sys.stdin.isatty():
+        raise SystemExit(f"{name}: one-machine job registered to {who}. Make sure it no longer runs there, then "
+                         "rerun with --takeover (this machine becomes its only machine)")
+    answer = input(f"{name}: one-machine job registered to {who}.\n"
+                   "Confirm it no longer runs there and this machine becomes its primary? [y/N] ")
+    if answer.strip().lower() not in ("y", "yes"):
+        raise SystemExit(f"{name}: not taken over")
+
+
+def write_registration(src: Path, machines: str, owners: list) -> bool:
+    """Rewrite only the registration fields of a repo spec; False when nothing changed (no dirty diff)."""
+    stored = json.loads(src.read_text())
+    if stored.get("machines") == machines and stored.get("adopted_by") == owners:
+        return False
+    stored.update(machines=machines, adopted_by=owners)
+    src.write_text(json.dumps(stored, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
+def existing_owners(src: Path) -> list:
+    """Registration of a repo spec about to be overwritten (add/migrate --force); unreadable → none."""
+    try:
+        owners = json.loads(src.read_text()).get("adopted_by")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return owners if isinstance(owners, list) else []
+
+
+def registry_note(src: Path, machines: str, owners: list) -> str:
+    me = machine_identity()
+    return (f"registry {src.name}: machines={machines} · " + ("; ".join(describe_owner(o, me) for o in owners) or "none")
+            + " (commit + push it; other machines see it after they pull)")
 
 
 def git_state(spec: dict) -> str | None:
@@ -205,7 +346,7 @@ def job_flag(spec: dict) -> str | None:
         stale = not p["sh"].exists() or p["sh"].read_text() != sh or p["plist"].read_bytes() != plist
     except (OSError, KeyError, SystemExit):
         stale = True
-    flags = [f for f in (state, "stale runner (t3-schedule refresh)" if stale else None) if f]
+    flags = [f for f in (spec.get("displaced"), state, "stale runner (t3-schedule refresh)" if stale else None) if f]
     return " · ".join(flags) or None
 
 
@@ -354,6 +495,23 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     echo "-- already spawned today ($today), skipping"
     exit 0
   fi"""
+    if spec.get("source"):
+        owner_def = f"""  # Registration (repo spec `adopted_by`): a one-machine job registered to another machine skips here,
+  # checked before the T3 wait and again right before the spawn (a pull may land in between).
+  owner_check() {{
+    reason=$(t3-schedule owner-check {shlex.quote(name)} 2>&1)
+    rc=$?
+    (( rc == 0 )) && return 0
+    (( rc == {OWNER_SKIP_EXIT} )) || fail "{name}: owner-check FAILED (exit $rc) - see log"
+    echo "-- {name}: skipping, $reason"
+    osascript -e "display notification \\"{name} skipped: registered to another machine (t3-schedule list)\\" with title \\"t3-schedule\\"" || true
+    exit 0
+  }}
+  owner_check
+"""
+        owner_again = "  owner_check\n"
+    else:
+        owner_def = owner_again = ""
     return f"""#!/bin/zsh
 # {'one-shot' if spec.get('once') else 'recurring'} T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
@@ -384,7 +542,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     echo "-- $1"
     {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n    : '}osascript -e "display notification \\"$1\\" with title \\"t3-schedule\\"" || true
   }}
-  waited=0
+{owner_def}  waited=0
   until t3_up; do
     if (( waited >= {spec["wait_max"]} )); then
       fail "{name}: T3 Code unreachable for ${{waited}}m, thread NOT spawned"
@@ -414,7 +572,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     [[ -n "$chosen" ]] && break
   done
   [[ -n "$chosen" ]] || fail "{name}: no model candidate available ({spec.get("model") or DEFAULT_MODELS})"
-  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
+{owner_again}  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
   rc=$?
   echo "$out"
   (( rc == 0 )) || fail "{name}: spawn FAILED (exit $rc) - see log"
@@ -625,13 +783,23 @@ def cmd_add(args: argparse.Namespace) -> int:
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
     versioned = versionable(spec)
+    if args.many_machines and not versioned:
+        raise SystemExit("--many-machines applies to recurring repo jobs only (one-shots/continuations are machine-local)")
+    others: list = []
     if versioned:  # the repo holds the definition; the runtime dir only a pointer
-        spec.update(prompt_path=str(repo_files(project, name)[1]), source=str(repo_files(project, name)[0]))
+        src = repo_files(project, name)[0]
+        me = ensure_identity()
+        machines = "many" if args.many_machines else "one"
+        owners, others = registration(existing_owners(src), machines, me, git_user(project))
+        spec.update(prompt_path=str(repo_files(project, name)[1]), source=str(src), machines=machines, adopted_by=owners)
     body = runner_script(spec, p)
     plist = plist_body(name, hour, minute, days, p["sh"], once)
     if args.dry_run:
         print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {prompt_path(spec)}\n{prompt}")
         return 0
+    confirm_takeover(name, others, args.takeover)
+    if versioned:
+        save_identity(me)  # the id recorded in adopted_by
     for path in p.values():
         path.parent.mkdir(parents=True, exist_ok=True)
     if loaded(name):
@@ -656,6 +824,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={describe_models(spec)}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     if versioned:
+        print(registry_note(source, spec["machines"], spec["adopted_by"]))
         print(f"commit   git -C {shlex.quote(str(project))} add {SCHEDULES_DIR}/{name}.json {SCHEDULES_DIR}/{name}.prompt.md "
               f"(definition lives in the repo; other machines opt in with `t3-schedule adopt {project}`)")
     return 0
@@ -689,19 +858,22 @@ def cmd_list(args: argparse.Namespace) -> int:
     if not rows:
         print("No scheduled jobs.")
         return 0
-    print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h\n")
+    me = machine_identity()
+    print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h")
+    print(f"this machine: {me['label']} ({me['id'][:8]})\n" if me else "this machine: no identity yet (add/adopt creates one)\n")
     if args.markdown:
-        print("| job | when | project | profile / model | loaded | last run | flag | prompt |")
-        print("|---|---|---|---|---|---|---|---|")
+        print("| job | when | project | profile / model | runs on | loaded | last run | flag | prompt |")
+        print("|---|---|---|---|---|---|---|---|---|")
         for spec in rows:
             name = spec["name"]
             if spec.get("missing"):
-                print(f"| {name} | | {Path(spec['project']).name} | | | | {job_flag(spec)} | |")
+                print(f"| {name} | | {Path(spec['project']).name} | | | | | {job_flag(spec)} | |")
                 continue
             prompt = prompt_path(spec).read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
                 f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name}{describe_resume(spec)} "
                 f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
+                f"| {describe_registration(spec) if spec.get('source') else 'this machine (local)'} "
                 f"| {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {job_flag(spec) or ('repo' if spec.get('source') else 'local')} | {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
@@ -718,6 +890,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         )
         if spec.get("resume_thread"):
             print(f"{'':<28}{describe_resume(spec)}")
+        if spec.get("source"):
+            print(f"{'':<28} runs on: {describe_registration(spec)}")
         if flag := job_flag(spec):
             print(f"{'':<28} ! {flag}")
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
@@ -738,6 +912,17 @@ def cmd_remove(args: argparse.Namespace) -> int:
     for key in ("plist", "spec", "prompt", "sh", "last", "fallback"):
         p[key].unlink(missing_ok=True)
     print(f"removed  {label_for(args.name)} from this machine (log kept: {p['log']})")
+    me = machine_identity()
+    if spec.get("source") and me:
+        src = Path(spec["source"])
+        try:  # disarmed either way; a stale registration only misleads `list` and takeover prompts elsewhere
+            stored = json.loads(src.read_text())
+            owners = stored.get("adopted_by") or []
+            if any(isinstance(o, dict) and o.get("id") == me["id"] for o in owners):
+                write_registration(src, stored.get("machines") or "one", [o for o in owners if o.get("id") != me["id"]])
+                print(f"registry dropped {me['label']} from {src} (commit + push it)")
+        except (OSError, ValueError, AttributeError) as exc:
+            print(f"registry NOT updated ({src}: {exc!r:.80}); this machine may still be listed in adopted_by")
     if spec.get("source"):
         print(f"repo     definition kept; to drop it for everyone: git -C {shlex.quote(spec['project'])} rm "
               f"{SCHEDULES_DIR}/{args.name}.json {SCHEDULES_DIR}/{args.name}.prompt.md")
@@ -834,7 +1019,7 @@ def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, dateti
 def due_now(spec: dict, now: datetime, last: str | None) -> bool:
     """Slot passed today, still inside the grace window, and nothing spawned today
     (once-jobs: today is their date and they never fired)."""
-    if spec.get("retired") or spec.get("missing"):
+    if spec.get("retired") or spec.get("missing") or spec.get("displaced"):
         return False
     if spec.get("once"):
         if last or spec["once"] != now.strftime("%Y-%m-%d"):
@@ -1000,7 +1185,10 @@ def adopt_sources(target: Path) -> list[Path]:
 
 
 def cmd_adopt(args: argparse.Namespace) -> int:
-    """Opt this machine into jobs committed to a repo. Never implicit: a clone alone arms nothing."""
+    """Opt this machine into jobs committed to a repo. Never implicit: a clone alone arms nothing.
+    Every spec is checked (and every takeover confirmed) before anything is written."""
+    me = ensure_identity()
+    plans = []
     for src in adopt_sources(Path(args.path).expanduser().resolve()):
         name = valid_name(src.stem)
         p = paths(name)
@@ -1012,11 +1200,24 @@ def cmd_adopt(args: argparse.Namespace) -> int:
         spec = merge_pointer(local)
         if spec.get("missing"):
             raise SystemExit(f"{src}: {spec['missing']}")
+        owners, others = registration(spec["adopted_by"], spec["machines"], me, git_user(src.parents[2]))
+        plans.append((name, src, local, spec["machines"], owners, others))
+    for name, _, _, _, _, others in plans:
+        confirm_takeover(name, others, args.takeover)
+    save_identity(me)
+    for name, src, local, machines, owners, others in plans:
+        p = paths(name)
         p["spec"].parent.mkdir(parents=True, exist_ok=True)
         p["plist"].parent.mkdir(parents=True, exist_ok=True)
+        changed = write_registration(src, machines, owners)
         p["spec"].write_text(json.dumps(local, indent=2) + "\n")
+        spec = merge_pointer(local)
         if rearm(spec):
-            print(f"adopted  {label_for(name)} · {describe_when(spec)} {spec['at']} · profile={profile or 'auto'}")
+            print(f"adopted  {label_for(name)} · {describe_when(spec)} {spec['at']} · profile={local['profile'] or 'auto'}")
+        if changed:
+            print(registry_note(src, machines, owners))
+        if others:
+            print(f"takeover {name}: {'; '.join(map(describe_owner, others))} keeps firing until its checkout pulls this commit")
     arm_catch_up()
     return 0
 
@@ -1034,11 +1235,38 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         src = repo_files(project, name)[0]
         if src.exists() and not args.force:
             raise SystemExit(f"{src} exists; `t3-schedule adopt {src}` or migrate --force to overwrite it")
+        me = ensure_identity()
+        owners, others = registration(existing_owners(src), "one", me, git_user(project))
+        confirm_takeover(name, others, args.takeover)
+        save_identity(me)
+        spec.update(machines="one", adopted_by=owners)
         write_repo_job(project, name, spec, p["prompt"].read_text())
         local = pointer(name, src, spec.get("profile"))
         p["spec"].write_text(json.dumps(local, indent=2) + "\n")
         rearm(merge_pointer(local))
         print(f"migrated {name} → {src} (commit it)")
+    return 0
+
+
+def cmd_owner_check(args: argparse.Namespace) -> int:
+    """Runner step of a repo job: 0 = fire, OWNER_SKIP_EXIT = registered to another machine (reason printed)."""
+    spec = load_spec(require_spec(args.name)["spec"])
+    if spec.get("missing"):
+        print(f"MISSING {spec['source']}: {spec['missing']}")
+        return 1
+    if spec.get("displaced"):
+        print(spec["displaced"])
+        return OWNER_SKIP_EXIT
+    return 0
+
+
+def cmd_machine(args: argparse.Namespace) -> int:
+    """Show (or label) the identity add/adopt record in `adopted_by`. A new label reaches a repo at its next adopt."""
+    me = machine_identity()
+    if args.label:
+        me = {**ensure_identity(), "label": args.label}
+        save_identity(me)
+    print(json.dumps(me, indent=2) if me else f"no identity yet ({identity_path()}); add/adopt creates one")
     return 0
 
 
@@ -1079,6 +1307,10 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--prompt-file", help="read the prompt from a file instead of the argument")
     add.add_argument("--wait-max", type=int, default=DEFAULT_WAIT_MAX, help=f"minutes to wait for T3 Code before giving up (default {DEFAULT_WAIT_MAX}; catch-up retries)")
     add.add_argument("--force", action="store_true", help="replace an existing job")
+    add.add_argument("--many-machines", action="store_true", help="recurring job may run on several machines at once "
+                     "(default: one machine; adopting it elsewhere needs a takeover)")
+    add.add_argument("--takeover", action="store_true", help="with --force over a one-machine job registered to another "
+                     "machine: confirm it no longer runs there")
     add.add_argument("--dry-run", action="store_true", help="print plist + runner + prompt, write nothing")
     add.add_argument("prompt", nargs="*", help='-- "<prompt>"')
     add.set_defaults(func=cmd_add)
@@ -1119,13 +1351,24 @@ def build_parser() -> argparse.ArgumentParser:
     adopt = sub.add_parser("adopt", help=f"arm the jobs committed to a repo on this machine (<repo>, <repo>/{SCHEDULES_DIR} or one <name>.json)")
     adopt.add_argument("path")
     adopt.add_argument("--profile", help="machine-local T3 provider instance for these jobs; omit → capacity routing")
-    adopt.add_argument("--force", action="store_true", help="replace a same-named job defined elsewhere")
+    adopt.add_argument("--force", action="store_true", help="replace a same-named job defined elsewhere (does not imply --takeover)")
+    adopt.add_argument("--takeover", action="store_true", help="a one-machine job registered to another machine: you confirmed it "
+                       "no longer runs there; this machine becomes its only one (required when not at a terminal)")
     adopt.set_defaults(func=cmd_adopt)
 
     migrate = sub.add_parser("migrate", help=f"move machine-local recurring jobs into <project>/{SCHEDULES_DIR} (you commit)")
     migrate.add_argument("names", nargs="*", help="default: every machine-local recurring job")
     migrate.add_argument("--force", action="store_true", help="overwrite an existing repo spec")
+    migrate.add_argument("--takeover", action="store_true", help="with --force over a spec registered to another machine")
     migrate.set_defaults(func=cmd_migrate)
+
+    owner = sub.add_parser("owner-check", help=f"(runner-internal) exit {OWNER_SKIP_EXIT} when a one-machine job is registered elsewhere")
+    owner.add_argument("name")
+    owner.set_defaults(func=cmd_owner_check)
+
+    machine = sub.add_parser("machine", help="this machine's registration identity (random id + label recorded in adopted_by)")
+    machine.add_argument("--label", help="set a readable label (default machine-<id>); no host/user names in public repos")
+    machine.set_defaults(func=cmd_machine)
 
     show = sub.add_parser("show", help="spec + prompt")
     show.add_argument("name")
