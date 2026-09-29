@@ -9,6 +9,7 @@ Speech layer only: find a call, export `transcript.md` (speaker/timestamp paragr
 summary and tasks), download the recording. What happened **on screen**: feed `source.webm` to
 [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md) (Gemini) or
 [video-frames-for-vision](../video-frames-for-vision/SKILL.md) (frames for vision-only models).
+Debrief note + delegable T3 prompts afterwards: [recording-followups](../recording-followups/SKILL.md).
 
 - `leexi-calls` lists recent calls; `download-leexi URL|UUID` or `download-leexi --at "today 14:00"`
   fetches one. Flags, `--at` forms and defaults: `--help`. Several `--at` matches → candidates on

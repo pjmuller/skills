@@ -93,6 +93,8 @@ native `agy` itself. If a future runtime supports media: `t3-spawn-thread --mode
 routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
 Model comparisons: fresh conversations, identical media, held-out reference evidence.
 
+Follow-up prompts / T3 threads from the verified transcript: [recording-followups](../recording-followups/SKILL.md).
+
 ## No Gemini available
 
 Seen blockers: `agy` weekly quota 429, video-summary 503, no Antigravity (Windows + Codex,

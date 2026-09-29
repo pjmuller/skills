@@ -51,7 +51,7 @@ the ClickUp AI bot (`user_id` `-4`) linking the notes Doc → v3 `docs/{id}/page
 - "Meeting Transcript" is the live notetaker's: untimed, possibly cut off mid-call.
 - The web player's timed captions come from a private AI-service endpoint that rejects personal
   tokens: unsupported. For a timed transcript use video-shrink-for-gemini's `transcribe-local` or
-  Gemini on the recording.
+  Gemini on the recording. Follow-up prompts from a call: the `recording-followups` skill in pjmuller/skills.
 
 Official: [tasks](https://developer.clickup.com/docs/tasks),
 [comment formatting](https://developer.clickup.com/docs/comment-formatting),
