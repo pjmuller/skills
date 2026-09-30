@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- text-to-speech (new): provider-neutral voice discovery, single-clip generation with key-free provenance, optional normalization, and offline comparison; ElevenLabs/Gemini controls and accent guidance.
+- text-to-speech (new): provider-neutral voice discovery, single-clip generation with key-free provenance, optional normalization, and offline comparison; ElevenLabs/Gemini controls, accent guidance, and a catalog-to-Voice-Design workflow for specific voices.
 - perplexity-core (new): `px.py ask` = one sourced research question over the Perplexity Agent API (web_search always on, optional people_search), markdown + retrieved-source list or `--schema` structured JSON with nullable fields and verified `*url` keys; `check` spends nothing. Extracted from brellascraper's enrichment service. Empty answers exit 3 after one retry; 429s back off.
 - t3-setup: "Fresh machine" section for a Mac with nothing installed (Homebrew via one Terminal line the user pastes, then gh/jq/mise, Claude Code CLI, T3 Code cask, GitHub login) and a non-developer rule; startable from Claude Desktop's Code tab.
 - recording-followups (new): after a Fathom/Leexi/SyncUp transcript, a debrief note plus self-contained T3 prompts, one temp file per prompt spawned by path (`t3-spawn-thread … < file`); light code research before proposing; thinker vs coding-model routing. Linked from video-shrink-for-gemini, leexi, clickup-core.
