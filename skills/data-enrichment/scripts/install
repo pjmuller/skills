@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in ""|--check) ;; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
+command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+uv run "$root/treg.py" --help >/dev/null
+if [ "${1:-}" = "--check" ]; then
+  if [ -z "${TREG_TOKEN:-}" ]; then
+    echo "TREG_TOKEN not in env: add it to the repo's ~/.config/mise-env/<org>/<repo>.env" >&2
+    exit 1
+  fi
+  uv run "$root/treg.py" balance
+fi
+printf '%s\n' 'data-enrichment ready; invoke scripts/treg.py with uv run (no global command links needed)'
