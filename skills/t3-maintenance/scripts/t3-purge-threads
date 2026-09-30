@@ -22,6 +22,10 @@ events on boot beyond the projections that already exist, and a live server
 would keep writing to the streams we are deleting). `apply --mode hard`
 therefore refuses unless the server is unreachable, no `T3 Code` process is
 running, and `--yes` is given. It backs up via `VACUUM INTO` first.
+
+Never purged: pinned, running/starting or blocked threads, and threads with a
+pending wake-up (`t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`);
+`list` reports the latter as kept. A failing helper aborts: no protected set, no purge.
 """
 
 from __future__ import annotations
@@ -368,7 +372,39 @@ def resolve_transcripts(thread: Thread) -> None:
     thread.transcripts = [path for path in paths if path.is_file()]
 
 
-def select(args: argparse.Namespace, threads: list[Thread]) -> list[Thread]:
+def pending_wakes() -> dict[str, str]:
+    """thread_id -> why it will be woken again (scheduled continuation, mail link).
+    Purging such a thread loses the context its follow-up needs. A helper absent
+    from PATH means its skill is not installed, so it holds no wakes; a helper
+    that fails leaves the protected set unknown, so refuse (fail closed)."""
+    wakes: dict[str, list[str]] = defaultdict(list)
+    for command, reason in (
+        (["t3-schedule", "pending-resumes"],
+         lambda fields: f"scheduled resume {fields[1]} ({fields[2]})"),
+        (["t3-mail-link", "list", "--thread-ids"], lambda fields: "mail link"),
+    ):
+        helper = shutil.which(command[0])
+        if not helper:
+            continue
+        result = subprocess.run(
+            [helper, *command[1:]], text=True, capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            raise SystemExit(
+                f"refusing: `{' '.join(command)}` failed (exit {result.returncode}), "
+                f"so threads with a pending wake-up are unknown: "
+                f"{one_line(result.stderr, 300)}"
+            )
+        for line in result.stdout.splitlines():
+            fields = line.split("\t")
+            if fields[0].strip():
+                wakes[fields[0].strip()].append(reason(fields + ["?", "?"]))
+    return {thread_id: "; ".join(reasons) for thread_id, reasons in wakes.items()}
+
+
+def select(
+    args: argparse.Namespace, threads: list[Thread], protected: frozenset[str] = frozenset()
+) -> list[Thread]:
     cohorts = []
     if args.archived:
         cohorts.append(lambda item: item.archived)
@@ -389,6 +425,7 @@ def select(args: argparse.Namespace, threads: list[Thread]) -> list[Thread]:
         and not item.pinned
         and item.session_status not in BUSY_STATUSES
         and not item.blocked
+        and item.thread_id not in protected
     ]
     if args.project:
         needle = args.project.casefold()
@@ -405,13 +442,22 @@ def select(args: argparse.Namespace, threads: list[Thread]) -> list[Thread]:
 # --- list --------------------------------------------------------------------
 
 
-def cmd_list(args: argparse.Namespace, rows: list[Thread]) -> int:
+def cmd_list(
+    args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]] = ()
+) -> int:
     if args.json:
-        print(json.dumps(summary(rows) | {"threads": [r.as_dict() for r in rows]},
-                         ensure_ascii=False, indent=2))
+        print(json.dumps(
+            summary(rows)
+            | {"threads": [r.as_dict() for r in rows],
+               "kept_pending_wake": [
+                   {"thread_id": item.thread_id, "title": item.title, "reason": reason}
+                   for item, reason in kept
+               ]},
+            ensure_ascii=False, indent=2))
         return 0
     if not rows:
         print("No matching threads.")
+        print_kept(kept)
         return 0
     for item in rows:
         print(
@@ -433,9 +479,15 @@ def cmd_list(args: argparse.Namespace, rows: list[Thread]) -> int:
         f"{files['transcripts']} transcripts "
         f"({files['unresolved']} threads unresolved)"
     )
+    print_kept(kept)
     print("\nDry run. `apply --mode soft` for T3's own delete, "
           "`apply --mode hard` (T3 closed) to purge the bytes.")
     return 0
+
+
+def print_kept(kept: list[tuple[Thread, str]]) -> None:
+    for item, reason in kept:
+        print(f"kept {item.thread_id[:8]} {one_line(item.title, TITLE_CHARS)}: {reason}")
 
 
 def summary(rows: list[Thread]) -> dict[str, object]:
@@ -681,7 +733,11 @@ def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
     return 0
 
 
-def cmd_apply(args: argparse.Namespace, rows: list[Thread]) -> int:
+def cmd_apply(
+    args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]] = ()
+) -> int:
+    if kept:
+        print(f"Keeping {len(kept)} matching threads with a pending wake-up (see `list`).")
     if not rows:
         print("No matching threads.")
         return 0
@@ -773,9 +829,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     now = datetime.now(timezone.utc)
     threads = load_threads(args.store, now, with_sizes=args.size)
-    rows = select(args, threads)
+    wakes = pending_wakes()
+    rows = select(args, threads, protected=frozenset(wakes))
+    # Threads the filters matched but a pending wake-up spares.
+    kept = [
+        (item, wakes[item.thread_id])
+        for item in select(args, [t for t in threads if t.thread_id in wakes])
+    ]
     attach_files(rows)
-    return cmd_list(args, rows) if args.command == "list" else cmd_apply(args, rows)
+    command = cmd_list if args.command == "list" else cmd_apply
+    return command(args, rows, kept)
 
 
 if __name__ == "__main__":

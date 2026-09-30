@@ -8,7 +8,7 @@ a reply in Gmail (never sends), asks the user, or settles. Flags: `t3-mail-link 
 t3-mail-link --config <wrapper>/workspace.json add '<gmail url | hex id>' [--thread ID] [--policy FILE]
 t3-mail-link --config … add --search 'from:vendor.example subject:offer'
 t3-mail-link --config … new '<url>' --project ~/code/example [--prompt "…"]   # spawn ✉️ thread + link
-t3-mail-link list · unlink <t3-or-gmail-id> · poll [--dry-run] · draft snapshot|unchanged <id> · schedule · unschedule
+t3-mail-link list [--thread-ids] · unlink <t3-or-gmail-id> · poll [--dry-run] · draft snapshot|unchanged <id> · schedule · unschedule
 ```
 
 - **Account** = the Workspace wrapper's `workspace.json` (`--config` / `$GWS_CONFIG`), via
@@ -22,7 +22,8 @@ t3-mail-link list · unlink <t3-or-gmail-id> · poll [--dry-run] · draft snapsh
   (open tab, else opens and closes one) for subject + account, then searches `subject:"…"`. Several
   matches → candidates, exit 3: ask the user. `--search` always works.
 - **State**: `~/.t3/userdata/mail-links.json` (seen ids per link; `add` baselines all current
-  messages). Saved mail: `~/.t3/userdata/mail-links/<gmail-thread>/`.
+  messages). Saved mail: `~/.t3/userdata/mail-links/<gmail-thread>/`. A linked thread is never
+  purged by [`t3-purge-threads`](../t3-maintenance/SKILL.md) (`list --thread-ids`); unlink first.
 - **Poll**: new ids only from the account / `SENT` → seen, no wake (the user replied);
   drafts ignored. Any new inbound → save its full text, `t3-ping-thread`, mark seen only after the
   ping landed (T3 down → next tick retries). A settled/snoozed thread is pinged with `--hide`, a

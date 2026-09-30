@@ -1109,6 +1109,22 @@ def last_spawn(name: str) -> str | None:
     return p.read_text().strip() if p.exists() else None
 
 
+def pending_resumes(now: datetime) -> list[dict]:
+    """Continuations that will still wake their thread: recurring (paused too), or once-jobs not yet fired,
+    retired or expired. Spec files + `.last` only (no launchctl): `t3-purge-threads` calls this to spare them."""
+    return [
+        spec for spec in specs()
+        if spec.get("resume_thread") and not spec.get("missing")
+        and not (spec.get("once") and (spec.get("retired") or retire_status(spec, now, last_spawn(spec["name"]))))
+    ]
+
+
+def cmd_pending_resumes(_args) -> int:
+    for spec in pending_resumes(datetime.now()):
+        print(f"{spec['resume_thread']}\t{spec['name']}\t{describe_when(spec)} {spec['at']}")
+    return 0
+
+
 def catch_up_plist() -> Path:
     return home() / "Library/LaunchAgents" / f"{label_for(CATCH_UP)}.plist"
 
@@ -1500,6 +1516,9 @@ def build_parser() -> argparse.ArgumentParser:
     machine = sub.add_parser("machine", help="this machine's registration identity (random id + label recorded in adopted_by)")
     machine.add_argument("--label", help="set a readable label (default machine-<id>); no host/user names in public repos")
     machine.set_defaults(func=cmd_machine)
+
+    pending = sub.add_parser("pending-resumes", help="THREAD_ID<TAB>name<TAB>when per continuation that will still wake its thread")
+    pending.set_defaults(func=cmd_pending_resumes)
 
     show = sub.add_parser("show", help="spec + prompt")
     show.add_argument("name")

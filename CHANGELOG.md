@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-purge-threads: never purges a thread with a pending wake-up (`t3-schedule pending-resumes` continuation, `t3-mail-link list --thread-ids` link); `list` reports them as kept (`kept_pending_wake` in `--json`), a failing helper aborts.
 - data-enrichment (new): one `TREG_TOKEN` for the treg.to catalog (~3,800 endpoints: email find/verify, person and company enrichment, scraping blocked pages, social, SERP/keywords, reviews, generation). `treg.py search|get` are free and print one line per endpoint (price, observed success); `call` caps routed spend at $0.05 and reports the real charge; `balance`. SKILL.md gives inspiration, money/verification rules and pointers into treg's own docs instead of a list.
 - text-to-speech (new): provider-neutral voice discovery, single-clip generation with key-free provenance, optional normalization, and offline comparison; ElevenLabs/Gemini controls, accent guidance, and a catalog-to-Voice-Design workflow for specific voices.
 - perplexity-core (new): `px.py ask` = one sourced research question over the Perplexity Agent API (web_search always on, optional people_search), markdown + retrieved-source list or `--schema` structured JSON with nullable fields and verified `*url` keys; `check` spends nothing. Extracted from brellascraper's enrichment service. Empty answers exit 3 after one retry; 429s back off.

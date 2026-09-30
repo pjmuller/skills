@@ -423,7 +423,13 @@ def cmd_new(args) -> int:
     return 0
 
 
-def cmd_list(_args) -> int:
+def cmd_list(args) -> int:
+    if args.thread_ids:  # state file only (atomic replace, no lock): t3-purge-threads spares these threads
+        path = state_path()
+        links = json.loads(path.read_text()).get("links", []) if path.exists() else []
+        for thread_id in dict.fromkeys(link["t3_thread"] for link in links):
+            print(thread_id)
+        return 0
     with locked_state() as state:
         links = state.get("links", [])
     for link in links:
@@ -584,7 +590,8 @@ def main(argv: list[str] | None = None) -> int:
     new = linker("new", "spawn a T3 thread preloaded with the Gmail thread, then link it")
     new.add_argument("--project", required=True, help="T3 project path for the new thread")
     new.add_argument("--prompt", help="task for the new thread (default: study, then ask the user)")
-    sub.add_parser("list", help="show links")
+    listing = sub.add_parser("list", help="show links")
+    listing.add_argument("--thread-ids", action="store_true", help="only the linked T3 thread ids, one per line (no T3 lookup)")
     unlink = sub.add_parser("unlink", help="remove a link")
     unlink.add_argument("id", help="T3 thread id or Gmail thread id")
     poll = sub.add_parser("poll", help="check linked threads, ping on new inbound mail")

@@ -90,3 +90,13 @@ def test_draft_fingerprint_ignores_ids_and_whitespace():
     same = {**view, "id": "m2", "headers": {**view["headers"], "Date": "d2"}, "body": "Hi,\nfine.\nOn Mon wrote:\n> quoted"}
     edited = {**view, "body": "Hi, fine, but 10% less.\nOn Mon wrote:\n> quoted"}
     assert ml.draft_fingerprint(view) == ml.draft_fingerprint(same) != ml.draft_fingerprint(edited)
+
+
+def test_list_thread_ids_reads_state_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
+    monkeypatch.setattr(ml, "t3_thread", lambda tid: pytest.fail("no T3 lookup"))
+    assert ml.main(["list", "--thread-ids"]) == 0 and capsys.readouterr().out == ""  # no state file yet
+    state = tmp_path / "userdata" / "mail-links.json"
+    state.parent.mkdir(parents=True)
+    state.write_text('{"links": [{"t3_thread": "a"}, {"t3_thread": "b"}, {"t3_thread": "a"}]}')
+    assert ml.main(["list", "--thread-ids"]) == 0 and capsys.readouterr().out == "a\nb\n"

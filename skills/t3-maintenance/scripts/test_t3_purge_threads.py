@@ -197,10 +197,63 @@ def test_list_defaults_to_dry_run_json(store: Path) -> None:
         [sys.executable, str(SCRIPT), "list", "--store", str(store),
          "--archived", "--json"],
         capture_output=True, text=True, check=True,
+        env={"PATH": "/usr/bin:/bin"},  # no wake helpers: hermetic
     )
     payload = json.loads(result.stdout)
     assert sorted(item["title"] for item in payload["threads"]) == ["archold", "otherpr"]
     assert payload["threads"][0]["state"] == "archived"
+    assert payload["kept_pending_wake"] == []
+
+
+def tid(name: str) -> str:
+    return f"{name:>08.8}-0000-0000-0000-000000000000".replace(" ", "0")
+
+
+def test_pending_wake_excluded_from_every_cohort(store: Path) -> None:
+    args = cli.build_parser().parse_args(
+        ["list", "--archived", "--settled", "--deleted"]
+    )
+    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=False)
+    protected = frozenset({tid("archold"), tid("settold"), tid("delold")})
+    assert {item.title for item in cli.select(args, threads, protected)} == {"otherpr"}
+
+
+def fake_helpers(monkeypatch, schedule_rc: int = 0) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/bin/{name}")
+
+    def run(argv, **_kwargs):
+        if argv[0].endswith("t3-schedule"):
+            out = f"{tid('archold')}\tkk-check\tonce 2026-10-27 (tue) 10:00\n"
+            return subprocess.CompletedProcess(argv, schedule_rc, out, "boom")
+        return subprocess.CompletedProcess(argv, 0, f"{tid('archold')}\n{tid('delold')}\n", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+
+def test_pending_wakes_merges_both_helpers(monkeypatch) -> None:
+    fake_helpers(monkeypatch)
+    assert cli.pending_wakes() == {
+        tid("archold"): "scheduled resume kk-check (once 2026-10-27 (tue) 10:00); mail link",
+        tid("delold"): "mail link",
+    }
+
+
+def test_pending_wakes_fails_closed(monkeypatch) -> None:
+    fake_helpers(monkeypatch, schedule_rc=1)
+    with pytest.raises(SystemExit, match="refusing"):
+        cli.pending_wakes()
+
+
+def test_pending_wakes_absent_helpers(monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    assert cli.pending_wakes() == {}
+
+
+def test_list_reports_kept(store: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "pending_wakes", lambda: {tid("archold"): "mail link"})
+    assert cli.main(["list", "--store", str(store), "--archived"]) == 0
+    out = capsys.readouterr().out
+    assert "archold  " not in out and "kept 0archold archold: mail link" in out
 
 
 def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:

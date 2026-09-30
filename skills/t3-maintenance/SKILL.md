@@ -90,3 +90,5 @@ Manual request only. Gotchas the code can't show:
   usually means the thread predates resume cursors or Claude's 30-day `cleanupPeriodDays` already
   removed the file.
 - `--older-than` uses `updated_at`, which a bulk settle bumps: conservative (threads look younger).
+- Never purges a thread with a pending `t3-schedule --resume-thread` job or a `t3-mail-link` link
+  (`list` shows it as `kept`); to purge it, remove the job/link first. A failing helper = refuse.

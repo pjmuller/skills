@@ -72,7 +72,8 @@ recurring. Usually `--once`; recurring works too (pings the same thread daily).
 `--resume-thread self` = the calling thread. Arm one yourself whenever the next step needs time to pass
 (logs to accumulate, caches to expire, a deploy to soak, a customer to reply): `t3-schedule add --name <x>
 --once <date> --at 10:00 --resume-thread self --prompt-file <what to check, where the data lives>`.
-Keep data the prompt needs outside `/tmp` (reboots).
+Keep data the prompt needs outside `/tmp` (reboots). A pending continuation (`t3-schedule pending-resumes`)
+protects its thread from [`t3-purge-threads`](../t3-maintenance/SKILL.md).
 
 - **Resumable** = `t3-read-thread` finds it, not deleted/archived, its provider instance is in
   `t3-list-profiles`, and the ping lands (settled is fine: the turn wakes it; busy is fine: T3

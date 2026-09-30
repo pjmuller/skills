@@ -731,3 +731,24 @@ def test_runner_checks_owner_before_wait_and_spawn(tmp_path, monkeypatch):
     lines = body.splitlines()
     assert len(calls) == 2 and calls[0] < lines.index("  waited=0") and lines[calls[1] + 1].startswith("  out=$(")
     assert f"(( rc == {mod.OWNER_SKIP_EXIT} )) || fail" in body and "skipping" in body
+
+
+def test_pending_resumes(tmp_path, monkeypatch):
+    import json
+    from datetime import datetime
+    monkeypatch.setenv("HOME", str(tmp_path))
+    base = {"at": "10:00", "days": None, "resume_thread": "T"}
+    jobs = {
+        "pending": {**base, "once": "2026-10-27"},
+        "fired": {**base, "once": "2026-10-27"},
+        "retired": {**base, "once": "2026-10-27", "retired": "fired 2026-09-01"},
+        "expired": {**base, "once": "2026-09-01"},
+        "weekly": {**base, "days": [1], "paused": True},
+        "spawner": {"at": "10:00", "days": None, "once": "2026-10-27"},
+    }
+    for name, spec in jobs.items():
+        mod.paths(name)["spec"].parent.mkdir(parents=True, exist_ok=True)
+        mod.paths(name)["spec"].write_text(json.dumps({"name": name, **spec}))
+    mod.paths("fired")["last"].write_text("2026-09-30\n")
+    names = [spec["name"] for spec in mod.pending_resumes(datetime(2026, 9, 30, 12, 0))]
+    assert names == ["pending", "weekly"]
