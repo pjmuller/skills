@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+case "${1:-}" in ""|--check) ;; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
+command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+uv run --no-project "$root/scripts/tts.py" --help >/dev/null
+if ! command -v ffmpeg >/dev/null; then
+  echo "ffmpeg absent: generation works; normalize and level-matched compare require ffmpeg" >&2
+fi
+printf '%s\n' 'text-to-speech ready; invoke scripts/tts.py with uv run --no-project (no PATH links)'
