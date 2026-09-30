@@ -23,7 +23,7 @@ which every store reader here skips.
   [#11846](https://github.com/pingdotgg/t3code/pull/11846), command
   `thread.auto-settle.set {threadId, enabled}` behind capability
   `threadAutoSettleOptOut` — the way to keep a long-idle hidden 🏓 worker from
-  being auto-settled (= killed); `t3-spawn-thread` does not send it yet.
+  being auto-settled (= killed); `t3-spawn-thread` sends it for hidden spawns.
   Tracker: [#8433](https://github.com/pingdotgg/t3code/discussions/8433).
 - V2's blocking `delegate_task mode:"wait"` hits the 300 s HTTP ceiling
   ([#11168](https://github.com/pingdotgg/t3code/issues/11168)): keep the async 🏓

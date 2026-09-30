@@ -665,6 +665,15 @@ if ((hide)); then
     printf 'Hide: FAILED to arm keeper (the thread is fine, it just stays visible)\n' >&2
     printf '%s\n' "$armed_output" | sed 's/^/  /' >&2
   fi
+  # A hidden worker that wakes from its snooze counts as inactive and would be
+  # auto-settled (= killed) after the project's window (upstream #11788). Opt the
+  # thread out (T3 >= 0.0.43, #11846); older servers reject the command, harmless.
+  auto_settle_payload="$(jq -n --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
+    --arg threadId "$thread_id" \
+    '{type:"thread.auto-settle.set",commandId:$commandId,threadId:$threadId,enabled:false}')"
+  if t3_dispatch "$auto_settle_payload" 2>/dev/null; then
+    printf 'Auto-settle: off for this thread (its orchestrator settles it)\n'
+  fi
 else
   printf 'Hide: off\n'
 fi

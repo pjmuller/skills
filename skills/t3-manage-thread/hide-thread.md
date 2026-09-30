@@ -33,7 +33,9 @@ Gotchas:
 - A derived snooze wake makes a thread an auto-settle candidate
   ([#11788](https://github.com/pingdotgg/t3code/issues/11788); default 3 idle
   days, per-project). An active keeper prevents that; a thread whose keeper died
-  can eventually be stopped by T3.
+  can eventually be stopped by T3. `t3-spawn-thread` therefore opts hidden
+  spawns out of auto-settle (`thread.auto-settle.set`, T3 ≥ 0.0.43); a thread
+  hidden later with `t3-hide-thread` alone is not opted out.
 
 Keep this wrapper small: T3 owns thread/session/attention state; the keeper only
 reconciles visibility. No worker registry or cached lifecycle state. Fixing the
