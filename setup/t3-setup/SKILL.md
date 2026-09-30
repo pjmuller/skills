@@ -15,6 +15,26 @@ logins/2FA you cannot complete. Preserve unrelated work; report deviations.
 Machine already has t3-manage-thread and only needs the release-gated updater →
 [skills-refresh onboarding](../../docs/onboarding/skills-refresh.md) instead.
 
+## Fresh machine (macOS, nothing installed)
+
+Any agent with a shell can start: Claude Desktop (Code tab, local session), Codex, `claude`
+in a terminal. Install only what `command -v` misses; verify each with `--version`.
+
+- Homebrew needs the user's Mac password in a real terminal, which you cannot type. Missing →
+  ask them to paste this one line in Terminal.app, then continue yourself:
+  `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
+  Afterwards put the `brew shellenv` line it prints in `~/.zprofile`.
+- `brew install git gh jq mise`; `eval "$(mise activate zsh)"` in `~/.zshrc`;
+  `mise use --global node@22 pnpm uv`.
+- Claude Code CLI: `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`
+  (browser; the user logs in).
+- T3 Code: `brew install --cask t3-code`, open it once, wait for
+  `~/.t3/userdata/server-runtime.json`; the Claude provider must show as signed in.
+- GitHub: `gh auth login --web`. No account yet → the user creates one with their work
+  email and tells PJ the username (repo invitations).
+- Non-developer: this is the only terminal line they ever paste. Explain in their language,
+  in plain words, and do the rest yourself.
+
 ## Detect before creating
 
 - Prompt parameters: identity, OS, setup repo, accounts, prompt base, skill scopes.
