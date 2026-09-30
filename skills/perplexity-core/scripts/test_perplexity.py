@@ -53,3 +53,15 @@ def test_check_needs_key(monkeypatch):
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
     with pytest.raises(SystemExit):
         module.main(["check"])
+
+
+def test_empty_answer_is_not_a_result(cli):
+    with pytest.raises(cli.EmptyAnswer):
+        cli.render(response("", ["https://example.org"]), schema=None, as_json=False)
+
+
+def test_answer_falls_back_to_message_items(cli):
+    r = response("", ["https://example.org"])
+    r.output.append(SimpleNamespace(type="message", results=None, contents=None,
+                                    content=[SimpleNamespace(text="Found it.")]))
+    assert cli.render(r, schema=None, as_json=False).startswith("Found it.")

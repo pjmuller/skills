@@ -23,6 +23,9 @@ PX ask "Farmad, Belgium" --schema company.json --json   # structured, urls verif
 
 - **Every `ask` is paid** (cents; `--context-size high` and `--people-search` cost more). Never
   call it from tests, UI checks or loops without a cap; cache results in the repo (markdown) instead.
+- **Exit 3 = no answer.** The API sometimes returns retrieved URLs with an empty answer (seen under
+  rate limiting); the CLI retries once, then exits 3 and prints the URLs to stderr. Treat it as a
+  failed call, never as "no information". 429s are retried with backoff.
 - **Sourced or nothing.** Search tools are always on; the default instructions demand inline source
   URLs and plain "unknown". `Sources:` lists only URLs the API actually retrieved.
 - **Structured mode** (`--schema FILE`): every top-level field becomes nullable + required;

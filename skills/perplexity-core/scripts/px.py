@@ -25,6 +25,10 @@ DEFAULT_INSTRUCTIONS = (
     "facts, employers or titles. Say plainly when something is unknown. Be concise and factual; no "
     "citation markers like [1]."
 )
+class EmptyAnswer(Exception):
+    """The API returned sources but no answer text; callers must not treat that as a result."""
+
+
 _NULL_LITERALS = {"", "-", "n/a", "na", "null", "none", "nil", "unknown", "undisclosed"}
 _NULL_PATTERN = re.compile(
     r"^(information\s+)?not\s+(publicly\s+|currently\s+)?"
@@ -141,15 +145,46 @@ def ask(query: str, *, instructions: str, model: str, context_size: str, people:
         kwargs["response_format"] = {"type": "json_schema",
                                      "json_schema": {"name": schema_name, "schema": harden_schema(schema)}}
     started = time.monotonic()
-    response = client().responses.create(**kwargs)
+    c = client()
+    for attempt in range(4):
+        try:
+            response = c.responses.create(**kwargs)
+        except Exception as exc:  # SDK raises typed errors; 429 is the one worth waiting out
+            if getattr(exc, "status_code", None) != 429 or attempt == 3:
+                raise
+            wait = 5 * (attempt + 1)
+            print(f"perplexity: 429, retry in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+            continue
+        if answer_text(response).strip() or attempt == 3:
+            break
+        print("perplexity: empty answer, retrying once more", file=sys.stderr)
     elapsed = time.monotonic() - started
     cost = getattr(getattr(response, "usage", None), "cost", None)
     print(f"perplexity: {model} ${getattr(cost, 'total_cost', 0) or 0:.4f} {elapsed:.1f}s", file=sys.stderr)
     return response
 
 
-def render(response: Any, *, schema: Optional[Dict[str, Any]], as_json: bool) -> str:
+def answer_text(response: Any) -> str:
+    """`output_text` when present, else the text parts of message items (seen empty on some runs)."""
     text = _field(response, "output_text") or ""
+    if text.strip():
+        return text
+    parts: List[str] = []
+    for item in _field(response, "output") or []:
+        if _field(item, "type") != "message":
+            continue
+        for part in _field(item, "content") or []:
+            t = _field(part, "text")
+            if isinstance(t, str) and t.strip():
+                parts.append(t)
+    return "\n".join(parts)
+
+
+def render(response: Any, *, schema: Optional[Dict[str, Any]], as_json: bool) -> str:
+    text = answer_text(response)
+    if not text.strip():
+        raise EmptyAnswer(sorted(collect_result_urls(response)))
     urls = sorted(collect_result_urls(response))
     if schema is not None:
         data = clean_structured(json.loads(text or "{}"), set(urls))
@@ -195,7 +230,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             schema = json.load(f)
     response = ask(query.strip(), instructions=instructions, model=args.model, context_size=args.context_size,
                    people=args.people_search, schema=schema, schema_name=args.schema_name)
-    text = render(response, schema=schema, as_json=args.json)
+    try:
+        text = render(response, schema=schema, as_json=args.json)
+    except EmptyAnswer as exc:
+        print("perplexity: NO ANSWER (sources only); not a result. Retrieved:\n" + "\n".join(f"- {u}" for u in exc.args[0]),
+              file=sys.stderr)
+        return 3
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(text + "\n")
