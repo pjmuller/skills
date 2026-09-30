@@ -201,3 +201,77 @@ def test_list_defaults_to_dry_run_json(store: Path) -> None:
     payload = json.loads(result.stdout)
     assert sorted(item["title"] for item in payload["threads"]) == ["archold", "otherpr"]
     assert payload["threads"][0]["state"] == "archived"
+
+
+def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:
+    monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(cli, "DEFAULT_LOG_DIR", tmp_path / "actions")
+    monkeypatch.setattr(cli, "t3_is_running", lambda: None)
+    monkeypatch.setattr(cli, "offer_backup_cleanup", lambda current: None)
+    args = cli.build_parser().parse_args(
+        ["apply", "--mode", "hard", "--yes", "--archived", *extra]
+    )
+    args.store = store
+    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=False)
+    rows = cli.select(args, threads)
+    cli.attach_files(rows)
+    assert cli.cmd_apply(args, rows) == 0
+    return next((tmp_path / "backups").iterdir())
+
+
+def test_hard_purge_slim_backup_keeps_messages_only(
+    store: Path, tmp_path: Path, monkeypatch
+) -> None:
+    with sqlite3.connect(store) as connection:
+        connection.execute(
+            "INSERT INTO projection_thread_messages VALUES ('m1', "
+            "'0archold-0000-0000-0000-000000000000')"
+        )
+    backup = hard_purge(store, tmp_path, monkeypatch)
+    assert backup.name.startswith("purged-threads-")
+    with sqlite3.connect(backup) as copy:
+        titles = {row[0] for row in copy.execute("SELECT title FROM projection_threads")}
+        assert titles == {"archold", "otherpr"}
+        assert copy.execute("SELECT COUNT(*) FROM projection_thread_messages").fetchone()[0] == 1
+        tables = {row[0] for row in copy.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "orchestration_events" not in tables
+    with sqlite3.connect(store) as live:
+        remaining = {row[0] for row in live.execute("SELECT title FROM projection_threads")}
+        assert not remaining & {"archold", "otherpr"}
+        assert "settold" in remaining
+        assert live.execute(
+            "SELECT COUNT(*) FROM orchestration_events WHERE stream_id LIKE '0archold%'"
+        ).fetchone()[0] == 0
+
+
+def test_hard_purge_full_backup_is_a_store_copy(
+    store: Path, tmp_path: Path, monkeypatch
+) -> None:
+    backup = hard_purge(store, tmp_path, monkeypatch, "--full-backup")
+    assert backup.name.startswith("state-before-purge-")
+    with sqlite3.connect(backup) as copy:
+        assert copy.execute("SELECT COUNT(*) FROM orchestration_events").fetchone()[0] == 9
+
+
+@pytest.mark.parametrize("answer,kept", [("", 0), ("y", 0), ("n", 2)])
+def test_offer_backup_cleanup(tmp_path: Path, monkeypatch, answer: str, kept: int) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    monkeypatch.setattr(cli, "BACKUP_DIR", backups)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    current = backups / "purged-threads-new.sqlite"
+    for name in ("state-before-purge-old.sqlite", "purged-threads-older.sqlite", current.name):
+        (backups / name).write_bytes(b"x")
+    cli.offer_backup_cleanup(current, ask=lambda prompt: answer)
+    assert current.exists()
+    assert len(list(backups.iterdir())) == 1 + kept
+
+
+def test_offer_backup_cleanup_skips_without_tty(tmp_path: Path, monkeypatch) -> None:
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    monkeypatch.setattr(cli, "BACKUP_DIR", backups)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    (backups / "old.sqlite").write_bytes(b"x")
+    cli.offer_backup_cleanup(backups / "new.sqlite", ask=lambda prompt: pytest.fail("asked"))
+    assert (backups / "old.sqlite").exists()

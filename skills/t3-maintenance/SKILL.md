@@ -78,7 +78,12 @@ AGENTS.md files (a deduplication check, not evidence). Propose changes; edit onl
 Manual request only. Gotchas the code can't show:
 
 - `--mode soft` (T3's own `thread.delete` + transcript/log unlink) keeps **every row in SQLite**,
-  secrets included; only `--mode hard` (T3 closed, `VACUUM INTO` backup first) removes them.
+  secrets included; only `--mode hard` (T3 closed) removes them.
+- Hard mode first writes a **slim backup** to `~/.t3/backups/purged-threads-<stamp>.sqlite`: only
+  `projection_threads` + `projection_thread_messages` of the purged cohort (MBs, seconds) — enough to
+  re-read a conversation, not to resurrect it live. `--full-backup` = the old `VACUUM INTO` copy of
+  the whole store (GBs, ~10 min on an 8 GB store). After a purge it lists older backups and asks
+  `Delete them? [Y/n]` (skipped without a tty): the newest backup supersedes the rest.
 
 - Transcripts are resolved by provider session UUID (`provider_session_runtime.resume_cursor_json`)
   across every Claude home and `~/.codex/sessions` — never by cwd slug, never guessed. `unresolved`

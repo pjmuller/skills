@@ -564,6 +564,66 @@ def t3_is_running() -> str | None:
     return None
 
 
+# Tables that make a purged thread readable again (title, project, every
+# message). The event stream + activities are the bulk (>90% of the store) and
+# only matter for a *live* restore, which nobody has ever needed: the purge
+# cohort is settled/deleted threads. `--full-backup` keeps the old VACUUM INTO.
+SLIM_BACKUP_TABLES = ("projection_threads", "projection_thread_messages")
+
+
+def slim_backup(connection: sqlite3.Connection, ids: list[tuple[str]], target: Path) -> None:
+    """Copy the purged threads' metadata + messages into a fresh SQLite file."""
+    connection.execute("ATTACH DATABASE ? AS backup", (str(target),))
+    try:
+        with connection:
+            connection.execute("CREATE TEMP TABLE purge_ids (thread_id TEXT PRIMARY KEY)")
+            connection.executemany("INSERT INTO purge_ids VALUES (?)", ids)
+            for table in SLIM_BACKUP_TABLES:
+                connection.execute(
+                    f"CREATE TABLE backup.{table} AS SELECT * FROM main.{table} "
+                    "WHERE thread_id IN (SELECT thread_id FROM purge_ids)"
+                )
+            connection.execute("DROP TABLE purge_ids")
+    finally:
+        connection.execute("DETACH DATABASE backup")
+
+
+def make_backup(connection: sqlite3.Connection, ids: list[tuple[str]], full: bool) -> Path:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if full:
+        backup = BACKUP_DIR / f"state-before-purge-{stamp}.sqlite"
+        connection.execute("VACUUM INTO ?", (str(backup),))
+    else:
+        backup = BACKUP_DIR / f"purged-threads-{stamp}.sqlite"
+        slim_backup(connection, ids, backup)
+    print(f"backup {backup} ({mb(backup.stat().st_size)} MB{'' if full else ', slim: threads + messages'})")
+    return backup
+
+
+def offer_backup_cleanup(current: Path, ask=input) -> None:
+    """The fresh backup supersedes every earlier one: list them, delete on Y."""
+    stale = sorted(
+        path for path in BACKUP_DIR.glob("*.sqlite")
+        if path.is_file() and path != current
+    )
+    if not stale:
+        return
+    total = sum(path.stat().st_size for path in stale)
+    print(f"\n{len(stale)} older backups ({mb(total)} MB) superseded by {current.name}:")
+    for path in stale:
+        print(f"  {mb(path.stat().st_size):>8} MB  {path.name}")
+    if not sys.stdin.isatty():
+        print("Not a terminal; delete them yourself when ready.")
+        return
+    if ask("Delete them? [Y/n] ").strip().lower() in ("", "y", "yes"):
+        for path in stale:
+            path.unlink()
+        print(f"deleted {len(stale)} backups (-{mb(total)} MB)")
+    else:
+        print("kept")
+
+
 def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
     blocker = t3_is_running()
     if blocker:
@@ -576,16 +636,12 @@ def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
         raise SystemExit("Refusing hard purge without --yes.")
     store = Path(args.store)
     before = store.stat().st_size
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = BACKUP_DIR / f"state-before-purge-{stamp}.sqlite"
     log_path = action_log("hard", args, rows)
+    ids = [(item.thread_id,) for item in rows]
 
     connection = sqlite3.connect(str(store))
     try:
-        connection.execute("VACUUM INTO ?", (str(backup),))
-        print(f"backup {backup} ({mb(backup.stat().st_size)} MB)")
-        ids = [(item.thread_id,) for item in rows]
+        backup = make_backup(connection, ids, full=args.full_backup)
         with connection:
             for table in THREAD_KEYED_TABLES:
                 connection.executemany(f"DELETE FROM {table} WHERE thread_id = ?", ids)
@@ -621,6 +677,7 @@ def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
         f"{len(rows)} threads purged · store {mb(before)} MB → {mb(after)} MB "
         f"(-{mb(before - after)} MB) · log {log_path}"
     )
+    offer_backup_cleanup(backup)
     return 0
 
 
@@ -695,6 +752,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--max", type=int, default=50, help="batch cap: oldest N of the matches (default 50)"
     )
     apply_parser.add_argument("--yes", action="store_true", help="required by --mode hard")
+    apply_parser.add_argument(
+        "--full-backup", action="store_true",
+        help="hard mode: VACUUM INTO a full copy of the store before purging "
+        "(minutes, GBs) instead of the default slim backup (purged threads' "
+        "metadata + messages, seconds, MBs)",
+    )
     apply_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     return parser
 
