@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- perplexity-core (new): `perplexity.py ask` = one sourced research question over the Perplexity Agent API (web_search always on, optional people_search), markdown + retrieved-source list or `--schema` structured JSON with nullable fields and verified `*url` keys; `check` spends nothing. Extracted from brellascraper's enrichment service.
+- perplexity-core (new): `px.py ask` = one sourced research question over the Perplexity Agent API (web_search always on, optional people_search), markdown + retrieved-source list or `--schema` structured JSON with nullable fields and verified `*url` keys; `check` spends nothing. Extracted from brellascraper's enrichment service.
 - t3-setup: "Fresh machine" section for a Mac with nothing installed (Homebrew via one Terminal line the user pastes, then gh/jq/mise, Claude Code CLI, T3 Code cask, GitHub login) and a non-developer rule; startable from Claude Desktop's Code tab.
 - recording-followups (new): after a Fathom/Leexi/SyncUp transcript, a debrief note plus self-contained T3 prompts, one temp file per prompt spawned by path (`t3-spawn-thread … < file`); light code research before proposing; thinker vs coding-model routing. Linked from video-shrink-for-gemini, leexi, clickup-core.
 - agents-md: global template gains self-armed follow-ups: when the next step needs time to pass, the agent schedules `t3-schedule add --once <date> --resume-thread self` and reports a new ⏰ status. `t3-schedule` accepts `--resume-thread self` (the calling thread).

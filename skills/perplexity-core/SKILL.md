@@ -9,7 +9,7 @@ One PEP 723 script, no wrapper needed: the consuming repo only supplies `PERPLEX
 through its mise env file. The core directory is replaced on update, so nothing local lives here.
 
 ```sh
-PX() { uv run .agents/skills/perplexity-core/scripts/perplexity.py "$@"; }
+PX() { uv run .agents/skills/perplexity-core/scripts/px.py "$@"; }
 PX check                                        # key + SDK, spends nothing
 PX ask "Who is Jo Wyns at Farmad?" --people-search
 PX ask - < question.md --out answer.md          # long prompts from stdin, file output

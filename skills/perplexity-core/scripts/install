@@ -3,9 +3,9 @@ set -eu
 case "${1:-}" in ""|--check) ;; *) echo "usage: $0 [--check]" >&2; exit 2;; esac
 command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-uv run "$root/perplexity.py" --help >/dev/null
+uv run "$root/px.py" --help >/dev/null
 if [ "${1:-}" = "--check" ] && [ -z "${PERPLEXITY_API_KEY:-}" ]; then
   echo "PERPLEXITY_API_KEY not in env: add it to the repo's ~/.config/mise-env/<org>/<repo>.env" >&2
   exit 1
 fi
-printf '%s\n' 'perplexity-core ready; invoke scripts/perplexity.py with uv run (no global command links needed)'
+printf '%s\n' 'perplexity-core ready; invoke scripts/px.py with uv run (no global command links needed)'

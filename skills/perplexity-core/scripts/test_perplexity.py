@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture
 def cli(monkeypatch):
-    spec = importlib.util.spec_from_file_location("perplexity_under_test", Path(__file__).with_name("perplexity.py"))
+    spec = importlib.util.spec_from_file_location("perplexity_under_test", Path(__file__).with_name("px.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "client", lambda: pytest.fail("unexpected API call"))
@@ -47,7 +47,7 @@ def test_harden_schema_makes_fields_nullable_and_required(cli):
 
 
 def test_check_needs_key(monkeypatch):
-    spec = importlib.util.spec_from_file_location("perplexity_raw", Path(__file__).with_name("perplexity.py"))
+    spec = importlib.util.spec_from_file_location("perplexity_raw", Path(__file__).with_name("px.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
