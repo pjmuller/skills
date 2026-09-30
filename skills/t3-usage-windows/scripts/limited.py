@@ -169,6 +169,7 @@ def load_limited(store: Path) -> list[Limited]:
                 SELECT latest.message_id
                 FROM projection_thread_messages latest
                 WHERE latest.thread_id = t.thread_id
+                  AND latest.role != 'reasoning'  -- thinking traces are rows since T3 0.0.43
                 ORDER BY latest.created_at DESC, latest.message_id DESC
                 LIMIT 1
             )

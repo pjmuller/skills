@@ -150,7 +150,8 @@ def main(argv: list[str] | None = None) -> None:
         if not a.thread_id:
             ap.error("THREAD_ID required (or --list)")
         thread = resolve_thread(conn, a.thread_id)
-        sql = "SELECT role, created_at, text FROM projection_thread_messages WHERE thread_id = ?"
+        # Thinking traces are rows (role 'reasoning') since T3 0.0.43: not transcript, and they would shift --msg indexes.
+        sql = "SELECT role, created_at, text FROM projection_thread_messages WHERE thread_id = ? AND role != 'reasoning'"
         args: list[object] = [thread["thread_id"]]
         if a.role:
             sql += " AND role = ?"

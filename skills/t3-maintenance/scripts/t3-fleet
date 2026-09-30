@@ -147,6 +147,7 @@ def load_fleet(store: Path, now: datetime) -> dict[str, Thread]:
         for row in connection.execute("""
             SELECT thread_id, role, substr(text, 1, 400) AS text, created_at
             FROM projection_thread_messages
+            WHERE role != 'reasoning'  -- thinking traces are rows since T3 0.0.43
             ORDER BY thread_id, created_at, message_id
         """):
             last[row["thread_id"]] = (row["created_at"], row["role"], row["text"])

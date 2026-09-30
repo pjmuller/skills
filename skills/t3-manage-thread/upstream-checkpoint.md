@@ -1,8 +1,11 @@
 # Upstream replacement checkpoint
 
 Before extending these helpers, check upstream native orchestration. Last
-checked 2026-09-23, T3 v0.0.42: nothing on stable (no `t3 thread` CLI, no thread
-MCP tools, no provider-facing send/settle/snooze/rename tool).
+checked 2026-09-30, T3 v0.0.44: nothing on stable (no `t3 thread` CLI, no thread
+MCP tools, no provider-facing send/settle/snooze/rename tool). The internal
+dispatch contract is additive since v0.0.42; thinking traces are now message
+rows (`role = 'reasoning'`, [#11784](https://github.com/pingdotgg/t3code/pull/11784)),
+which every store reader here skips.
 
 - **Gate:** Orchestrator V2 [PR #2829](https://github.com/pingdotgg/t3code/pull/2829),
   unmerged, already carries native `create_threads`, `t3_thread_start/send/wait/read/list/interrupt`,
@@ -16,7 +19,11 @@ MCP tools, no provider-facing send/settle/snooze/rename tool).
   (for [#6368](https://github.com/pingdotgg/t3code/issues/6368), the reason
   `t3-hide-thread` needs a keeper), background wake #10183.
 - Still open on main: [#11795](https://github.com/pingdotgg/t3code/pull/11795)
-  (`create_threads`), auto-settle opt-out [#11846](https://github.com/pingdotgg/t3code/pull/11846).
+  (`create_threads`). Shipped v0.0.43: auto-settle opt-out
+  [#11846](https://github.com/pingdotgg/t3code/pull/11846), command
+  `thread.auto-settle.set {threadId, enabled}` behind capability
+  `threadAutoSettleOptOut` — the way to keep a long-idle hidden 🏓 worker from
+  being auto-settled (= killed); `t3-spawn-thread` does not send it yet.
   Tracker: [#8433](https://github.com/pingdotgg/t3code/discussions/8433).
 - V2's blocking `delegate_task mode:"wait"` hits the 300 s HTTP ceiling
   ([#11168](https://github.com/pingdotgg/t3code/issues/11168)): keep the async 🏓

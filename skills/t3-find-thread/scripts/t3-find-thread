@@ -259,6 +259,7 @@ def sync_index(store: Path, rebuild: bool = False, verbose: bool = False) -> dic
                     [
                         (m["text"], SEPARATORS.sub(" ", m["text"]), tid, m["role"], m["created_at"])
                         for m in messages
+                        if m["role"] != "reasoning"  # thinking traces (T3 0.0.43+) are not searchable content
                     ],
                 )
     global ENVIRONMENT_ID
@@ -442,7 +443,8 @@ def resolve_thread(cache: sqlite3.Connection, ident: str) -> sqlite3.Row:
 def thread_messages(store: Path, thread_id: str) -> list[sqlite3.Row]:
     with connect_readonly(store) as src:
         return src.execute(
-            "SELECT role, text, created_at FROM projection_thread_messages WHERE thread_id = ? ORDER BY created_at",
+            "SELECT role, text, created_at FROM projection_thread_messages "
+            "WHERE thread_id = ? AND role != 'reasoning' ORDER BY created_at",
             (thread_id,),
         ).fetchall()
 
