@@ -52,8 +52,12 @@ in a terminal. Install only what `command -v` misses; verify each with `--versio
   T3 provider's home. Read existing `CLAUDE.md`, `~/.codex/AGENTS.md`, skill dirs and
   symlink targets; note broken links and diverging content. Never print tokens.
 - Windows: do everything inside WSL; T3 desktop attaches to the WSL server. Linux/WSL:
-  thread helpers + `skills-refresh` cron only; no launchd scheduler, no smoke job, no plists
-  (report as a platform limitation).
+  thread helpers + `skills-refresh` cron only; no launchd scheduler, no smoke job, no plists,
+  no `t3-open-thread` (thread *search* works; opening is macOS-only). Report these as platform
+  limitations. Claude on Linux stores its /login in `<home>/.credentials.json`; `t3-limits`
+  reads that. A profile that only has a `claude setup-token` (settings.json `env`) can run
+  turns but shows no usage: the usage API refuses setup-tokens, so `t3-limits` prints
+  "setup-token only" for it and capacity routing treats it as unknown.
 
 ## Merge prompts and unify homes
 
@@ -104,7 +108,9 @@ or `$HOME/.claude` on the default account, looks up an item never written → "N
 in · Please run /login". Isolated homes use the same string as at `claude auth login`.
 Start T3, verify with `t3-limits` (instance listed with its plan) and
 `t3-spawn-thread --profile <slug> --dry-run`. Codex present → verify its provider too;
-never add Codex when absent. CodexBar requested →
+never add Codex when absent. Verify the Codex login in the shell T3 uses (`codex login status`
+inside WSL): the Windows desktop app and WSL keep separate logins, a signed-in desktop proves
+nothing for the WSL backend. CodexBar requested →
 [codexbar-setup install](../../skills/codexbar-setup/install.md).
 
 Antigravity requested: `brew install --cask antigravity-cli`, run `agy` to sign in
@@ -119,20 +125,23 @@ with a real file write. Video goes through native `agy`, not T3:
 ## Install in dependency order
 
 `~/.local/bin` must be on the login-shell PATH. Existing `.claude/skills` directory
-symlinks: [README](../../README.md#multiple-claude-homes).
+symlinks: [README](../../README.md#multiple-claude-homes). Always name the agents
+(`-a claude-code`, plus `-a codex` when Codex is installed): without it the CLI prompts
+for agents, which cancels in a non-TTY agent shell, and warns about agents it cannot find.
 
 ```bash
-pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y
+A="-a claude-code"            # add: -a codex   (when Codex is present)
+pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y $A
 ~/.agents/skills/t3-manage-thread/scripts/install
-pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y         # macOS
+pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y $A      # macOS
 ~/.agents/skills/t3-schedule/scripts/install                     # --relink if an older copy owns the command
 skills-refresh                                                   # pin to newest release tag
-skills-refresh schedule --project <setup-repo>                   # daily job (Linux/WSL: cron)
+skills-refresh schedule --project <setup-repo>                   # daily job (Linux/WSL: cron line; it tells you if the daemon is off)
 # from the setup repo (repo-local):
-pnpm dlx skills add pjmuller/skills -s agents-md -y
-pnpm dlx skills add pjmuller/skills -s tone-of-voice -y          # when selected
-pnpm dlx skills add pjmuller/skills -s codexbar-setup -y         # when selected
-pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y       # when selected (+ t3-maintenance), then its scripts/install
+pnpm dlx skills add pjmuller/skills -s agents-md -y $A
+pnpm dlx skills add pjmuller/skills -s tone-of-voice -y $A       # when selected
+pnpm dlx skills add pjmuller/skills -s codexbar-setup -y $A      # when selected
+pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y $A    # when selected (+ t3-maintenance), then its scripts/install
 t3-usage-windows topup install                                   # macOS: open usage windows from 05:00, chain all day
 ```
 

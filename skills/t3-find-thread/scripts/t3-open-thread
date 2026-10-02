@@ -127,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--browser", action="store_true", help="skip the palette, open the web client")
     parser.add_argument("--dry-run", action="store_true", help="print what would happen")
     args = parser.parse_args(argv)
+    if sys.platform != "darwin" and not args.browser:
+        print("t3-open-thread drives the macOS desktop app (osascript); on Linux/WSL open the thread "
+              "from the sidebar by title, or pass --browser for the web client.", file=sys.stderr)
+        return 2
 
     ident = parse_ident(args.target)
     thread_id, title = lookup(ident)

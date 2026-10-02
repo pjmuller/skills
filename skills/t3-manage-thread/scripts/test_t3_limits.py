@@ -333,6 +333,21 @@ class CodexRowsTest(unittest.TestCase):
         credentials = t3_limits.codex_credentials(str(home))
         self.assertEqual(credentials["identity"], "acc-1")
 
+    def test_claude_credentials_file_and_setup_token_hint(self):
+        home = Path(tempfile.mkdtemp())
+        with patch.object(t3_limits.sys, "platform", "linux"):
+            with self.assertRaisesRegex(LookupError, "no Claude login"):
+                t3_limits.claude_credentials(str(home))
+            (home / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x"}}))
+            with self.assertRaisesRegex(LookupError, "setup-token only"):
+                t3_limits.claude_credentials(str(home))
+            (home / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+                "accessToken": "file-token", "subscriptionType": "max"}}))
+            self.assertEqual(t3_limits.claude_credentials(str(home))["accessToken"], "file-token")
+        with patch.object(t3_limits.sys, "platform", "darwin"), \
+                patch.object(t3_limits, "keychain_token", side_effect=LookupError("no Keychain item")):
+            self.assertEqual(t3_limits.claude_credentials(str(home))["accessToken"], "file-token")
+
     def test_missing_login_becomes_an_error_row(self):
         settings = Path(tempfile.mkdtemp()) / "settings.json"
         settings.write_text(json.dumps({"providerInstances": {"codex": {

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.4.3 (2026-10-02)
+- t3-limits: reads Claude's `/login` credential from `<home>/.credentials.json` on Linux/WSL (and as macOS Keychain fallback) instead of crashing on a missing `security` binary; a profile that only holds a `claude setup-token` gets a "setup-token only" row (the usage API answers 403 to those tokens).
+- skills-refresh: `schedule` on Linux/WSL warns when no cron daemon runs (with the WSL `[boot] systemd=true` persistence hint) and prints the zone the hour is read in; `--version` reports the release stamp for a managed copy inside a setup repo (was: that repo's commit).
+- t3-find-thread: `t3-open-thread` refuses on Linux/WSL with a sidebar hint (`--browser` still works); docs mark it macOS-only.
+- t3-setup: `skills add` lines pass `-a claude-code` (+ `-a codex`) so the CLI never prompts for agents in a non-TTY shell; verify the Codex login inside WSL (`codex login status`), not the Windows desktop app; WSL limitations listed in one place.
 - t3-purge-threads: never purges a thread with a pending wake-up (`t3-schedule pending-resumes` continuation, `t3-mail-link list --thread-ids` link); `list` reports them as kept (`kept_pending_wake` in `--json`), a failing helper aborts.
 - data-enrichment (new): one `TREG_TOKEN` for the treg.to catalog (~3,800 endpoints: email find/verify, person and company enrichment, scraping blocked pages, social, SERP/keywords, reviews, generation). `treg.py search|get` are free and print one line per endpoint (price, observed success); `call` caps routed spend at $0.05 and reports the real charge; `balance`. SKILL.md gives inspiration, money/verification rules and pointers into treg's own docs instead of a list.
 - text-to-speech (new): provider-neutral voice discovery, single-clip generation with key-free provenance, optional normalization, and offline comparison; ElevenLabs/Gemini controls, accent guidance, and a catalog-to-Voice-Design workflow for specific voices.

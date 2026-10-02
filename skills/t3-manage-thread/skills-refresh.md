@@ -19,5 +19,7 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   cheap model): the script, not the model, decides the thread's fate — settle
   when nothing changed, surface it with the changelog on an update or the error
   on failure (`schedule --quiet` settles on updates too). Linux/WSL: a crontab
-  line tagged `# skills-refresh` instead.
+  line tagged `# skills-refresh` instead; `schedule` warns when no cron daemon runs
+  (WSL needs `[boot] systemd=true` or a `command=` line in `/etc/wsl.conf` to keep
+  it across restarts) and prints the zone the hour is read in.
 - Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.

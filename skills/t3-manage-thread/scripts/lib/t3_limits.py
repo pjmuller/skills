@@ -144,15 +144,56 @@ def codex_profiles(settings_path: Path) -> list[tuple[str, str, str]]:
 
 
 def keychain_token(service: str) -> dict:
-    result = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-w"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:  # no macOS `security` binary (Linux/WSL)
+        raise LookupError(f"no Keychain on this platform ({service})")
     if result.returncode != 0:
         raise LookupError(f"no Keychain item {service}")
     return json.loads(result.stdout).get("claudeAiOauth") or {}
+
+
+def claude_home(home_path: str) -> Path:
+    return Path(home_path).expanduser() if home_path else Path.home() / ".claude"
+
+
+def has_setup_token(home_path: str) -> bool:
+    """A 1-year `claude setup-token` lives in the env (CLAUDE_CODE_OAUTH_TOKEN) or the
+    profile's settings.json `env` block. It makes model calls, but the usage API answers
+    403 to it, so limits still need the /login credential."""
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return True
+    try:
+        settings = json.loads((claude_home(home_path) / "settings.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return bool((settings.get("env") or {}).get("CLAUDE_CODE_OAUTH_TOKEN"))
+
+
+def claude_credentials(home_path: str) -> dict:
+    """The /login credential for one profile: macOS Keychain item, else the
+    `.credentials.json` file Claude Code writes on Linux/WSL (and as macOS fallback)."""
+    errors = []
+    if sys.platform == "darwin":
+        try:
+            return keychain_token(keychain_service(home_path))
+        except LookupError as error:
+            errors.append(str(error))
+    path = claude_home(home_path) / ".credentials.json"
+    try:
+        token = json.loads(path.read_text()).get("claudeAiOauth") or {}
+    except (OSError, ValueError):
+        token = {}
+    if token.get("accessToken"):
+        return token
+    if has_setup_token(home_path):
+        raise LookupError("setup-token only: usage needs a /login credential (`claude auth login` in that profile)")
+    raise LookupError("; ".join(errors + [f"no Claude login in {path.parent}"]))
 
 
 def fetch_claude_usage(token: str) -> dict:
@@ -344,7 +385,7 @@ def claude_accounts(
 ) -> list[Account]:
     return collect(
         claude_profiles(settings_path),
-        lambda home: keychain_token(keychain_service(home)),
+        claude_credentials,
         lambda credentials: fetch(credentials["accessToken"]),
         lambda payload, credentials: (claude_plan(credentials), *claude_rows(payload)),
         cache_path, fresh, now or datetime.now(timezone.utc),

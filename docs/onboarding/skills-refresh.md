@@ -9,9 +9,9 @@ Paste to your agent (Claude Code or Codex):
 
 ```text
 Run these in order and show me any failing line (exit 0 and exit 10 are both success for skills-refresh):
-pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y
+pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y -a claude-code   # add -a codex when Codex is installed
 ~/.agents/skills/t3-manage-thread/scripts/install
-pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y          # macOS only
+pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y -a claude-code        # macOS only
 ~/.agents/skills/t3-schedule/scripts/install --relink             # macOS only; --relink replaces an older repo-local copy
 skills-refresh                                                     # exit 10 = applied newest release tag, writes ~/.agents/pjmuller-skills.version
 skills-refresh schedule --project <my personal setup repo path>
@@ -21,7 +21,7 @@ t3-spawn-thread --version                                          # must print 
 ```
 
 - Mac + Claude Code: T3 Code must be running for `run-now`; the job is a hidden T3 thread on a cheap model.
-- WSL + Codex: skip the macOS lines; `skills-refresh schedule` installs a cron line instead (`sudo service cron start` once if cron is not running); output lands in `~/.agents/pjmuller-skills.log`.
+- WSL + Codex: skip the macOS lines; `skills-refresh schedule` installs a cron line instead and warns when the cron daemon is off (`sudo service cron start`; to survive a WSL restart set `[boot] systemd=true` in `/etc/wsl.conf`). The hour is the machine's zone (`date +%Z`, often UTC on a fresh WSL). Output lands in `~/.agents/pjmuller-skills.log`.
 
 ## What you will see
 

@@ -185,7 +185,12 @@ schedule() {
     local line
     line="${at#*:} ${at%%:*} * * * PATH=$HOME/.local/bin:\$PATH skills-refresh >> $HOME_/pjmuller-skills.log 2>&1 # skills-refresh"
     { crontab -l 2>/dev/null | grep -v '# skills-refresh$' || true; echo "$line"; } | crontab -
-    echo "crontab: $line"; return 0
+    echo "crontab: $line (fires in $(date +%Z); the hour is this machine's zone, not UTC)"
+    if ! pgrep -x cron >/dev/null 2>&1 && ! pgrep -x crond >/dev/null 2>&1; then
+      echo "skills-refresh: cron daemon not running: \`sudo service cron start\` once; WSL forgets it on" \
+        "restart unless /etc/wsl.conf has [boot] systemd=true (or command=\"service cron start\")" >&2
+    fi
+    return 0
   fi
   command -v t3-schedule >/dev/null || die "t3-schedule not on PATH: run skills/t3-schedule/scripts/install"
   [[ -n "$project" ]] || project="$(git rev-parse --show-toplevel 2>/dev/null)" || die "--project DIR required outside a git repo"

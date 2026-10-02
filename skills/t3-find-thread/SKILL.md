@@ -31,8 +31,10 @@ separator-split copy). Thread ids: any prefix ≥ 8 chars.
 **Links to threads do not work inside T3 chat**: its markdown sanitizer allows only
 http/https/mailto/file, http(s) opens externally, and there is no desktop deep link upstream
 (pingdotgg/t3code#4996) — custom schemes and helper applets were tried and dropped. Hence short
-ids, and `scripts/t3-open-thread <id>` drives the desktop app's cmd+k palette (needs Accessibility
-rights; archived threads are not in the palette; log in the cache dir).
+ids, and `scripts/t3-open-thread <id>` drives the desktop app's cmd+k palette (macOS only:
+osascript; needs Accessibility rights; archived threads are not in the palette; log in the cache
+dir). On Linux/WSL searching works, opening does not: give the user the title to click in the
+sidebar, or `--browser` when the web client is enabled.
 
 Install: `scripts/install` (`--check` verifies deps, store, symlinks). Related:
 [t3-manage-thread](../t3-manage-thread/SKILL.md) (spawn/ping/read/settle),
