@@ -99,3 +99,9 @@ Give your agent the bootstrap URL and your parameters (accounts, which skills, p
 https://raw.githubusercontent.com/pjmuller/skills/main/setup/t3-setup/SKILL.md
 It detects existing setup, unifies Claude homes, installs helpers, verifies a launchd smoke job and
 ends with a feedback block. Tool-free fallback: clone this repo and read `setup/t3-setup/SKILL.md`.
+
+## Contributing
+
+Collaborators push a branch to this repo and open a pull request (`gh pr create`); `main` only
+takes pull requests (ruleset, admin bypass for releases). Everyone else forks. Add a CHANGELOG line
+under "Unreleased"; releases are tags, see [Update](#update).
