@@ -125,7 +125,7 @@ class ClaudeRowsTest(unittest.TestCase):
         rows, _ = t3_limits.claude_rows(dict(CLAUDE_PAYLOAD, limits=[]))
         self.assertEqual([row.window for row in rows], ["session", "weekly"])
 
-    @patch.object(t3_limits, "keychain_token", return_value={"accessToken": "fixture-token"})
+    @patch.object(t3_limits, "claude_credentials", return_value={"accessToken": "fixture-token"})
     def test_expired_token_reports_instead_of_raising(self, _token):
         settings = settings_fixture()
 
@@ -170,7 +170,7 @@ class CacheTest(unittest.TestCase):
         self.cache = self.tmp / "t3-limits-cache.json"
         self.settings = settings_fixture()
         patcher = patch.object(
-            t3_limits, "keychain_token", return_value={"accessToken": "fixture-token"}
+            t3_limits, "claude_credentials", return_value={"accessToken": "fixture-token"}
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -347,6 +347,32 @@ class CodexRowsTest(unittest.TestCase):
         with patch.object(t3_limits.sys, "platform", "darwin"), \
                 patch.object(t3_limits, "keychain_token", side_effect=LookupError("no Keychain item")):
             self.assertEqual(t3_limits.claude_credentials(str(home))["accessToken"], "file-token")
+
+    def test_claude_config_dir_and_profile_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            for home, token in ((root, "default-token"), (profile, "profile-token")):
+                (home / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": token}}))
+            with patch.dict(t3_limits.os.environ, {"CLAUDE_CONFIG_DIR": directory}), \
+                    patch.object(t3_limits.sys, "platform", "linux"), \
+                    patch.object(t3_limits, "keychain_token") as keychain:
+                self.assertEqual(t3_limits.claude_credentials("")["accessToken"], "default-token")
+                self.assertEqual(t3_limits.claude_credentials(str(profile))["accessToken"], "profile-token")
+                keychain.assert_not_called()
+
+    def test_unusable_keychain_falls_back_without_exposing_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "file-token"}}))
+            with patch.object(t3_limits.sys, "platform", "darwin"):
+                for value in ({}, {"accessToken": "keychain-token"}):
+                    with patch.object(t3_limits, "keychain_token", return_value=value):
+                        expected = value.get("accessToken", "file-token")
+                        self.assertEqual(t3_limits.claude_credentials(directory)["accessToken"], expected)
+                with patch.object(t3_limits, "keychain_token", side_effect=ValueError("secret-value")):
+                    self.assertEqual(t3_limits.claude_credentials(directory)["accessToken"], "file-token")
 
     def test_missing_login_becomes_an_error_row(self):
         settings = Path(tempfile.mkdtemp()) / "settings.json"

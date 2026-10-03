@@ -1,9 +1,17 @@
 """uv run pytest .agents/skills/t3-schedule/scripts — pure functions only, no launchctl."""
 import plistlib
+import pytest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 mod = SourceFileLoader("t3_schedule", str(Path(__file__).with_name("t3-schedule"))).load_module()
+
+
+@pytest.fixture(autouse=True)
+def mac_backend(monkeypatch):
+    # The historical suite exercises launchd without touching the host service manager.
+    monkeypatch.setattr(mod, "systemd", lambda: False)
+    monkeypatch.setattr(mod, "scheduler_check", lambda: None)
 
 
 def test_weekday_plist(tmp_path, monkeypatch):

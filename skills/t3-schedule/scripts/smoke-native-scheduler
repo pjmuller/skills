@@ -1,0 +1,47 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Opt-in native launchd/systemd timer smoke: unique marker-only job; no T3/auth needed."""
+import os
+import plistlib
+import shlex
+import tempfile
+import time
+import uuid
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+mod = SourceFileLoader("scheduler_smoke", str(Path(__file__).with_name("t3-schedule"))).load_module()
+mod.scheduler_check()
+name = "native-smoke-" + uuid.uuid4().hex[:12]
+p = mod.paths(name)
+with tempfile.TemporaryDirectory(prefix="t3-schedule-smoke-") as tmp:
+    marker = Path(tmp) / "fired"
+    try:
+        p["sh"].parent.mkdir(parents=True, exist_ok=True)
+        p["plist"].parent.mkdir(parents=True, exist_ok=True)
+        p["sh"].write_text(f"#!/bin/zsh\nprintf 'native scheduler fired\\n' > {shlex.quote(str(marker))}\n")
+        p["sh"].chmod(0o755)
+        if mod.systemd():
+            p["service"].write_text(mod.service_body(name))
+            p["plist"].write_text("[Timer]\nOnActiveSec=1s\nAccuracySec=1s\n[Install]\nWantedBy=timers.target\n")
+        else:
+            body = plistlib.loads(mod.plist_body(name, 0, 0, None, p["sh"]))
+            body.pop("StartCalendarInterval")
+            body["RunAtLoad"] = True
+            p["plist"].write_bytes(plistlib.dumps(body))
+        mod.bootstrap(p["plist"])
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.25)
+        if not marker.exists():
+            raise SystemExit("native scheduler did not execute the marker job within 30 seconds")
+        print(f"PASS: {'systemd user timer' if mod.systemd() else 'launchd LaunchAgent'} fired marker job")
+    finally:
+        mod.bootout(name)
+        for key in ("plist", "service", "sh"):
+            p[key].unlink(missing_ok=True)
+        if mod.systemd():
+            mod.checked_systemctl("daemon-reload")

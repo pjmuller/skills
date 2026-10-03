@@ -1,0 +1,31 @@
+name: T3 portability
+
+on:
+  pull_request:
+    paths:
+      - 'skills/t3-manage-thread/**'
+      - 'skills/t3-schedule/**'
+      - '.github/workflows/t3-portability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - name: Linux shell dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh jq
+      - name: Test thread helpers and scheduler
+        run: uv run --with pytest pytest skills/t3-manage-thread/scripts skills/t3-schedule/scripts -q
+      - name: Native launchd smoke job
+        if: runner.os == 'macOS'
+        run: uv run skills/t3-schedule/scripts/smoke-native-scheduler

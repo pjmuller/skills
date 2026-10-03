@@ -15,11 +15,11 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   `skills-refresh --version`, `t3-spawn-thread --version` and `scripts/install --check`
   (`source checkout <describe>` only when the skill dir is this repo's own
   `skills/t3-manage-thread`, see `version()`).
-- **Job thread** (macOS, via [t3-schedule](../t3-schedule/SKILL.md), hidden,
+- **Job thread** (macOS and Linux/WSL, via [t3-schedule](../t3-schedule/SKILL.md), hidden,
   cheap model): the script, not the model, decides the thread's fate — settle
   when nothing changed, surface it with the changelog on an update or the error
-  on failure (`schedule --quiet` settles on updates too). Linux/WSL: a crontab
-  line tagged `# skills-refresh` instead; `schedule` warns when no cron daemon runs
-  (WSL needs `[boot] systemd=true` or a `command=` line in `/etc/wsl.conf` to keep
-  it across restarts) and prints the zone the hour is read in.
+  on failure (`schedule --quiet` settles on updates too). Uses launchd on macOS
+  and systemd user timers in WSL; no cron daemon required. After the timer is registered,
+  `schedule` removes only old crontab lines tagged `# skills-refresh` to prevent
+  duplicate updates. Other cron entries are preserved.
 - Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.

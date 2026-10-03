@@ -15,13 +15,19 @@ if [[ "${1:-}" == "--check" ]]; then
   spawn="$(readlink -f "$(command -v t3-spawn-thread)")"
   [[ -r "$(dirname "$spawn")/lib/t3-common.sh" ]] || { echo "missing lib/t3-common.sh; run: $remedy" >&2; exit 1; }
   echo 'ok      lib/t3-common.sh'
-  # launchd runners get SCHEDULE_PATH, not your interactive PATH: check the tools there.
+  "$script_dir/t3-schedule" check
+  # Scheduled runners get SCHEDULE_PATH, not your interactive PATH: check the tools there.
   schedule_path="$("$script_dir/t3-schedule" runner-path)"
-  for tool in pnpm uv jq sqlite3; do
+  for tool in pnpm uv jq sqlite3 zsh curl sed; do
     resolved="$(PATH="$schedule_path" bash -c "command -v $tool" || true)"
-    [[ -n "$resolved" ]] || { echo "missing $tool on the launchd runner PATH ($schedule_path)" >&2; exit 1; }
+    [[ -n "$resolved" ]] || { echo "missing $tool on the scheduled runner PATH ($schedule_path)" >&2; exit 1; }
     echo "ok      $tool ($resolved, runner PATH)"
   done
+  if [[ "$(uname -s)" == Linux ]]; then
+    for tool in flock systemctl systemd-run; do
+      PATH="$schedule_path" command -v "$tool" >/dev/null || { echo "missing $tool on runner PATH" >&2; exit 1; }
+    done
+  fi
   echo "ok      t3-schedule ($target)"; exit 0
 fi
 # Preflight every link before changing any command.

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- t3-schedule: persistent systemd user timers on Linux/WSL for recurring jobs and one-time continuations, sharing the existing retry/catch-up and duplicate guards; macOS keeps launchd. Installer checks verify scheduler readiness.
+- t3-manage-thread: harden platform credential loading and background-worker readiness; use the native scheduler for Linux skills-refresh jobs.
+
 ## v0.4.3 (2026-10-02)
 - t3-limits: reads Claude's `/login` credential from `<home>/.credentials.json` on Linux/WSL (and as macOS Keychain fallback) instead of crashing on a missing `security` binary; a profile that only holds a `claude setup-token` gets a "setup-token only" row (the usage API answers 403 to those tokens).
 - skills-refresh: `schedule` on Linux/WSL warns when no cron daemon runs (with the WSL `[boot] systemd=true` persistence hint) and prints the zone the hour is read in; `--version` reports the release stamp for a managed copy inside a setup repo (was: that repo's commit).

@@ -7,7 +7,7 @@
 profile T3 Code knows about.
 
 Read-only and deterministic: T3's `settings.json` lists the enabled provider
-instances; each Claude instance's OAuth token is read from the macOS Keychain and
+instances; each Claude instance's OAuth token is read from macOS Keychain or Linux credentials and
 each Codex instance's from `<home>/auth.json`; the percentages come from Anthropic's
 `/api/oauth/usage` and ChatGPT's `/backend-api/wham/usage`. Tokens are never printed
 and never refreshed (a refresh would rotate them out from under the CLI itself); an
@@ -159,7 +159,7 @@ def keychain_token(service: str) -> dict:
 
 
 def claude_home(home_path: str) -> Path:
-    return Path(home_path).expanduser() if home_path else Path.home() / ".claude"
+    return Path(home_path or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
 
 
 def has_setup_token(home_path: str) -> bool:
@@ -181,15 +181,17 @@ def claude_credentials(home_path: str) -> dict:
     errors = []
     if sys.platform == "darwin":
         try:
-            return keychain_token(keychain_service(home_path))
-        except LookupError as error:
-            errors.append(str(error))
+            token = keychain_token(keychain_service(home_path or os.environ.get("CLAUDE_CONFIG_DIR", "")))
+            if token.get("accessToken"):
+                return token
+        except (LookupError, OSError, ValueError, AttributeError):
+            errors.append("Claude Keychain credential unavailable")
     path = claude_home(home_path) / ".credentials.json"
     try:
         token = json.loads(path.read_text()).get("claudeAiOauth") or {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         token = {}
-    if token.get("accessToken"):
+    if isinstance(token, dict) and token.get("accessToken"):
         return token
     if has_setup_token(home_path):
         raise LookupError("setup-token only: usage needs a /login credential (`claude auth login` in that profile)")

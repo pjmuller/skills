@@ -52,9 +52,10 @@ in a terminal. Install only what `command -v` misses; verify each with `--versio
   T3 provider's home. Read existing `CLAUDE.md`, `~/.codex/AGENTS.md`, skill dirs and
   symlink targets; note broken links and diverging content. Never print tokens.
 - Windows: do everything inside WSL; T3 desktop attaches to the WSL server. Linux/WSL:
-  thread helpers + `skills-refresh` cron only; no launchd scheduler, no smoke job, no plists,
-  no `t3-open-thread` (thread *search* works; opening is macOS-only). Report these as platform
-  limitations. Claude on Linux stores its /login in `<home>/.credentials.json`; `t3-limits`
+  use systemd user timers for `t3-schedule`, including the scheduler smoke job;
+  verify the user manager with `systemctl --user show-environment`. Keep WSL and T3 running
+  and the computer awake. No Windows execution wrapper or launchd in WSL.
+  `t3-open-thread` remains macOS-only (thread *search* works). Claude on Linux stores its /login in `<home>/.credentials.json`; `t3-limits`
   reads that. A profile that only has a `claude setup-token` (settings.json `env`) can run
   turns but shows no usage: the usage API refuses setup-tokens, so `t3-limits` prints
   "setup-token only" for it and capacity routing treats it as unknown.
@@ -133,10 +134,10 @@ for agents, which cancels in a non-TTY agent shell, and warns about agents it ca
 A="-a claude-code"            # add: -a codex   (when Codex is present)
 pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y $A
 ~/.agents/skills/t3-manage-thread/scripts/install
-pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y $A      # macOS
+pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y $A      # macOS or Linux/WSL
 ~/.agents/skills/t3-schedule/scripts/install                     # --relink if an older copy owns the command
 skills-refresh                                                   # pin to newest release tag
-skills-refresh schedule --project <setup-repo>                   # daily job (Linux/WSL: cron line; it tells you if the daemon is off)
+skills-refresh schedule --project <setup-repo>                   # daily job (launchd on macOS, systemd user timer on Linux/WSL)
 # from the setup repo (repo-local):
 pnpm dlx skills add pjmuller/skills -s agents-md -y $A
 pnpm dlx skills add pjmuller/skills -s tone-of-voice -y $A       # when selected
@@ -153,14 +154,14 @@ one canonical tree.
 
 ## Verify live and record
 
-- Both `scripts/install --check` (scheduler: macOS; it also checks the launchd runner
+- Both `scripts/install --check` (scheduler checks the native service manager and runner
   PATH). `t3-spawn-thread --project <setup-repo> --profile <name> --dry-run -- "Reply ok"`
   for **each** provider, Codex included. `t3-limits`.
-- macOS smoke job (free name, e.g. `t3-setup-smoke`, suffix if taken; `--at` = now + 2 min):
+- Native scheduler smoke job (free name, e.g. `t3-setup-smoke`, suffix if taken; `--at` = now + 2 min):
   `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,
   then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered and
   settled. Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
-- `t3-schedule list` shows `skills-refresh` (Linux/WSL: `crontab -l`); `t3-usage-windows topup status` loaded when selected;
+- `t3-schedule list` shows `skills-refresh`; `t3-usage-windows topup status` loaded when selected;
   `skills-refresh --version` prints a tag.
 - SETUP.md in the setup repo: bootstrap URL + full revision, installed skill
   revisions/locks, tested T3 version, home layout, update procedure

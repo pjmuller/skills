@@ -11,17 +11,22 @@ Paste to your agent (Claude Code or Codex):
 Run these in order and show me any failing line (exit 0 and exit 10 are both success for skills-refresh):
 pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y -a claude-code   # add -a codex when Codex is installed
 ~/.agents/skills/t3-manage-thread/scripts/install
-pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y -a claude-code        # macOS only
-~/.agents/skills/t3-schedule/scripts/install --relink             # macOS only; --relink replaces an older repo-local copy
+pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y -a claude-code
+~/.agents/skills/t3-schedule/scripts/install --relink     # --relink replaces an older repo-local copy
 skills-refresh                                                     # exit 10 = applied newest release tag, writes ~/.agents/pjmuller-skills.version
 skills-refresh schedule --project <my personal setup repo path>
-t3-schedule list                                                   # macOS: must show skills-refresh at 06:30
-t3-schedule run-now skills-refresh                                 # macOS: one real run; expect "up to date" and a thread that settles itself
+t3-schedule list                                                   # must show skills-refresh at 06:30
+t3-schedule run-now skills-refresh                                 # one real run; expect "up to date" and a thread that settles itself
 t3-spawn-thread --version                                          # must print v0.4.0 or higher
 ```
 
-- Mac + Claude Code: T3 Code must be running for `run-now`; the job is a hidden T3 thread on a cheap model.
-- WSL + Codex: skip the macOS lines; `skills-refresh schedule` installs a cron line instead and warns when the cron daemon is off (`sudo service cron start`; to survive a WSL restart set `[boot] systemd=true` in `/etc/wsl.conf`). The hour is the machine's zone (`date +%Z`, often UTC on a fresh WSL). Output lands in `~/.agents/pjmuller-skills.log`.
+- Both platforms: T3 Code must be running; the job is a hidden T3 thread on a cheap model.
+- macOS uses launchd; Linux/WSL uses persistent systemd user timers. Run the installer check
+  to verify the service manager and runner PATH. Windows execution stays inside WSL.
+- Keep the computer awake and WSL running (T3 connected to its WSL backend). A systemd
+  timer cannot start a stopped WSL distribution. Times use the machine zone (`date +%Z`).
+- Rerun `skills-refresh schedule` to migrate the old Linux cron entry; it removes only
+  its tagged cron line after the new timer has been armed successfully.
 
 ## What you will see
 
