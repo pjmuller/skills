@@ -22,6 +22,19 @@ check() {
     fi
   done
 
+  # A binary on PATH does not prove the user's service manager is running.
+  source "$script_dir/lib/t3-common.sh"
+  local supervisor
+  if supervisor="$(t3_supervisor)"; then
+    printf 'ok      worker supervisor %s\n' "$supervisor"
+  else
+    printf 'MISSING worker supervisor (macOS GUI launchd / Linux systemd user manager)\n'
+    status=1
+  fi
+  if command -v uv >/dev/null; then
+    uv run --python '>=3.11' "$script_dir/lib/t3_credentials_check.py" || status=1
+  fi
+
   local base_dir="${T3CODE_HOME:-$HOME/.t3}"
   local runtime_file="$base_dir/userdata/server-runtime.json"
   local last_origin_file="$base_dir/userdata/last-server-origin"

@@ -50,5 +50,5 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 ## Install
 
 `scripts/install` symlinks the helpers into `~/.local/bin`; `scripts/install --check`
-verifies deps, links and that T3 Code is reachable. Colleagues: `skills-refresh schedule`.
+verifies deps, links, local login credentials, worker supervision and T3 connectivity. Colleagues: `skills-refresh schedule`.
 Debug the shell helpers with `T3_SPAWN_DEBUG=1`. macOS, Linux, WSL2.

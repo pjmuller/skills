@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS LaunchAgents.
+"""Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS launchd or Linux/WSL systemd user timers.
 
 Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
 T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`, or, for a continuation job
@@ -41,7 +41,7 @@ ONCE_DEADLINE = (23, 0)               # once-jobs have no tomorrow: retried unti
 DEFAULT_WAIT_MAX = 10                 # minutes the runner waits for T3 Code; catch-up retries later
 # pnpm's global bin is not on launchd's PATH; without it the runner falls back to the slow
 # `pnpm dlx`. Resolved when the plist is written, so a custom PNPM_HOME is honoured.
-PNPM_BIN = os.environ.get("PNPM_HOME") or "$HOME/Library/pnpm"
+PNPM_BIN = os.environ.get("PNPM_HOME") or ("$HOME/Library/pnpm" if sys.platform == "darwin" else "$HOME/.local/share/pnpm")
 SCHEDULE_PATH = f"$HOME/.local/bin:$HOME/.local/share/mise/shims:{PNPM_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RUNTIME_JSON = ".t3/userdata/server-runtime.json"
 LAST_ORIGIN = ".t3/userdata/last-server-origin"   # written by lib/t3-common.sh t3_bootstrap
@@ -75,10 +75,16 @@ def label_for(name: str) -> str:
     return f"{LABEL_PREFIX}.{name}"
 
 
+def systemd() -> bool:
+    return sys.platform.startswith("linux")
+
+
 def paths(name: str) -> dict[str, Path]:
     base = home() / ".t3/userdata/scheduled/t3-schedule"
     return {
-        "plist": home() / "Library/LaunchAgents" / f"{label_for(name)}.plist",
+        "plist": (home() / ".config/systemd/user" / f"{label_for(name)}.timer" if systemd()
+                  else home() / "Library/LaunchAgents" / f"{label_for(name)}.plist"),
+        "service": home() / ".config/systemd/user" / f"{label_for(name)}.service",
         "spec": base / f"{name}.json",
         "prompt": base / f"{name}.prompt.md",
         "sh": base / f"{name}.sh",
@@ -346,7 +352,8 @@ def git_state(spec: dict) -> str | None:
 def artefacts(spec: dict) -> tuple[str, bytes]:
     p = paths(spec["name"])
     hour, minute = parse_at(spec["at"])
-    return runner_script(spec, p), plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once"))
+    body = timer_body(spec) if systemd() else plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once"))
+    return runner_script(spec, p), body
 
 
 def job_flag(spec: dict) -> str | None:
@@ -363,6 +370,8 @@ def job_flag(spec: dict) -> str | None:
     try:
         sh, plist = artefacts({"wait_max": DEFAULT_WAIT_MAX, **spec})
         stale = not p["sh"].exists() or p["sh"].read_text() != sh or p["plist"].read_bytes() != plist
+        if systemd():
+            stale = stale or p["service"].read_text() != service_body(spec["name"])
     except (OSError, KeyError, SystemExit):
         stale = True
     flags = [f for f in (spec.get("displaced"), state, "stale runner (t3-schedule refresh)" if stale else None) if f]
@@ -543,10 +552,21 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
         owner_again = "  owner_check\n"
     else:
         pause_def = pause_again = owner_def = owner_again = ""
+    linux_preamble = f"""# Linux notifications are optional; the durable log and T3 thread are the acknowledgement.
+if [[ "$(uname -s)" == Linux ]]; then
+  osascript() {{ return 0; }}
+  exec 9> {shlex.quote(str(p["sh"].with_suffix(".lock")))}
+  flock -n 9 || exit 0
+fi
+# Persistent timers must respect the same bounded catch-up window as the poller.
+if [[ "$T3_SCHEDULE_AUTOMATIC" == 1 && "$T3_SCHEDULE_FORCE" != 1 ]]; then
+  t3-schedule due-check {shlex.quote(name)} || exit 0
+fi
+""" if systemd() else ""
     return f"""#!/bin/zsh
 # {'one-shot' if spec.get('once') else 'recurring'} T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
-# never inherit a parent thread: a scheduled thread is a root, whatever spawned the runner
+{linux_preamble}# never inherit a parent thread: a scheduled thread is a root, whatever spawned the runner
 unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID T3_MCP_BEARER_TOKEN
 mkdir -p {shlex.quote(str(p["log"].parent))}
 {{
@@ -555,7 +575,7 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
   # T3 Code must be up to accept the spawn; the Mac may have just woken (launchd runs missed
   # StartCalendarInterval jobs at the next wake), so wait for it.
   t3_up() {{
-    origin=$(sed -n 's/.*"origin":"\\([^"]*\\)".*/\\1/p' "$HOME/{RUNTIME_JSON}" 2>/dev/null)
+    origin=$(jq -r ' .origin // empty' "$HOME/{RUNTIME_JSON}" 2>/dev/null)
     [[ -n "$origin" ]] || origin=$(cat "$HOME/{LAST_ORIGIN}" 2>/dev/null)  # file vanished, server alive
     [[ -n "$origin" ]] && curl -sf --max-time 5 "$origin{HEALTH_PATH}" >/dev/null
   }}
@@ -615,9 +635,22 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
 """
 
 
-# --- launchctl ----------------------------------------------------------------
+# --- service managers ---------------------------------------------------------
 def launchctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["launchctl", *args], capture_output=True, text=True)
+
+
+def systemctl(*args: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SystemExit("systemctl missing: Linux/WSL scheduling requires systemd with a running user manager") from None
+
+
+def checked_systemctl(*args: str) -> None:
+    result = systemctl(*args)
+    if result.returncode:
+        raise SystemExit(f"systemctl --user {' '.join(args)} failed: {result.stderr.strip()}")
 
 
 def domain() -> str:
@@ -625,25 +658,105 @@ def domain() -> str:
 
 
 def loaded(name: str) -> bool:
+    if systemd():
+        return systemctl("is-active", "--quiet", f"{label_for(name)}.timer").returncode == 0
     return launchctl("print", f"{domain()}/{label_for(name)}").returncode == 0
 
 
 def running(name: str) -> bool:
-    """launchd reports `pid = N` while the runner (or its T3 wait loop) is alive."""
+    if systemd():
+        # oneshot services are 'activating' throughout ExecStart, not 'active'.
+        state = systemctl("show", "--property=ActiveState", "--value", f"{label_for(name)}.service").stdout.strip()
+        if state in ("activating", "active", "deactivating", "reloading"):
+            return True
+        manual = systemctl("show", "--property=ActiveState", "--value", f"{label_for(name)}.manual.service").stdout.strip()
+        return manual in ("activating", "active", "deactivating", "reloading")
     out = launchctl("print", f"{domain()}/{label_for(name)}").stdout
     return any(line.strip().startswith("pid = ") for line in out.splitlines())
 
 
 def bootout(name: str) -> None:
-    launchctl("bootout", f"{domain()}/{label_for(name)}")
+    if systemd():
+        if paths(name)["plist"].exists():
+            checked_systemctl("disable", "--now", f"{label_for(name)}.timer")
+        elif systemctl("show", "--property=LoadState", "--value", f"{label_for(name)}.timer").stdout.strip() == "loaded":
+            checked_systemctl("stop", f"{label_for(name)}.timer")
+        # Missing service is possible after an interrupted install. Existing services must stop.
+        if paths(name)["service"].exists():
+            checked_systemctl("stop", f"{label_for(name)}.service")
+        if systemctl("show", "--property=LoadState", "--value", f"{label_for(name)}.manual.service").stdout.strip() == "loaded":
+            checked_systemctl("stop", f"{label_for(name)}.manual.service")
+    else:
+        launchctl("bootout", f"{domain()}/{label_for(name)}")
 
 
 def bootstrap(plist: Path) -> None:
+    if systemd():
+        checked_systemctl("daemon-reload")
+        checked_systemctl("enable", "--now", plist.name)
+        return
     result = launchctl("bootstrap", domain(), str(plist))
     if result.returncode != 0:
         fallback = launchctl("load", str(plist))
         if fallback.returncode != 0:
             raise SystemExit(f"launchctl bootstrap failed: {result.stderr.strip()} / {fallback.stderr.strip()}")
+
+
+def kickstart(name: str) -> subprocess.CompletedProcess:
+    if systemd():
+        return systemctl("start", "--no-block", f"{label_for(name)}.service")
+    return launchctl("kickstart", f"{domain()}/{label_for(name)}")
+
+
+def unit_arg(value: str) -> str:
+    # systemd parses its own quoting, percent specifiers and (ExecStart only) dollar expansion.
+    return json.dumps(value.replace("%", "%%").replace("$", "$$"), ensure_ascii=False)
+
+
+def service_body(name: str) -> str:
+    runner = unit_arg(str(paths(name)["sh"]))
+    return f"""[Unit]
+Description=T3 scheduled job {name}
+
+[Service]
+Type=oneshot
+ExecStart=/bin/zsh {runner}
+Environment=T3_SCHEDULE_AUTOMATIC=1
+TimeoutStartSec=infinity
+"""
+
+
+def timer_body(spec: dict) -> bytes:
+    if spec.get("once"):
+        calendar = f"{spec['once']} {spec['at']}:00"
+    else:
+        days = spec.get("days")
+        prefix = ",".join(DAY_NAMES[d].title() for d in days) + " " if days else ""
+        calendar = f"{prefix}*-*-* {spec['at']}:00"
+    return f"""[Unit]
+Description=T3 scheduled job {spec['name']}
+
+[Timer]
+OnCalendar={calendar}
+Persistent=true
+AccuracySec=1s
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target
+""".encode()
+
+
+def scheduler_check() -> None:
+    if systemd():
+        checked_systemctl("show-environment")  # exit status, never print secrets
+    elif sys.platform == "darwin":
+        if launchctl("print", domain()).returncode:
+            raise SystemExit("launchd GUI domain unavailable; log into the macOS desktop session")
+    else:
+        raise SystemExit("supported schedulers: macOS launchd, Linux/WSL systemd user manager (run inside WSL)")
+    if not Path("/bin/zsh").exists():
+        raise SystemExit("missing /bin/zsh: install zsh for the scheduled runners")
 
 
 # --- commands -----------------------------------------------------------------
@@ -851,11 +964,16 @@ def cmd_add(args: argparse.Namespace) -> int:
         owners, others = registration(existing_owners(src), machines, me, git_user(project))
         spec.update(prompt_path=str(repo_files(project, name)[1]), source=str(src), machines=machines, adopted_by=owners)
     body = runner_script(spec, p)
-    plist = plist_body(name, hour, minute, days, p["sh"], once)
+    plist = timer_body(spec) if systemd() else plist_body(name, hour, minute, days, p["sh"], once)
     if args.dry_run:
         print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {prompt_path(spec)}\n{prompt}")
+        if systemd():
+            print(f"--- {p['service']}\n{service_body(name)}")
         return 0
+    scheduler_check()
     confirm_takeover(name, others, args.takeover)
+    if running(name):
+        raise SystemExit(f"{name}: runner active; wait for completion before replacing the job")
     if versioned:
         save_identity(me)  # the id recorded in adopted_by
     for path in p.values():
@@ -874,6 +992,8 @@ def cmd_add(args: argparse.Namespace) -> int:
     p["sh"].write_text(body)
     p["sh"].chmod(0o755)
     p["plist"].write_bytes(plist)
+    if systemd():
+        p["service"].write_text(service_body(name))
     bootstrap(p["plist"])
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
@@ -968,8 +1088,10 @@ def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
     bootout(args.name)
-    for key in ("plist", "spec", "prompt", "sh", "last", "fallback"):
+    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed", "fallback"):
         p[key].unlink(missing_ok=True)
+    if systemd():
+        checked_systemctl("daemon-reload")
     print(f"removed  {label_for(args.name)} from this machine (log kept: {p['log']})")
     me = machine_identity()
     if spec.get("source") and me:
@@ -1004,11 +1126,20 @@ def cmd_run_now(args: argparse.Namespace) -> int:
     if args.foreground:
         status = subprocess.run(["/bin/zsh", "-lc", str(p["sh"])], env=env).returncode
         finished = True
+    elif systemd():
+        # A transient user service keeps parent process ancestry out of the thread and allows
+        # an explicit early run without changing the persistent timer's environment.
+        result = subprocess.run(["systemd-run", "--user", "--collect", "--no-block",
+                                 f"--unit={label_for(args.name)}.manual", "--setenv=T3_SCHEDULE_FORCE=1",
+                                 "/bin/zsh", str(p["sh"])], capture_output=True, text=True)
+        if result.returncode:
+            raise SystemExit(f"run-now failed: {result.stderr.strip()}")
+        status = 0
     elif spec.get("once"):
         subprocess.run(["/bin/zsh", "-c", f"{shlex.quote(str(p['sh']))} >/dev/null 2>&1 &"], env=env)
         status = 0
     else:
-        result = launchctl("kickstart", f"{domain()}/{label_for(args.name)}")
+        result = kickstart(args.name)
         if result.returncode != 0:
             raise SystemExit(f"kickstart failed: {result.stderr.strip()}")
         status = 0
@@ -1045,9 +1176,13 @@ def cmd_run_now(args: argparse.Namespace) -> int:
 def write_artefacts(spec: dict) -> None:
     p = paths(spec["name"])
     sh, plist = artefacts(spec)
+    p["sh"].parent.mkdir(parents=True, exist_ok=True)
+    p["plist"].parent.mkdir(parents=True, exist_ok=True)
     p["sh"].write_text(sh)
     p["sh"].chmod(0o755)
     p["plist"].write_bytes(plist)
+    if systemd():
+        p["service"].write_text(service_body(spec["name"]))
 
 
 def rearm(spec: dict) -> bool:
@@ -1070,7 +1205,9 @@ def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, dateti
     hour, minute = parse_at(at)
     slot = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if once:
-        return slot, max(slot, slot.replace(hour=ONCE_DEADLINE[0], minute=ONCE_DEADLINE[1]))
+        deadline = slot.replace(hour=ONCE_DEADLINE[0], minute=ONCE_DEADLINE[1])
+        # A late slot needs a real firing window; systemd starts after the exact microsecond.
+        return slot, deadline if slot < deadline else slot.replace(hour=23, minute=59, second=59, microsecond=999999)
     end = slot + timedelta(hours=CATCH_UP_GRACE_HOURS)
     return slot, min(end, slot.replace(hour=23, minute=59, second=59))  # same calendar day only
 
@@ -1130,6 +1267,16 @@ def catch_up_plist() -> Path:
 
 
 def arm_catch_up() -> None:
+    if systemd():
+        p = paths(CATCH_UP)
+        p["plist"].parent.mkdir(parents=True, exist_ok=True)
+        p["sh"].parent.mkdir(parents=True, exist_ok=True)
+        p["sh"].write_text(f'#!/bin/zsh\nexport PATH="{SCHEDULE_PATH}"\nexec t3-schedule catch-up\n')
+        p["sh"].chmod(0o755)
+        p["service"].write_text(service_body(CATCH_UP))
+        p["plist"].write_text(f"[Unit]\nDescription=T3 schedule catch-up\n\n[Timer]\nOnStartupSec=1min\nOnUnitActiveSec={CATCH_UP_INTERVAL}s\nAccuracySec=1s\n\n[Install]\nWantedBy=timers.target\n")
+        bootstrap(p["plist"])
+        return
     plist = catch_up_plist()
     body = plistlib.dumps(
         {
@@ -1162,10 +1309,13 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
             continue
         bootout(name)
         paths(name)["plist"].unlink(missing_ok=True)
+        if systemd():
+            paths(name)["service"].unlink(missing_ok=True)
+            checked_systemctl("daemon-reload")
         paths(name)["sh"].unlink(missing_ok=True)
         spec["retired"] = status
         paths(name)["spec"].write_text(json.dumps(spec, indent=2) + "\n")
-        if status.startswith("expired"):
+        if status.startswith("expired") and not systemd():
             msg = f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired"
             subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
     # One job per tick, earliest slot first: after a long power-off several slots are due at
@@ -1182,7 +1332,7 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
         if args.dry_run:
             kicked.append(f"{name} (dry-run; also due: {', '.join(s['name'] for s in due[1:]) or 'none'})")
             continue
-        result = launchctl("kickstart", f"{domain()}/{label_for(name)}")
+        result = kickstart(name)
         kicked.append(name if result.returncode == 0 else f"{name} FAILED: {result.stderr.strip()}")
     if kicked:
         line = f"{now:%Y-%m-%d %H:%M:%S}  catch-up: {', '.join(kicked)}"
@@ -1198,11 +1348,12 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
 
 def cmd_refresh(args: argparse.Namespace) -> int:
     """Regenerate every runner + plist from its spec (after a template change) and re-arm catch-up."""
+    scheduler_check()
     # Retire old labels before arming replacements; preserve specs/prompts/run markers.
     legacy_prefix = "com.pjmuller.t3-schedule"
-    old_plists = list((home() / "Library/LaunchAgents").glob(f"{legacy_prefix}.*.plist"))
+    old_plists = [] if systemd() else list((home() / "Library/LaunchAgents").glob(f"{legacy_prefix}.*.plist"))
     old_labels = {p.stem for p in old_plists}
-    old_labels.update(line.split()[-1] for line in launchctl("list").stdout.splitlines()
+    old_labels.update(line.split()[-1] for line in ("" if systemd() else launchctl("list").stdout).splitlines()
                       if line.split() and line.split()[-1].startswith(legacy_prefix + "."))
     for label in sorted(old_labels):
         launchctl("bootout", f"{domain()}/{label}")
@@ -1262,6 +1413,7 @@ def adopt_sources(target: Path) -> list[Path]:
 def cmd_adopt(args: argparse.Namespace) -> int:
     """Opt this machine into jobs committed to a repo. Never implicit: a clone alone arms nothing.
     Every spec is checked (and every takeover confirmed) before anything is written."""
+    scheduler_check()
     me = ensure_identity()
     plans = []
     for src in adopt_sources(Path(args.path).expanduser().resolve()):
@@ -1416,7 +1568,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="t3-schedule",
-        description="Recurring or one-shot T3 Code threads on a wall-clock schedule (macOS LaunchAgents).",
+        description="Recurring or one-shot T3 Code threads on a wall-clock schedule (macOS launchd / Linux and WSL systemd user timers).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1446,7 +1598,7 @@ def build_parser() -> argparse.ArgumentParser:
                      "(default: one machine; adopting it elsewhere needs a takeover)")
     add.add_argument("--takeover", action="store_true", help="with --force over a one-machine job registered to another "
                      "machine: confirm it no longer runs there")
-    add.add_argument("--dry-run", action="store_true", help="print plist + runner + prompt, write nothing")
+    add.add_argument("--dry-run", action="store_true", help="print scheduler units + runner + prompt, write nothing")
     add.add_argument("prompt", nargs="*", help='-- "<prompt>"')
     add.set_defaults(func=cmd_add)
 
@@ -1459,7 +1611,7 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("name")
     rm.set_defaults(func=cmd_remove)
 
-    run = sub.add_parser("run-now", help="fire the job now via launchd (once-jobs: foreground, forced) and print the result")
+    run = sub.add_parser("run-now", help="fire now via the native service manager and print the result")
     run.add_argument("name")
     run.add_argument("--foreground", action="store_true", help="run the script directly instead of launchctl kickstart")
     run.add_argument("--timeout", type=int, default=120, help="seconds to wait for the runner's result line")
@@ -1470,7 +1622,7 @@ def build_parser() -> argparse.ArgumentParser:
     catch.add_argument("--dry-run", action="store_true", help="print what would be kicked")
     catch.set_defaults(func=cmd_catch_up)
 
-    refresh = sub.add_parser("refresh", help="regenerate all runners/plists from their specs and re-arm the catch-up poller")
+    refresh = sub.add_parser("refresh", help="regenerate all runners/scheduler units from their specs and re-arm the catch-up poller")
     refresh.set_defaults(func=cmd_refresh)
 
     at = sub.add_parser("set-at", help="move a job to another HH:MM (keeps prompt/profile/model)")
@@ -1524,9 +1676,27 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("name")
     show.set_defaults(func=cmd_show)
 
-    runner_path = sub.add_parser("runner-path", help="print the PATH launchd runners get (used by install --check)")
+    check = sub.add_parser("check", help="verify the platform service manager is reachable")
+    check.set_defaults(func=cmd_check)
+
+    due = sub.add_parser("due-check", help="(runner-internal) check the bounded catch-up window")
+    due.add_argument("name")
+    due.set_defaults(func=cmd_due_check)
+
+    runner_path = sub.add_parser("runner-path", help="print the PATH scheduled runners get (used by install --check)")
     runner_path.set_defaults(func=cmd_runner_path)
     return parser
+
+
+def cmd_check(_args) -> int:
+    scheduler_check()
+    print("ok      systemd user manager" if systemd() else "ok      launchd GUI domain")
+    return 0
+
+
+def cmd_due_check(args) -> int:
+    spec = load_spec(require_spec(args.name)["spec"])
+    return 0 if due_now(spec, datetime.now(), last_spawn(args.name)) else 1
 
 
 def cmd_runner_path(_args) -> int:

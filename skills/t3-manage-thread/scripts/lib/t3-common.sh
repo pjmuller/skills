@@ -279,10 +279,29 @@ t3_print_thread_state() {
 # print which one was used. A calling harness reaps nohup/disown descendants
 # when a tool call completes (verified 2026-08-28), so launchd / systemd --user
 # must own the detached process.
+# Check the actual login/user-manager domain, not just installed binaries.
+t3_supervisor() {
+  case "$(uname -s)" in
+    Darwin)
+      command -v launchctl >/dev/null &&
+        launchctl print "gui/$(id -u)" >/dev/null 2>&1 || return 1
+      printf '%s' launchd ;;
+    Linux)
+      command -v systemd-run >/dev/null && command -v systemctl >/dev/null &&
+        systemctl --user show-environment >/dev/null 2>&1 || return 1
+      printf '%s' systemd ;;
+    *) return 1 ;;
+  esac
+}
+
 t3_supervise() {
-  local label="$1" log_file="$2"
+  local label="$1" log_file="$2" supervisor
   shift 2
-  if command -v launchctl >/dev/null; then
+  supervisor="$(t3_supervisor)" || {
+    echo "No usable worker supervisor: macOS needs a launchd GUI login; Linux/WSL needs a running systemd user manager (systemctl --user show-environment)." >&2
+    return 1
+  }
+  if [[ "$supervisor" == launchd ]]; then
     # Not `launchctl submit`: that runs the job at Background QoS, where every
     # step crawls (t3 --version 26s instead of 0.9s, keeper start 40-50s late;
     # measured 2026-09-09). A bootstrapped plist with ProcessType=Interactive
@@ -299,20 +318,20 @@ t3_supervise() {
       printf '%s\n' "$@" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/^/<string>/' -e 's/$/<\/string>/'
       printf '</array></dict></plist>\n'
     } >"$plist"
-    launchctl bootstrap "gui/$(id -u)" "$plist"
+    if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
+      rm -f -- "$plist"
+      return 1
+    fi
     rm -f -- "$plist"
     printf '%s' "launchd"
-  elif command -v systemd-run >/dev/null; then
+  else
     # --collect reaps the transient unit itself, so the worker needs no self-cleanup.
     systemd-run --user --collect --quiet --unit "$label" \
       --property="StandardOutput=append:$log_file" \
       --property="StandardError=append:$log_file" \
-      -- "$@"
+      -- "$@" || return 1
     printf '%s' "systemd"
-  else
-    echo "warning: neither launchctl nor systemd-run is available; falling back to setsid nohup — the calling harness may reap the worker." >&2
-    setsid nohup "$@" >>"$log_file" 2>&1 &
-    printf '%s' "setsid"
+
   fi
 }
 

@@ -1,6 +1,6 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via a macOS LaunchAgent, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/pause/resume/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
+description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via macOS launchd or Linux/WSL systemd user timers, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/pause/resume/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
 ---
 
 # t3-schedule
@@ -28,7 +28,7 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
 A recurring job's definition lives in its project repo so it survives a machine reset and gets
 reviewed: `<project>/.agents/schedules/<name>.json` (portable fields only: no path, no profile) +
 `<name>.prompt.md`. `add` writes both; **the caller commits them** (the helper never commits).
-The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, plist and state.
+The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, native scheduler units and state.
 
 - Prompt edits apply at the next fire (the runner reads the repo file); time/model/flag edits need
   `refresh`. `list` flags `untracked`/`uncommitted`/`MISSING` specs, stale runners and
@@ -38,7 +38,7 @@ The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, pli
 - `remove` disarms this machine only; `git rm` the two files to drop the job for everyone.
 - `pause <name> [--until YYYY-MM-DD]` marks the repo spec paused on every machine after pull;
   `resume <name>` clears it. Commit + push the spec. `--until` resumes at local midnight at the
-  start of that date on each machine; the spec remains paused until `resume` clears it. LaunchAgents
+  start of that date on each machine; the spec remains paused until `resume` clears it. Scheduler registrations
   and `adopted_by` stay intact. Run `refresh` once after upgrading old runners; subsequent
   pause/resume changes need no refresh. Runners and catch-up read the spec at fire time.
   `list` and `show` display effective status. Existing spawned threads are untouched.
@@ -85,7 +85,7 @@ protects its thread from [`t3-purge-threads`](../t3-maintenance/SKILL.md).
 - Log/notification: `resumed <title> (<id>)` vs `fallback (<reason>): spawned …`. `.last` and
   catch-up behave as for spawns.
 
-Pipeline: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
+Pipeline on macOS: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
 `~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt: repo file, or `<name>.prompt.md` there for
 local jobs) → waits for T3 Code
 → `t3-spawn-thread --no-open` → macOS notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`.
@@ -93,7 +93,7 @@ local jobs) → waits for T3 Code
 
 ## Contract
 
-- **Root thread.** The runner unsets inherited thread env and `run-now` goes through launchd, so no
+- **Root thread.** The runner unsets inherited thread env and `run-now` goes through the native service manager, so no
   parent is inherited even when fired from inside a T3 agent.
 - **Model + profile at fire time.** `--model a,b` = ordered candidates; the first whose ecosystem is
   installed *and* has capacity wins (default `opus,sol`). Without `--profile`, `t3-spawn-thread`
@@ -115,6 +115,39 @@ local jobs) → waits for T3 Code
   [t3-usage-windows](../t3-usage-windows/SKILL.md) recovers it. The notification + sidebar thread
   `⏰ <name> <date>` is the ack; nothing else pings the user.
 - **One-shot (`--once`).** Same guarantees, one spawn; catch-up retries until 23:00 that day.
-  launchd has no Year, so the runner skips other dates and any run after `<name>.last` exists; the
-  poller then retires the job (plist + runner deleted, spec kept; `list` shows `fired <date>` or
+  Jobs at/after 23:00 retry until midnight. On macOS launchd has no Year, so the runner skips other dates and any run after `<name>.last` exists; the
+  poller then retires the job (scheduler units + runner deleted, spec kept; `list` shows `fired <date>` or
   `expired (never fired)`).
+
+## Linux / Windows through WSL
+
+Run all helpers inside Linux. Windows uses the same systemd backend through WSL; there is no
+PowerShell scheduler or Windows Task Scheduler bridge. macOS keeps its existing launchd backend.
+`install --check` verifies the actual user service manager and the unattended runner's tools;
+`t3-schedule check` isolates scheduler readiness. Linux needs systemd, its running **user** manager,
+and zsh (`/bin/zsh`). No cron fallback: an unavailable manager fails with its error.
+
+- Each job installs `~/.config/systemd/user/com.t3-skills.t3-schedule.<name>.timer` and `.service`.
+  Timers use `OnCalendar` (including the year for one-shots), `Persistent=true`, and `AccuracySec=1s`.
+  Enablement survives WSL restarts. The same prompt/spec, pause, ownership, daily success marker,
+  continuation and catch-up rules apply on both platforms.
+- The catch-up timer runs one minute after the user manager starts, then every 15 minutes. Failed
+  launches retry within the documented window; missed days are not replayed. Persistent timer
+  wake-ups outside that window skip. A Linux file lock also prevents simultaneous manual/timed runs.
+- Keep the computer awake, WSL running and T3's WSL backend available. **Systemd does not keep WSL
+  alive or wake a suspended Windows computer.** An overdue one-shot can catch up within its window;
+  otherwise it expires visibly in `list`. System clock/timezone controls all schedules: check `date`.
+- User lingering (`loginctl enable-linger "$USER"`) can keep the user manager available without a
+  Linux login while WSL is running; it does not keep the WSL VM or Windows awake. Only enable it
+  when unattended operation requires it.
+- Linux completion/failure evidence is the T3 thread, `t3-schedule list`, and the existing log path;
+  macOS notifications remain macOS-only. Inspect native units with `systemctl --user list-timers`
+  and `journalctl --user -u com.t3-skills.t3-schedule.<name>.service`.
+
+Verification: `scripts/smoke-native-scheduler` loads a unique marker-only native timer/LaunchAgent,
+waits for execution, and removes only its own artifacts. It needs no T3 credentials. Unit tests cover
+both backends; a live scheduled T3 ping verifies the separate T3/auth leg.
+
+References: [WSL systemd lifecycle](https://learn.microsoft.com/en-us/windows/wsl/systemd),
+[systemd timer guarantees](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html),
+[user lingering](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html).

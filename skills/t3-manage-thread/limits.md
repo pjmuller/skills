@@ -21,9 +21,11 @@ Glossary:
   advisory, and a fresh reading does not reserve capacity for running jobs.
 
 Source per enabled T3 provider instance, so each row is the account T3 would run:
-- Claude: Keychain item `Claude Code-credentials`, suffixed
+- Claude on macOS: Keychain item `Claude Code-credentials`, suffixed
   `-<sha256(config dir)[:8]>` when the instance sets `config.homePath` →
-  Anthropic OAuth usage endpoint.
+  Anthropic OAuth usage endpoint. Linux/WSL reads `<homePath>/.credentials.json`;
+  macOS falls back to that file if Keychain has no usable login. Empty homePath
+  uses `CLAUDE_CONFIG_DIR`, then `~/.claude`. Windows execution stays inside WSL.
 - Codex: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint.
   The login e-mail is shown so a mis-assigned home is visible. Only top-level
   windows; API-key logins have none.
