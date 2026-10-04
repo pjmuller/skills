@@ -1,17 +1,39 @@
 ---
 name: data-enrichment
-description: Use when a task needs external or live data the repo has no API key for - find or verify a work email, enrich a person or company, read a bot-blocked web page, pull social posts/profiles (X, LinkedIn, Instagram, TikTok, YouTube, Reddit), SERP/keyword/backlink data, app or product reviews, or generate an image/video/voice clip - through one treg.to token, paid per call in fractions of a cent.
+description: Use for public page/PDF to Markdown (free Jina, then treg/Olostep), or external/live data the repo has no API key for - email verification, people/companies, social posts/profiles, SERP/SEO, reviews, or image/video/voice generation through treg.to.
 ---
 
 # Data enrichment (treg.to)
 
 [treg](https://treg.to) is a catalog of ~3,800 third-party endpoints across ~100 providers behind
-one token and one prepaid balance: no provider signup, no subscription. **Ask for the job, not the
-vendor**: search the catalog, read the price, call it.
+one token and one prepaid balance: no provider signup, no subscription. For catalog lookups,
+search the job, read the price, call it. Public pages use the capture helper below.
 
 Needs `TREG_TOKEN` in the repo's mise env file (`~/.config/mise-env/<org>/<repo>.env`), plus
 `TREG_ORG=<team-slug>` when the token is a personal identity token rather than a team API key.
-Tokens: treg.to dashboard. `scripts/install --check` verifies uv, the token and prints the balance.
+Tokens: treg.to dashboard. `scripts/install --check` verifies helpers; with a token, also balance.
+
+## Public page or PDF → Markdown
+
+Use **Jina first → pinned `olostep.web.scrape` through treg** on failure:
+`uv run .agents/skills/data-enrichment/scripts/capture_url.py URL --out DIR`.
+Jina needs no token; paid fallback needs the env above. Python callers use `capture(url, out)`.
+
+One page, hosted providers, no browser. Inline links stay; a separate link list unions inline and
+provider links. Raw JSON (including available HTML), receipts, `page.md` and `capture.json` survive
+validation. Transport/origin status, provider, charges and call IDs remain separate; missing status
+or final URL stays unknown (`reported_url` may only echo the request). Check coverage yourself.
+
+`DIR` is a durable cache: matching completed capture reuses it; failed/pending/mismatched output
+refuses. A new directory requests fresh capture. UUID idempotency key is saved before paid work;
+recover a lost paid response with treg `--idempotency-key` and the same scrape request. No retries or
+second paid provider; Jina 429 stops without spending. Unknown price or price over $0.01 refuses fallback; charges on rejected
+answers are retained. Empty/challenge/consent shells, origin errors and warnings trigger fallback.
+
+Public HTTP(S) only, no credentials/local targets. This guard is not server-side SSRF protection:
+providers fetch the URL. Batch callers own robots, site scope, discovery and backoff (`Retry-After`
+is saved); keep total anonymous Jina traffic ≤20/min. In-process calls space Jina starts by 3s.
+Exit codes: 0 complete/cached, 1 failed, 2 bad URL or refused output directory.
 
 ```sh
 TREG() { uv run .agents/skills/data-enrichment/scripts/treg.py "$@"; }
