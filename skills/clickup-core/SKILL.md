@@ -38,6 +38,9 @@ Semantics `--help` doesn't show:
 - `handoff` / `review` implement the wrapper's `[policy]` workflow; recipients must be unambiguous.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
 - `--json task` returns `{"task": ...}` plus requested comments/downloads.
+- `chat read URL` / `chat post URL --text … [--image FILE…]`: channels, DMs and threads from their
+  app URL (`/t/<id>` = reply in that thread, also when the id is a reply). Text-only posts use the
+  public v3 API; `--image` needs the web-app session (`chat session`, [reference.md](reference.md#chat)).
 
 ## Comment discipline
 
