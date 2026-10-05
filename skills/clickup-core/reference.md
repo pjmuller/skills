@@ -40,6 +40,29 @@ becomes a `table-embed` part in the shape the UI writes (opaque row/column ids, 
 Description list/blockquote/code-block attributes are nested objects; comment attributes stay flat.
 Before extending the parser to a new embed, write it in the UI and read it back through the API.
 
+## Chat
+
+The public v3 chat API posts Markdown only, and its image syntax is broken: `![](url)` is stored as an
+image part with `src="http://null/"`, whatever the URL (checked 2026-10-05). Chat views are not
+reachable through v2 `/view/{id}/comment` either (DMs answer `can_use_public_api_dev_key`). Inline
+images therefore replay what the web app does, private and unstable like the v1 content seam:
+
+1. `POST https://id.app.clickup.com/data/v3/workspaces/{ws}/authentication/access_tokens` with the
+   `cu_refresh` cookie + `Origin`/`X-CSRF` headers → workspace-scoped bearer (48 h). `cu_refresh` lives
+   one year and is not rotated, so `chat session` reads it once from a Chrome profile (headless Chrome
+   decrypts a copy of the jar, no keychain prompt) and caches it in `~/.cache/clickup-core/`. The
+   personal token cannot do any of this.
+2. `POST {frontdoor}/v1/attachment` multipart `attachment`, `parent=<channel id>`, `type=8` → attachment
+   JSON (`id`, `url`, thumbnails, width/height). The frontdoor host is region-bound
+   (`CHAT_FRONTDOOR`, override `[chat].frontdoor`).
+3. `POST {frontdoor}/comment-service/v3/workspaces/{ws}/comments/view/{channel}` (channel message,
+   `type` 8) or `…/comments/comment/{root}` (thread reply, `parent=root`, `type` 2) with `comment`
+   parts: `comment_parts(text)` + `chat_image_part(att)` per image, plus `attachment_ids`.
+
+Readback is public v3 (`![name](url)` per image); a count mismatch fails the command. Thread URLs
+carry the message you opened the pane from, which may be a reply: `chat_root_of` walks the last 100
+roots and their replies.
+
 ## SyncUp recordings
 
 [scripts/syncup.py](scripts/syncup.py) chain: root chat message (`A SyncUp Happened`) → reply from

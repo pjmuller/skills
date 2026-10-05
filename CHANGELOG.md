@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- clickup-core: `chat read` / `chat post` for channels, DMs and threads; `--image` posts real inline images through the web app's session (`chat session` reads the one-year refresh cookie from a Chrome profile; the public API stores chat images as `src="http://null/"`).
 - data-enrichment: durable URL/PDF capture to Markdown via free Jina, then one pinned treg/Olostep fallback; preserve raw evidence, links and billing receipts. Free capture needs no token.
 - t3-schedule: persistent systemd user timers on Linux/WSL for recurring jobs and one-time continuations, sharing the existing retry/catch-up and duplicate guards; macOS keeps launchd. Installer checks verify scheduler readiness.
 - t3-manage-thread: harden platform credential loading and background-worker readiness; use the native scheduler for Linux skills-refresh jobs.

@@ -48,3 +48,9 @@ handoff_pair = ["author", "reviewer"]
 # high = "00000000-0000-4000-8000-000000000002"
 # For customers/--customer compatibility configure custom_fields.customer with
 # id, type="list_relationship", list="onboardings", target_list="customers".
+
+# Optional. Chat images replay the web app (reference.md "Chat"); the frontdoor host is region-bound.
+# Per machine, not here: CLICKUP_CHROME_PROFILE (Chrome profile dir logged in to ClickUp) or
+# CLICKUP_REFRESH_TOKEN in the auth.env_file.
+# [chat]
+# frontdoor = "https://frontdoor-prod-eu-west-1-2.clickup.com"

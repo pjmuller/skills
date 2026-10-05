@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests"]
+# dependencies = ["requests", "websocket-client"]
 # ///
 """Workspace-configured ClickUp CLI. See ../SKILL.md and --help."""
 import argparse
@@ -20,6 +20,12 @@ import requests
 API = "https://api.clickup.com/api/v2"
 API_V1 = "https://api.clickup.com/api/v1"  # undocumented; task `content` is lossless only here
 API_V3 = "https://api.clickup.com/api/v3"  # attachment delete exists only here
+# Private web-app host (chat image upload + rich chat posts; see reference.md "Chat"). Region-bound:
+# override with [chat].frontdoor in clickup.toml for a non-EU workspace.
+CHAT_FRONTDOOR = "https://frontdoor-prod-eu-west-1-2.clickup.com"
+REFRESH_TOKEN_ENV = "CLICKUP_REFRESH_TOKEN"  # the web app's cu_refresh cookie (1 year)
+CSRF_HEADERS = {"Origin": "https://app.clickup.com", "X-CSRF": "1"}
+CHROME_PROFILE_ENV = "CLICKUP_CHROME_PROFILE"
 CONFIG = {}
 CONFIG_PATH = None
 TEAM_ID = SPACE_ID = CUSTOMER_FIELD_ID = ""
@@ -753,6 +759,251 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
         as_json, f"posted{' with mention' if has_tag else ''}: {render(posted)}")
 
 
+# ---------------------------------------------------------------------------------------------
+# Chat (channels, DMs, threads). Text goes through the public v3 chat API. Images need the
+# web app's private seam: the public markdown path stores an image with src="http://null/".
+# ---------------------------------------------------------------------------------------------
+
+def env_value(name: str) -> str:
+    """Environment first, then the configured auth.env_file (parsed, never executed)."""
+    import shlex
+    value = os.environ.get(name, "").strip()
+    filename = CONFIG.get("auth", {}).get("env_file")
+    if value or not filename:
+        return value
+    path = Path(filename).expanduser()
+    if not path.is_absolute() and CONFIG_PATH:
+        path = CONFIG_PATH.parent / path
+    if not path.is_file():
+        return ""
+    for line in path.read_text().splitlines():
+        match = re.match(r"^(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*)$", line.strip())
+        if match:
+            values = shlex.split(match[1], comments=True)
+            return values[0] if len(values) == 1 else ""
+    return ""
+
+
+def chat_ref(value: str) -> tuple[str, str | None]:
+    """'https://app.clickup.com/<ws>/chat/r/<channel>[/t/<message>]', '<channel>' or
+    '<channel>/<message>' -> (channel_id, message_id | None)."""
+    m = re.search(r"/chat/r/([^/?#]+)(?:/t/(\d+))?", value)
+    if m:
+        return m[1], m[2]
+    if re.fullmatch(r"[\w-]+(?:/\d+)?", value):
+        channel, _, message = value.partition("/")
+        return channel, message or None
+    sys.exit(f"not a chat reference: {value!r}")
+
+
+def chat_api(method: str, path: str, **kw):
+    return _api(API_V3, method, f"/workspaces/{TEAM_ID}/chat{path}", **kw)
+
+
+def chat_messages(channel: str, limit: int = 50) -> list[dict]:
+    return chat_api("GET", f"/channels/{channel}/messages?limit={limit}").get("data", [])
+
+
+def chat_replies(message: str) -> list[dict]:
+    return chat_api("GET", f"/messages/{message}/replies?limit=100").get("data", [])
+
+
+def chat_root_of(channel: str, message: str, limit: int = 100) -> str:
+    """A `/t/<id>` URL may name a reply (the web app does that when you open a thread from a
+    reply). Threads hang off the root only, so resolve it."""
+    roots = chat_messages(channel, limit)
+    if any(str(m["id"]) == str(message) for m in roots):
+        return str(message)
+    for root in roots:
+        if root.get("replies_count") and any(str(r["id"]) == str(message) for r in chat_replies(root["id"])):
+            return str(root["id"])
+    sys.exit(f"message {message} not found among the last {limit} root messages of {channel} or their replies")
+
+
+def _jwt_payload(jwt: str) -> dict:
+    import base64
+    body = jwt.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+
+def _refresh_cache() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "clickup-core" / "refresh-token"
+
+
+def chrome_refresh_token(profile: str) -> str:
+    """Read the web app's `cu_refresh` cookie (httpOnly, one year, not rotated) out of a Chrome
+    profile by letting a throwaway headless Chrome decrypt a copy of its cookie jar: Chrome owns the
+    OS key, so no keychain prompt. macOS/Linux; Windows cookies are DPAPI-bound to the real browser."""
+    import shutil, socket, subprocess, tempfile, time, urllib.request
+    import websocket
+    if sys.platform == "darwin":
+        binary = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        root = Path("~/Library/Application Support/Google/Chrome").expanduser()
+    else:
+        binary = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium") or ""
+        root = Path("~/.config/google-chrome").expanduser()
+    cookies = root / profile / "Cookies"
+    if not Path(binary).is_file() or not cookies.is_file():
+        sys.exit(f"no Chrome cookie jar at {cookies} (binary: {binary or 'not found'})")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    tmp = Path(tempfile.mkdtemp(prefix="clickup-session-"))
+    (tmp / "Default").mkdir()
+    shutil.copy(cookies, tmp / "Default" / "Cookies")
+    proc = subprocess.Popen([binary, "--headless=new", f"--user-data-dir={tmp}", f"--remote-debugging-port={port}",
+                             "--no-first-run", "--no-default-browser-check", "about:blank"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(40):
+            try:
+                page = next(t for t in json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json")) if t["type"] == "page")
+                break
+            except Exception:
+                time.sleep(0.25)
+        else:
+            sys.exit("headless Chrome did not expose a DevTools page in 10 s")
+        ws = websocket.create_connection(page["webSocketDebuggerUrl"], suppress_origin=True, timeout=10)
+        ws.send(json.dumps({"id": 1, "method": "Network.getCookies", "params": {"urls": ["https://app.clickup.com"]}}))
+        jar = json.loads(ws.recv())["result"]["cookies"]
+        ws.close()
+    finally:
+        proc.kill()
+        proc.wait()
+        shutil.rmtree(tmp, ignore_errors=True)
+    token = next((c["value"] for c in jar if c["name"] == "cu_refresh"), "")
+    if not token:
+        sys.exit(f"Chrome profile {profile!r} holds no ClickUp session: log in to app.clickup.com there first")
+    return token
+
+
+def refresh_token(chrome_profile: str | None = None, renew: bool = False) -> str:
+    """$CLICKUP_REFRESH_TOKEN, else the cache, else Chrome ($CLICKUP_CHROME_PROFILE / --chrome-profile)."""
+    import time
+    cache = _refresh_cache()
+    for token in ([] if renew else [env_value(REFRESH_TOKEN_ENV), cache.read_text().strip() if cache.is_file() else ""]):
+        if token and _jwt_payload(token).get("exp", float("inf")) > time.time() + 3600:
+            return token  # cu_refresh carries no exp claim; a dead one surfaces as 401 when minting
+    profile = chrome_profile or env_value(CHROME_PROFILE_ENV)
+    if not profile:
+        sys.exit(f"chat images need the web-app session. Either {CHROME_PROFILE_ENV}=<Chrome profile dir logged in to "
+                 f"ClickUp> (macOS/Linux; `chat session` caches it) or {REFRESH_TOKEN_ENV}=<value of the cu_refresh "
+                 "cookie: DevTools > Application > Cookies > app.clickup.com>")
+    token = chrome_refresh_token(profile)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(token)
+    cache.chmod(0o600)
+    return token
+
+
+def workspace_token(chrome_profile: str | None = None) -> str:
+    """Workspace-scoped bearer (48 h) the web app uses, minted from the refresh cookie."""
+    r = requests.post(f"https://id.app.clickup.com/data/v3/workspaces/{TEAM_ID}/authentication/access_tokens", json={},
+                      cookies={"cu_refresh": refresh_token(chrome_profile)}, headers=CSRF_HEADERS, timeout=30)
+    if r.status_code == 401:
+        sys.exit(f"ClickUp refused the refresh token ({r.text[:100]}); `chat session --renew` or renew {REFRESH_TOKEN_ENV}")
+    if not r.ok:
+        sys.exit(f"HTTP {r.status_code} minting the workspace token\n{r.text}")
+    return r.json()["token"]
+
+
+def _frontdoor() -> str:
+    return CONFIG.get("chat", {}).get("frontdoor", CHAT_FRONTDOOR).rstrip("/")
+
+
+def _private(jwt: str, method: str, path: str, **kw) -> dict:
+    r = requests.request(method, f"{_frontdoor()}{path}", timeout=120,
+                         headers={"Authorization": f"Bearer {jwt}", "X-Workspace-ID": TEAM_ID, **kw.pop("headers", {})}, **kw)
+    if not r.ok:
+        sys.exit(f"HTTP {r.status_code} on {method} {path}\n{r.text}")
+    return r.json() if r.content else {}
+
+
+def chat_upload(jwt: str, channel: str, filename: str) -> dict:
+    """Attachment parented to the channel (`type` 8 = chat view), as the web app does on paste."""
+    path = Path(filename)
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    with path.open("rb") as stream:
+        return _private(jwt, "POST", "/v1/attachment", data={"parent": channel, "type": "8", "permanent": "false"},
+                        files={"attachment": (path.name, stream, mime)})
+
+
+def chat_image_part(att: dict, width: int = 300) -> dict:
+    """Structured comment part the web app writes for an inline chat image."""
+    url = att["url"]
+    return {"type": "image", "text": att["name"],
+            "image": {"id": att["id"], "name": att["name"], "title": att.get("title", att["name"]),
+                      "type": att.get("extension", ""), "extension": mimetypes.guess_type(att["name"])[0] or "",
+                      "thumbnail_large": att.get("thumbnail_large", url), "thumbnail_medium": att.get("thumbnail_medium", url),
+                      "thumbnail_small": att.get("thumbnail_small", url), "url": url, "uploaded": True},
+            "attributes": {"width": str(min(width, att.get("width") or width)), "data-id": att["id"],
+                           "data-natural-width": str(att.get("width", "")), "data-natural-height": str(att.get("height", ""))}}
+
+
+def chat_post_private(jwt: str, channel: str, root: str | None, parts: list[dict], attachment_ids: list[str]) -> str:
+    """Rich post (image parts) through the web app's comment service. A thread reply is a comment
+    parented to the root comment (`type` 2); a channel message is parented to the view (`type` 8)."""
+    import time, uuid
+    body = {"id": str(uuid.uuid4()), "comment": parts, "attachment_ids": attachment_ids, "reactions": [],
+            "root_parent_id": channel, "root_parent_type": 8, "roomId": channel, "comment_date": int(time.time() * 1000)}
+    if root:
+        body.update(parent=root, type=2)
+        path = f"/comment-service/v3/workspaces/{TEAM_ID}/comments/comment/{root}"
+    else:
+        body.update(parent=channel, type=8)
+        path = f"/comment-service/v3/workspaces/{TEAM_ID}/comments/view/{channel}"
+    return str(_private(jwt, "POST", path, json=body)["id"])
+
+
+def chat_post(ref: str, text: str, images: list[str], chrome_profile: str | None = None) -> dict:
+    channel, message = chat_ref(ref)
+    root = chat_root_of(channel, message) if message else None
+    if images:
+        jwt = workspace_token(chrome_profile)
+        atts = [chat_upload(jwt, channel, f) for f in images]
+        parts = comment_parts(text) + [{"text": "\n"}] if text.strip() else []
+        for att in atts:
+            parts += [chat_image_part(att), {"text": "\n"}]
+        created = chat_post_private(jwt, channel, root, parts, [a["id"] for a in atts])
+    else:
+        body = {"type": "message", "content_format": "text/md", "content": text}
+        created = str(chat_api("POST", f"/messages/{root}/replies" if root else f"/channels/{channel}/messages",
+                               data=json.dumps(body))["id"])
+    posted = next((m for m in (chat_replies(root) if root else chat_messages(channel, 20)) if str(m["id"]) == created), None)
+    if posted is None:
+        sys.exit(f"chat message {created} created but not found on readback; do not retry posting")
+    got = posted["content"].count("![")
+    if got != len(images):
+        sys.exit(f"posted {created} but readback shows {got} of {len(images)} images: {posted['content'][:200]!r}")
+    return {"id": created, "channel": channel, "root": root, "images": got,
+            "url": f"https://app.clickup.com/{TEAM_ID}/chat/r/{channel}" + (f"/t/{root}" if root else "")}
+
+
+def cmd_chat(a):
+    if a.chat_cmd == "session":
+        token = refresh_token(a.chrome_profile, renew=a.renew)
+        payload = _jwt_payload(workspace_token(a.chrome_profile))
+        out({"user": payload.get("user"), "workspace": payload.get("workspace_id"), "cache": str(_refresh_cache()),
+             **({"refresh_token": token} if a.show else {})},
+            a.json, f"web-app session OK for user {payload.get('user')} in workspace {payload.get('workspace_id')} (cached: {_refresh_cache()})")
+    elif a.chat_cmd == "read":
+        channel, message = chat_ref(a.ref)
+        roots = [m for m in chat_messages(channel, a.limit) if not message or str(m["id"]) == chat_root_of(channel, message)]
+        rows = []
+        for m in reversed(roots):
+            rows.append({"id": m["id"], "user": m["user_id"], "date": m["date"], "replies": m.get("replies_count", 0), "content": m["content"]})
+            if message or a.threads:
+                rows += [{"id": r["id"], "user": r["user_id"], "date": r["date"], "reply_to": m["id"], "content": r["content"]}
+                         for r in reversed(chat_replies(m["id"]))]
+        out(rows, a.json, "\n".join(f"{'  ' if r.get('reply_to') else ''}{r['id']} u{r['user']} {r['content']!r}" for r in rows))
+    else:
+        for f in a.image or []:
+            if not Path(f).is_file():
+                sys.exit(f"no such image: {f}")
+        result = chat_post(a.ref, a.text, a.image or [], a.chrome_profile)
+        out(result, a.json, f"posted {result['id']} ({result['images']} images) → {result['url']}")
+
+
 def policy(key, default=None):
     return CONFIG.get("policy", {}).get(key, default)
 
@@ -1193,6 +1444,22 @@ def main(argv=None):
         if cmd == "detach":
             s.add_argument("attachment", help="attachment id (with or without extension) or unique title")
         if cmd in ("delete", "detach"): s.add_argument("--yes", action="store_true")
+    s = sub.add_parser("chat", help="channels, DMs and threads; images need the web-app session (reference.md)")
+    s.set_defaults(fn=cmd_chat)
+    chat = s.add_subparsers(dest="chat_cmd", required=True, parser_class=lambda **kw: argparse.ArgumentParser(parents=[g], **kw))
+    c = chat.add_parser("read", help="root messages of a channel URL; a /t/<id> URL = that thread")
+    c.add_argument("ref")
+    c.add_argument("--limit", type=int, default=20)
+    c.add_argument("--threads", action="store_true", help="include replies under every root")
+    c = chat.add_parser("post", help="message in a channel URL, or reply in a /t/<id> thread URL")
+    c.add_argument("ref")
+    c.add_argument("--text", default="")
+    c.add_argument("--image", action="append", metavar="FILE", help="inline image (repeatable); uploads via the session")
+    c.add_argument("--chrome-profile")
+    c = chat.add_parser("session", help="obtain/cache the web-app refresh token from Chrome and prove it mints a workspace token")
+    c.add_argument("--chrome-profile")
+    c.add_argument("--renew", action="store_true", help="ignore env/cache, read Chrome again")
+    c.add_argument("--show", action="store_true", help="print the refresh token itself")
     a = p.parse_args(argv)
     a.json = getattr(a, "json", False)
     if getattr(a, "id", None): a.id = task_id_of(a.id)
