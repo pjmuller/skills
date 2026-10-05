@@ -310,7 +310,7 @@ def set_customer(task_id: str, customer_task_id: str):
 #   `![alt](https://…)` images
 #   `**bold**` · `*italic*` / `_italic_` · `~~strike~~` · `` `code` `` · `[text](url)`
 #   `[@Name](#user_mention#ID)` · `@reviewer` / `@author` · task mentions as `[[task-id]]`, a ClickUp
-#   task URL, or a markdown link to one
+#   task URL, or a markdown link to one · `[[file:NAME]]` (pre-pass: `link_attachments`)
 # Descriptions need the NESTED attribute shapes ClickUp normalizes to (`{"list": {"list": …}}`,
 # `{"blockquote": {}}`, `{"code-block": {"code-block": lang}}`) — emitting the flat form round-trips
 # as the nested one and would break the exact-op readback in `content_signature`. Comments keep the
@@ -502,6 +502,83 @@ def md_to_delta(md: str) -> str:
             ops.append({"insert": {"image": event[1]}})
             newline()
     return json.dumps({"ops": ops}, ensure_ascii=False)
+
+
+# --- [[file:NAME]] -> link to an attachment of the target task --------------------------------
+# A bare filename such as `notes.md` is auto-linked by ClickUp as a DOMAIN (`.md` is a TLD) → a
+# dead http://notes.md link (incident 2026-10-05). Resolution is a text pre-pass before the parser,
+# so both emitters get an ordinary `[title](url)` link with the attachment's pre-signed URL.
+# Code spans, fenced code, Markdown links, other `[[…]]` and URLs are left untouched.
+_FILE_INLINE = re.compile(
+    r"`[^`\n]+`"                                  # code span
+    r"|!?\[[^\]\n]*\]\([^)\n]*\)"                 # existing Markdown link / image
+    r"|\[\[file:(?P<fname>[^\]\n]+)\]\]"          # [[file:NAME]]
+    r"|\[\[[^\]\n]*\]\]"                          # [[task-id]]
+    r"|https?://\S+"                              # bare URL
+)
+
+
+def _att_date(att: dict) -> int:
+    return int(att.get("date") or 0)
+
+
+def pick_file(task: dict | None, name: str) -> dict:
+    """Exact title, else a unique case-insensitive title; several versions -> newest `date`."""
+    atts = [x for x in (task or {}).get("attachments", []) if not x.get("is_folder") and x.get("title")]
+    hits = [x for x in atts if x["title"] == name]
+    if not hits:
+        hits = [x for x in atts if x["title"].casefold() == name.casefold()]
+        if len({x["title"] for x in hits}) > 1:
+            hits = None
+    if not hits:
+        where = f"task {task['id']}" if task else "a task that does not exist yet (create, attach, then update)"
+        titles = ", ".join(sorted({x["title"] for x in atts})) or "none"
+        sys.exit(f"[[file:{name}]]: {'ambiguous' if hits is None else 'no'} attachment with that title on "
+                 f"{where}; attachments: {titles}. Attach first (`attach ID FILE`), then reference it.")
+    newest = max(hits, key=_att_date)
+    if len(hits) > 1:
+        print(f"note: {len(hits)} attachments titled {newest['title']!r}; linking the newest", file=sys.stderr)
+    return newest
+
+
+def _file_link(att: dict) -> str:
+    text = att["title"].replace("[", "(").replace("]", ")")
+    return f"[{text}]({att['url'].replace(' ', '%20').replace(')', '%29')})"
+
+
+def link_attachments(text: str | None, task: dict | None) -> str | None:
+    """Resolve `[[file:NAME]]` and auto-link bare attachment filenames; fails closed before any write."""
+    if text is None:
+        return None
+    titles = sorted({x["title"] for x in (task or {}).get("attachments", [])
+                     if not x.get("is_folder") and re.search(r"\.\w+$", x.get("title") or "")},
+                    key=len, reverse=True)  # filenames only: a bare word title must not hijack prose
+    bare = re.compile(r"(?<![\w./-])(?:" + "|".join(map(re.escape, titles)) + r")(?![\w/-])(?!\.\w)") \
+        if titles else None
+
+    def plain(s: str) -> str:
+        if not bare:
+            return s
+
+        def sub(m):
+            print(f"linked attachment: {m[0]}", file=sys.stderr)
+            return _file_link(pick_file(task, m[0]))
+        return bare.sub(sub, s)
+
+    def line(s: str) -> str:
+        out, pos = [], 0
+        for m in _FILE_INLINE.finditer(s):
+            out += [plain(s[pos:m.start()]), _file_link(pick_file(task, m["fname"].strip())) if m["fname"] else m[0]]
+            pos = m.end()
+        return "".join(out) + plain(s[pos:])
+
+    lines, fenced = text.split("\n"), False
+    for i, s in enumerate(lines):
+        if s.strip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            lines[i] = line(s)
+    return "\n".join(lines)
 
 
 def get_task(task_id: str, markdown: bool = False) -> dict:
@@ -1183,7 +1260,7 @@ def cmd_create(a):
         body["tags"] = a.tag
     if a.parent:
         body["parent"] = task_id_of(a.parent)
-    desc = description_of(a)
+    desc = link_attachments(description_of(a), None)  # no attachments yet: [[file:]] fails closed
     if desc is not None:
         body["content"] = md_to_delta(desc)
         validate_task_mentions(body["content"])
@@ -1208,7 +1285,8 @@ def cmd_update(a):
             body[key] = getattr(a, key)
     if a.priority:
         body["priority"] = PRIORITY[a.priority]
-    desc, extra = description_of(a), description_of(a, "append_")
+    desc = link_attachments(description_of(a), current)
+    extra = link_attachments(description_of(a, "append_"), current)
     if desc is not None and extra is not None:
         sys.exit("pass either --description* or --append-description*, not both")
     if desc is not None:
@@ -1245,7 +1323,8 @@ def cmd_comment(a):
     # silently (2026-09-22): a ping nobody receives is worse than an error.
     if a.mention_first is not None and not a.mention:
         sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
-    post_comment(a.id, a.text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
+    text = link_attachments(a.text, get_task(a.id))
+    post_comment(a.id, text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
                  reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None)
 
 
@@ -1265,9 +1344,10 @@ def cmd_handoff(a):
     status = a.status or policy("handoff_status", "to test")
     check_status(list_key_of(current), status)
     mention = counterpart(current, a.mention)
+    text = link_attachments(a.text, current)
     if current["status"]["status"] != status:
         api("PUT", f"/task/{a.id}", data=json.dumps({"status": status}))
-    post_comment(a.id, a.text, mention, False, quiet=a.json)
+    post_comment(a.id, text, mention, False, quiet=a.json)
     read_back(a.id, a.json)
 
 
@@ -1279,6 +1359,7 @@ def cmd_review(a):
     text = a.text or (policy("review_ok_text", f"reviewed by {me['username']}'s coding agent, ✅ all fine") if a.verdict == "ok" else None)
     if not text:
         sys.exit("--text required for --verdict to-test")
+    text = link_attachments(text, current)
     recipient = a.mention or policy("review_mention")
     mention = user_id(recipient) if recipient else counterpart(current)
     header = policy("review_header")
@@ -1312,7 +1393,8 @@ def cmd_attach(a):
         write_task_content(a.id, appended_ops_content(a.id, ops))
         verify_embed(a.id, ops[0])
         result["embedded"] = kind
-    out(result, a.json, result.get("url") or json.dumps(result))
+    result["reference"] = f"[[file:{result.get('title') or a.name or Path(a.file).name}]]"
+    out(result, a.json, f"{result.get('url') or json.dumps(result)}\nreference: {result['reference']}")
 
 
 def pick_attachment(rows: list[dict], ref: str) -> dict:

@@ -66,6 +66,9 @@ tables, images, `@alias` / `[@Name](#user_mention#ID)`, `[[task-id]]` or task UR
 Appends go through ClickUp's private v1 Quill content and verify on readback, failing closed:
 [reference.md](reference.md). Readback proves stored mentions, not notification delivery.
 
+- `[[file:NAME]]` → link to that task's attachment titled NAME (newest version; unknown fails
+  before writing). Attach first (`attach` prints the reference), then comment/update. Bare
+  attachment filenames are auto-linked (ClickUp would turn `x.md` into a dead domain link).
 - `task ID --download-attachments` → `/tmp/cu-ID` (or `--dir`); the token is never sent to media hosts.
 - `--download-looms` runs [scripts/loom.py](scripts/loom.py): inspect transcript AND frames, scrub
   screen data before sharing.

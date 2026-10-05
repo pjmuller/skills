@@ -315,3 +315,85 @@ class PickAttachmentTests(unittest.TestCase):
             pick(self.ROWS, "brief.md")
         with self.assertRaises(SystemExit):
             pick(self.ROWS, "nope")
+
+
+ATT_URL = "https://t1.p.clickup-attachments.com/t1/a/"
+FILE_TASK = {"id": "t1", "attachments": [
+    {"id": "a1.md", "title": "de-kies-retro.md", "url": ATT_URL + "old.md", "date": "1000"},
+    {"id": "a2.md", "title": "de-kies-retro.md", "url": ATT_URL + "new.md", "date": "2000"},
+    {"id": "a3.pdf", "title": "Report.PDF", "url": ATT_URL + "report.pdf", "date": "1500"},
+    {"id": "a4", "title": "notes", "url": ATT_URL + "notes", "date": "1"},
+]}
+
+
+class FileReferenceTests(unittest.TestCase):
+    link = staticmethod(MODULE["link_attachments"])
+
+    def test_exact_and_case_insensitive_match(self):
+        self.assertEqual(self.link("zie [[file:Report.PDF]]", FILE_TASK), f"zie [Report.PDF]({ATT_URL}report.pdf)")
+        self.assertEqual(self.link("zie [[file:report.pdf]]", FILE_TASK), f"zie [Report.PDF]({ATT_URL}report.pdf)")
+
+    def test_newest_version_wins(self):
+        self.assertEqual(self.link("[[file:de-kies-retro.md]]", FILE_TASK), f"[de-kies-retro.md]({ATT_URL}new.md)")
+
+    def test_unknown_name_fails_listing_titles(self):
+        with self.assertRaisesRegex(SystemExit, "no attachment.*de-kies-retro.md, notes"):
+            self.link("[[file:nope.md]]", FILE_TASK)
+        with self.assertRaisesRegex(SystemExit, "does not exist yet"):
+            self.link("[[file:nope.md]]", None)
+
+    def test_bare_filename_is_auto_linked(self):
+        self.assertEqual(self.link("zie de bijlage de-kies-retro.md.", FILE_TASK),
+                         f"zie de bijlage [de-kies-retro.md]({ATT_URL}new.md).")
+        # renders as a real link part, not ClickUp's domain autolink
+        parts = comment_parts(self.link("zie de-kies-retro.md", FILE_TASK))
+        self.assertIn({"text": "de-kies-retro.md", "attributes": {"link": ATT_URL + "new.md"}}, parts)
+
+    def test_bare_filename_in_code_link_url_or_extensionless_title_untouched(self):
+        for text in ("`de-kies-retro.md`", "[retro](https://x.test/de-kies-retro.md)",
+                     "[de-kies-retro.md](https://x.test/a)", "https://x.test/de-kies-retro.md",
+                     "```\nde-kies-retro.md\n[[file:nope]]\n```", "my-de-kies-retro.md", "take notes",
+                     "`[[file:nope]]`", "[[abc123]]"):
+            self.assertEqual(self.link(text, FILE_TASK), text)
+
+
+class FileReferenceCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        g = MODULE["cmd_update"].__globals__
+        for name in ("api", "api_v1"):
+            self.addCleanup(g.__setitem__, name, g[name])
+        g["api"] = self.fake_api
+        g["api_v1"] = lambda method, path, **kw: self.calls.append((method, path)) or {"content": ""}
+
+    def fake_api(self, method, path, **kw):
+        self.calls.append((method, path))
+        return {**FILE_TASK, "status": {"status": "open"}, "list": {"id": "1"}, "description": ""}
+
+    def test_unknown_name_fails_before_any_write(self):
+        from types import SimpleNamespace
+        a = SimpleNamespace(id="t1", text="zie [[file:nope.md]]", mention=None, mention_first=None, json=False)
+        with self.assertRaises(SystemExit):
+            MODULE["cmd_comment"](a)
+        a = SimpleNamespace(id="t1", name=None, status=None, priority=None, customer=None, description=None,
+                            description_file=None, append_description="[[file:nope.md]]",
+                            append_description_file=None, add_assignee=None, rem_assignee=None, json=False)
+        with self.assertRaises(SystemExit):
+            MODULE["cmd_update"](a)
+        self.assertEqual([c for c in self.calls if c[0] != "GET"], [])
+
+    def test_attach_prints_reference_last(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        g = MODULE["cmd_attach"].__globals__
+        self.addCleanup(g.__setitem__, "upload_attachment", g["upload_attachment"])
+        g["upload_attachment"] = lambda tid, f, name=None: dict(PDF_UPLOAD)
+        for as_json in (False, True):
+            buf = StringIO()
+            with redirect_stdout(buf):
+                MODULE["cmd_attach"](SimpleNamespace(id="t1", file="/tmp/x.pdf", name=None, embed=False, json=as_json))
+            if as_json:
+                self.assertEqual(json.loads(buf.getvalue())["reference"], "[[file:report.pdf]]")
+            else:
+                self.assertEqual(buf.getvalue().strip().splitlines()[-1], "reference: [[file:report.pdf]]")

@@ -23,6 +23,11 @@ stores; `verify_embed` proves they landed.
 - Comment part: `{"type":"tag","user":{"id":101}}`,
   `{"type":"task_mention","text":"<resolved title>","task_mention":{"task_id":"abc123","team_id":"…"}}`.
 
+Attachment links: `[[file:NAME]]` (beside `[[task-id]]`) is a pre-pass (`link_attachments`) to
+`[NAME](<attachment url>)` from the target task's one GET; exact title, else unique
+case-insensitive; duplicates → newest `date`. Bare filename titles outside code/links/URLs get the
+same rewrite (stderr `linked attachment:`). `create` has no attachments yet, so it fails closed.
+
 Task mentions resolve title and workspace before posting; the created comment is re-read by id.
 `comment_text`, a plain `@Name` or a plain URL is not a native mention. No native Doc-chip write
 is proven (a Markdown link to a Doc works). Threads: `/comment/{root_id}/reply`, always the root
