@@ -782,8 +782,33 @@ def validate_task_mentions(content: str):
         task_mention_part(task_id)  # resolves the task and enforces TEAM_ID
 
 
-def write_task_content(task_id: str, content: str):
+# ClickUp strips every explicit link in a task DESCRIPTION that has a code block anywhere after it, on
+# every save (verified by readback 2026-10-05, any URL, also text == URL); only links it re-derives
+# itself survive (bare domains -> http://…, e-mail -> mailto:). The write would succeed and silently
+# lose the links, so refuse it up front with the fix. Comments: not affected as far as verified.
+def _autolink_of(text: str, url: str) -> bool:
+    return url in (text, "http://" + text, "https://" + text, "mailto:" + text)
+
+
+def guard_links_before_code(content: str):
+    ops = json.loads(content)["ops"]
+    last_code = max((i for i, op in enumerate(ops) if "code-block" in (op.get("attributes") or {})), default=-1)
+    doomed = [op["insert"] for op in ops[:last_code]
+              if isinstance(op.get("insert"), str) and (link := (op.get("attributes") or {}).get("link"))
+              and not _autolink_of(op["insert"], link)]
+    if doomed:
+        sys.exit("refusing description write: ClickUp drops links that come before a code block in a "
+                 f"description ({', '.join(map(repr, doomed[:5]))}). Put the code block before the links, "
+                 "or move the links/[[file:…]] references into a comment.")
+
+
+def validate_description(content: str):
     validate_task_mentions(content)
+    guard_links_before_code(content)
+
+
+def write_task_content(task_id: str, content: str):
+    validate_description(content)
     api("PUT", f"/task/{task_id}", data=json.dumps({"content": content}))
     verify_task_content(task_id, content)
 
@@ -1263,7 +1288,7 @@ def cmd_create(a):
     desc = link_attachments(description_of(a), None)  # no attachments yet: [[file:]] fails closed
     if desc is not None:
         body["content"] = md_to_delta(desc)
-        validate_task_mentions(body["content"])
+        validate_description(body["content"])
     t = api("POST", f"/list/{lid}/task", data=json.dumps(body))
     # Make partial success recoverable even when rich-content readback fails.
     print(f"created task {t['id']} {t.get('url', '')}", file=sys.stderr)
@@ -1300,7 +1325,7 @@ def cmd_update(a):
         sys.exit("nothing to update")
     if body:
         if "content" in body:
-            validate_task_mentions(body["content"])
+            validate_description(body["content"])
         api("PUT", f"/task/{a.id}", data=json.dumps(body))
         if "content" in body:
             verify_task_content(a.id, body["content"])
@@ -1367,7 +1392,7 @@ def cmd_review(a):
         name = next((USER_NAMES[k] for k, uid in USERS.items() if uid == mention), str(mention))
         header = f"# {me['username']} [@{name}](#user_mention#{mention})"
     content = appended_content(a.id, f"{header}\n\n{text.strip()}")
-    validate_task_mentions(content)
+    validate_description(content)
     api("PUT", f"/task/{a.id}", data=json.dumps({"status": status, "content": content}))
     verify_task_content(a.id, content)
     if a.comment:

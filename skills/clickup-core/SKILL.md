@@ -69,6 +69,8 @@ Appends go through ClickUp's private v1 Quill content and verify on readback, fa
 - `[[file:NAME]]` → link to that task's attachment titled NAME (newest version; unknown fails
   before writing). Attach first (`attach` prints the reference), then comment/update. Bare
   attachment filenames are auto-linked (ClickUp would turn `x.md` into a dead domain link).
+- ClickUp strips every description link that has a code block after it, on every save; description
+  writes refuse that up front. Put code blocks before links, or reference files in a comment.
 - `task ID --download-attachments` → `/tmp/cu-ID` (or `--dir`); the token is never sent to media hosts.
 - `--download-looms` runs [scripts/loom.py](scripts/loom.py): inspect transcript AND frames, scrub
   screen data before sharing.

@@ -397,3 +397,25 @@ class FileReferenceCommandTests(unittest.TestCase):
                 self.assertEqual(json.loads(buf.getvalue())["reference"], "[[file:report.pdf]]")
             else:
                 self.assertEqual(buf.getvalue().strip().splitlines()[-1], "reference: [[file:report.pdf]]")
+
+
+class LinksBeforeCodeBlockTests(unittest.TestCase):
+    """ClickUp strips explicit description links that precede a code block (readback 2026-10-05)."""
+
+    guard = staticmethod(MODULE["guard_links_before_code"])
+    delta = staticmethod(MODULE["md_to_delta"])
+
+    def test_link_before_code_block_is_refused(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.guard(self.delta("See [retro](https://example.com/r).\n\n```\nhello\n```"))
+        self.assertIn("'retro'", str(cm.exception))
+
+    def test_code_block_before_link_is_fine(self):
+        self.guard(self.delta("```\nhello\n```\n\nSee [retro](https://example.com/r)."))
+
+    def test_autolinks_clickup_rebuilds_are_fine(self):
+        content = json.dumps({"ops": [
+            {"insert": "info@x.be", "attributes": {"link": "mailto:info@x.be"}},
+            {"insert": "SKILL.md", "attributes": {"link": "http://SKILL.md"}},
+            {"insert": "hello"}, {"insert": "\n", "attributes": {"code-block": {"code-block": "plain"}}}]})
+        self.guard(content)
