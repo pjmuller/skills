@@ -11,8 +11,10 @@ import re
 import subprocess
 import tempfile
 from decimal import Decimal, InvalidOperation
+from collections import Counter
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 from .outstanding import COLUMNS, NUMERIC
 
@@ -41,7 +43,7 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
                          f"wrapper's manual_columns.\n  sheet:    {existing[0]}\n  expected: {header}")
     seen = {r[header.index("item_id")] for r in existing[1:] if len(r) > header.index("item_id")}
     new = [r for r in rows if r["item_id"] not in seen]
-    seeds = _prior_manual_cells(gws, spreadsheet_id, quarter, tabs, manual, new) if new else {}
+    seeds = _prior_manual_cells(gws, spreadsheet_id, quarter, tabs, manual, rows, new) if new else {}
     summary = {"tab": quarter, "existing": len(seen), "appended": len(new), "seeded": len(seeds),
                "carryover": sum(1 for r in new if r["carryover"]), "created": quarter not in tabs}
     if dry_run or not new:
@@ -103,52 +105,67 @@ def _cells(values: list, columns: list[str] | None = None) -> list:
 
 
 def _prior_manual_cells(gws: Gws, spreadsheet_id: str, quarter: str, tabs: dict, manual: list[str],
-                        rows: list[dict]) -> dict[str, list[str]]:
-    """Copy manual cells from the newest earlier quarter tab for rows found there uniquely:
-    by item_id when that tab has one, else by (date, original_amount, description_raw).
-    Ambiguous or missing matches stay blank."""
+                        rows: list[dict], new: list[dict]) -> dict[str, list[str]]:
+    """Copy manual cells from the newest earlier quarter tab when exactly one row there matches
+    exactly one of this quarter's Yuki rows: by item_id when that tab has one, else by
+    (date, original_amount, description_raw). Ambiguous or missing matches stay blank."""
     current = TAB.match(quarter)
     earlier = sorted((m[1], m[2], t) for t in tabs if (m := TAB.match(t)) and (m[1], m[2]) < (current[1], current[2]))
     if not earlier:
         return {}
-    values = _values(gws, spreadsheet_id, earlier[-1][2])
-    if not values:
+    tab = earlier[-1][2]
+    shown = _values(gws, spreadsheet_id, tab)  # manual cells as people see them
+    # Keys from unformatted values: displayed amounts follow the sheet locale ("-10,00" in nl_BE).
+    raw = gws("api", "GET", f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/"
+              f"{quote(_quoted(tab), safe='')}", "--param", "valueRenderOption=UNFORMATTED_VALUE",
+              "--param", "dateTimeRenderOption=FORMATTED_STRING").get("values", [])
+    if not shown:
         return {}
-    head = values[0]
-    col = {name: i for i, name in enumerate(head)}
+    if len(raw) != len(shown) or raw[0] != shown[0]:
+        raise RuntimeError(f"tab {tab} changed between reads; rerun")
+    col = {name: i for i, name in enumerate(shown[0])}
     shared = [name for name in manual if name in col]
     if not shared:
         return {}
 
-    def cell(row: list[str], name: str) -> str:
+    def cell(row: list, name: str):
         i = col.get(name)
-        return row[i].strip() if i is not None and i < len(row) else ""
+        return row[i] if i is not None and i < len(row) else ""
 
     by_id = "item_id" in col
 
-    def sheet_key(row: list[str]) -> tuple:
+    def sheet_key(row: list) -> tuple:
         if by_id:
-            return (cell(row, "item_id"),)
-        return (cell(row, "date"), _number(cell(row, "original_amount")), cell(row, "description_raw"))
+            return (str(cell(row, "item_id")).strip(),)
+        return (str(cell(row, "date")).strip(), _number(cell(row, "original_amount")),
+                str(cell(row, "description_raw")).strip())
 
     def yuki_key(r: dict) -> tuple:
         return (r["item_id"],) if by_id else (r["date"], r["original_amount"], r["description_raw"])
 
-    index: dict[tuple, list[list[str]]] = {}
-    for row in values[1:]:
-        index.setdefault(sheet_key(row), []).append(row)
+    index: dict[tuple, list[int]] = {}
+    for n, row in enumerate(raw[1:], start=1):
+        index.setdefault(sheet_key(row), []).append(n)
+    current_count = Counter(yuki_key(r) for r in rows)  # all of this quarter's rows, not only new ones
     seeds = {}
-    for r in rows:
+    for r in new:
         matches = index.get(yuki_key(r), [])
-        if len(matches) == 1:
-            cells = [cell(matches[0], name) if name in shared else "" for name in manual]
+        if len(matches) == 1 and current_count[yuki_key(r)] == 1:
+            cells = [str(cell(shown[matches[0]], name)).strip() if name in shared else "" for name in manual]
             if any(cells):
                 seeds[r["item_id"]] = cells
     return seeds
 
 
-def _number(text: str) -> Decimal | str:
+def _quoted(tab: str) -> str:
+    return "'" + tab.replace("'", "''") + "'"
+
+
+def _number(value) -> Decimal | str:
+    """Unformatted cell -> Decimal; text that is not a plain number never matches (no separator guessing)."""
+    if isinstance(value, bool):
+        return str(value)
     try:
-        return Decimal(text.replace(",", ""))
+        return Decimal(str(value).strip()) if isinstance(value, (int, float, str)) else str(value)
     except InvalidOperation:
-        return text
+        return str(value)

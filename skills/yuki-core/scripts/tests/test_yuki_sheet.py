@@ -1,4 +1,5 @@
 import json
+from urllib.parse import unquote
 from decimal import Decimal
 
 import pytest
@@ -24,8 +25,9 @@ def sheet_row(r):
 class FakeGws:
     """In-memory spreadsheet speaking the gws CLI subset sheet.push uses."""
 
-    def __init__(self, tabs):
+    def __init__(self, tabs, unformatted=None):
         self.tabs = tabs
+        self.unformatted = unformatted or {}  # tab -> values as UNFORMATTED_VALUE returns them
         self.calls = []
 
     def __call__(self, cmd, sid, *args):
@@ -34,6 +36,9 @@ class FakeGws:
             return {"sheets": [{"properties": {"title": t, "sheetId": i}} for i, t in enumerate(self.tabs)]}
         if cmd == "sheet-read":
             return {"values": self.tabs[args[0].strip("'")]}
+        if cmd == "api":  # GET .../values/<quoted tab>?valueRenderOption=UNFORMATTED_VALUE
+            tab = unquote(args[0].rsplit("/", 1)[1]).strip("'")
+            return {"values": self.unformatted.get(tab, self.tabs[tab])}
         if cmd == "sheet-add-tab":
             self.tabs[args[0]] = []
             return {"replies": [{"addSheet": {"properties": {"sheetId": 99}}}]}
@@ -75,3 +80,27 @@ def test_header_mismatch_and_dry_run_write_nothing():
     gws = FakeGws({"2026-Q3": [HEADER, sheet_row(row("x"))]})
     summary = push(gws, "sid", MANUAL, "2026-Q3", [row("x"), row("y")], dry_run=True)
     assert summary["appended"] == 1 and "sheet-write" not in gws.calls
+
+
+LEGACY = ["Resp", "Done", "date", "original_amount", "description_raw"]
+
+
+def test_legacy_key_must_be_unique_on_both_sides():
+    """One annotated legacy row, two current Yuki rows with the same tuple: seed neither,
+    also when one of the two was imported by an earlier push."""
+    gws = FakeGws({"2026-Q2": [LEGACY, ["Will", "TRUE", "2026-05-02", "-10.00", "same"]]})
+    twins = [row("a", "2026-05-02", desc="same", carryover="yes"), row("b", "2026-05-02", desc="same", carryover="yes")]
+    assert push(gws, "sid", MANUAL, "2026-Q3", twins)["seeded"] == 0
+    gws = FakeGws({"2026-Q2": gws.tabs["2026-Q2"], "2026-Q3": [HEADER, sheet_row(twins[0])]})
+    assert push(gws, "sid", MANUAL, "2026-Q3", twins)["seeded"] == 0
+
+
+def test_legacy_amount_matches_on_unformatted_value():
+    """nl_BE sheets display "-10,00"; the unformatted -10 must match -10.00, never -1000."""
+    shown = [LEGACY, ["Will", "TRUE", "2026-05-02", "-10,00", "fee"]]
+    gws = FakeGws({"2026-Q2": shown}, {"2026-Q2": [LEGACY, ["Will", True, "2026-05-02", -10, "fee"]]})
+    rows = [row("ten", "2026-05-02", "-10.00", "fee", "yes"), row("thousand", "2026-05-02", "-1000.00", "fee", "yes")]
+    summary = push(gws, "sid", MANUAL, "2026-Q3", rows)
+    tab = gws.tabs["2026-Q3"]
+    assert summary["seeded"] == 1
+    assert tab[1][:2] == ["Will", "True"] and tab[2][:2] == ["", ""]
