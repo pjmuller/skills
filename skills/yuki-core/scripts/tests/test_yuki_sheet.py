@@ -43,7 +43,8 @@ class FakeGws:
             assert len(values) == int(start) - 1 and "--raw" in args
             values.extend([["" if c is None else str(c) for c in r] for r in json.loads(args[-1])])
             return {}
-        if cmd == "sheet-freeze-rows":
+        if cmd == "sheet-batch":
+            self.batch = json.load(open(args[-1]))
             return {}
         raise AssertionError(cmd)
 
@@ -59,7 +60,7 @@ def test_creates_tab_seeds_from_legacy_tab_and_reruns_idempotently():
     assert tab[0] == HEADER
     assert tab[1][:2] == ["Will", "True"] and tab[2][:2] == ["", ""]  # unique match seeded, ambiguous blank
     assert tab[1][HEADER.index("amount")] == "-10.0"  # written as a number
-    assert "sheet-freeze-rows" in gws.calls
+    assert gws.batch["requests"][0]["updateSheetProperties"]["properties"]["gridProperties"] == {"frozenRowCount": 1}
 
     tab[1][1] = "manual edit"
     again = push(gws, "sid", MANUAL, "2026-Q3", rows + [row("w")])

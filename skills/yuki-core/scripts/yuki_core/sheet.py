@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
@@ -58,7 +59,10 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
     start = len(existing) + 1 if existing else 1
     gws("sheet-write", spreadsheet_id, f"'{quarter}'!A{start}", "--raw", "--values", json.dumps(body))
     if summary["created"]:
-        gws("sheet-freeze-rows", spreadsheet_id, str(tabs[quarter]), "--rows", "1")
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as body_file:
+            json.dump(_layout(tabs[quarter], header), body_file)
+            body_file.flush()
+            gws("sheet-batch", spreadsheet_id, "--body", body_file.name)
 
     after = _values(gws, spreadsheet_id, quarter)
     ids = [r[header.index("item_id")] for r in after[1:] if len(r) > header.index("item_id")]
@@ -66,6 +70,19 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
     if after[0] != header or len(ids) != len(seen) + len(new) or missing:
         raise RuntimeError(f"read-back mismatch in tab {quarter}: {len(ids)} ids, missing/duplicate {missing}")
     return summary
+
+
+def _layout(sheet_id: int, header: list[str]) -> dict:
+    """New tab: freeze the header, show the EUR amounts with two decimals (whole columns)."""
+    requests = [{"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                                           "fields": "gridProperties.frozenRowCount"}}]
+    for name in ("amount", "original_amount"):
+        i = header.index(name)
+        requests.append({"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": i, "endColumnIndex": i + 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}}},
+            "fields": "userEnteredFormat.numberFormat"}})
+    return {"requests": requests}
 
 
 def _values(gws: Gws, spreadsheet_id: str, tab: str) -> list[list[str]]:
