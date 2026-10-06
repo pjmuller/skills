@@ -40,7 +40,7 @@ the key), `sheet` = `{spreadsheet_id, manual_columns}` or `null` (CSV only), `gw
 - **Data = items open today**, not a quarter-end snapshot. A quarter takes rows dated up to its end;
   older ones get `carryover=yes`. Booked purchase invoices (`Aankoopfactuur`) are dropped (Yuki's
   screen hides them); payments of both signs stay (refunds are positive).
-- **Append-only.** The tab is created on first push (manual columns + data columns, row 1 frozen).
+- **Append-only.** The tab is created on first push (manual columns + data columns, row 1 frozen, amounts as `0.00`).
   Later pushes require the exact header, append only unseen `item_id`s (Yuki `Item/@ID`) and never
   touch existing cells. A row that disappears from Yuki is *not* marked done, and amounts of
   existing rows can go stale: Yuki stays the truth.
