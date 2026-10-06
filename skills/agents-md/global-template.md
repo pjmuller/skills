@@ -2,6 +2,7 @@
 
 Merge base for a developer's cross-project file: fill `{…}` and merge per
 [global.md](global.md#merge-the-template-into-someones-existing-file). The file starts below the rule.
+Optional supporting file: [review-flow mini template](code-review-template.md).
 
 ---
 
