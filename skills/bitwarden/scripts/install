@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+check=false
+prefix="$HOME/.local"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --check) check=true; shift;;
+    --prefix) [ "$#" -ge 2 ] || exit 2; prefix=$2; shift 2;;
+    *) echo "usage: $0 [--check] [--prefix ABSOLUTE_PATH]" >&2; exit 2;;
+  esac
+done
+case "$prefix" in /*) ;; *) echo "Install prefix must be absolute" >&2; exit 2;; esac
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+target="$prefix/lib/bw-once"
+command_path="$prefix/bin/bw-once"
+for dependency in uv bw xcrun; do
+  command -v "$dependency" >/dev/null || { echo "Missing $dependency; install it separately" >&2; exit 1; }
+done
+[ "$(uname -s)" = Darwin ] || { echo "macOS Terminal and AppKit required" >&2; exit 1; }
+if [ "$check" = true ]; then
+  [ -x "$target/clipboard" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target/bw-once" ] || {
+    echo "bw-once installation missing" >&2; exit 1;
+  }
+  for name in bw-once bw_once.py clipboard.swift; do
+    cmp -s "$source_dir/$name" "$target/$name" || { echo "Installed $name differs; rerun installer" >&2; exit 1; }
+  done
+  echo "bw-once ready; helper on PATH, skill not globally registered"
+  exit 0
+fi
+if [ -e "$command_path" ] || [ -L "$command_path" ]; then
+  [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target/bw-once" ] || {
+    echo "Refusing to replace another command at $command_path" >&2; exit 1;
+  }
+fi
+mkdir -p "$target" "$prefix/bin"
+chmod 700 "$target"
+for name in bw-once bw_once.py clipboard.swift; do
+  cp "$source_dir/$name" "$target/$name"
+done
+xcrun swiftc "$target/clipboard.swift" -o "$target/clipboard.new"
+chmod 700 "$target/clipboard.new" "$target/bw-once"
+mv "$target/clipboard.new" "$target/clipboard"
+ln -sf "$target/bw-once" "$command_path"
+echo "Installed $command_path; skill not globally registered"
