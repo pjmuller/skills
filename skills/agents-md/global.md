@@ -82,6 +82,9 @@ Their facts and preferences survive; the template adds behaviour they lack.
    actually use. Fill template placeholders from evidence (`gh api user`,
    `ls ~/code/*`, `mise ls`, `brew list`), not guesses; ask only for what the
    machine cannot tell you.
+   Browser routing: purpose → profile → verified account, preserving their fallback.
+   Missing setup → offer [browser onboarding](https://github.com/pjmuller/skills/blob/main/setup/t3-setup/browser-profiles.md);
+   keep import steps and volatile IDs outside the global prompt.
 3. Same rule in both → the tighter wording. Conflict → theirs wins; list it.
 4. Drop template sections for tools they lack (T3 threads, a second harness,
    deploy rights). Keep the template's model names; they are refreshed upstream.

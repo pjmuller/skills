@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- t3-setup / agents-md: offer browser cookie import, verify selected profiles in installed harnesses, and save only purpose/profile/account routing in the user's global prompt; retain browser fallbacks and keep setup details private.
 - agents-md: global template tells agents to use T3 inline visual replies (`html_preview`/`html_render`, T3 ≥0.0.46) for charts/tables/mockups instead of prose or loose HTML files.
 - agents-md: prefer native T3 browser tools in both Claude and Codex; retain tab IDs and verify account identity, with profile-selection details kept outside the global prompt.
 - clickup-core: `[[file:NAME]]` links an attachment of the target task in comments, handoffs, reviews and descriptions (fails closed before writing on unknown/ambiguous names; newest version wins); bare attachment filenames are auto-linked instead of becoming ClickUp's dead domain links; `attach` prints `reference: [[file:<title>]]`.

@@ -123,6 +123,12 @@ is active. Verify `t3-spawn-thread --model gemini`
 with a real file write. Video goes through native `agy`, not T3:
 [video-shrink-for-gemini](../../skills/video-shrink-for-gemini/SKILL.md#execute-and-verify).
 
+## Browser sessions (optional)
+
+Offer to reuse selected browser logins in T3, then follow [browser-profiles.md](browser-profiles.md):
+import only the user's chosen profiles, verify identities, and save concise routing in their
+own global prompt. Existing imports need verification, not another copy. Skipping is fine.
+
 ## Install in dependency order
 
 `~/.local/bin` must be on the login-shell PATH. Existing `.claude/skills` directory
