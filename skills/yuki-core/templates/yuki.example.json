@@ -1,0 +1,14 @@
+{
+  "company_label": "Example BV",
+  "domain_id": "00000000-0000-0000-0000-000000000000",
+  "administration_id": "00000000-0000-0000-0000-000000000000",
+  "api_key_env": "YUKI_API_KEY",
+  "sheet": {
+    "spreadsheet_id": "<google-sheet-id>",
+    "manual_columns": ["Resp", "Status", "Comment"]
+  },
+  "gws": {
+    "script": "../google-workspace-core/scripts/gws.py",
+    "config": "../google-workspace/workspace.json"
+  }
+}
