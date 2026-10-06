@@ -81,7 +81,8 @@ Pushed a change to a shared skill core that projects carry as a committed copy? 
 - Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
 - Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser: {browser + profile name per account}; volatile IDs go in a pointer file beside this one.
+- Browser in T3 (Claude + Codex): native `t3-code` `preview_*` tools. `preview_status` → `preview_open` if needed → `preview_snapshot`; retain `tabId`, use snapshot locators. Browser profiles: {profile name per account}; verify the signed-in identity. Profile selection/recovery → {browser guide beside this file}; read before authenticated browsing.
+- Fallback when T3 cannot handle the task (or explicit browser/extension work): {browser / computer-use tools}; profiles: {profile name per account}. Account/extension routing → {browser guide}. A closed T3 preview alone isn't a reason to fall back.
 
 ## Writing in my name
 - Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
