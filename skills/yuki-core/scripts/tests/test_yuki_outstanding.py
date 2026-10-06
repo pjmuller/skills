@@ -23,8 +23,8 @@ def test_quarter_selection_carryover_and_invoice_drop():
     raw = response(item("old", "2026-05-02"), item("in", "2026-09-30"), item("late", "2026-10-01"),
                    item("inv", "2026-08-01", "120.00", "Aankoopfactuur"), item("refund", "2026-07-01", "15.00"))
     rows = select(parse_items(raw), "2026-Q3")
-    assert [(r["item_id"], r["carryover"]) for r in rows] == [("old", "yes"), ("in", ""), ("refund", "")]
-    assert rows[0]["type"] == "Card" and rows[2]["amount"] == Decimal("15.00")
+    assert [(r["item_id"], r["carryover"]) for r in rows] == [("old", "yes"), ("refund", ""), ("in", "")]
+    assert rows[0]["type"] == "Card" and rows[1]["amount"] == Decimal("15.00")
 
 
 def test_fx_uses_belgian_number_format():
