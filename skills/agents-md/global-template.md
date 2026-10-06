@@ -31,6 +31,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - Propose the 80/20 cut before building; list bigger options, don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
 - External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
 - Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
+- Visual replies: when T3 exposes `html_preview`/`html_render` (T3 ≥0.0.46), a chart/table/collage/mockup renders inline in the thread — prefer it over prose or a one-off HTML file; mermaid fences render natively. Durable reports still → `~/Downloads`.
 - Writing instructions for a colleague's agent → first read that person's machine/profile notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
 
 ## Verify your own work
