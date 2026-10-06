@@ -88,6 +88,10 @@ Their facts and preferences survive; the template adds behaviour they lack.
 3. Same rule in both → the tighter wording. Conflict → theirs wins; list it.
 4. Drop template sections for tools they lack (T3 threads, a second harness,
    deploy rights). Keep the template's model names; they are refreshed upstream.
+   For review instructions outside the global prompt, adapt the
+   [review-flow mini template](code-review-template.md) into their setup repo
+   and link its absolute path. With T3 installed, resolve the full review guide
+   from their installation; never copy another person's machine path.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
 6. Show the human: conflicts, dropped sections, token count. Commit in their setup repo.
