@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+script=$0
+while [ -L "$script" ]; do
+  link=$(readlink "$script")
+  case "$link" in /*) script=$link;; *) script=$(dirname "$script")/$link;; esac
+done
+root=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd)
+exec uv run --no-project python -I "$root/bw_once.py" "$@"

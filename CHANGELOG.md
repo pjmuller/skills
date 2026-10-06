@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- bitwarden (pilot): `bw-once` opens human Terminal for fresh native authentication, performs one bounded lookup/copy/Send, then locks before delivery; no agent vault session, clipboard expiry preserves newer contents. Current released CLI requires a master password; live-vault UX remains unverified.
 - yuki-core (new): Yuki "Aan te leveren aankoopfacturen" for one quarter (`yuki.py outstanding|sheet-push|discover`): read-only zeep client behind a method allowlist, carryover flag for older open items, Belgian-format FX parsing, fails closed on malformed data; `sheet-push` creates the `<YYYY>-Q<n>` tab, appends only unseen Yuki item ids, seeds manual cells once from the previous quarter tab and verifies on read-back. Company ids, sheet and Google account live in the wrapper's `yuki.json`.
 - t3-setup / agents-md: offer browser cookie import, verify selected profiles in installed harnesses, and save only purpose/profile/account routing in the user's global prompt; retain browser fallbacks and keep setup details private.
 - agents-md: global template tells agents to use T3 inline visual replies (`html_preview`/`html_render`, T3 ≥0.0.46) for charts/tables/mockups instead of prose or loose HTML files.
