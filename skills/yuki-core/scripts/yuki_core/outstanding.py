@@ -53,7 +53,7 @@ def select(items: list[dict], quarter: str) -> list[dict]:
     (incoming refunds/settlements legitimately show up positive)."""
     start, end = quarter_bounds(quarter)
     rows = []
-    for item in items:
+    for item in sorted(items, key=lambda i: (i["date"], i["item_id"])):  # Yuki's DateAsc is unstable within a day
         if item["type"] == INVOICE_TYPE or item["date"] > end.isoformat():
             continue
         rows.append({**item, "type": SHORT_TYPES.get(item["type"], item["type"]),
