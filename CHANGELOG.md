@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: concise Markdown reports use progressive disclosure, callouts and Mermaid; conclusions stay visible.
+
 - agents-md: simplify colleague handoffs to pre-merged prompts and short installation steps; retain inline repo maps, keep setup mechanics outside the global prompt, and scale optional PR/review flow to regression risk.
 
 - agents-md: one role-neutral core with product-owner Git assistance, repository-aware integration and release authority; global-prompt migration inventories all homes/overrides, preserves backups and verifies fresh instruction loading.
