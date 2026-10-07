@@ -80,14 +80,14 @@ The same correction given twice in chat → it is a missing line.
 ## Merge the template into someone's existing file
 
 Their facts and preferences survive; the template adds behaviour they lack.
+For a colleague handoff, prepare the merged content here, with their repo map
+inline. The receiving agent saves, links and verifies it; don't delegate a second
+redesign. Keep setup/symlink instructions in the installer, outside the prompt.
+Adapt the [role](roles.md) without creating a second competing Git policy.
 
-1. Discover the private setup repo first; don't store live configuration inside
-   an installed skill. Inventory every configured Claude/Codex home, symlink
-   target, filename case and global override. Read/diff every distinct copy.
-   Back up contents **and original link destinations** outside Git before edits;
-   keep a per-path rollback manifest. Merge global overrides before archiving
-   them so they cannot silently shadow the new Codex link. Leave project
-   overrides alone. Link instruction files only, never whole account homes.
+1. Read existing copies (configured Claude/Codex homes, symlink targets and
+   global overrides). Back up contents and link destinations outside Git before
+   replacing them; check for missing personal rules. Leave project overrides alone.
 2. Keep verbatim: identity, role, language, repos, accounts, tooling they
    actually use. Fill template placeholders from evidence (`gh api user`,
    `ls ~/code/*`, `mise ls`, `brew list`), not guesses; ask only for what the
@@ -104,20 +104,10 @@ Their facts and preferences survive; the template adds behaviour they lack.
    from their installation; never copy another person's machine path.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
-6. Keep machine/account/repo inventories in a supporting file beside the prompt,
-   with absolute pointers from the global file. Commit/push in the setup repo
-   under its actual Git policy; inspect the staged diff for secrets. Preserve
-   signing and verified commit identity; a display-name mismatch is not evidence
-   that Git attribution is broken.
-7. Verify every link resolves to the same tracked file, compare hashes, and
-   run a fresh read-only instruction-loading check per usable harness/home.
-   Distinguish filesystem checks from unavailable login/runtime checks. Record
-   conflicts, dropped sections, size, commit/PR, backup and rollback location.
-   Never claim a colleague's installation succeeded before their machine checks.
-
-A request to unify prompts does not authorize account re-login, provider
-re-enablement, env migration, changing repository protections or granting access.
-Preserve those boundaries; prepare unrelated fixes separately.
+6. Verify links resolve to the tracked source and fresh harness sessions load
+   it. Commit/push under the setup repo's rules; report source, commit/PR and any
+   unresolved difference or failed check. Don't change accounts or working
+   tooling as part of prompt installation.
 
 Re-sync later: `git log -p <sha>.. -- skills/agents-md/global-template.md` in a
 clone of the skills repo; offer each change as adopt/skip, then update the marker.

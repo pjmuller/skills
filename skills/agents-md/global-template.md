@@ -26,7 +26,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
-- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and approvals required by the repo/account policy under Commit.
+- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and approvals required by the repo/account policy under Git.
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
 - My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
@@ -62,15 +62,14 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
 - Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread self`, skill `t3-schedule`) and report ⏰ with the date.
 
-## Commit (select the workflow under repo policy)
-- Discover the actual default/development branch, repository rules, required approvals and release process; never assume its name is `main`. Repo policy wins.
-- One commit per high-level task. Inspect status, fetch and safely pull before work; integrate new upstream work again before pushing. Commit/push routine authorized work yourself, preserving other agents' edits and required signing.
-- Where team policy permits shared-branch work, default to its integration branch, without unnecessary feature branches. If a PR is required or the team uses worktrees, push a short-lived branch, open/reuse its PR, fix checks, and merge promptly once required approvals and merge authority are satisfied. Never bypass protection or force-push shared history.
-- Integrate feature work into the development target. Release/promotion branches are a separate action requiring explicit authorization from the task or standing release policy.
-- A colleague may already have committed your shared-file changes; verify what landed and continue, without undoing their work or making a duplicate commit.
-- Done means integrated into the team's target branch and pushed; a worktree-only commit or approval-pending PR is still pending. Report that state honestly. For changes requiring release, execute the repo's authorized deployment process and verify live; preserve its approval gates. Technical access alone is not deploy authorization.
-- Never `checkout`/`reset`/`stash` in a shared checkout for integration or deployment: other agents may have uncommitted edits. Use an isolated worktree. Do not rebase someone else's commits or use autostash to conceal dirty state.
-- Session in a worktree: commit/push there, then integrate through the permitted PR or direct-push route; leave the session worktree for explicit cleanup. For ignored local config use `.worktreeinclude`, never bulk-copy ignored files.
+## Git
+- Pull safely before starting and again before pushing; commit and push completed work without reminders. One commit per coherent task. Leave other agents' changes alone.
+- Small, low-risk work (docs, a standalone visualization, isolated presentation changes): use the repo's normal development/staging branch directly where permitted, then verify. Don't create a PR just for ceremony.
+- Work with meaningful regression risk (business logic, shared components, auth, data, integrations): use a short-lived branch/worktree and PR, with independent review before integration. Judge impact, not just line count; a visual change can still affect shared behavior.
+- Follow repo branch/release rules and required approvals. Use the actual branch name, not an assumed `main`. Merge promptly once checks and approvals are satisfied; don't leave finished work isolated. Don't promote to production merely to try something out.
+- Rework for an open PR stays on that PR. Never reset/stash/switch branches in a shared checkout or force-push others' history; isolate integration when needed. A colleague may already have committed your changes: verify and continue.
+- Existing signing/worktree conventions remain. Preserve session worktrees for follow-up; needed ignored config uses `.worktreeinclude`, never a bulk copy.
+- Follow the repo's authorized release process and verify live. Report accurately whether work is pushed, awaiting review, integrated or deployed.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
 Register as few skills globally as possible. Occasional machine/prompt maintenance belongs in a **personal setup repository**; product workflows belong in their **project repository**. A **skill source repository** distributes templates/tools, not live personal configuration. Global commands on PATH do not require global skill registration.
