@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["google-auth>=2", "requests>=2", "httpx>=0.27", "python-dotenv>=1"]
 # ///
-"""Link a T3 thread to a Gmail thread; a deterministic poller pings it on new inbound mail.
+"""Resolve Gmail references or link a T3 thread; a poller pings it on new inbound mail.
 
 The account comes from a Workspace wrapper config (--config / $GWS_CONFIG), stored per link so
 the LaunchAgent poller needs no arguments. Gmail access goes through the google-workspace-core
@@ -364,6 +364,17 @@ def save_messages(ws, link: dict, ids: list[str], name: str, trim: bool) -> Path
 
 
 # --- commands -------------------------------------------------------------------
+def cmd_resolve(args) -> int:
+    ws = workspace(config_arg(args))
+    account = ws.config.account.lower()
+    actual = str(ws.whoami().get("email") or "").lower()
+    if actual != account:
+        raise SystemExit(f"authorized as {actual or 'unknown'}, expected {account}; nothing resolved")
+    gmail_id = resolve_thread(ws, account, args.ref, args.search)
+    print(json.dumps({"account": account, "gmail_thread": gmail_id}))
+    return 0
+
+
 def make_link(args, t3_id: str) -> tuple[object, dict, dict]:
     config = config_arg(args)
     ws = workspace(config)
@@ -578,13 +589,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", help="Workspace wrapper workspace.json (default $GWS_CONFIG)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def linker(name: str, help_text: str):
+    def reference(name: str, help_text: str):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("ref", nargs="?", help="Gmail URL, hex id or thread-f:/msg-f: id")
         p.add_argument("--search", help="Gmail query that matches exactly one thread")
+        return p
+
+    def linker(name: str, help_text: str):
+        p = reference(name, help_text)
         p.add_argument("--policy", help="consumer policy doc the woken agent must read")
         return p
 
+    reference("resolve", "read-only: verify the configured account and print its Gmail thread id as JSON")
     add = linker("add", "link a Gmail thread to a T3 thread (default: the calling thread)")
     add.add_argument("--thread", help="T3 thread id")
     new = linker("new", "spawn a T3 thread preloaded with the Gmail thread, then link it")
@@ -602,9 +618,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("schedule", help="arm the weekday LaunchAgent poller")
     sub.add_parser("unschedule", help="remove the LaunchAgent poller")
     args = parser.parse_args(argv)
-    if args.command in ("add", "new") and bool(args.ref) == bool(args.search):
+    if args.command in ("resolve", "add", "new") and bool(args.ref) == bool(args.search):
         parser.error("give exactly one of REF or --search")
-    return {"add": cmd_add, "new": cmd_new, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll, "draft": cmd_draft,
+    return {"resolve": cmd_resolve, "add": cmd_add, "new": cmd_new, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll, "draft": cmd_draft,
             "schedule": cmd_schedule, "unschedule": cmd_unschedule}[args.command](args)
 
 

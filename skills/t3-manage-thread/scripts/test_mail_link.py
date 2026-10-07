@@ -1,7 +1,11 @@
 """t3-mail-link pure logic: Gmail ref parsing, Chrome titles, new-inbound detection, link dedupe."""
 import importlib.machinery
 import importlib.util
+import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -100,3 +104,110 @@ def test_list_thread_ids_reads_state_only(tmp_path, monkeypatch, capsys):
     state.parent.mkdir(parents=True)
     state.write_text('{"links": [{"t3_thread": "a"}, {"t3_thread": "b"}, {"t3_thread": "a"}]}')
     assert ml.main(["list", "--thread-ids"]) == 0 and capsys.readouterr().out == "a\nb\n"
+
+
+@pytest.fixture
+def resolver(tmp_path, monkeypatch):
+    """Offline Workspace reads; any T3 call, saved-mail or link-state write fails the test."""
+    ws = Mock(config=SimpleNamespace(account="Ann@Example.com"))
+    ws.whoami.return_value = {"email": "ANN@example.com"}
+    monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
+    monkeypatch.setenv("GWS_CONFIG", str(tmp_path / "workspace.json"))
+    monkeypatch.setattr(ml, "workspace", lambda config: ws)
+    monkeypatch.setitem(sys.modules, "gws_core", SimpleNamespace(ApiError=RuntimeError))
+    for name in ("locked_state", "save_messages", "store", "t3_thread", "own_thread", "cmd_draft"):
+        monkeypatch.setattr(ml, name, lambda *a, **kw: pytest.fail("resolve must not mutate or access T3"))
+    monkeypatch.setattr(ml.subprocess, "run", lambda *a, **kw: pytest.fail("no subprocess in offline resolve"))
+    state = tmp_path / "userdata/mail-links.json"
+    state.parent.mkdir()
+    state.write_text('{"links": [{"gmail_thread": "existing", "t3_thread": "keep"}]}')
+    saved = state.parent / "mail-links/existing/thread.md"
+    saved.parent.mkdir(parents=True)
+    saved.write_text("saved mail remains untouched")
+
+    def snapshot():
+        return {str(p.relative_to(tmp_path)): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in tmp_path.rglob("*") if p.is_file()}
+
+    before = snapshot()
+    yield ws
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("ref", [
+    "19e875318442de06",
+    "https://mail.google.com/mail/u/0/?view=pt&permthid=thread-f:1866870901077892614",
+])
+def test_resolve_exact_reference(resolver, capsys, ref):
+    resolver.api.side_effect = lambda *a, **kw: {"id": a[1].rsplit("/", 1)[-1]}
+    assert ml.main(["resolve", ref]) == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed == {"account": "ann@example.com", "gmail_thread": ml.parse_gmail_ref(ref)[1]}
+    resolver.whoami.assert_called_once_with()
+    assert resolver.api.call_args.args[0] == "GET"
+    resolver.gmail.get.assert_not_called()
+
+
+def test_resolve_message_and_draft_are_reads(resolver, capsys):
+    resolver.api.side_effect = RuntimeError("message id is not a thread id")
+    resolver.gmail.get.return_value = {"threadId": "thread-from-message"}
+    assert ml.main(["resolve", "19e875318442de06"]) == 0
+    assert json.loads(capsys.readouterr().out)["gmail_thread"] == "thread-from-message"
+    resolver.gmail.get.assert_called_once_with("19e875318442de06")
+    resolver.gmail.get_draft.return_value = {"message": {"threadId": "thread-from-draft"}}
+    assert ml.main(["resolve", "https://mail.google.com/mail/u/0/?permmsgid=msg-a:r-12"]) == 0
+    assert json.loads(capsys.readouterr().out)["gmail_thread"] == "thread-from-draft"
+    resolver.gmail.get_draft.assert_called_once_with("r-12")
+    assert {call[0] for call in resolver.gmail.method_calls} == {"get", "get_draft"}
+
+
+def test_resolve_search_and_ambiguity(resolver, capsys):
+    resolver.api.side_effect = [{"threads": [{"id": "one"}]}, {"messages": []}]
+    assert ml.main(["resolve", "--search", "from:vendor.test subject:offer"]) == 0
+    assert json.loads(capsys.readouterr().out)["gmail_thread"] == "one"
+    assert resolver.api.call_args_list[0].kwargs["params"]["q"] == "from:vendor.test subject:offer"
+    resolver.api.side_effect = [{"threads": [{"id": "one"}, {"id": "two"}]},
+                                {"messages": []}, {"messages": []}]
+    with pytest.raises(SystemExit) as exc:
+        ml.main(["resolve", "--search", "subject:offer"])
+    assert exc.value.code == 3 and capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("identity", [{"email": "other@example.com"}, {}])
+def test_resolve_wrong_or_unknown_identity_stops_before_lookup(resolver, identity):
+    resolver.whoami.return_value = identity
+    with pytest.raises(SystemExit, match="nothing resolved"):
+        ml.main(["resolve", "19e875318442de06"])
+    resolver.api.assert_not_called()
+    assert resolver.gmail.method_calls == []
+
+
+def test_resolve_failed_identity_probe_stops_before_lookup(resolver):
+    resolver.whoami.side_effect = RuntimeError("expired token")
+    with pytest.raises(RuntimeError, match="expired token"):
+        ml.main(["resolve", "19e875318442de06"])
+    resolver.api.assert_not_called()
+    assert resolver.gmail.method_calls == []
+
+
+def test_resolve_explicit_wrapper_overrides_environment(resolver, monkeypatch, tmp_path):
+    selected = Mock(return_value=resolver)
+    monkeypatch.setattr(ml, "workspace", selected)
+    resolver.api.return_value = {"id": "canonical"}
+    assert ml.main(["--config", str(tmp_path / "explicit.json"), "resolve", "19e875318442de06"]) == 0
+    selected.assert_called_once_with(str(tmp_path / "explicit.json"))
+
+
+def test_resolve_browser_account_mismatch_stops_before_search(resolver, monkeypatch):
+    monkeypatch.setattr(ml, "chrome_subject", lambda *a: ("Offer", "other@example.com"))
+    with pytest.raises(SystemExit, match="that Gmail tab belongs to other@example.com"):
+        ml.main(["resolve", "https://mail.google.com/mail/u/0/#inbox/FMfcgzQhWTsMxrbPlmQHFRGDvlgCtzdB"])
+    resolver.api.assert_not_called()
+
+
+@pytest.mark.parametrize("argv", [["resolve"], ["resolve", "19e875318442de06", "--search", "q"]])
+def test_resolve_requires_one_reference_or_search(resolver, argv):
+    with pytest.raises(SystemExit) as exc:
+        ml.main(argv)
+    assert exc.value.code == 2
+    resolver.whoami.assert_not_called()
