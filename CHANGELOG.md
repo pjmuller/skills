@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: one role-neutral core with product-owner Git assistance, repository-aware integration and release authority; global-prompt migration inventories all homes/overrides, preserves backups and verifies fresh instruction loading.
+
 ## v0.4.4 (2026-10-07)
 - t3-route (new): instruction-only intake, verified thread reuse and dispatch through a private wrapper; account/scope-aware onboarding and bounded corrections, with source evidence separate from inferred intent.
 - t3-mail-link: `resolve` reads the selected account and Gmail thread ID without linking, spawning, writing mail-link state or scheduling; ambiguous references remain unresolved.

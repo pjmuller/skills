@@ -10,15 +10,20 @@ Admission test per line: **true in every repo, and would removing it cause a
 mistake or a detour?** Both yes → keep. Otherwise move it down or delete it.
 
 Starting point or merge base: [global-template.md](global-template.md).
+Adapt [role and Git workflow](roles.md); a product owner gets more operational
+help, not a lower code-quality bar.
 
 ## Mechanics worth knowing
 
 - Keep one canonical file in a versioned, private setup repo; symlink
-  `~/.claude/CLAUDE.md`, every isolated `CLAUDE_CONFIG_DIR`, and
-  `~/.codex/AGENTS.md` to it. Resolve the symlink and edit the target; commit there.
-- Nothing overrides anything. Claude Code concatenates user + project files;
-  Codex concatenates global → repo root → cwd. Conflicts are resolved by the
-  model, arbitrarily. Say once in the global file that repo files win.
+  `~/.claude/CLAUDE.md`, each `CLAUDE_CONFIG_DIR/CLAUDE.md`, and
+  each `CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) to it. Resolve the symlink and edit the target; commit there.
+- State that repo-specific guidance wins over personal defaults. Codex discovers
+  global guidance from each `CODEX_HOME`, preferring `AGENTS.override.md` over
+  `AGENTS.md`; deeper project guidance takes precedence. [Official discovery
+  rules](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
+- Prose is advisory, not an enforcement mechanism: remove contradictory rules
+  rather than relying on a "repo wins" sentence alone.
 - Codex caps the *whole chain* (`project_doc_max_bytes`, 32 KiB by default) and
   truncates silently from the end, so a fat global file cuts the repo's file.
   Check what loaded: Claude `/context`; Codex: ask it to summarize its instructions.
@@ -76,8 +81,13 @@ The same correction given twice in chat → it is a missing line.
 
 Their facts and preferences survive; the template adds behaviour they lack.
 
-1. Read every copy (each Claude home, Codex, differing symlink targets). Back
-   them up outside the repo before changing links.
+1. Discover the private setup repo first; don't store live configuration inside
+   an installed skill. Inventory every configured Claude/Codex home, symlink
+   target, filename case and global override. Read/diff every distinct copy.
+   Back up contents **and original link destinations** outside Git before edits;
+   keep a per-path rollback manifest. Merge global overrides before archiving
+   them so they cannot silently shadow the new Codex link. Leave project
+   overrides alone. Link instruction files only, never whole account homes.
 2. Keep verbatim: identity, role, language, repos, accounts, tooling they
    actually use. Fill template placeholders from evidence (`gh api user`,
    `ls ~/code/*`, `mise ls`, `brew list`), not guesses; ask only for what the
@@ -94,7 +104,20 @@ Their facts and preferences survive; the template adds behaviour they lack.
    from their installation; never copy another person's machine path.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
-6. Show the human: conflicts, dropped sections, token count. Commit in their setup repo.
+6. Keep machine/account/repo inventories in a supporting file beside the prompt,
+   with absolute pointers from the global file. Commit/push in the setup repo
+   under its actual Git policy; inspect the staged diff for secrets. Preserve
+   signing and verified commit identity; a display-name mismatch is not evidence
+   that Git attribution is broken.
+7. Verify every link resolves to the same tracked file, compare hashes, and
+   run a fresh read-only instruction-loading check per usable harness/home.
+   Distinguish filesystem checks from unavailable login/runtime checks. Record
+   conflicts, dropped sections, size, commit/PR, backup and rollback location.
+   Never claim a colleague's installation succeeded before their machine checks.
+
+A request to unify prompts does not authorize account re-login, provider
+re-enablement, env migration, changing repository protections or granting access.
+Preserve those boundaries; prepare unrelated fixes separately.
 
 Re-sync later: `git log -p <sha>.. -- skills/agents-md/global-template.md` in a
 clone of the skills repo; offer each change as adopt/skip, then update the marker.

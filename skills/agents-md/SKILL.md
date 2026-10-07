@@ -12,7 +12,8 @@ real constraint or concrete verification requirement makes precision necessary.
 
 This file covers a repository's entrypoint. The user-level file loaded in every
 repo (write, prune, merge the [template](global-template.md), port improvements)
-has its own economics: [global.md](global.md). Handoffs between people, agents
+has its own economics: [global.md](global.md). Product-owner/developer adaptation
+and agent-owned Git housekeeping: [roles.md](roles.md). Handoffs between people, agents
 and roles (relay prompt, dev → non-technical, bug report → dev): [handoff.md](handoff.md).
 Independent review and reasoned pushback: [mini template](code-review-template.md);
 full T3 mechanics: [review procedure](../t3-manage-thread/code-review.md).

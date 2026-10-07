@@ -1,6 +1,7 @@
 # Global agent prompt: template
 
-Merge base for a developer's cross-project file: fill `{…}` and merge per
+Merge base for a cross-project file: adapt the [role and Git workflow](roles.md),
+fill `{…}` and merge per
 [global.md](global.md#merge-the-template-into-someones-existing-file). The file starts below the rule.
 Optional supporting file: [review-flow mini template](code-review-template.md).
 
@@ -25,7 +26,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
-- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and the deploy exception under Commit.
+- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and approvals required by the repo/account policy under Commit.
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
 - My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
@@ -61,14 +62,15 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - **Settle = kill** (stops the session and every sub-agent in it). 🏓 threads are never auto-settled: after the ping-back arrives and you verified, `t3-settle-thread --wait THREAD_ID`. Standalone/📤 threads are neither hidden nor settled, unless I say "…then settle this thread": finish everything, `t3-settle-thread --self` as the LAST tool call, then the final answer.
 - Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread self`, skill `t3-schedule`) and report ⏰ with the date.
 
-## Commit (parallel agents on shared `main`, no feature branches)
-- One commit per high-level task (cherry-pick friendly), not per small step.
-- Done = shared `main` contains the commit, pushed. A detached/worktree-only commit is unfinished.
-- Done = live: for repos that deploy/promote/publish, ship on every plane the change touches, then re-verify live (real run/curl/UI, not just green tests). Don't stop at "ready to deploy", don't ask. Exception, high-volume production repos (named in their own AGENTS.md): first diff production vs `main` and confirm the delta is only your change or cosmetic commits; anything else → 👀 ask before deploying.
-- Other agents ship to `main` while you work: pull before you start and again before you push; build on their landed work.
-- Leave other agents' in-flight changes alone. Races are fine: a shared file commits whole; your file already committed by someone else is expected.
-- Never `checkout`/`reset`/`stash` in the shared checkout (promote/deploy/compare): other agents have uncommitted edits there. Use a throwaway `git worktree add --detach /tmp/<x> origin/<branch>`, remove it when done.
-- Session already running inside a worktree: commit there, cherry-pick onto a detached `/tmp` worktree at `origin/main`, `git push origin HEAD:main`, verify with `git cherry`; leave the session worktree for explicit cleanup. Ignored local config a worktree needs → repo-root `.worktreeinclude` allowlist, never bulk-copy ignored files.
+## Commit (select the workflow under repo policy)
+- Discover the actual default/development branch, repository rules, required approvals and release process; never assume its name is `main`. Repo policy wins.
+- One commit per high-level task. Inspect status, fetch and safely pull before work; integrate new upstream work again before pushing. Commit/push routine authorized work yourself, preserving other agents' edits and required signing.
+- Where team policy permits shared-branch work, default to its integration branch, without unnecessary feature branches. If a PR is required or the team uses worktrees, push a short-lived branch, open/reuse its PR, fix checks, and merge promptly once required approvals and merge authority are satisfied. Never bypass protection or force-push shared history.
+- Integrate feature work into the development target. Release/promotion branches are a separate action requiring explicit authorization from the task or standing release policy.
+- A colleague may already have committed your shared-file changes; verify what landed and continue, without undoing their work or making a duplicate commit.
+- Done means integrated into the team's target branch and pushed; a worktree-only commit or approval-pending PR is still pending. Report that state honestly. For changes requiring release, execute the repo's authorized deployment process and verify live; preserve its approval gates. Technical access alone is not deploy authorization.
+- Never `checkout`/`reset`/`stash` in a shared checkout for integration or deployment: other agents may have uncommitted edits. Use an isolated worktree. Do not rebase someone else's commits or use autostash to conceal dirty state.
+- Session in a worktree: commit/push there, then integrate through the permitted PR or direct-push route; leave the session worktree for explicit cleanup. For ignored local config use `.worktreeinclude`, never bulk-copy ignored files.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
 Register as few skills globally as possible. Occasional machine/prompt maintenance belongs in a **personal setup repository**; product workflows belong in their **project repository**. A **skill source repository** distributes templates/tools, not live personal configuration. Global commands on PATH do not require global skill registration.
