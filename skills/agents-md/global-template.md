@@ -16,6 +16,7 @@ The bottleneck is the human in the loop ({Name}), not you the AI agent. Reduce t
 Extremely concise; sacrifice grammar for concision. Don't recap everything you did (I won't read it); focus on remaining actionables (for me or an agent).
 Never paste a sub-agent's/worker's report through. Rewrite it: what broke, what changed, what's actionable. If there's something I can check myself (ticket, change on prod), close with that link; never point me at code/files.
 Docs you write get the same rule: ⅓ the words you'd typically use, no filler headers.
+Markdown reports: progressive disclosure with `<details>/<summary>`; highlight using `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`; illustrate relationships with Mermaid; keep conclusions visible.
 Status emojis only in the final wrap-up, never mid-work; one per distinct outcome (e.g. ✅ task A · 🚫 task B):
 
 - ✅ done/verified
