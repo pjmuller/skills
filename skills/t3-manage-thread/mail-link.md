@@ -5,6 +5,8 @@ once; a deterministic poller (no LLM) pings that thread on every new inbound mai
 a reply in Gmail (never sends), asks the user, or settles. Flags: `t3-mail-link --help`.
 
 ```bash
+t3-mail-link --config <wrapper>/workspace.json resolve '<gmail url | hex id>'
+t3-mail-link --config … resolve --search 'from:vendor.example subject:offer'
 t3-mail-link --config <wrapper>/workspace.json add '<gmail url | hex id>' [--thread ID] [--policy FILE]
 t3-mail-link --config … add --search 'from:vendor.example subject:offer'
 t3-mail-link --config … new '<url>' --project ~/code/example [--prompt "…"]   # spawn ✉️ thread + link
@@ -14,6 +16,11 @@ t3-mail-link list [--thread-ids] · unlink <t3-or-gmail-id> · poll [--dry-run] 
 - **Account** = the Workspace wrapper's `workspace.json` (`--config` / `$GWS_CONFIG`), via
   [google-workspace-core](../google-workspace-core/SKILL.md) (sibling dir or `$GWS_CORE`). Stored
   per link, so `poll` needs no flags. `--policy` = the consumer wrapper's rules; the ping names it.
+- **Resolve** verifies the authenticated account before reading a reference and prints JSON
+  `{"account":"operator@example.com","gmail_thread":"19e875318442de06"}`. It creates no link,
+  saved mail, draft or T3 thread. Choose exactly one reference or `--search`; ambiguous results
+  fail closed. Web tokens may briefly open/close a Chrome tab and require its account to match;
+  exact references and `--search` avoid the browser.
 - **Default T3 thread** = the caller (same resolution as `t3-settle-thread --self`).
 - **URL ids**: best = the URL of the mail's ⋮ → **Print all** (`permthid=thread-f:…` = the thread
   id). Also exact, no browser: hex, `thread-f:` / `msg-f:`, ⋮ → **Show original** (`permmsgid=msg-f:`

@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+
+## v0.4.4 (2026-10-07)
+- t3-route (new): instruction-only intake, verified thread reuse and dispatch through a private wrapper; account/scope-aware onboarding and bounded corrections, with source evidence separate from inferred intent.
+- t3-mail-link: `resolve` reads the selected account and Gmail thread ID without linking, spawning, writing mail-link state or scheduling; ambiguous references remain unresolved.
 - bitwarden (pilot): `bw-once` opens human Terminal for fresh native authentication, performs one bounded lookup/copy/Send, then locks before delivery; no agent vault session, clipboard expiry preserves newer contents. Current released CLI requires a master password; live-vault UX remains unverified.
 - yuki-core (new): Yuki "Aan te leveren aankoopfacturen" for one quarter (`yuki.py outstanding|sheet-push|discover`): read-only zeep client behind a method allowlist, carryover flag for older open items, Belgian-format FX parsing, fails closed on malformed data; `sheet-push` creates the `<YYYY>-Q<n>` tab, appends only unseen Yuki item ids, seeds manual cells once from the previous quarter tab and verifies on read-back. Company ids, sheet and Google account live in the wrapper's `yuki.json`.
 - t3-setup / agents-md: offer browser cookie import, verify selected profiles in installed harnesses, and save only purpose/profile/account routing in the user's global prompt; retain browser fallbacks and keep setup details private.
