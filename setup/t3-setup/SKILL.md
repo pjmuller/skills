@@ -114,6 +114,10 @@ inside WSL): the Windows desktop app and WSL keep separate logins, a signed-in d
 nothing for the WSL backend. CodexBar requested →
 [codexbar-setup install](../../skills/codexbar-setup/install.md).
 
+Disable harness auto-memory in every discovered provider home; keep durable lessons
+in versioned repo instructions. Follow [memory setup and one-time salvage](harness-memory.md),
+including override checks and fresh-session verification. Record each account's coverage in SETUP.md.
+
 Antigravity requested: `brew install --cask antigravity-cli`, run `agy` to sign in
 (check account/quota). T3: Providers → Antigravity → Enable → Install → Sign in with Google
 (separate ACP runtime and login; leave binary path automatic). Expired localhost callback →
