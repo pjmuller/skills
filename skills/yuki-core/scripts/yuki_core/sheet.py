@@ -34,16 +34,27 @@ def gws_runner(script: Path, config: Path) -> Gws:
 
 
 WIDTHS = {"Resp": 188, "contact": 145, "description_clean": 485}  # px; other columns keep the default
+LOOKUP_WIDTH = 250
 DOT_DECIMAL = {"en", "ja", "zh", "ko", "th", "he"}  # locales whose formulas separate arguments with ","
 SORT = [("description_clean", "ASCENDING"), ("date", "DESCENDING")]
 
 
+def columns(formulas: list[dict], manual: list[str], lookups: list[dict]) -> tuple[list[str], list[str]]:
+    """(header, data columns): formula columns, manual columns, then data with lookups after description_clean."""
+    cut = COLUMNS.index("description_clean") + 1
+    data = COLUMNS[:cut] + [lk["name"] for lk in lookups] + COLUMNS[cut:]
+    return [f["name"] for f in formulas] + manual + data, data
+
+
 def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: list[dict],
-         dry_run: bool = False, formulas: list[dict] | None = None, tab: str | None = None) -> dict:
+         dry_run: bool = False, formulas: list[dict] | None = None, tab: str | None = None,
+         lookups: list[dict] | None = None) -> dict:
     """`formulas` = wrapper `formula_columns` ([{name, rules: [{label, pattern}]}]), placed first;
-    `tab` overrides the target tab name (test pushes); seeding still follows `quarter`."""
-    formulas, tab = formulas or [], tab or quarter
-    header = [f["name"] for f in formulas] + manual + COLUMNS
+    `lookups` = wrapper `lookup_columns` ([{name, tab}]): the note of the first row in a human-kept tab
+    (columns match, name, Owner; created if missing) whose `match` regex hits contact + description_clean; `tab` overrides the target tab name (test pushes);
+    seeding still follows `quarter`."""
+    formulas, lookups, tab = formulas or [], lookups or [], tab or quarter
+    header, data = columns(formulas, manual, lookups)
     meta = gws("api", "GET", f"{SHEETS}/{spreadsheet_id}",
                  "--param", "fields=properties.locale,sheets(properties(title,sheetId),basicFilter)")
     sheets, locale = meta.get("sheets", []), meta.get("properties", {}).get("locale", "en_US")
@@ -51,7 +62,7 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
     existing = _values(gws, spreadsheet_id, tab) if tab in tabs else []
     if existing and existing[0] != header:
         raise ValueError(f"tab {tab} header differs from the expected one; fix the sheet or the wrapper's "
-                         f"formula_columns/manual_columns.\n  sheet:    {existing[0]}\n  expected: {header}")
+                         f"formula_columns/manual_columns/lookup_columns.\n  sheet:    {existing[0]}\n  expected: {header}")
     id_col = header.index("item_id")
     seen = {r[id_col] for r in existing[1:] if len(r) > id_col}
     new = [r for r in rows if r["item_id"] not in seen]
@@ -63,27 +74,39 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
                             "seeded" if r["item_id"] in seeds else ""] for r in new]
         return summary
 
+    batch = []
+    for lk in lookups:  # the notes tab people maintain, once per vendor
+        if lk["tab"] not in tabs:
+            reply = gws("sheet-add-tab", spreadsheet_id, lk["tab"])
+            tabs[lk["tab"]] = reply["replies"][0]["addSheet"]["properties"]["sheetId"]
+            gws("sheet-write", spreadsheet_id, f"{_quoted(lk['tab'])}!A1", "--raw",
+                "--values", json.dumps([["match", lk["name"], "Owner"]]))
+            batch.append(_freeze(tabs[lk["tab"]]))
     if summary["created"]:
         reply = gws("sheet-add-tab", spreadsheet_id, tab)
         tabs[tab] = reply["replies"][0]["addSheet"]["properties"]["sheetId"]
     first = len(existing) + 1 if existing else 2  # first new data row (1-based)
     body = [[""] * len(formulas) + _cells(seeds.get(r["item_id"], [""] * len(manual)))
-            + _cells([r[c] for c in COLUMNS], COLUMNS) for r in new]
+            + _cells([r.get(c, "") for c in data], data) for r in new]
     if not existing:
         body.insert(0, header)
     gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first - (not existing)}", "--raw", "--values", json.dumps(body))
-    if formulas:  # USER_ENTERED only for the formula cells; data stays RAW/typed
-        sep = "," if locale.split("_")[0] in DOT_DECIMAL else ";"  # USER_ENTERED parses in the sheet's locale
-        cells = [[_formula(f, header, n, sep) for f in formulas] for n in range(first, first + len(new))]
-        gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first}", "--values", json.dumps(cells))
+    # Formula/lookup cells USER_ENTERED, in the sheet locale's argument separator; data stays RAW/typed.
+    sep = "," if locale.split("_")[0] in DOT_DECIMAL else ";"
+    blocks = [(0, lambda n: [_formula(f, header, n, sep) for f in formulas]) if formulas else None,
+              (header.index(lookups[0]["name"]), lambda n: [_lookup(lk, header, n, sep) for lk in lookups]) if lookups else None]
+    for start, make in filter(None, blocks):
+        gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!{_letter(start)}{first}",
+            "--values", json.dumps([make(n) for n in range(first, first + len(new))]))
     last = first + len(new) - 1
     if summary["created"]:
-        requests = _layout(tabs[tab], header, last)
+        requests = batch + _layout(tabs[tab], header, last, [lk["name"] for lk in lookups])
     else:  # grow an existing basic filter over the appended rows, keeping its sort/filter specs
         old = next((t.get("basicFilter") for t in sheets if t["properties"]["title"] == tab), None)
         requests = [{"setBasicFilter": {"filter": {**{k: v for k, v in old.items() if k != "criteria"},
                                                    "range": {**old["range"], "endRowIndex": max(last, old["range"]["endRowIndex"])}}}}] \
             if old and "endRowIndex" in old["range"] else []
+        requests = batch + requests
     if requests:
         with tempfile.NamedTemporaryFile("w", suffix=".json") as body_file:
             json.dump({"requests": requests}, body_file)
@@ -97,7 +120,8 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
         raise RuntimeError(f"read-back mismatch in tab {tab}: {len(ids)} ids, missing/duplicate {missing}")
     added = {r["item_id"] for r in new}
     broken = [r[id_col] for r in after[1:] if len(r) > id_col and r[id_col] in added
-              and any(str(c).startswith("#") for c in r[:len(formulas)])]
+              and any(str(r[header.index(name)]).startswith("#") for name in
+                      [f["name"] for f in formulas] + [lk["name"] for lk in lookups] if header.index(name) < len(r))]
     if broken:
         raise RuntimeError(f"formula errors in tab {tab} (locale {locale}?) for item ids {broken}")
     return summary
@@ -112,6 +136,20 @@ def _formula(column: dict, header: list[str], row: int, sep: str = ",") -> str:
     return f'=IFS({sep.join(parts)}{sep}TRUE{sep}"")'
 
 
+def _lookup(column: dict, header: list[str], row: int, sep: str = ",") -> str:
+    """Note of the first notes-tab row whose `match` (case-insensitive regex) hits contact + description_clean.
+    Not a contact VLOOKUP: Yuki books e.g. Google Ads under the "Linkedin Ireland" contact."""
+    notes = _quoted(column["tab"])
+    text = f'{_letter(header.index("contact"))}{row}&" "&{_letter(header.index("description_clean"))}{row}'
+    hits = f'ARRAYFORMULA(({notes}!A2:A<>"")*REGEXMATCH({text}{sep}"(?i)"&{notes}!A2:A))'
+    return f'=IFERROR(INDEX({notes}!B2:B{sep}MATCH(1{sep}{hits}{sep}0)){sep}"")'
+
+
+def _freeze(sheet_id: int) -> dict:
+    return {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                                      "fields": "gridProperties.frozenRowCount"}}
+
+
 def _letter(index: int) -> str:
     out, index = "", index + 1
     while index:
@@ -120,17 +158,16 @@ def _letter(index: int) -> str:
     return out
 
 
-def _layout(sheet_id: int, header: list[str], last_row: int) -> list[dict]:
+def _layout(sheet_id: int, header: list[str], last_row: int, lookups: list[str] = ()) -> list[dict]:
     """New tab: frozen header, EUR amounts as 0.00, fixed widths, basic filter sorted for triage."""
-    requests = [{"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
-                                           "fields": "gridProperties.frozenRowCount"}}]
+    requests = [_freeze(sheet_id)]
     for name in ("amount", "original_amount"):
         i = header.index(name)
         requests.append({"repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": i, "endColumnIndex": i + 1},
             "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}}},
             "fields": "userEnteredFormat.numberFormat"}})
-    for name, px in WIDTHS.items():
+    for name, px in [*WIDTHS.items(), *((n, LOOKUP_WIDTH) for n in lookups)]:
         if name in header:
             i = header.index(name)
             requests.append({"updateDimensionProperties": {

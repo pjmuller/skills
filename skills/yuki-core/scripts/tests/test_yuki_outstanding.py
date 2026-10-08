@@ -70,4 +70,4 @@ def test_quarters_and_csv():
     assert last_closed_quarter(date(2026, 10, 6)) == "2026-Q3"
     assert last_closed_quarter(date(2027, 2, 1)) == "2026-Q4"
     csv = to_csv(select(parse_items(response(item())), "2026-Q3"))
-    assert csv.splitlines()[1].startswith("2026-08-01,Acme,-29.00,-29.00,Card,")
+    assert csv.splitlines()[1].startswith("2026-08-01,Acme,-29.00,Acme,-29.00,Card,")

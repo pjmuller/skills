@@ -13,11 +13,10 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from html import unescape
 
-COLUMNS = [
-    "date", "contact", "amount", "original_amount", "type",
-    "foreign_currency", "foreign_amount", "exchange_rate", "description_clean",
-    "vat_number", "coc_number", "country", "city", "address", "due_date", "reference",
-    "description_raw", "item_id", "document_id", "contact_id",
+COLUMNS = [  # what people read first, then the rest
+    "date", "contact", "amount", "description_clean", "original_amount", "type",
+    "foreign_currency", "foreign_amount", "exchange_rate", "vat_number", "coc_number", "country",
+    "city", "address", "due_date", "reference", "description_raw", "item_id", "document_id", "contact_id",
 ]
 NUMERIC = {"amount", "original_amount", "foreign_amount", "exchange_rate"}
 

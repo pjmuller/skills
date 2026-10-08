@@ -8,7 +8,8 @@
     "formula_columns": [
       {"name": "Likely resp", "rules": [{"label": "Alice", "pattern": "(?i)aws|github"}, {"label": "Bob", "pattern": "(?i)figma"}]}
     ],
-    "manual_columns": ["Resp", "Status", "Comment"]
+    "manual_columns": ["Resp", "Status", "Comment"],
+    "lookup_columns": [{"name": "How to find", "tab": "Vendor notes"}]
   },
   "gws": {
     "script": "../google-workspace-core/scripts/gws.py",

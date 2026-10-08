@@ -47,15 +47,16 @@ class FakeGws:
             self.tabs[args[1]] = []
             return {"replies": [{"addSheet": {"properties": {"sheetId": 99}}}]}
         if cmd == "sheet-write":
-            tab, start = args[1].split("!A")
-            values, start = self.tabs[tab.strip("'")], int(start)
+            tab, cell = args[1].split("!")
+            col, start = ord(cell[0]) - 65, int(cell[1:])
+            values = self.tabs[tab.strip("'")]
             if "--raw" in args:
-                assert len(values) == start - 1
+                assert len(values) == start - 1 and col == 0
                 values.extend([["" if c is None else str(c) for c in r] for r in json.loads(args[-1])])
             else:
                 self.user_entered.append(json.loads(args[-1]))
                 for n, cells in enumerate(json.loads(args[-1])):
-                    values[start - 1 + n][:len(cells)] = cells
+                    values[start - 1 + n][col:col + len(cells)] = cells
             return {}
         if cmd == "sheet-batch":
             self.batches.append(json.load(open(args[-1]))["requests"])
@@ -93,12 +94,12 @@ def test_formula_column_and_existing_filter_grows():
     gws = FakeGws({"2026-Q3 test": [header, sheet_row(row("x"), 3)]}, filters={"2026-Q3 test": old})
     summary = push(gws, "sid", MANUAL, "2026-Q3", [row("x"), row("y")], formulas=rules, tab="2026-Q3 test")
     assert summary["appended"] == 1
-    # contact is column E, description_clean column L once the formula column leads (as in PJ's PB tab)
-    assert gws.user_entered == [[['=IFS(REGEXMATCH(E3&" "&L3,"(?i)kbc|""q"""),"PJ",REGEXMATCH(E3&" "&L3,"(?i)figma"),"Will",TRUE,"")']]]
+    # contact is column E, description_clean column G once the formula column leads (as in PJ's PB tab)
+    assert gws.user_entered == [[['=IFS(REGEXMATCH(E3&" "&G3,"(?i)kbc|""q"""),"PJ",REGEXMATCH(E3&" "&G3,"(?i)figma"),"Will",TRUE,"")']]]
     grown = gws.batches[0][0]["setBasicFilter"]["filter"]
     nl = FakeGws({"2026-Q3": [header]}, locale="nl_NL")  # comma-decimal locales parse ";" separators
     push(nl, "sid", MANUAL, "2026-Q3", [row("x")], formulas=rules)
-    assert nl.user_entered[0][0][0].startswith('=IFS(REGEXMATCH(E2&" "&L2;"(?i)kbc|""q""");"PJ";')
+    assert nl.user_entered[0][0][0].startswith('=IFS(REGEXMATCH(E2&" "&G2;"(?i)kbc|""q""");"PJ";')
     assert grown["range"]["endRowIndex"] == 3 and grown["sortSpecs"] == old["sortSpecs"] and "criteria" not in grown
 
 
@@ -130,3 +131,18 @@ def test_legacy_amount_matches_on_unformatted_value():
     tab = gws.tabs["2026-Q3"]
     assert summary["seeded"] == 1
     assert tab[1][:2] == ["Will", "True"] and tab[2][:2] == ["", ""]
+
+
+def test_lookup_column_creates_notes_tab_and_vlookup():
+    lookups = [{"name": "How to find", "tab": "Vendor notes"}]
+    gws = FakeGws({}, locale="nl_NL")
+    push(gws, "sid", MANUAL, "2026-Q3", [row("x")], lookups=lookups)
+    header = gws.tabs["2026-Q3"][0]
+    assert header[2:7] == ["date", "contact", "amount", "description_clean", "How to find"]
+    assert gws.tabs["Vendor notes"] == [["match", "How to find", "Owner"]]
+    notes = "'Vendor notes'"
+    assert gws.user_entered == [[[f'=IFERROR(INDEX({notes}!B2:B;MATCH(1;ARRAYFORMULA(({notes}!A2:A<>"")*'
+                                  f'REGEXMATCH(D2&" "&F2;"(?i)"&{notes}!A2:A));0));"")']]]
+    widths = {r["updateDimensionProperties"]["range"]["startIndex"]: r["updateDimensionProperties"]["properties"]["pixelSize"]
+              for r in gws.batches[0] if "updateDimensionProperties" in r}
+    assert widths[header.index("How to find")] == 250
