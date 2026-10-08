@@ -21,6 +21,9 @@ after the user decides.
 
 - Thresholds and the suggestion list sit at the bottom of `scripts/disk_audit.sh`; add new
   offenders there, not in ad-hoc commands.
+- uv cache "in use" FAILED: a long-running `uv run`/`uvx` holds the lock. If those processes
+  run from a project `.venv` (`pgrep -fl uv`, check child python path), `uv cache clean --force`
+  is safe (macOS venvs are clones); an ephemeral `uvx`/`--with` env lives in the cache, so stop it first.
 - Colima: the audit's suggested prune ends with `colima ssh -- sudo fstrim -av`, which returns
   freed sparse-disk blocks to macOS (Virtualization.Framework backend). Recreate the VM only if
   trim fails, and only after backing up volumes.

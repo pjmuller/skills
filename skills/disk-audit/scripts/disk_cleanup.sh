@@ -18,8 +18,8 @@ fi
 
 step() { # <label> <path-to-measure> <command...>
   local label=$1 path=$2; shift 2
-  local before; before=$(size "$path")
-  "$@" >/dev/null 2>&1
+  local before out; before=$(size "$path")
+  out=$("$@" 2>&1) || printf '  %-28s FAILED: %s\n' "$label" "$(printf '%s' "$out" | grep -v '^\s*$' | tail -1)"
   printf '  %-28s %6s -> %s\n' "$label" "$before" "$(size "$path")"
 }
 
