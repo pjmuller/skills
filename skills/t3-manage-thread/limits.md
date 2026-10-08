@@ -17,8 +17,9 @@ Glossary:
   Codex `pro` does not distinguish
   a 5x from a 20x allowance; `unknown` means no label was available.
 - Percentages are relative to each account's own allowance. A 1x account at
-  20% and a 20x account at 20% do not have equal quota left. Plan labels are
-  advisory, and a fresh reading does not reserve capacity for running jobs.
+  20% and a 20x account at 20% do not have equal quota left; routing multiplies
+  headroom by the multiplier the label states (`max_20x` → 20, none → 1). Plan
+  labels are advisory, and a fresh reading does not reserve capacity for running jobs.
 
 Source per enabled T3 provider instance, so each row is the account T3 would run:
 - Claude on macOS: Keychain item `Claude Code-credentials`, suffixed

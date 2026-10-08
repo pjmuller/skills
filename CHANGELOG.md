@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.4.6 (2026-10-08)
+
+- t3-manage-thread: automatic profile routing is plan-aware. The headroom-per-hour score is multiplied by the multiplier the login label states (`max_20x` → 20, `max_5x` → 5, no multiplier → 1), and session tightness is measured in the same plan units relative to the largest verified plan (a 5x beside a 20x is tight from 60 % used; a 1x beside a 20x is overflow only). Unlabelled providers (Codex `pro`/`prolite`) keep the unweighted ranking; exclusion, unknown/stale handling, model-only caps and explicit `--profile` are unchanged. Routing output shows `%/h × Nx = score`.
+
 - agents-md: verify rule now front-loads the proof: before non-trivial work the agent designs how it will verify end to end without the human (seed data, demo UI, device, scheduled check), builds that tooling first, flags only when it is a chunk of work, and treats "can you check…" as a defect.
 
 ## v0.4.5 (2026-10-08)

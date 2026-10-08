@@ -90,14 +90,21 @@ also the override when every account is exhausted.
   `<Model> only` cap for the requested family.
 - **Unknown** (unreachable, stale, missing numbers): ranked after every verified
   account, picked only when nothing is verified.
-- **Score** (PJ, 2026-09-27): the tightest relevant weekly-class window's
-  **headroom per hour until its reset** (`headroom% / max(hours, 1)`; an
-  untouched window counts as 100 % over its full length). Highest wins. This is
-  what a human reads off the reset times: the first weekly cap to expire gets
-  priority, growing continuously as the reset nears (36 h out already counts,
-  the last hour no longer adds). Quota left at a reset is lost; the other
-  account's is not. 5 h session windows never enter the score — a session
-  ≥ 90 % used only ranks the account after the ones with session room.
+- **Score** (PJ, 2026-09-27; plan-weighted 2026-10-08): the tightest relevant
+  weekly-class window's **headroom per hour until its reset** (`headroom% /
+  max(hours, 1)`; an untouched window counts as 100 % over its full length),
+  **times the plan multiplier** stated in the label (`max_20x` → 20, `max_5x` → 5;
+  a label without one — Claude `pro`, Codex `pro`/`prolite`, `unknown` — → 1, so
+  such accounts stay unweighted among themselves). Highest wins. This is what a
+  human reads off the reset times and plan sizes: the first weekly cap to expire
+  gets priority, growing continuously as the reset nears, but 25 % left on a 5x
+  is a quarter of 25 % left on a 20x.
+- **Session**: 5 h windows never enter the score, but a session that is tight
+  ranks after the ones with room. Tight = `multiplier × session headroom %` below
+  10 % of the largest verified plan's session (20x beside 20x: ≥ 90 % used, the
+  old rule; 5x beside 20x: ≥ 60 % used; 1x beside 20x: always, i.e. overflow
+  only — the routing output says so). Excluded or unknown accounts do not set
+  the bar.
 - **Ties** keep the inherited account (on a driver switch: its sibling, same
   display name minus the driver word), then instance id.
 - Paid overage is never capacity. Every automatic route prints its reasoning on
@@ -108,11 +115,11 @@ near-simultaneous spawns are not spread across equal accounts (the next read,
 ≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
 
 For a huge or batched job, check `t3-spawn-thread --dry-run`, `t3-limits`, and
-the active fleet before launch. Percentages are relative to each account's own
-allowance; plan labels are advisory (Claude's login tier can be stale, and Codex
-`pro` does not distinguish 5x/20x). Do not stack several huge jobs on a
-1x, 5x, or unknown account solely because its window has room. Stage them
-sequentially and recheck actual consumption. Explicit `--profile` still wins.
+the active fleet before launch. Plan weights come from the login label, which
+can lag a billing change (Claude) or state no multiplier (Codex `pro`/`prolite`):
+an unweighted or stale-labelled account is ranked by percentage alone, so stage
+huge jobs on it one at a time and recheck actual consumption. Explicit
+`--profile` still wins.
 
 Profile names come from T3's native registry on every call (exact id, else a
 unique case-insensitive id/display-name match narrowed by `--model`'s driver),
