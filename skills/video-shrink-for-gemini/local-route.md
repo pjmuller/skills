@@ -21,6 +21,13 @@ Measured against AssemblyAI on three 24–92 min English podcasts (WER 2.5–6.7
   and manual 120 s chunking (long files fail silently). Revisit if sharing Handy's GGUF models matters;
   parakeet-mlx cannot read them. Qwen3-ASR, Granite and Canary(-Qwen) give no usable word timestamps.
 
+Install on another machine: paste into your coding agent:
+
+> Install local speech-to-text for the video-shrink-for-gemini skill on this computer. Apple Silicon: `uv tool
+> install mlx-whisper` (and `parakeet-mlx` if you need word-timestamp clip cutting); models download to the
+> Hugging Face cache on first run. Other OS: pick the closest equivalent runner for whisper-large-v3-turbo.
+> Verify with `scripts/install --check` and a 30 s test file through `transcribe-local`.
+
 ## Measured (Apple M5 / 32 GB, 2026-09-18)
 
 Dutch two-speaker meeting, reference = vendor transcript, so figures are **disagreement, not

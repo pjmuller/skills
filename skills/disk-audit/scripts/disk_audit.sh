@@ -176,7 +176,7 @@ if [ -d "$HOME_DIR/Library/pnpm/store" ]; then
   done
 fi
 suggest "$(bytes "$HOME_DIR/.cache/huggingface")" 1 \
-  "rm -rf ~/.cache/huggingface" "downloaded HF models — re-downloaded on demand"
+  "uvx --from huggingface_hub hf cache ls   # then: hf cache rm -y model/<id>" "Operator judgment: unused HF models (rm -rf of a model dir misses shared blobs)"
 suggest "$(bytes "$HOME_DIR/.cache/puppeteer")" 0.5 \
   "rm -rf ~/.cache/puppeteer" "puppeteer browsers"
 suggest "$(bytes "$HOME_DIR/.codex/logs_2.sqlite")" 1 \
