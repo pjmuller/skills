@@ -96,7 +96,8 @@ def main() -> None:
     rows = fetch(config, args.quarter)
     summary = sheet.push(sheet.gws_runner(script, gws_config), target["spreadsheet_id"],
                          target["manual_columns"], args.quarter, rows, dry_run=args.dry_run,
-                         formulas=target.get("formula_columns"), tab=args.tab)
+                         formulas=target.get("formula_columns"), tab=args.tab,
+                         lookups=target.get("lookup_columns"))
     print(json.dumps(summary, indent=1, ensure_ascii=False))
 
 

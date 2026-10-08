@@ -32,7 +32,7 @@ Y discover                                           # domains + administrations
 
 Template: [templates/yuki.example.json](templates/yuki.example.json). Keys: `company_label`,
 `domain_id`, `administration_id` (from `discover`), `api_key_env` (env var holding the key, never
-the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?}` or `null` (CSV only), `gws` =
+the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?, lookup_columns?}` or `null` (CSV only), `gws` =
 `{script, config}` (google-workspace-core `gws.py` + a Sheets-capable `workspace.json`; paths absolute,
 `~`, or relative to yuki.json) or `null`; `--gws` / `--gws-config` override.
 
@@ -45,6 +45,14 @@ the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?}` or `nul
   `=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, …, TRUE, "")` per row (a "who
   probably owns this" hint). Written USER_ENTERED with the sheet locale's argument separator (`;` for
   nl_NL and other comma-decimal locales); never seeded; overwrite a cell by hand freely.
+- **Vendor notes** (optional `lookup_columns: [{name, tab}]`, e.g. `How to find` / `Vendor notes`):
+  a human-kept tab (`match, How to find, Owner`, created if missing) holds one note per vendor that
+  survives quarters. Each quarter row shows the note of the first notes row whose `match`
+  (case-insensitive regex, e.g. `google ads`) hits contact + description_clean; order specific
+  before broad (Yuki books Google Ads under the "Linkedin Ireland" contact, so not a contact lookup).
+  Keep notes generic ("account > avatar > billing"): billing UIs change every quarter.
+- **Column order**: formula columns, manual columns, then `date, contact, amount, description_clean`,
+  lookup columns, the rest (raw/technical last).
 - **Append-only.** The tab is created on first push: header, row 1 frozen, amounts as `0.00`, widths
   for Resp/contact/description_clean, a basic filter sorted by description_clean then date (newest
   first). Later pushes require the exact header, append only unseen `item_id`s (Yuki `Item/@ID`),
@@ -55,6 +63,10 @@ the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?}` or `nul
 - **Fails closed**: malformed amounts or dates, an unexpected response shape, missing or duplicate
   item ids, a header mismatch, or a read-back that does not show every new id exactly once.
 - `foreign_amount`/`exchange_rate` are parsed from the Belgian-format bank text (`-1.090,21`).
+
+## Out of scope
+
+Per-person filter views, marking rows done from Yuki, uploading invoices to Yuki (a 2-minute manual batch).
 
 ## Yuki API gotchas
 
