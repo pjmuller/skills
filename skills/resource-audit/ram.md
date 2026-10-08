@@ -37,3 +37,11 @@ and their logs. A watchdog may already have killed the original culprit. Read it
 implementation before invoking it: a diagnostic-looking script may kill processes
 by default. Reuse a documented dry-run where available; keep machine-specific
 thresholds, protected ports, and installation paths in local operator docs.
+
+## T3 Code renderer swarm
+
+Every T3 browser-preview tab (any thread, hidden or not) stays mounted as its own
+`T3 Code Helper (Renderer)`; agents have no `preview_close`, so they pile up (85 on
+2026-10-08). The main UI renderer started with the app (same etime as its parent).
+Killing a preview renderer does **not** close its tab: T3 reloads most of them at once,
+fresh and larger. Kill only a single huge one; otherwise close tabs in the T3 UI.
