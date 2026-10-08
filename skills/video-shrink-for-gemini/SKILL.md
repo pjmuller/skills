@@ -7,11 +7,12 @@ description: Prepare recordings and obtain Markdown transcripts or visual narrat
 
 Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a copy/paste prompt for the
 user), built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source.
-Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `download-loom`, `transcribe-local`,
-`transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
+Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `download-loom`,
+`transcribe-gemini`, `transcribe-local`, `transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
 
-Route: native `agy` (Gemini) when it works → continuous audiovisual narrative. No Gemini, or
-small on-screen text must be exact → [No Gemini available](#no-gemini-available).
+Route: `transcribe-gemini` (Gemini API) → continuous audiovisual narrative; native `agy` only
+without an API key ([agy-route.md](agy-route.md)). No Gemini, or small on-screen text must be
+exact → [No Gemini available](#no-gemini-available).
 
 ## Fathom input
 
@@ -47,9 +48,9 @@ and skip ranges from context (`AGENTS.md`, project docs); ask one question round
 
 ## Shrink
 
-`shrink-video --preset normal FILE` (presets in the script; keep the original). Hard external
-limit: native `agy` rejects attachments over **50 MiB (52,428,800 bytes)**, separate from Gemini
-API limits. Over it: add `--max-bytes 48M` (splits into overlapping parts + `<name>.chunks.md`);
+`shrink-video --preset normal FILE` (presets in the script; keep the original). API tokens depend
+on duration, not bytes: shrinking only speeds the upload. Native `agy` rejects attachments over
+**50 MiB (52,428,800 bytes)**; over it: add `--max-bytes 48M` (splits into overlapping parts + `<name>.chunks.md`);
 preset choice and stitching part transcripts: [compression.md](compression.md).
 Never use `extreme` when small screen text matters; rapid actions may need source frames.
 
@@ -65,41 +66,27 @@ Fill [prompt-template.md](prompt-template.md) (`MODE`, ffprobe durations, situat
 speakers, skips, vocabulary, one-line intro per context file; keep applicable rule blocks), then
 `build-prompt --header header.md --out session.gemini-prompt.md CONTEXT_FILE...` appends context
 files verbatim. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
-API route: `GEMINI_API_KEY` from your environment; check current Gemini video limits first.
 
 ## Execute and verify
 
-Verified: native `agy` 1.2.5, Gemini 3.8 Flash High, paid plan (2026-09-18); a 42-minute 720p
-meeting took ~150 s.
+`transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` writes
+`<name>.transcript.md` + `.usage.json` (tokens, USD at list price). Billing follows the repository
+environment: `GEMINI_API_KEY` (Developer API, File API above 20 MB, uploads deleted after the call)
+else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). Neither set → [agy-route.md](agy-route.md).
+`--thinking medium` (default) kept every visual step at ~$0.02 per 2 minutes; `high` doubles cost
+for no speech gain; `low` dropped visual steps. Known screen-share ranges (`--ranges`, JSON
+`{"ranges": [{"start": s, "end": s}]}`) send frames only there and audio throughout.
 
-Cost (2026-10-08): agy quota draws at API-price ratios plus ~12k tokens of agent prompt per call;
-on Google AI Plus a 2-minute clip took ~4.9% of the weekly Gemini pool (`agy -p /usage
---output-format json`), the same clip cost $0.03–0.06 via the API: the plan is roughly API parity, not a subsidy.
-
-1. `agy models` checks native auth (separate from T3 login) and lists model IDs; never silently
-   substitute a model or change billing.
-2. Start `agy --model gemini-3.8-flash-high --effort high` in a folder holding only the video
-   (it is an agent: given neighbouring transcripts it read those instead of watching, 2026-10-08).
-3. Attach the **file**, not its path as text: copy the video file to the clipboard, Ctrl+V. Before
-   submitting, confirm the indicator shows `video/mp4` and nonzero bytes (after submit it may say
-   "image(s)" / 0 B). Headless: `osascript -e 'set the clipboard to (POSIX file "…")'`, `agy` in
-   `tmux`, `tmux send-keys C-v`, confirm `Clipboard file URL read … video/mp4` in the newest
-   `~/.gemini/antigravity-cli/log/cli-*.log`, then `tmux load-buffer` + `paste-buffer -p` the
-   prompt. Sandboxed `osascript` can fail silently (empty `clipboard info`): run it unsandboxed.
-   Headless stream-json takes text blocks only; do not invent video attachment JSON
-   ([media-paste docs](https://antigravity.google/docs/cli/prompting/)).
-4. Send the brief with an absolute `<name>.transcript.md` path; require direct media perception
-   (not logs or source code); approve that file write.
-5. Read the file; check speech, visual changes, timestamps and coverage against the recording;
-   report gaps; exit the CLI. A `media_summary_generation` 503 is harmless; a main-run 429 blocks.
+Read the file; check speech, visual changes, timestamps and coverage against the recording;
+report gaps.
 
 Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
 screen names on a 29-minute 720p share (2026-09-24). Compare 3–4 source frames first; if they
 disagree, use [video-frames-for-vision](../video-frames-for-vision/SKILL.md) as the source and the
 Gemini draft as hypotheses. `gemini-3.1-pro-high` did not read small opaque IDs better.
 
-T3 0.0.40 / ACP 1.1.1 has no media tool, so T3 workers cannot watch video; an orchestrator runs
-native `agy` itself. If a future runtime supports media: `t3-spawn-thread --model gemini` with a
+T3 0.0.40 / ACP 1.1.1 has no media tool, so T3 workers cannot watch video; they run
+`transcribe-gemini` (or an orchestrator runs native `agy`). If a future runtime supports media: `t3-spawn-thread --model gemini` with a
 `🏓` title and absolute paths; verify the file before settling; never delegate recursively. All
 routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
 Model comparisons: fresh conversations, identical media, held-out reference evidence.
@@ -108,7 +95,7 @@ Follow-up prompts / T3 threads from the verified transcript: [recording-followup
 
 ## No Gemini available
 
-Seen blockers: `agy` weekly quota 429, video-summary 503, no Antigravity (Windows + Codex,
+Seen blockers: no API key and `agy` weekly quota 429, video-summary 503, no Antigravity (Windows + Codex,
 Claude Code on a subscription). Frames: `select-frames` from
 [video-frames-for-vision](../video-frames-for-vision/SKILL.md). Speech: vendor transcript
 (Leexi/Fathom), else `transcribe-local`. Second ASR opinion when names/products/decisions matter

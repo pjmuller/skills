@@ -1,0 +1,158 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["google-genai>=1.30"]
+# ///
+"""Transcribe/narrate one recording with the Gemini API: plain model call, no agent, no clipboard.
+
+Backend follows the environment, so each repository's own key and billing apply:
+  GEMINI_API_KEY set           Gemini Developer API; files over 20 MB go through the File API.
+  else GOOGLE_CLOUD_PROJECT    Vertex AI (GOOGLE_CLOUD_LOCATION, default global; regional is +10%)
+                               with GOOGLE_APPLICATION_CREDENTIALS or ADC; inline upload.
+
+--ranges RANGES.json ({"ranges": [{"start": s, "end": s}, ...]}, e.g. from detect-screenshare) sends
+the full audio but frames only inside those ranges; the rest of the recording costs audio tokens only.
+
+Writes OUT (the model's markdown) and OUT with .usage.json (tokens per modality, latency, USD at list).
+Measured 2026-10-08, 2-min 480p clip, 11.2k input tokens (video 66/frame at default resolution, audio
+25/s): thinking low $0.016/20 s (drops visual steps), medium $0.023/34 s, high $0.03-0.06/95 s.
+--ranges with 65 of 120 s shared: video tokens 7.9k -> 4.3k, speech unchanged.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from google import genai
+from google.genai import types
+
+INLINE_MAX = 20 * 1024 * 1024
+UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
+# USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
+# 3.7/3.8 Flash list price doubles on 2027-01-01.
+PRICES = {"gemini-3.8-flash": (0.75, 3.75), "gemini-3.7-flash": (0.75, 3.75), "gemini-3.1-pro-preview": (2.00, 12.00)}
+
+
+def clock(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+def client_and_backend() -> tuple[genai.Client, str]:
+    if os.environ.get("GEMINI_API_KEY"):
+        return genai.Client(api_key=os.environ["GEMINI_API_KEY"]), "developer-api"
+    if os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+        return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location), f"vertex/{location}"
+    sys.exit("set GEMINI_API_KEY (Developer API) or GOOGLE_CLOUD_PROJECT + credentials (Vertex)")
+
+
+def media_part(client: genai.Client, backend: str, path: Path, mime: str) -> types.Part:
+    # Developer API: File API above 20 MB. Vertex: inline (38 MB accepted 2026-10-08); its own limit errors.
+    if backend != "developer-api" or path.stat().st_size <= INLINE_MAX:
+        return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)
+    uploaded = client.files.upload(file=path, config={"mime_type": mime})
+    UPLOADED.append(uploaded.name)
+    while uploaded.state and uploaded.state.name == "PROCESSING":
+        time.sleep(3)
+        uploaded = client.files.get(name=uploaded.name)
+    if uploaded.state and uploaded.state.name == "FAILED":
+        sys.exit(f"File API processing failed for {path}")
+    return types.Part.from_uri(file_uri=uploaded.uri, mime_type=mime)
+
+
+def ffmpeg(*args: str) -> None:
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
+
+
+def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[dict], tmp: Path) -> list:
+    """Full audio track + the silent video clipped to each range, each clip labelled with its absolute time."""
+    audio, silent = tmp / "audio.m4a", tmp / "silent.mp4"
+    ffmpeg("-i", str(video), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "48k", str(audio))
+    ffmpeg("-i", str(video), "-an", "-c:v", "copy", str(silent))
+    parts = ["Full audio of the recording follows. Its timeline is the recording timeline.",
+             media_part(client, backend, audio, "audio/mp4"),
+             "Video was sent only for these ranges (screen sharing). Outside them there is audio only: "
+             "do not describe visuals there."]
+    silent_part = media_part(client, backend, silent, "video/mp4")
+    for r in ranges:
+        parts.append(f"Video clip {clock(r['start'])}-{clock(r['end'])} (recording timeline; if the clip's own "
+                     f"timestamps start at 00:00:00, add {clock(r['start'])}).")
+        clip = types.Part(file_data=silent_part.file_data, inline_data=silent_part.inline_data)
+        clip.video_metadata = types.VideoMetadata(start_offset=f"{r['start']:.1f}s", end_offset=f"{r['end']:.1f}s")
+        parts.append(clip)
+    return parts
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("video", type=Path, help="<name>.gemini.mp4 from shrink-video (any video/audio ffmpeg reads)")
+    parser.add_argument("--prompt", type=Path, required=True, help="session.gemini-prompt.md from build-prompt")
+    parser.add_argument("--out", type=Path, help="default <video stem>.transcript.md beside the video")
+    parser.add_argument("--model", default="gemini-3.8-flash")
+    parser.add_argument("--thinking", default="medium", choices=["minimal", "low", "medium", "high"])
+    parser.add_argument("--media-resolution", choices=["low", "medium", "high"],
+                        help="default: model default (66-70 tokens/frame); high (~280) for small screen text")
+    parser.add_argument("--ranges", type=Path, help="JSON with ranges [{start,end}] that get frames; audio covers all")
+    args = parser.parse_args()
+
+    out = args.out or args.video.with_name(args.video.name.split(".")[0] + ".transcript.md")
+    client, backend = client_and_backend()
+    prompt = args.prompt.read_text(encoding="utf-8")
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level=args.thinking),
+        # The shared prompt template also serves agent runs that write files; here the reply is the file.
+        system_instruction="Reply with the complete markdown document itself. You have no file access: ignore "
+                           "instructions to write files or to return only paths.")
+    if args.media_resolution:
+        config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        if args.ranges:
+            ranges = json.loads(args.ranges.read_text())["ranges"]
+            parts = ranged_parts(client, backend, args.video, ranges, Path(tmp))
+        else:
+            parts = [media_part(client, backend, args.video, "video/mp4")]
+        started = time.time()
+        try:
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(model=args.model, contents=[*parts, prompt], config=config)
+                    break
+                except genai.errors.ServerError as error:  # 5xx: retry; 4xx (quota, auth, bad request) fails fast
+                    if attempt == 2:
+                        raise
+                    print(f"retrying after {error.code}", file=sys.stderr)
+                    time.sleep(10 * (attempt + 1))
+        finally:
+            for name in UPLOADED:
+                client.files.delete(name=name)
+    elapsed = round(time.time() - started, 1)
+
+    text = response.text or ""
+    if not text.strip():
+        sys.exit(f"empty response (finish reason {response.candidates[0].finish_reason if response.candidates else '?'})")
+    out.write_text(text, encoding="utf-8")
+    usage = response.usage_metadata
+    output_tokens = (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
+    price = PRICES.get(args.model)
+    report = {
+        "model": response.model_version or args.model, "backend": backend, "elapsed_s": elapsed,
+        "input_tokens": usage.prompt_token_count,
+        "input_by_modality": {d.modality.name: d.token_count for d in usage.prompt_tokens_details or []},
+        "output_tokens": usage.candidates_token_count, "thinking_tokens": usage.thoughts_token_count,
+        "usd_at_list": round(usage.prompt_token_count * price[0] / 1e6 + output_tokens * price[1] / 1e6, 4) if price else None,
+    }
+    out.with_suffix(".usage.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"{out}: {len(text.split())} words · {usage.prompt_token_count} in / {output_tokens} out · "
+          f"{elapsed}s · ${report['usd_at_list']} ({backend})")
+
+
+if __name__ == "__main__":
+    main()
