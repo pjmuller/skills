@@ -1,12 +1,12 @@
 ---
 name: recording-followups
-description: Turn a call or meeting transcript (Fathom, Leexi, ClickUp SyncUp, local recording) into a short debrief note plus standalone, self-contained T3 thread prompts, one temp file per prompt, spawnable by path. Use after any recording is transcribed and the user wants "follow-up prompts", "what should we do about this call", or threads to delegate the agreed work.
+description: Turn a call or meeting transcript (Fathom, Loom, Leexi, ClickUp SyncUp, local recording) into a short debrief note plus standalone, self-contained T3 thread prompts, one temp file per prompt, spawnable by path. Use after any recording is transcribed and the user wants "follow-up prompts", "what should we do about this call", or threads to delegate the agreed work.
 ---
 
 # Recording → follow-up prompts
 
 Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md)
-(Fathom/SyncUp/local) or [leexi](../leexi/SKILL.md). This skill owns what happens after the
+(Fathom/Loom/SyncUp/local) or [leexi](../leexi/SKILL.md). This skill owns what happens after the
 transcript is on disk. Project skills (rootcause `fathom-interviews`, redcell's Fathom wrapper) own
 where the note lives and its frontmatter; they link here for the prompt step.
 

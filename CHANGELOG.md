@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- video-shrink-for-gemini: `download-loom` fetches a public Loom share's video, metadata and Loom's own timestamped transcript without login (share-page Apollo cache, GraphQL fallback); `loom.md` documents the merge with Gemini. recording-followups lists Loom as a speech layer.
+
 - agents-md: concise Markdown reports use progressive disclosure, callouts and Mermaid; conclusions stay visible.
 
 - agents-md: simplify colleague handoffs to pre-merged prompts and short installation steps; retain inline repo maps, keep setup mechanics outside the global prompt, and scale optional PR/review flow to regression risk.
