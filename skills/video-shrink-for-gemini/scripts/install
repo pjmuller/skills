@@ -20,10 +20,10 @@ if [[ "${1:-}" == "--check" ]]; then
     echo "ok      $helper"
   done
   # transcribe-gemini key: env (project choice) or the per-machine file; Vertex/agy remain fallbacks.
-  if [[ -n "${GEMINI_API_KEY:-}" ]] || grep -q '^GEMINI_API_KEY=.' "$HOME/.config/transcribe-gemini/env" 2>/dev/null; then
-    echo "ok      Gemini key"
+  if [[ -n "${VIDEO_GEMINI_API_KEY:-}" ]] || grep -q '^VIDEO_GEMINI_API_KEY=.' "$HOME/.config/transcribe-gemini/env" 2>/dev/null; then
+    echo "ok      Gemini video key"
   else
-    echo "warn    no Gemini key: write GEMINI_API_KEY=... to ~/.config/transcribe-gemini/env (chmod 600)"
+    echo "warn    no Gemini video key: write VIDEO_GEMINI_API_KEY=... to ~/.config/transcribe-gemini/env (chmod 600)"
   fi
   exit 0
 fi

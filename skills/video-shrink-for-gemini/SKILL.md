@@ -71,8 +71,8 @@ files verbatim. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identi
 
 `transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` writes
 `<name>.transcript.md` + `.usage.json` (tokens, USD at list price), from any folder. Key: one per
-machine in `~/.config/transcribe-gemini/env` (`GEMINI_API_KEY=...`, chmod 600; never in a repo); a
-project's own `GEMINI_API_KEY` env wins; else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). None →
+machine: `VIDEO_GEMINI_API_KEY` from the env or `~/.config/transcribe-gemini/env` (chmod 600; never
+in a repo); else a project's `GEMINI_API_KEY`; else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). None →
 [agy-route.md](agy-route.md). `scripts/install --check` reports the key.
 `--thinking medium` (default) kept every visual step at ~$0.02 per 2 minutes; `high` doubles cost
 for no speech gain; `low` dropped visual steps.

@@ -5,10 +5,11 @@
 # ///
 """Transcribe/narrate one recording with the Gemini API: plain model call, no agent, no clipboard.
 
-Key/backend, first match wins:
-  GEMINI_API_KEY in the env    Gemini Developer API (a project that wants its own billing sets it);
-                               files over 20 MB go through the File API.
-  ~/.config/transcribe-gemini/env   one key per machine, `GEMINI_API_KEY=...` (chmod 600), same API.
+Key/backend, first match wins (Gemini Developer API; files over 20 MB go through the File API):
+  VIDEO_GEMINI_API_KEY         one key per machine for video work, from the env or from
+                               ~/.config/transcribe-gemini/env (`VIDEO_GEMINI_API_KEY=...`, chmod 600).
+                               Its own name, so it never collides with apps reading GEMINI_API_KEY.
+  GEMINI_API_KEY in the env    a project's generic key.
   else GOOGLE_CLOUD_PROJECT    Vertex AI (GOOGLE_CLOUD_LOCATION, default global; regional is +10%)
                                with GOOGLE_APPLICATION_CREDENTIALS or ADC; inline upload.
 
@@ -51,20 +52,20 @@ def clock(seconds: float) -> str:
 def machine_key() -> str | None:
     if MACHINE_ENV.exists():
         for line in MACHINE_ENV.read_text().splitlines():
-            if line.startswith("GEMINI_API_KEY="):
+            if line.startswith("VIDEO_GEMINI_API_KEY="):
                 return line.split("=", 1)[1].strip().strip("'\"") or None
     return None
 
 
 def client_and_backend() -> tuple[genai.Client, str]:
-    key = os.environ.get("GEMINI_API_KEY") or machine_key()
+    key = os.environ.get("VIDEO_GEMINI_API_KEY") or machine_key() or os.environ.get("GEMINI_API_KEY")
     if key:
         # vertexai=False: GOOGLE_GENAI_USE_VERTEXAI=true in the env would otherwise silently route to Vertex.
         return genai.Client(api_key=key, vertexai=False), "developer-api"
     if os.environ.get("GOOGLE_CLOUD_PROJECT"):
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
         return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location), f"vertex/{location}"
-    sys.exit(f"no Gemini key: write GEMINI_API_KEY=... to {MACHINE_ENV} (chmod 600), or set GEMINI_API_KEY / "
+    sys.exit(f"no Gemini key: write VIDEO_GEMINI_API_KEY=... to {MACHINE_ENV} (chmod 600), or set GEMINI_API_KEY / "
              "GOOGLE_CLOUD_PROJECT + credentials (Vertex)")
 
 
