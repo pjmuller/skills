@@ -21,30 +21,35 @@ Run from the wrapper's repository through `mise exec --` (it loads the API key e
 Y() { mise exec -- uv run --quiet --project .agents/skills/yuki-core .agents/skills/yuki-core/scripts/yuki.py --config .agents/skills/yuki/yuki.json "$@"; }
 Y outstanding --quarter 2026-Q3 --csv /tmp/out.csv   # stdout without --csv
 Y sheet-push --quarter 2026-Q3 --dry-run             # then without --dry-run
+Y sheet-push --quarter 2026-Q3 --tab "2026-Q3 test"  # push into a scratch tab
 Y discover                                           # domains + administrations for a new wrapper
 ```
 
 `--quarter` defaults to the last closed quarter. `sheet-push` prints a JSON summary
-(`appended`, `seeded`, `carryover`, `created`).
+(`appended`, `seeded`, `created`).
 
 ## Wrapper config (`yuki.json`)
 
 Template: [templates/yuki.example.json](templates/yuki.example.json). Keys: `company_label`,
 `domain_id`, `administration_id` (from `discover`), `api_key_env` (env var holding the key, never
-the key), `sheet` = `{spreadsheet_id, manual_columns}` or `null` (CSV only), `gws` =
+the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?}` or `null` (CSV only), `gws` =
 `{script, config}` (google-workspace-core `gws.py` + a Sheets-capable `workspace.json`; paths absolute,
 `~`, or relative to yuki.json) or `null`; `--gws` / `--gws-config` override.
 
 ## Behaviour worth knowing
 
-- **Data = items open today**, not a quarter-end snapshot. A quarter takes rows dated up to its end;
-  older ones get `carryover=yes`. Booked purchase invoices (`Aankoopfactuur`) are dropped (Yuki's
-  screen hides them); payments of both signs stay (refunds are positive).
-- **Append-only.** The tab is created on first push (manual columns + data columns, row 1 frozen, amounts as `0.00`).
-  Later pushes require the exact header, append only unseen `item_id`s (Yuki `Item/@ID`) and never
-  touch existing cells. A row that disappears from Yuki is *not* marked done, and amounts of
-  existing rows can go stale: Yuki stays the truth.
-- **Seeding.** New rows found uniquely in the newest earlier quarter tab (by `item_id`, or for legacy
+- **Data = items open today**, not a quarter-end snapshot. A quarter takes the rows dated inside it;
+  older open items stay in their own quarter tab. Booked purchase invoices (`Aankoopfactuur`) are
+  dropped (Yuki's screen hides them); payments of both signs stay (refunds are positive).
+- **Formula columns** (optional, first in the tab): `{name, rules: [{label, pattern}]}` becomes
+  `=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, …, TRUE, "")` per row (a "who
+  probably owns this" hint). Written USER_ENTERED; never seeded; overwrite a cell by hand freely.
+- **Append-only.** The tab is created on first push: header, row 1 frozen, amounts as `0.00`, widths
+  for Resp/contact/description_clean, a basic filter sorted by description_clean then date (newest
+  first). Later pushes require the exact header, append only unseen `item_id`s (Yuki `Item/@ID`),
+  extend an existing basic filter over the new rows and never touch existing cells. A row that
+  disappears from Yuki is *not* marked done; amounts of existing rows can go stale: Yuki stays the truth.
+- **Seeding.** New rows matching one-to-one a row of the newest earlier quarter tab (by `item_id`, or for legacy
   tabs by date + original_amount + description_raw) get that tab's manual cells copied once.
 - **Fails closed**: malformed amounts or dates, an unexpected response shape, missing or duplicate
   item ids, a header mismatch, or a read-back that does not show every new id exactly once.

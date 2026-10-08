@@ -5,6 +5,9 @@
   "api_key_env": "YUKI_API_KEY",
   "sheet": {
     "spreadsheet_id": "<google-sheet-id>",
+    "formula_columns": [
+      {"name": "Likely resp", "rules": [{"label": "Alice", "pattern": "(?i)aws|github"}, {"label": "Bob", "pattern": "(?i)figma"}]}
+    ],
     "manual_columns": ["Resp", "Status", "Comment"]
   },
   "gws": {

@@ -1,7 +1,7 @@
 """Yuki "Aan te leveren aankoopfacturen" (OutstandingCreditorItems) as clean rows for one quarter.
 
-Yuki returns the items open *today*, not a quarter-end snapshot. A quarter selects rows dated up
-to its end; rows dated before its start are kept with `carryover=yes` so stragglers stay visible.
+Yuki returns the items open *today*, not a quarter-end snapshot. A quarter selects the rows dated
+inside it; older open items stay in their own earlier quarter tab.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from html import unescape
 
 COLUMNS = [
-    "date", "carryover", "contact", "amount", "original_amount", "type",
+    "date", "contact", "amount", "original_amount", "type",
     "foreign_currency", "foreign_amount", "exchange_rate", "description_clean",
     "vat_number", "coc_number", "country", "city", "address", "due_date", "reference",
     "description_raw", "item_id", "document_id", "contact_id",
@@ -49,15 +49,12 @@ def last_closed_quarter(today: date) -> str:
 
 
 def select(items: list[dict], quarter: str) -> list[dict]:
-    """Payments without an invoice, dated up to the quarter end; both signs are kept
+    """Payments without an invoice dated inside the quarter; both signs are kept
     (incoming refunds/settlements legitimately show up positive)."""
-    start, end = quarter_bounds(quarter)
-    rows = []
-    for item in sorted(items, key=lambda i: (i["date"], i["item_id"])):  # Yuki's DateAsc is unstable within a day
-        if item["type"] == INVOICE_TYPE or item["date"] > end.isoformat():
-            continue
-        rows.append({**item, "type": SHORT_TYPES.get(item["type"], item["type"]),
-                     "carryover": "yes" if item["date"] < start.isoformat() else ""})
+    start, end = (d.isoformat() for d in quarter_bounds(quarter))
+    rows = [{**item, "type": SHORT_TYPES.get(item["type"], item["type"])}
+            for item in sorted(items, key=lambda i: (i["date"], i["item_id"]))  # Yuki's DateAsc is unstable within a day
+            if item["type"] != INVOICE_TYPE and start <= item["date"] <= end]
     ids = [row["item_id"] for row in rows]
     if not all(ids):
         raise YukiDataError("an outstanding item has no Item/@ID; refusing to dedupe without it")
