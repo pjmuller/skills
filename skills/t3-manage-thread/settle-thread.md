@@ -24,7 +24,8 @@ not settled, while they run.
 `--self` resolves the calling thread from `CODEX_THREAD_ID` /
 `CLAUDE_CODE_SESSION_ID` and arms a detached worker (`t3_supervise`) bound to
 the current turn; it settles seconds after the turn ends. Same kill semantics,
-so only on the user's explicit request:
+so only on the user's explicit request or an authorized routing policy recorded
+in the brief (see the [canonical completion footer](spawn-thread.md#fire-and-forget---settle-when-done)):
 
 1. Finish all work. No background shells, sub-agents or monitors alive (`--self`
    warns on open tasks): settle kills them, and a later task notification would

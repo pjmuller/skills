@@ -29,9 +29,9 @@ Options:
                                                     detached snooze keeper (the agent keeps running).
                                                     Default: on only when --title starts with 🏓
                                                     or with --settle-when-done.
-  --settle-when-done                                Fire-and-forget: hide the thread while it runs
-                                                    and append a footer that makes the worker run
-                                                    `t3-settle-thread --self` as its last tool call.
+  --settle-when-done                                Conditional self-settle after clean verified delivery;
+                                                    append the canonical completion footer.
+                                                    Hidden by default; --no-hide keeps it visible.
                                                     Not for 🏓 workers (the orchestrator settles those).
   --no-open                                         Do not focus the new T3 thread
   --dry-run                                         Resolve everything, create nothing
@@ -524,13 +524,13 @@ if title_is_roundtrip "$thread_title" && [[ -n "$source_thread_id" ]]; then
 $roundtrip_footer"
 fi
 
-# Fire-and-forget threads settle themselves: the self-settle footer is appended
+# Conditional self-settlement: the completion footer is appended
 # mechanically for the same reason as the ping-back footer (a brief that merely
 # said "settle when done" is not deterministic).
 thread_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 settle_footer=""
 if ((settle_when_done)); then
-  settle_footer="$(printf '\n---\nFire-and-forget thread. MANDATORY final step, overriding any earlier "stop"/"end" instruction in this brief: once the task is complete and no background work (sub-agents, background shells, monitors) is alive, decide whether the user needs to see this thread.\n- Clean outcome (brief fully executed and verified, no unresolved issue needing the user): run `t3-settle-thread --self` as your LAST tool call, then end the turn with a one-line final answer. Corrections and caveats already handled in the requested deliverable count as clean. Do nothing after that call.\n- Anything needing the user (blocked or partial work, material failure, unresolved finding, decision or follow-up): do NOT settle. Run `t3-hide-thread --unhide %s` so the thread surfaces, then end the turn with a terse report of what needs them.' "$thread_id")"
+  settle_footer="$(printf '\n---\nConditional self-settlement completion footer. Explicit keep-open instructions and later user instructions take precedence; this footer grants no additional task authorization.\n- Clean outcome: brief fully executed and verified, requested delivery verified at its destination, no background work (sub-agents, background shells, monitors), and no unresolved issue or user decision. Run `t3-settle-thread --self` as your LAST tool call, then end with a one-line final answer. Routine corrections or caveats resolved within the requested outcome count as clean. Do nothing after that call.\n- Material findings beyond the requested outcome are not clean merely because they were recorded in an artifact. Blocked or partial work, failed verification, incomplete delivery, unresolved findings or user review/dialogue stay open. Continue useful authorized work where possible; at a genuine stopping point, if hidden run `t3-hide-thread --unhide %s` (idempotent), then report what needs the user.' "$thread_id")"
   prompt_text="$prompt_text
 $settle_footer"
 fi

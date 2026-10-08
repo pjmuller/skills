@@ -97,3 +97,79 @@ Local discovery: Windows WSL2; personal setup repo `/home/alex/setup`; two regis
 User: “Update the shared router skill.”
 
 Before update: installed public core revision `fixture-core-a`; separate private wrapper has Harbor routes, Fable default, and cancellation-routing lesson. New public revision `fixture-core-b` changes generic link intake wording. Neither revision supplies operator identities or product routes. Wrapper reference is not inside the installed core directory. After refresh user input: “Investigate these cancellation dates.” + `https://app.clickup.com/t/fixture-h03`.
+
+## 15. Lifecycle decisions
+
+Evaluate dispatch flags and later completion behavior separately. No live tools.
+The synthetic wrapper adopts the core's conditional lifecycle policy, except video
+ingestion uses its established hidden `--settle-when-done` playbook. Each case is independent.
+
+### a. Specific bug, production delivery
+
+User: “Fix duplicate invoice button ISSUE-101, deploy it, and update the ticket.”
+Dispatch: precise reproduction; deployment and ticket writes authorized; repository
+permits the deployment. No lifecycle preference or request to inspect the result.
+End: root cause matched; tests passed; pushed fix deployed and browser-verified.
+Ticket evidence and requested final status verified. No pending work or unexpected findings.
+
+### b. Failed verification
+
+User and dispatch: same bounded task and authorization as a, for ISSUE-102.
+End: candidate fix committed locally; regression test still reproduces duplicate
+invoices. No deployment. Ticket records failure; diagnosis remains.
+
+### c. Deployment approval outstanding
+
+User: “Fix the search regression, ship under repository rules, and finish ISSUE-103.”
+Dispatch: bounded task; repository requires approval if production-to-main contains
+unrelated behavior changes. No lifecycle preference.
+End: fix and tests passed; production comparison found unrelated functional changes.
+Approval unanswered; no deployment or live verification. Ticket records pending delivery.
+
+### d. Material finding beyond scope
+
+User: “Correct the mislabeled retention setting and finish ISSUE-104.”
+Dispatch: label change and normal release authorized; no lifecycle preference.
+End: pushed label fix deployed, verified, recorded in completed ticket. Also found
+one retention option deletes records earlier than displayed. Evidence attached;
+deciding the response lies outside the requested label change.
+
+### e. Research delivery to another owner
+
+User: “Compare Vendor Blue with our product; create a short HTML report and a
+product ticket, attach it, and assign it to Casey.”
+Dispatch: research and specified writes authorized; Casey is recipient; no user review requested.
+End A: sources checked; assigned ticket, report attachment and link reopen correctly;
+no material surprises or questions. End B (alternative): report and ticket exist,
+but attachment failed and no accessible artifact link or alternative delivery exists.
+
+### f. User conversation or inspection
+
+Request A: “Review my last two weeks, coach my schedule, and ask what I want to change.”
+Dispatch: journal access authorized. End: assessment and questions presented; user
+has not answered or agreed a schedule.
+Request B (independent): “Research subscription options for me to inspect before deciding.”
+Dispatch: read-only research and local report authorized. End: sources verified,
+report presented with working link; user has not inspected it or chosen an option.
+
+### g. Explicit keep-open
+
+User: “Fix the export filename, deploy it, update the ticket, and keep the thread open.”
+Dispatch: precise issue; ticket writes and permitted deployment authorized.
+End: pushed fix passes tests, deployed export manually verified, ticket updated;
+no pending work or unexpected findings.
+
+### h. Video ingestion
+
+User: “Ingest this tutorial into the learning library using the usual video workflow.”
+Dispatch: ingestion and library writes authorized; workflow produces verified
+transcript and library entry. No discussion or review requested.
+End: verified transcript on disk; saved entry/source link and transcript reopened
+successfully. No errors, unresolved findings or pending workers.
+
+### i. Round-trip review worker
+
+Parent task: “Implement the billing change and obtain independent review before shipping.”
+Dispatch: this spawn is the review worker with a real parent address; parent owns release.
+End: review finished and findings sent to parent. Parent has not assessed findings
+or confirmed closure; no review activity remains running.

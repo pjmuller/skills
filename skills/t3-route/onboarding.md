@@ -52,6 +52,7 @@ Create or refine a committed sibling skill, outside `t3-route`, with:
 
 - A precise local trigger: explicit command plus the designated dispatch conversation.
 - A link to this core, dispatch identity/location and model/lifecycle defaults.
+  Lifecycle defaults tailor the core's eligibility decision, not authorization or explicit keep-open choices.
 - A small project catalog: roots, ownership and sibling boundaries.
 - Links to the user's own integration wrappers and relevant triage/playbooks.
 
