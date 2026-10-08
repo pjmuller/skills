@@ -34,6 +34,7 @@ def gws_runner(script: Path, config: Path) -> Gws:
 
 
 WIDTHS = {"Resp": 188, "contact": 145, "description_clean": 485}  # px; other columns keep the default
+DOT_DECIMAL = {"en", "ja", "zh", "ko", "th", "he"}  # locales whose formulas separate arguments with ","
 SORT = [("description_clean", "ASCENDING"), ("date", "DESCENDING")]
 
 
@@ -43,8 +44,9 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
     `tab` overrides the target tab name (test pushes); seeding still follows `quarter`."""
     formulas, tab = formulas or [], tab or quarter
     header = [f["name"] for f in formulas] + manual + COLUMNS
-    sheets = gws("api", "GET", f"{SHEETS}/{spreadsheet_id}",
-                 "--param", "fields=sheets(properties(title,sheetId),basicFilter)").get("sheets", [])
+    meta = gws("api", "GET", f"{SHEETS}/{spreadsheet_id}",
+                 "--param", "fields=properties.locale,sheets(properties(title,sheetId),basicFilter)")
+    sheets, locale = meta.get("sheets", []), meta.get("properties", {}).get("locale", "en_US")
     tabs = {t["properties"]["title"]: t["properties"]["sheetId"] for t in sheets}
     existing = _values(gws, spreadsheet_id, tab) if tab in tabs else []
     if existing and existing[0] != header:
@@ -71,7 +73,8 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
         body.insert(0, header)
     gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first - (not existing)}", "--raw", "--values", json.dumps(body))
     if formulas:  # USER_ENTERED only for the formula cells; data stays RAW/typed
-        cells = [[_formula(f, header, n) for f in formulas] for n in range(first, first + len(new))]
+        sep = "," if locale.split("_")[0] in DOT_DECIMAL else ";"  # USER_ENTERED parses in the sheet's locale
+        cells = [[_formula(f, header, n, sep) for f in formulas] for n in range(first, first + len(new))]
         gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first}", "--values", json.dumps(cells))
     last = first + len(new) - 1
     if summary["created"]:
@@ -92,15 +95,21 @@ def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: l
     missing = [r["item_id"] for r in new if ids.count(r["item_id"]) != 1]
     if after[0] != header or len(ids) != len(seen) + len(new) or missing:
         raise RuntimeError(f"read-back mismatch in tab {tab}: {len(ids)} ids, missing/duplicate {missing}")
+    added = {r["item_id"] for r in new}
+    broken = [r[id_col] for r in after[1:] if len(r) > id_col and r[id_col] in added
+              and any(str(c).startswith("#") for c in r[:len(formulas)])]
+    if broken:
+        raise RuntimeError(f"formula errors in tab {tab} (locale {locale}?) for item ids {broken}")
     return summary
 
 
-def _formula(column: dict, header: list[str], row: int) -> str:
-    """=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, ..., TRUE, "")"""
+def _formula(column: dict, header: list[str], row: int, sep: str = ",") -> str:
+    """=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, ..., TRUE, ""); `sep` is the
+    locale's argument separator (";" where the decimal mark is a comma, e.g. nl_NL)."""
     text = f'{_letter(header.index("contact"))}{row}&" "&{_letter(header.index("description_clean"))}{row}'
     quote_ = lambda s: '"' + s.replace('"', '""') + '"'
-    parts = [f"REGEXMATCH({text},{quote_(r['pattern'])}),{quote_(r['label'])}" for r in column["rules"]]
-    return f'=IFS({",".join(parts)},TRUE,"")'
+    parts = [f"REGEXMATCH({text}{sep}{quote_(r['pattern'])}){sep}{quote_(r['label'])}" for r in column["rules"]]
+    return f'=IFS({sep.join(parts)}{sep}TRUE{sep}"")'
 
 
 def _letter(index: int) -> str:

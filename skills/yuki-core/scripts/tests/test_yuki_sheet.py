@@ -26,8 +26,8 @@ def sheet_row(r, width=len(MANUAL)):
 class FakeGws:
     """In-memory spreadsheet speaking the gws CLI subset sheet.push uses."""
 
-    def __init__(self, tabs, unformatted=None, filters=None):
-        self.tabs = tabs
+    def __init__(self, tabs, unformatted=None, filters=None, locale="en_US"):
+        self.tabs, self.locale = tabs, locale
         self.unformatted = unformatted or {}  # tab -> values as UNFORMATTED_VALUE returns them
         self.filters = filters or {}
         self.calls, self.batches, self.user_entered = [], [], []
@@ -39,7 +39,7 @@ class FakeGws:
             if "/values/" in url:
                 tab = unquote(url.rsplit("/", 1)[1]).strip("'")
                 return {"values": self.unformatted.get(tab, self.tabs[tab])}
-            return {"sheets": [{"properties": {"title": t, "sheetId": i}, **({"basicFilter": self.filters[t]} if t in self.filters else {})}
+            return {"properties": {"locale": self.locale}, "sheets": [{"properties": {"title": t, "sheetId": i}, **({"basicFilter": self.filters[t]} if t in self.filters else {})}
                                for i, t in enumerate(self.tabs)]}
         if cmd == "sheet-read":
             return {"values": self.tabs[args[1].strip("'")]}
@@ -96,6 +96,9 @@ def test_formula_column_and_existing_filter_grows():
     # contact is column E, description_clean column L once the formula column leads (as in PJ's PB tab)
     assert gws.user_entered == [[['=IFS(REGEXMATCH(E3&" "&L3,"(?i)kbc|""q"""),"PJ",REGEXMATCH(E3&" "&L3,"(?i)figma"),"Will",TRUE,"")']]]
     grown = gws.batches[0][0]["setBasicFilter"]["filter"]
+    nl = FakeGws({"2026-Q3": [header]}, locale="nl_NL")  # comma-decimal locales parse ";" separators
+    push(nl, "sid", MANUAL, "2026-Q3", [row("x")], formulas=rules)
+    assert nl.user_entered[0][0][0].startswith('=IFS(REGEXMATCH(E2&" "&L2;"(?i)kbc|""q""");"PJ";')
     assert grown["range"]["endRowIndex"] == 3 and grown["sortSpecs"] == old["sortSpecs"] and "criteria" not in grown
 
 

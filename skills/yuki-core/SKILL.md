@@ -43,7 +43,8 @@ the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?}` or `nul
   dropped (Yuki's screen hides them); payments of both signs stay (refunds are positive).
 - **Formula columns** (optional, first in the tab): `{name, rules: [{label, pattern}]}` becomes
   `=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, …, TRUE, "")` per row (a "who
-  probably owns this" hint). Written USER_ENTERED; never seeded; overwrite a cell by hand freely.
+  probably owns this" hint). Written USER_ENTERED with the sheet locale's argument separator (`;` for
+  nl_NL and other comma-decimal locales); never seeded; overwrite a cell by hand freely.
 - **Append-only.** The tab is created on first push: header, row 1 frozen, amounts as `0.00`, widths
   for Resp/contact/description_clean, a basic filter sorted by description_clean then date (newest
   first). Later pushes require the exact header, append only unseen `item_id`s (Yuki `Item/@ID`),
