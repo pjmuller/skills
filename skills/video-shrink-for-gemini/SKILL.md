@@ -72,9 +72,14 @@ API route: `GEMINI_API_KEY` from your environment; check current Gemini video li
 Verified: native `agy` 1.2.5, Gemini 3.8 Flash High, paid plan (2026-09-18); a 42-minute 720p
 meeting took ~150 s.
 
+Cost (2026-10-08): agy quota draws at API-price ratios plus ~12k tokens of agent prompt per call;
+on Google AI Plus a 2-minute clip took ~4.9% of the weekly Gemini pool (`agy -p /usage
+--output-format json`), the same clip cost $0.03–0.06 via the API: the plan is roughly API parity, not a subsidy.
+
 1. `agy models` checks native auth (separate from T3 login) and lists model IDs; never silently
    substitute a model or change billing.
-2. Start `agy --model gemini-3.8-flash-high --effort high` in the task folder.
+2. Start `agy --model gemini-3.8-flash-high --effort high` in a folder holding only the video
+   (it is an agent: given neighbouring transcripts it read those instead of watching, 2026-10-08).
 3. Attach the **file**, not its path as text: copy the video file to the clipboard, Ctrl+V. Before
    submitting, confirm the indicator shows `video/mp4` and nonzero bytes (after submit it may say
    "image(s)" / 0 B). Headless: `osascript -e 'set the clipboard to (POSIX file "…")'`, `agy` in
