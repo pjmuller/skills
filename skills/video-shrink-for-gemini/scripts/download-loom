@@ -1,0 +1,135 @@
+#!/usr/bin/env -S uv run python
+"""Download a public Loom share: video, metadata and Loom's own timestamped transcript (cookie-free)."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"}
+STATE_MARKER = "window.__APOLLO_STATE__ ="
+# Plain (non-persisted) query; Loom's web client sends the same operation name. Works logged out for public shares.
+TRANSCRIPT_QUERY = ("query FetchVideoTranscript($videoId: ID!, $password: String) { fetchVideoTranscript(videoId: $videoId, "
+                    "password: $password) { ... on VideoTranscriptDetails { source_url transcription_status language } "
+                    "... on GenericError { message } } }")
+
+
+def video_id(url):
+    parsed = urlparse(url)
+    match = re.fullmatch(r"/(?:share|embed)/([0-9a-f]{32})/?", parsed.path)
+    if parsed.scheme != "https" or parsed.hostname not in ("www.loom.com", "loom.com") or not match:
+        raise ValueError("Expected https://www.loom.com/share/<32-hex id>")
+    return match[1]
+
+
+def fetch(url, data=None, headers=None):
+    request = Request(url, data=data, headers={**UA, **(headers or {})})
+    with urlopen(request, timeout=60) as response:
+        return response.read().decode()
+
+
+def apollo_state(html):
+    """The share page embeds the logged-out Apollo cache: video, owner and transcript details."""
+    start = html.find(STATE_MARKER)
+    if start < 0:
+        return {}
+    state, _ = json.JSONDecoder().raw_decode(html[start + len(STATE_MARKER):].lstrip())
+    return state
+
+
+def metadata(state, vid, url):
+    video = state.get(f"RegularUserVideo:{vid}", {})
+    owner = state.get((video.get("owner") or {}).get("__ref", ""), {})
+    props = video.get("video_properties") or {}
+    return {
+        "source_url": url, "id": vid, "title": video.get("name"),
+        "owner": owner.get("display_name") or owner.get("first_name"),
+        "duration_s": video.get("source_duration") or props.get("duration"),
+        "created": video.get("createdAt"), "privacy": video.get("privacy"),
+        "needs_password": video.get("needs_password"),
+        "recording_type": props.get("recording_type"),
+    }
+
+
+def transcript_details(state):
+    root = state.get("ROOT_QUERY", {})
+    for key, value in root.items():
+        if key.startswith("fetchVideoTranscript(") and isinstance(value, dict):
+            return state.get(value.get("__ref", ""), value)
+    return {}
+
+
+def graphql_details(vid):
+    body = json.dumps({"operationName": "FetchVideoTranscript", "variables": {"videoId": vid, "password": None},
+                       "query": TRANSCRIPT_QUERY}).encode()
+    data = json.loads(fetch("https://www.loom.com/graphql", body, {"Content-Type": "application/json",
+                                                                  "apollographql-client-name": "web"}))
+    return (data.get("data") or {}).get("fetchVideoTranscript") or {}
+
+
+def stamp(seconds):
+    seconds = int(seconds)
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+def render(payload, meta, details):
+    """Loom transcription JSON (`phrases[].ts/value`) → timestamped Markdown with provenance."""
+    head = [f"# Loom transcript: {meta.get('title') or meta['id']}", "",
+            f"Source: {meta['source_url']}  ",
+            f"Owner: {meta.get('owner') or 'unknown'} · duration {meta.get('duration_s')} s · created {meta.get('created')}  ",
+            f"Provenance: Loom's own ASR ({details.get('processing_service') or 'unknown service'}, "
+            f"language {details.get('language') or 'unknown'}); no speaker labels, not verified against audio or video.", ""]
+    lines = [f"[{stamp(p.get('ts', 0))}] {p.get('value', '').strip()}" for p in payload.get("phrases", [])]
+    return "\n".join(head + lines) + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("url")
+    parser.add_argument("--out", type=Path, required=True, help="Private output directory; must be ignored when inside git")
+    parser.add_argument("--resolve-only", action="store_true", help="Save <id>.loom.json metadata only")
+    parser.add_argument("--transcript-only", action="store_true", help="Metadata + Loom transcript; no yt-dlp download")
+    args = parser.parse_args()
+    out = args.out.expanduser().resolve()
+    os.umask(0o077)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    in_git = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=out, capture_output=True).returncode == 0
+    if in_git and subprocess.run(["git", "check-ignore", "-q", str(out / "probe.loom.json")], cwd=out).returncode:
+        parser.error("Output must be git-ignored; add the run directory to git info/exclude first")
+    try:
+        vid = video_id(args.url)
+        url = f"https://www.loom.com/share/{vid}"
+        state = apollo_state(fetch(url))
+        meta = metadata(state, vid, url)
+        (out / f"{vid}.loom.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+        print(f"{meta['title']!r} by {meta['owner']}, {meta['duration_s']} s")
+        if args.resolve_only:
+            return
+        details = transcript_details(state)
+        if not details.get("source_url"):
+            try:
+                details = graphql_details(vid)
+            except (URLError, ValueError) as exc:
+                details = {"message": str(exc)}
+        if details.get("source_url") and details.get("transcription_status", "success") == "success":
+            payload = json.loads(fetch(details["source_url"]))
+            (out / f"{vid}.loom-transcript.md").write_text(render(payload, meta, details))
+            print(f"Loom transcript: {len(payload.get('phrases', []))} phrases")
+        else:
+            reason = details.get("message") or details.get("transcription_status") or "no transcript in logged-out page"
+            print(f"Loom transcript unavailable without login ({reason}); continue Gemini-only")
+        if not args.transcript_only:
+            subprocess.run(["yt-dlp", "--no-playlist", "--no-overwrites", "--no-progress", "--abort-on-unavailable-fragments",
+                            "--concurrent-fragments", "4", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                            "--merge-output-format", "mp4", "-o", str(out / f"{vid}.%(ext)s"), url], check=True)
+        print(f"Saved Loom artifacts in {out}")
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"Loom download failed: {exc}\n")
+
+
+if __name__ == "__main__":
+    main()

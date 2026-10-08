@@ -1,13 +1,13 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand. Leexi calls come from the leexi skill; without Gemini, frames come from video-frames-for-vision.
+description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand. Loom shares via download-loom; Leexi calls come from the leexi skill; without Gemini, frames come from video-frames-for-vision.
 ---
 
 # Video → Gemini
 
 Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a copy/paste prompt for the
 user), built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source.
-Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `transcribe-local`,
+Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `download-loom`, `transcribe-local`,
 `transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
 
 Route: native `agy` (Gemini) when it works → continuous audiovisual narrative. No Gemini, or
@@ -18,6 +18,12 @@ small on-screen text must be exact → [No Gemini available](#no-gemini-availabl
 Fathom URL → [fathom.md](fathom.md). Transcript-only requests: `download-fathom URL --out
 PRIVATE_DIR --transcript-only`, then stop (no media, Gemini or ASR). Never change sharing
 permissions.
+
+## Loom input
+
+Loom share URL → [loom.md](loom.md): `download-loom URL --out PRIVATE_DIR` fetches video, metadata
+and Loom's own timestamped transcript (public shares, no login). That transcript is the speech layer;
+Gemini adds the screen. `--transcript-only` stops before the download.
 
 ## Leexi input
 

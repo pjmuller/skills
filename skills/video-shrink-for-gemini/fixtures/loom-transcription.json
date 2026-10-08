@@ -1,0 +1,15 @@
+{
+ "schemaVersion": "1.1.3",
+ "phrases": [
+  {
+   "ts": 1.2,
+   "value": "Hallo, dit is een voorbeeld.",
+   "ranges": []
+  },
+  {
+   "ts": 65.43,
+   "value": " Tweede zin over de sheet. ",
+   "ranges": []
+  }
+ ]
+}
