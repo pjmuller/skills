@@ -11,6 +11,16 @@ Claude accepts images and PDF, no audio/video
 images only (0.156/0.157 answer "cannot access audio" for MP3/WAV). Audio must go through a model
 first: vendor transcript, `transcribe-local`, or `transcribe-openai`. Verified 2026-09-25.
 
+## Model choice, English (Apple M5 / 32 GB, 2026-10-08)
+
+Measured against AssemblyAI on three 24–92 min English podcasts (WER 2.5–6.7 % for all contenders):
+
+- `transcribe-local` default stays `whisper-large-v3-turbo`: WER on par with Parakeet, fewest missed names.
+- Word-timestamp clip cutting: `parakeet-mlx` + `mlx-community/parakeet-tdt-0.6b-v2` (≈2× faster, lighter).
+- `parakeet-unified-en-0.6b` (Handy's default) is ~0.3 pt better only on transcribe.cpp, with a +210 ms word lag
+  and manual 120 s chunking (long files fail silently). Revisit if sharing Handy's GGUF models matters;
+  parakeet-mlx cannot read them. Qwen3-ASR, Granite and Canary(-Qwen) give no usable word timestamps.
+
 ## Measured (Apple M5 / 32 GB, 2026-09-18)
 
 Dutch two-speaker meeting, reference = vendor transcript, so figures are **disagreement, not
