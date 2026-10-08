@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: verify rule now front-loads the proof: before non-trivial work the agent designs how it will verify end to end without the human (seed data, demo UI, device, scheduled check), builds that tooling first, flags only when it is a chunk of work, and treats "can you check…" as a defect.
+
 ## v0.4.5 (2026-10-08)
 
 - video-shrink-for-gemini: `download-loom` fetches a public Loom share's video, metadata and Loom's own timestamped transcript without login (share-page Apollo cache, GraphQL fallback); `loom.md` documents the merge with Gemini. recording-followups lists Loom as a speech layer.

@@ -39,7 +39,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 
 ## Verify your own work
 - Frontend → browser; backend → unit/integration/e2e tests. Minimal set covering the critical paths; don't test to test.
-- If verification isn't possible in-project (missing architecture / system gaps), propose how to close the gap.
+- Before building anything non-trivial, silently work out how you will prove it works end to end without my hands (seed data, demo UI, real device, scheduled later check). Proof needs me? Build that tooling first; flag it only when that tooling is a chunk of work on its own, then carry on unless I object. A "can you check…" question to me is a defect, not a handoff.
 
 ## Docs are hints, not law
 AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by weaker models. Treat their guidance as *one* known-good path, not a constraint: if you see a better/more pragmatic way, take it and propose a doc update (which stays a hint too).
