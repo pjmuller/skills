@@ -1,0 +1,178 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=1.26"]
+# ///
+"""Find the time ranges of a meeting recording where a screen is shared (input for transcribe-gemini --ranges).
+
+Google Meet bot recordings (Fathom, Leexi): while someone presents, Meet draws the shared screen as one big
+tile with a filmstrip of webcam tiles on its right, split by a full-height gutter in the dark client
+background at ~73% or ~77% of the width (the position depends on the participant count). Galleries put their
+gutters at 1/2 or 1/3 and 2/3, a spotlight has none. Every --step seconds one frame is sampled; frames that
+clearly show the gutter teach its position(s), every frame with a gutter there counts as shared; runs are
+merged across short gaps and padded.
+
+Anything else (no dark client margin: Loom, Zoom, Teams, phone video) gets one range over the whole video
+(method "full-fallback"): send all frames.
+
+Measured 2026-10-08 on 10 Meet recordings (7.6 h, 4.3 h shared; ground truth from inspected frames, blind
+spot-check 120/120): share-seconds precision 0.99 (padding), recall 1.00; 42% of video seconds skipped;
+~13 s per hour of 720p source, ~6 s per hour of a shrunk .gemini.mp4. Rejected on the same set: transcript
+cues ("share my screen", "zie je mijn scherm"; precision 0.4, recall 0.1 on share starts, ends never
+announced) and select-frames' skin/edge heuristic (precision 0.85: logo and avatar tiles look like screens).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+from itertools import pairwise
+from pathlib import Path
+
+W, H = 640, 360            # analysis size; positions below are fractions of the width
+WINDOW = (0.70, 0.82)      # where Meet puts the share/filmstrip gutter
+MIN_SEEDS = 5              # confident frames needed before a gutter position is trusted
+
+
+def probe(video: Path) -> tuple[float, float]:
+    """(duration, median keyframe spacing over the first minute)."""
+    duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                     str(video)], check=True, capture_output=True, text=True).stdout.strip())
+    keys = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey", "-show_entries",
+                           "frame=pts_time", "-read_intervals", "%+60", "-of", "csv=p=0", str(video)],
+                          check=False, capture_output=True, text=True).stdout.split()
+    times = sorted(float(k.strip(",")) for k in keys if k.strip(",").replace(".", "", 1).isdigit())
+    gaps = sorted(b - a for a, b in pairwise(times))
+    return duration, (gaps[len(gaps) // 2] if gaps else float("inf"))
+
+
+def column_profiles(video: Path, step: float, keyframes_only: bool):
+    """Per sampled frame: fraction of rows (10-95% of height) in Meet background colour, per column; and
+    whether the left margin looks like a Meet client (dark, uniform)."""
+    import numpy as np
+
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
+    if keyframes_only:
+        cmd += ["-skip_frame", "nokey"]
+    cmd += ["-i", str(video), "-an", "-sn", "-vf", f"fps=1/{step},scale={W}:{H}", "-f", "rawvideo",
+            "-pix_fmt", "rgb24", "pipe:"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    profiles, margins = [], []
+    size = W * H * 3
+    bg = 17  # Meet's dark client background as recorded; re-read from the left margin of every Meet frame
+    while True:
+        buf = proc.stdout.read(size)
+        if len(buf) < size:
+            break
+        rgb = np.frombuffer(buf, np.uint8).reshape(H, W, 3)[int(H * 0.10):int(H * 0.95)].astype(np.int16)
+        luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
+        spread = rgb.max(2) - rgb.min(2)
+        edge = luma[:, :4]
+        level = int(np.median(edge))
+        # Meet's dark grey (luma ~17 as recorded); black or lighter margins are other apps (Loom, IDEs).
+        margins.append(10 <= level <= 26 and float((np.abs(edge - level) <= 6).mean()) > 0.8)
+        if margins[-1]:
+            bg = level
+        # Luma plus low chroma, not exact RGB: compression tints the gutter next to coloured tiles.
+        mask = (np.abs(luma - bg) <= 9) & (spread <= 14)
+        profiles.append(mask.mean(0))
+    proc.wait()
+    if proc.returncode:
+        raise SystemExit(f"ffmpeg failed on {video}")
+    return np.array(profiles, np.float32).reshape(-1, W), margins
+
+
+def shared_frames(cols) -> tuple[list[bool], list[float]]:
+    """Per frame: Meet share layout? Plus the learned gutter positions (fractions of the width)."""
+    import numpy as np
+
+    def content(c, a, b):  # non-background share of columns [a, b): tiles, not empty client background
+        return 1 - c[..., a:b].mean(-1)
+
+    # Seeds: frames whose strongest column in the window is a clean gutter with tiles on both sides.
+    lo, hi = int(W * WINDOW[0]), int(W * WINDOW[1])
+    peak = cols[:, lo:hi].argmax(1) + lo
+    strength = cols[np.arange(len(cols)), peak]
+    right = np.array([content(c, x + 4, int(W * 0.97)) for c, x in zip(cols, peak)])
+    left = np.array([content(c, int(W * 0.05), x - 3) for c, x in zip(cols, peak)])
+    seeds = np.bincount(peak[(strength >= 0.85) & (right > 0.25) & (left > 0.3)], minlength=W)
+    gutters: list[int] = []
+    for x in np.argsort(-seeds):
+        if seeds[x] < MIN_SEEDS:
+            break
+        if all(abs(int(x) - g) > 4 for g in gutters):
+            gutters.append(int(x))
+    shared = np.zeros(len(cols), bool)
+    for x in gutters:
+        # Lenient per frame: the active speaker's glow and dark shared content blur the gutter edges.
+        shared |= ((cols[:, x - 3:x + 4].max(1) >= 0.5) & (content(cols, x + 4, int(W * 0.97)) > 0.25)
+                   & (content(cols, int(W * 0.05), x - 3) > 0.1))
+    return shared.tolist(), [round(g / W, 3) for g in sorted(gutters)]
+
+
+def to_ranges(flags: list[bool], step: float, duration: float, gap: float = 20.0, pad: float = 4.0,
+              min_samples: int = 2) -> list[dict]:
+    """Sampled flags (one per `step` seconds from 0) -> padded share ranges.
+
+    Runs shorter than min_samples are dropped (one odd frame), runs closer than `gap` seconds merge,
+    confidence is the share of positive samples inside the merged run, edges are padded by `pad`."""
+    runs, start = [], None
+    for i, flag in enumerate(list(flags) + [False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if i - start >= min_samples:
+                runs.append([start, i])  # sample indices [start, i)
+            start = None
+    merged: list[list[int]] = []
+    for run in runs:
+        if merged and (run[0] - merged[-1][1]) * step <= gap:
+            merged[-1][1] = run[1]
+        else:
+            merged.append(run)
+    out: list[dict] = []
+    for a, b in merged:
+        start_s, end_s = max(0.0, a * step - pad), min(duration, b * step + pad)
+        confidence = round(sum(flags[a:b]) / (b - a), 2)
+        if out and start_s <= out[-1]["end"]:
+            out[-1]["end"] = round(end_s, 1)
+            out[-1]["confidence"] = min(out[-1]["confidence"], confidence)
+            continue
+        out.append({"start": round(start_s, 1), "end": round(end_s, 1), "kind": "share", "confidence": confidence})
+    return out
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("video", type=Path)
+    parser.add_argument("--out", type=Path, help="default <video stem>.screenshare.json beside the video")
+    parser.add_argument("--step", type=float, default=2.0, help="seconds between sampled frames")
+    parser.add_argument("--gap", type=float, default=20.0, help="merge share ranges closer than this (s)")
+    parser.add_argument("--pad", type=float, default=4.0, help="seconds added on both sides of every range")
+    args = parser.parse_args()
+    video = args.video.expanduser().resolve()
+    if not video.is_file():
+        raise SystemExit(f"not found: {video}")
+    out = args.out or video.with_name(video.stem + ".screenshare.json")
+
+    duration, key_spacing = probe(video)
+    cols, margins = column_profiles(video, args.step, keyframes_only=key_spacing <= args.step)
+    if not len(cols):
+        raise SystemExit("no frames decoded")
+    meet = sum(margins) / len(margins) >= 0.6
+    if meet:
+        flags, gutters = shared_frames(cols)
+        result = {"duration": round(duration, 1), "method": "meet-layout", "gutters": gutters,
+                  "ranges": to_ranges(flags, args.step, duration, args.gap, args.pad)}
+    else:
+        result = {"duration": round(duration, 1), "method": "full-fallback",
+                  "ranges": [{"start": 0.0, "end": round(duration, 1), "kind": "share", "confidence": 0.0}]}
+    shared = sum(r["end"] - r["start"] for r in result["ranges"])
+    result["share_seconds"] = round(shared, 1)
+    out.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
+    print(f"{out}: {result['method']}, {len(result['ranges'])} ranges, {shared / 60:.1f} of {duration / 60:.1f} min "
+          f"get frames ({100 * (1 - shared / duration) if duration else 0:.0f}% skipped)")
+
+
+if __name__ == "__main__":
+    main()
