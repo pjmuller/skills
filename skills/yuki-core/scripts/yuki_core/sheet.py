@@ -19,6 +19,7 @@ from urllib.parse import quote
 from .outstanding import COLUMNS, NUMERIC
 
 Gws = Callable[..., dict]
+SHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
 TAB = re.compile(r"^(\d{4})\s*-\s*Q([1-4])$")  # also matches legacy names like "2026 - Q1"
 
 
@@ -32,50 +33,86 @@ def gws_runner(script: Path, config: Path) -> Gws:
     return run
 
 
+WIDTHS = {"Resp": 188, "contact": 145, "description_clean": 485}  # px; other columns keep the default
+SORT = [("description_clean", "ASCENDING"), ("date", "DESCENDING")]
+
+
 def push(gws: Gws, spreadsheet_id: str, manual: list[str], quarter: str, rows: list[dict],
-         dry_run: bool = False) -> dict:
-    header = manual + COLUMNS
-    tabs = {t["properties"]["title"]: t["properties"]["sheetId"]
-            for t in gws("sheet-meta", spreadsheet_id).get("sheets", [])}
-    existing = _values(gws, spreadsheet_id, quarter) if quarter in tabs else []
+         dry_run: bool = False, formulas: list[dict] | None = None, tab: str | None = None) -> dict:
+    """`formulas` = wrapper `formula_columns` ([{name, rules: [{label, pattern}]}]), placed first;
+    `tab` overrides the target tab name (test pushes); seeding still follows `quarter`."""
+    formulas, tab = formulas or [], tab or quarter
+    header = [f["name"] for f in formulas] + manual + COLUMNS
+    sheets = gws("api", "GET", f"{SHEETS}/{spreadsheet_id}",
+                 "--param", "fields=sheets(properties(title,sheetId),basicFilter)").get("sheets", [])
+    tabs = {t["properties"]["title"]: t["properties"]["sheetId"] for t in sheets}
+    existing = _values(gws, spreadsheet_id, tab) if tab in tabs else []
     if existing and existing[0] != header:
-        raise ValueError(f"tab {quarter} header differs from the expected one; fix the sheet or the "
-                         f"wrapper's manual_columns.\n  sheet:    {existing[0]}\n  expected: {header}")
-    seen = {r[header.index("item_id")] for r in existing[1:] if len(r) > header.index("item_id")}
+        raise ValueError(f"tab {tab} header differs from the expected one; fix the sheet or the wrapper's "
+                         f"formula_columns/manual_columns.\n  sheet:    {existing[0]}\n  expected: {header}")
+    id_col = header.index("item_id")
+    seen = {r[id_col] for r in existing[1:] if len(r) > id_col}
     new = [r for r in rows if r["item_id"] not in seen]
     seeds = _prior_manual_cells(gws, spreadsheet_id, quarter, tabs, manual, rows, new) if new else {}
-    summary = {"tab": quarter, "existing": len(seen), "appended": len(new), "seeded": len(seeds),
-               "carryover": sum(1 for r in new if r["carryover"]), "created": quarter not in tabs}
+    summary = {"tab": tab, "existing": len(seen), "appended": len(new), "seeded": len(seeds),
+               "created": tab not in tabs}
     if dry_run or not new:
         summary["rows"] = [[r["date"], str(r["amount"]), r["description_clean"],
                             "seeded" if r["item_id"] in seeds else ""] for r in new]
         return summary
 
-    if quarter not in tabs:
-        reply = gws("sheet-add-tab", spreadsheet_id, quarter)
-        tabs[quarter] = reply["replies"][0]["addSheet"]["properties"]["sheetId"]
-    body = [_cells(seeds.get(r["item_id"], [""] * len(manual))) + _cells([r[c] for c in COLUMNS], COLUMNS)
-            for r in new]
+    if summary["created"]:
+        reply = gws("sheet-add-tab", spreadsheet_id, tab)
+        tabs[tab] = reply["replies"][0]["addSheet"]["properties"]["sheetId"]
+    first = len(existing) + 1 if existing else 2  # first new data row (1-based)
+    body = [[""] * len(formulas) + _cells(seeds.get(r["item_id"], [""] * len(manual)))
+            + _cells([r[c] for c in COLUMNS], COLUMNS) for r in new]
     if not existing:
         body.insert(0, header)
-    start = len(existing) + 1 if existing else 1
-    gws("sheet-write", spreadsheet_id, f"'{quarter}'!A{start}", "--raw", "--values", json.dumps(body))
+    gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first - (not existing)}", "--raw", "--values", json.dumps(body))
+    if formulas:  # USER_ENTERED only for the formula cells; data stays RAW/typed
+        cells = [[_formula(f, header, n) for f in formulas] for n in range(first, first + len(new))]
+        gws("sheet-write", spreadsheet_id, f"{_quoted(tab)}!A{first}", "--values", json.dumps(cells))
+    last = first + len(new) - 1
     if summary["created"]:
+        requests = _layout(tabs[tab], header, last)
+    else:  # grow an existing basic filter over the appended rows, keeping its sort/filter specs
+        old = next((t.get("basicFilter") for t in sheets if t["properties"]["title"] == tab), None)
+        requests = [{"setBasicFilter": {"filter": {**{k: v for k, v in old.items() if k != "criteria"},
+                                                   "range": {**old["range"], "endRowIndex": max(last, old["range"]["endRowIndex"])}}}}] \
+            if old and "endRowIndex" in old["range"] else []
+    if requests:
         with tempfile.NamedTemporaryFile("w", suffix=".json") as body_file:
-            json.dump(_layout(tabs[quarter], header), body_file)
+            json.dump({"requests": requests}, body_file)
             body_file.flush()
             gws("sheet-batch", spreadsheet_id, "--body", body_file.name)
 
-    after = _values(gws, spreadsheet_id, quarter)
-    ids = [r[header.index("item_id")] for r in after[1:] if len(r) > header.index("item_id")]
+    after = _values(gws, spreadsheet_id, tab)
+    ids = [r[id_col] for r in after[1:] if len(r) > id_col]
     missing = [r["item_id"] for r in new if ids.count(r["item_id"]) != 1]
     if after[0] != header or len(ids) != len(seen) + len(new) or missing:
-        raise RuntimeError(f"read-back mismatch in tab {quarter}: {len(ids)} ids, missing/duplicate {missing}")
+        raise RuntimeError(f"read-back mismatch in tab {tab}: {len(ids)} ids, missing/duplicate {missing}")
     return summary
 
 
-def _layout(sheet_id: int, header: list[str]) -> dict:
-    """New tab: freeze the header, show the EUR amounts with two decimals (whole columns)."""
+def _formula(column: dict, header: list[str], row: int) -> str:
+    """=IFS(REGEXMATCH(contact&" "&description_clean, pattern), label, ..., TRUE, "")"""
+    text = f'{_letter(header.index("contact"))}{row}&" "&{_letter(header.index("description_clean"))}{row}'
+    quote_ = lambda s: '"' + s.replace('"', '""') + '"'
+    parts = [f"REGEXMATCH({text},{quote_(r['pattern'])}),{quote_(r['label'])}" for r in column["rules"]]
+    return f'=IFS({",".join(parts)},TRUE,"")'
+
+
+def _letter(index: int) -> str:
+    out, index = "", index + 1
+    while index:
+        index, rem = divmod(index - 1, 26)
+        out = chr(65 + rem) + out
+    return out
+
+
+def _layout(sheet_id: int, header: list[str], last_row: int) -> list[dict]:
+    """New tab: frozen header, EUR amounts as 0.00, fixed widths, basic filter sorted for triage."""
     requests = [{"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
                                            "fields": "gridProperties.frozenRowCount"}}]
     for name in ("amount", "original_amount"):
@@ -84,11 +121,21 @@ def _layout(sheet_id: int, header: list[str]) -> dict:
             "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": i, "endColumnIndex": i + 1},
             "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}}},
             "fields": "userEnteredFormat.numberFormat"}})
-    return {"requests": requests}
+    for name, px in WIDTHS.items():
+        if name in header:
+            i = header.index(name)
+            requests.append({"updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+                "properties": {"pixelSize": px}, "fields": "pixelSize"}})
+    requests.append({"setBasicFilter": {"filter": {
+        "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": last_row,
+                  "startColumnIndex": 0, "endColumnIndex": len(header)},
+        "sortSpecs": [{"dimensionIndex": header.index(n), "sortOrder": o} for n, o in SORT]}}})
+    return requests
 
 
 def _values(gws: Gws, spreadsheet_id: str, tab: str) -> list[list[str]]:
-    return gws("sheet-read", spreadsheet_id, f"'{tab}'").get("values", [])
+    return gws("sheet-read", spreadsheet_id, _quoted(tab)).get("values", [])
 
 
 def _cells(values: list, columns: list[str] | None = None) -> list:
@@ -116,7 +163,7 @@ def _prior_manual_cells(gws: Gws, spreadsheet_id: str, quarter: str, tabs: dict,
     tab = earlier[-1][2]
     shown = _values(gws, spreadsheet_id, tab)  # manual cells as people see them
     # Keys from unformatted values: displayed amounts follow the sheet locale ("-10,00" in nl_BE).
-    raw = gws("api", "GET", f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/"
+    raw = gws("api", "GET", f"{SHEETS}/{spreadsheet_id}/values/"
               f"{quote(_quoted(tab), safe='')}", "--param", "valueRenderOption=UNFORMATTED_VALUE",
               "--param", "dateTimeRenderOption=FORMATTED_STRING").get("values", [])
     if not shown:

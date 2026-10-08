@@ -19,12 +19,12 @@ def response(*items):
     return ET.fromstring(f"<OutstandingCreditorItems>{''.join(items)}</OutstandingCreditorItems>")
 
 
-def test_quarter_selection_carryover_and_invoice_drop():
+def test_quarter_selection_and_invoice_drop():
     raw = response(item("old", "2026-05-02"), item("in", "2026-09-30"), item("late", "2026-10-01"),
                    item("inv", "2026-08-01", "120.00", "Aankoopfactuur"), item("refund", "2026-07-01", "15.00"))
     rows = select(parse_items(raw), "2026-Q3")
-    assert [(r["item_id"], r["carryover"]) for r in rows] == [("old", "yes"), ("refund", ""), ("in", "")]
-    assert rows[0]["type"] == "Card" and rows[1]["amount"] == Decimal("15.00")
+    assert [r["item_id"] for r in rows] == ["refund", "in"]  # older open items belong to their own quarter
+    assert rows[0]["type"] == "Card" and rows[0]["amount"] == Decimal("15.00")
 
 
 def test_fx_uses_belgian_number_format():
@@ -70,4 +70,4 @@ def test_quarters_and_csv():
     assert last_closed_quarter(date(2026, 10, 6)) == "2026-Q3"
     assert last_closed_quarter(date(2027, 2, 1)) == "2026-Q4"
     csv = to_csv(select(parse_items(response(item())), "2026-Q3"))
-    assert csv.splitlines()[1].startswith("2026-08-01,,Acme,-29.00,-29.00,Card,")
+    assert csv.splitlines()[1].startswith("2026-08-01,Acme,-29.00,-29.00,Card,")

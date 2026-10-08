@@ -50,8 +50,7 @@ def connect(config: dict):
 def fetch(config: dict, quarter: str) -> list[dict]:
     raw = connect(config).outstanding_creditor_items(config["administration_id"])
     rows = outstanding.select(outstanding.parse_items(raw), quarter)
-    print(f"{config['company_label']} {quarter}: {len(rows)} rows "
-          f"({sum(1 for r in rows if r['carryover'])} carryover)", file=sys.stderr)
+    print(f"{config['company_label']} {quarter}: {len(rows)} rows", file=sys.stderr)
     return rows
 
 
@@ -65,6 +64,7 @@ def main() -> None:
     out.add_argument("--csv", type=Path, help="write here instead of stdout")
     push = sub.add_parser("sheet-push", parents=[quarter], help="append unseen rows to the quarter tab")
     push.add_argument("--dry-run", action="store_true", help="show what would be appended, write nothing")
+    push.add_argument("--tab", help="target tab name (default: the quarter), e.g. for a test push")
     push.add_argument("--gws", type=Path, help="override config gws.script (google-workspace-core gws.py)")
     push.add_argument("--gws-config", type=Path, help="override config gws.config (workspace.json)")
     sub.add_parser("discover", help="list the domains and administrations this API key sees")
@@ -95,7 +95,8 @@ def main() -> None:
         raise SystemExit("set gws.script and gws.config in the wrapper config, or pass --gws/--gws-config")
     rows = fetch(config, args.quarter)
     summary = sheet.push(sheet.gws_runner(script, gws_config), target["spreadsheet_id"],
-                         target["manual_columns"], args.quarter, rows, dry_run=args.dry_run)
+                         target["manual_columns"], args.quarter, rows, dry_run=args.dry_run,
+                         formulas=target.get("formula_columns"), tab=args.tab)
     print(json.dumps(summary, indent=1, ensure_ascii=False))
 
 
