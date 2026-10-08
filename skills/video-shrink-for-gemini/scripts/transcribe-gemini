@@ -46,7 +46,8 @@ def clock(seconds: float) -> str:
 
 def client_and_backend() -> tuple[genai.Client, str]:
     if os.environ.get("GEMINI_API_KEY"):
-        return genai.Client(api_key=os.environ["GEMINI_API_KEY"]), "developer-api"
+        # vertexai=False: GOOGLE_GENAI_USE_VERTEXAI=true in the env would otherwise silently route to Vertex.
+        return genai.Client(api_key=os.environ["GEMINI_API_KEY"], vertexai=False), "developer-api"
     if os.environ.get("GOOGLE_CLOUD_PROJECT"):
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
         return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location), f"vertex/{location}"
@@ -102,7 +103,8 @@ def main() -> None:
     parser.add_argument("--ranges", type=Path, help="JSON with ranges [{start,end}] that get frames; audio covers all")
     args = parser.parse_args()
 
-    out = args.out or args.video.with_name(args.video.name.split(".")[0] + ".transcript.md")
+    # meeting.gemini.part01.mp4 -> meeting.part01.transcript.md: keep version/part suffixes distinct.
+    out = args.out or args.video.with_name(args.video.stem.replace(".gemini", "", 1) + ".transcript.md")
     client, backend = client_and_backend()
     prompt = args.prompt.read_text(encoding="utf-8")
     config = types.GenerateContentConfig(
@@ -114,13 +116,13 @@ def main() -> None:
         config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
 
     with tempfile.TemporaryDirectory() as tmp:
-        if args.ranges:
-            ranges = json.loads(args.ranges.read_text())["ranges"]
-            parts = ranged_parts(client, backend, args.video, ranges, Path(tmp))
-        else:
-            parts = [media_part(client, backend, args.video, "video/mp4")]
-        started = time.time()
         try:
+            if args.ranges:
+                ranges = json.loads(args.ranges.read_text())["ranges"]
+                parts = ranged_parts(client, backend, args.video, ranges, Path(tmp))
+            else:
+                parts = [media_part(client, backend, args.video, "video/mp4")]
+            started = time.time()
             for attempt in range(3):
                 try:
                     response = client.models.generate_content(model=args.model, contents=[*parts, prompt], config=config)
@@ -131,8 +133,11 @@ def main() -> None:
                     print(f"retrying after {error.code}", file=sys.stderr)
                     time.sleep(10 * (attempt + 1))
         finally:
-            for name in UPLOADED:
-                client.files.delete(name=name)
+            for name in UPLOADED:  # best effort: a failed delete must not lose the paid output
+                try:
+                    client.files.delete(name=name)
+                except Exception as error:
+                    print(f"warning: could not delete {name} (expires in 48 h): {error}", file=sys.stderr)
     elapsed = round(time.time() - started, 1)
 
     text = response.text or ""
