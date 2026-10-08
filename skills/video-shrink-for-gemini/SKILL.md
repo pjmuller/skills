@@ -8,7 +8,7 @@ description: Prepare recordings and obtain Markdown transcripts or visual narrat
 Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a copy/paste prompt for the
 user), built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source.
 Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `download-loom`,
-`transcribe-gemini`, `transcribe-local`, `transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
+`detect-screenshare`, `transcribe-gemini`, `transcribe-local`, `transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
 
 Route: `transcribe-gemini` (Gemini API) → continuous audiovisual narrative; native `agy` only
 without an API key ([agy-route.md](agy-route.md)). No Gemini, or small on-screen text must be
@@ -74,8 +74,14 @@ files verbatim. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identi
 environment: `GEMINI_API_KEY` (Developer API, File API above 20 MB, uploads deleted after the call)
 else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). Neither set → [agy-route.md](agy-route.md).
 `--thinking medium` (default) kept every visual step at ~$0.02 per 2 minutes; `high` doubles cost
-for no speech gain; `low` dropped visual steps. Known screen-share ranges (`--ranges`, JSON
-`{"ranges": [{"start": s, "end": s}]}`) send frames only there and audio throughout.
+for no speech gain; `low` dropped visual steps.
+
+Google Meet recordings (Fathom, Leexi): first `detect-screenshare <name>.gemini.mp4` (seconds per
+hour, local) → `<name>.gemini.screenshare.json`, then pass it as `--ranges`: frames only while a
+screen is shared, audio throughout; no share → audio only. Not Meet (Loom, Zoom, phone) → the JSON
+says `full-fallback` and the whole video is sent. 10 Meet calls: 42% of video seconds skipped,
+recall 1.00; a 29-minute call cost $0.14 instead of ~$0.17. Transcript cues ("share my screen")
+missed most share starts: don't use them.
 
 Read the file; check speech, visual changes, timestamps and coverage against the recording;
 report gaps.
