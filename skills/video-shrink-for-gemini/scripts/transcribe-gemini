@@ -5,8 +5,10 @@
 # ///
 """Transcribe/narrate one recording with the Gemini API: plain model call, no agent, no clipboard.
 
-Backend follows the environment, so each repository's own key and billing apply:
-  GEMINI_API_KEY set           Gemini Developer API; files over 20 MB go through the File API.
+Key/backend, first match wins:
+  GEMINI_API_KEY in the env    Gemini Developer API (a project that wants its own billing sets it);
+                               files over 20 MB go through the File API.
+  ~/.config/transcribe-gemini/env   one key per machine, `GEMINI_API_KEY=...` (chmod 600), same API.
   else GOOGLE_CLOUD_PROJECT    Vertex AI (GOOGLE_CLOUD_LOCATION, default global; regional is +10%)
                                with GOOGLE_APPLICATION_CREDENTIALS or ADC; inline upload.
 
@@ -34,6 +36,7 @@ from google import genai
 from google.genai import types
 
 INLINE_MAX = 20 * 1024 * 1024
+MACHINE_ENV = Path.home() / ".config/transcribe-gemini/env"
 UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
 # USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
 # 3.7/3.8 Flash list price doubles on 2027-01-01.
@@ -45,14 +48,24 @@ def clock(seconds: float) -> str:
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
+def machine_key() -> str | None:
+    if MACHINE_ENV.exists():
+        for line in MACHINE_ENV.read_text().splitlines():
+            if line.startswith("GEMINI_API_KEY="):
+                return line.split("=", 1)[1].strip().strip("'\"") or None
+    return None
+
+
 def client_and_backend() -> tuple[genai.Client, str]:
-    if os.environ.get("GEMINI_API_KEY"):
+    key = os.environ.get("GEMINI_API_KEY") or machine_key()
+    if key:
         # vertexai=False: GOOGLE_GENAI_USE_VERTEXAI=true in the env would otherwise silently route to Vertex.
-        return genai.Client(api_key=os.environ["GEMINI_API_KEY"], vertexai=False), "developer-api"
+        return genai.Client(api_key=key, vertexai=False), "developer-api"
     if os.environ.get("GOOGLE_CLOUD_PROJECT"):
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
         return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location), f"vertex/{location}"
-    sys.exit("set GEMINI_API_KEY (Developer API) or GOOGLE_CLOUD_PROJECT + credentials (Vertex)")
+    sys.exit(f"no Gemini key: write GEMINI_API_KEY=... to {MACHINE_ENV} (chmod 600), or set GEMINI_API_KEY / "
+             "GOOGLE_CLOUD_PROJECT + credentials (Vertex)")
 
 
 def media_part(client: genai.Client, backend: str, path: Path, mime: str) -> types.Part:

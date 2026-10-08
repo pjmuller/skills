@@ -19,6 +19,12 @@ if [[ "${1:-}" == "--check" ]]; then
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
+  # transcribe-gemini key: env (project choice) or the per-machine file; Vertex/agy remain fallbacks.
+  if [[ -n "${GEMINI_API_KEY:-}" ]] || grep -q '^GEMINI_API_KEY=.' "$HOME/.config/transcribe-gemini/env" 2>/dev/null; then
+    echo "ok      Gemini key"
+  else
+    echo "warn    no Gemini key: write GEMINI_API_KEY=... to ~/.config/transcribe-gemini/env (chmod 600)"
+  fi
   exit 0
 fi
 # Preflight every link before changing any command.
