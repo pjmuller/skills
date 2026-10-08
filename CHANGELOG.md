@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+## v0.4.5 (2026-10-08)
+
 - video-shrink-for-gemini: `download-loom` fetches a public Loom share's video, metadata and Loom's own timestamped transcript without login (share-page Apollo cache, GraphQL fallback); `loom.md` documents the merge with Gemini. recording-followups lists Loom as a speech layer.
+
+- t3-route: decide conditional self-settlement per standalone dispatch; verified durable delivery, existing authorization and no user review required. Eligible tasks stay visible while running; helper footer preserves keep-open instructions and surfaces material findings.
 
 - agents-md: concise Markdown reports use progressive disclosure, callouts and Mermaid; conclusions stay visible.
 

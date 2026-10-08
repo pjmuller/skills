@@ -58,6 +58,23 @@ and `--thinking` unless the user specifies them or an applicable authorized play
 requires them. Resolve a named account with `t3-list-profiles`; never guess its ID.
 Check wrapper capacity guidance for batches. A dry run can verify flags and routing.
 
+### Lifecycle
+
+Decide eligibility at each standalone dispatch; omit `--settle-when-done` unless
+the outcome is bounded and clear, expected durable delivery is independently
+verifiable, the full path already has authorization, and no user review/dialogue
+is needed. Eligible work uses `--settle-when-done --no-hide`: visible while running.
+Known outstanding approval prevents arming; conditional project gates stay in force
+and unmet gates prevent settling. Result verification belongs to execution.
+Wrappers may tailor defaults/playbooks, never explicit keep-open instructions or
+authorization/safety limits. Simplicity or a confidence percentage is insufficient.
+Dispatchers and tasks needing user review/dialogue stay open; 🏓 workers are
+always settled by their parent. This policy authorizes lifecycle only, not
+ticket writes or deployment. Each brief records one **Lifecycle:** sentence with
+mode and concrete destination, referencing the `t3-manage-thread` completion
+footer for conditional self-settlement; do not duplicate that footer. Name live
+production/ticket delivery only when actually authorized and required.
+
 Brief: sentinel above, **Source:** exact user task text/link and attachment paths,
 **Evidence:** compact fetched facts, selected wrapper and routing reason,
 **Inferred intent:** a short revisable hypothesis only when needed. Label screenshot
@@ -71,11 +88,12 @@ Keep attachments accessible to the destination; do not substitute a summary for 
 
 For continuation, read the verified target before `t3-ping-thread` with its exact ID;
 forward the new task verbatim with new evidence separated. Search-only requests return
-the match without a ping. A requested new thread or genuinely different scope can
+the match without a ping. Preserve the target's selected lifecycle unless the user
+authorizes a change. A requested new thread or genuinely different scope can
 justify spawning; explain that distinction. Purged-history recovery follows the
 private wrapper and helper guidance, never restore rows into T3's live database.
 
 Verify the helper result; report destination/title and actual account/model or which
-thread was reused and why. Routing failures stay visible. Do not hide or settle by
-default; respect explicit lifecycle instructions and authorized wrapper playbooks.
+thread was reused and why. Routing failures stay visible; apply the per-task
+lifecycle decision above and authorized wrapper playbooks.
 For durable user corrections, read [corrections.md](corrections.md).

@@ -24,7 +24,7 @@ Nothing settles the worker: after its report is verified, `t3-settle-thread --wa
 Return path is decided per spawn from what the user asked: 🏓 when the result
 feeds back into **this thread's deliverable** (review, delegated sub-step,
 anything this thread still has to verify before it can finish); 📤 standalone
-(visible, nobody pings back, never hidden or settled by helpers) when:
+(visible by default, nobody pings back; conditional mode below is opt-in) when:
 - the user said "standalone / separate thread / separate process / own job /
   hand off", or
 - the task is a **new, orthogonal scope** the user will follow on its own (new
@@ -39,15 +39,15 @@ hides a live worker.
 
 ## Fire-and-forget: `--settle-when-done`
 
-For standalone work nobody needs to verify. Hides the thread and appends a
-footer: on a **clean outcome** the worker runs `t3-settle-thread --self` as its
-last call ([settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread));
-blocked/partial work, material failures, unresolved findings or user decisions →
-it unhides itself and ends with a terse report. Intent: the human is the
-bottleneck; a verified, finished thread shouldn't cost a glance, and a
-correction already folded into the deliverable is still clean. Use it when the
-user says "…and settle it when done". Refused with a 🏓 title (the orchestrator
-settles those). A finished thread still in "needs you" didn't run the footer.
+Conditional self-settlement for standalone work: use an explicit user request or
+an authorized routing policy recorded in the brief, never standalone status alone.
+The helper appends the canonical completion footer in `scripts/t3-spawn-thread`;
+that footer defines clean completion and exceptions. Default visibility is hidden;
+`--settle-when-done --no-hide` keeps the thread visible while running. On clean
+delivery the worker runs `t3-settle-thread --self` as its last tool call
+([settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread));
+otherwise it stays open and unhides if needed. Explicit keep-open or later user
+instructions win. Refused with a 🏓 title: the parent settles those after verification.
 
 ## Titles, models, briefs
 
