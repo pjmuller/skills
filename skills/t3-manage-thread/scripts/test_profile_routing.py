@@ -44,13 +44,13 @@ def test_unknown_stale_and_expired_windows():
 
 
 def test_score_headroom_per_hour_and_stable_ties():
-    a, b = account("a", plan="max_20x"), account("b", plan="pro")
+    a, b = account("a", plan="max_20x"), account("b", plan="max_20x")
     assert choose([b, a], "claude-fable-5", "a", NOW)[0] == "a"
-    assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "b"  # plan labels do not break a tie
+    assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "b"  # equal plans: inherited account wins
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
     selected, reason, candidates = choose([b, a], "claude-fable-5", "a", NOW)
     explanation = explain("claude-fable-5", candidates, NOW, selected, reason)
-    assert "a  [max_20x]" in explanation and "b  [pro]" in explanation and "%/h" in explanation
+    assert "a  [max_20x]" in explanation and "b  [max_20x]" in explanation and "%/h × 20x" in explanation
     assert "Percentages are per account" in explanation and "tie → inherited" in reason
     b.rows[1].resets_at = NOW + timedelta(days=6)  # same headroom, later reset → less urgent
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
@@ -83,7 +83,7 @@ def test_session_never_masks_an_expiring_weekly_but_tight_session_demotes():
     assert selected == "a" and candidates[0].score == 20 and candidates[0].bottleneck == "weekly"
     a.rows[0].used_percent = 95  # session tight: b goes first even though a expires sooner
     selected, reason, candidates = choose([a, b], "gpt-6-sol", "b", NOW)
-    assert selected == "b" and "[session tight]" in explain("gpt-6-sol", candidates, NOW, selected, reason)
+    assert selected == "b" and "[session tight: 5 ≤ 10 plan-% units]" in explain("gpt-6-sol", candidates, NOW, selected, reason)
     b.rows[0].used_percent = 97  # everyone tight → best score again, with a warning
     selected, reason, _ = choose([a, b], "gpt-6-sol", "b", NOW)
     assert selected == "a" and "session is tight" in reason
@@ -185,3 +185,65 @@ def test_scoped_display_names_and_unknown_scopes():
     assert relevant("scoped only", "claude-fable-5-1")
 
 
+
+
+def test_plan_multiplier_weights_identical_percentages():
+    """PJ 2026-10-08: a 5x account at the same % as a 20x has a quarter of the quota;
+    routing must stop treating equal percentages as equal work."""
+    big, small = account("big", 40, plan="max_20x"), account("small", 40, plan="max_5x")
+    selected, reason, candidates = choose([small, big], "claude-fable-5", "small", NOW)
+    assert selected == "big" and "× 20x" in reason and "plan-weighted" in reason
+    assert candidates[0].weight == 5 and candidates[1].weight == 20
+    assert round(candidates[1].score / candidates[0].score, 3) == 4.0
+    assert choose([small, account("pro", 40, plan="pro")], "claude-fable-5", "pro", NOW)[0] == "small"
+    # The label format is controlled; stray digits in prose or e-mails never become a multiplier.
+    from profile_routing import plan_weight
+    assert plan_weight("max_20x (pro)") == 20 and plan_weight("max_5x") == 5
+    assert plan_weight("pro") == plan_weight("prolite · x20x@example.com") == plan_weight("unknown") == 1
+    assert plan_weight("legacy_20x") == plan_weight("20x") == 1  # only the `max_Nx` shape is trusted
+
+
+def test_small_plan_still_wins_when_its_reset_is_urgent_or_the_big_one_is_nearly_out():
+    big = Account("big", "big", plan="max_20x", rows=[Row("session", 10, NOW + timedelta(hours=4), 18000),
+                                                        Row("weekly", 50, NOW + timedelta(hours=72), 604800)])
+    small = Account("small", "small", plan="max_5x", rows=[Row("session", 10, NOW + timedelta(hours=4), 18000),
+                                                            Row("weekly", 50, NOW + timedelta(hours=24), 604800)])
+    assert choose([small, big], "claude-fable-5", "small", NOW)[0] == "big"  # 20·50/72 = 13.9 > 5·50/24 = 10.4
+    small.rows[1].resets_at = NOW + timedelta(hours=12)  # 5·50/12 = 20.8: the sooner reset wins again
+    assert choose([small, big], "claude-fable-5", "big", NOW)[0] == "small"
+    small.rows[1].resets_at = NOW + timedelta(hours=72)
+    big.rows[1].used_percent = 95  # 20·5/72 = 1.4 < 5·50/72 = 3.5: a nearly exhausted 20x loses
+    assert choose([small, big], "claude-fable-5", "big", NOW)[0] == "small"
+
+
+def test_session_tightness_is_measured_in_plan_units_of_the_largest_verified_plan():
+    big = account("big", 10, plan="max_20x")
+    big.rows[1].resets_at = NOW + timedelta(days=5)
+    small = Account("small", "small", plan="max_5x", rows=[Row("session", 59, NOW + timedelta(hours=4), 18000),
+                                                            Row("weekly", 10, NOW + timedelta(hours=24), 604800)])
+    # 5x at 59 % used: 5·41 = 205 plan-% > 200 → not tight; its sooner reset wins (5·90/24 > 20·90/120).
+    selected, _, candidates = choose([big, small], "claude-fable-5", "big", NOW)
+    assert selected == "small" and not candidates[1].session_tight
+    small.rows[0].used_percent = 60  # 5·40 = 200 ≤ 200 → tight: ranks after the 20x despite weekly room
+    selected, _, candidates = choose([big, small], "claude-fable-5", "big", NOW)
+    assert selected == "big" and candidates[1].session_tight and "200 ≤ 200" in candidates[1].detail
+    big.rows[0].used_percent = 89  # 20·11 = 220 → the old ≥ 90 % rule is unchanged for a 20x
+    assert not choose([big, small], "claude-fable-5", "big", NOW)[2][0].session_tight
+    big.rows[0].used_percent = 90
+    assert choose([big, small], "claude-fable-5", "big", NOW)[2][0].session_tight
+    small.rows[0].used_percent = 61
+    # An excluded 20x must not set the bar: alone among verified accounts, a 5x uses its own scale.
+    big.rows[1].used_percent = 100
+    selected, _, candidates = choose([big, small], "claude-fable-5", "big", NOW)
+    assert selected == "small" and candidates[0].status == "excluded" and not candidates[1].session_tight
+
+
+def test_unused_1x_beside_20x_is_overflow_only_and_says_so():
+    pro = account("pro", 0, plan="pro")
+    big = account("big", 80, plan="max_20x")
+    selected, _, candidates = choose([pro, big], "claude-fable-5", "pro", NOW)
+    assert selected == "big" and candidates[0].session_tight
+    assert "[session tight: 100 ≤ 200 plan-% units]" in explain("claude-fable-5", candidates, NOW, selected, "")
+    big.rows[0].used_percent = 95  # both tight → plan-weighted score decides: 20·1 vs 1·100 per 48 h
+    big.rows[1].used_percent = 99
+    assert choose([pro, big], "claude-fable-5", "pro", NOW)[0] == "pro"

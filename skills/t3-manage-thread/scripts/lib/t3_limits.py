@@ -514,7 +514,7 @@ def reset_text(when: datetime | None, now: datetime) -> str:
 
 
 PACE_LEGEND = "pace = % of window elapsed · room = pace − used (+ under pace, − over pace)"
-PLAN_HINT = "Percentages are per account; plan labels are advisory (Claude login may lag; Codex pro has no multiplier); free quota does not reserve running work."
+PLAN_HINT = "Percentages are per account; routing weights them by the label's multiplier (max_20x → 20, none → 1; Claude login may lag, Codex pro states none); free quota does not reserve running work."
 
 
 def plan_label(account: Account) -> str:
