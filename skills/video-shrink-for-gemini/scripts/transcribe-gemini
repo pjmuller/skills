@@ -10,8 +10,9 @@ Backend follows the environment, so each repository's own key and billing apply:
   else GOOGLE_CLOUD_PROJECT    Vertex AI (GOOGLE_CLOUD_LOCATION, default global; regional is +10%)
                                with GOOGLE_APPLICATION_CREDENTIALS or ADC; inline upload.
 
---ranges RANGES.json ({"ranges": [{"start": s, "end": s}, ...]}, e.g. from detect-screenshare) sends
-the full audio but frames only inside those ranges; the rest of the recording costs audio tokens only.
+--ranges <name>.screenshare.json (from detect-screenshare; {"method", "ranges": [{"start", "end"}]}) sends
+the full audio but frames only inside those ranges; the rest costs audio tokens only. "ranges": [] means
+audio only; method "full-fallback" (not a Meet recording) sends the whole video as without --ranges.
 
 Writes OUT (the model's markdown) and OUT with .usage.json (tokens per modality, latency, USD at list).
 Measured 2026-10-08, 2-min 480p clip, 11.2k input tokens (video 66/frame at default resolution, audio
@@ -76,11 +77,13 @@ def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[d
     """Full audio track + the silent video clipped to each range, each clip labelled with its absolute time."""
     audio, silent = tmp / "audio.m4a", tmp / "silent.mp4"
     ffmpeg("-i", str(video), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "48k", str(audio))
-    ffmpeg("-i", str(video), "-an", "-c:v", "copy", str(silent))
     parts = ["Full audio of the recording follows. Its timeline is the recording timeline.",
              media_part(client, backend, audio, "audio/mp4"),
              "Video was sent only for these ranges (screen sharing). Outside them there is audio only: "
-             "do not describe visuals there."]
+             "do not describe visuals there." if ranges else "No screen was shared: audio only, no visual section."]
+    if not ranges:
+        return parts
+    ffmpeg("-i", str(video), "-an", "-c:v", "copy", str(silent))
     silent_part = media_part(client, backend, silent, "video/mp4")
     for r in ranges:
         parts.append(f"Video clip {clock(r['start'])}-{clock(r['end'])} (recording timeline; if the clip's own "
@@ -117,9 +120,9 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            if args.ranges:
-                ranges = json.loads(args.ranges.read_text())["ranges"]
-                parts = ranged_parts(client, backend, args.video, ranges, Path(tmp))
+            plan = json.loads(args.ranges.read_text()) if args.ranges else {"method": "full-fallback"}
+            if plan.get("method") != "full-fallback":  # detect-screenshare could not tell: send every frame
+                parts = ranged_parts(client, backend, args.video, plan["ranges"], Path(tmp))
             else:
                 parts = [media_part(client, backend, args.video, "video/mp4")]
             started = time.time()
