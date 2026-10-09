@@ -52,7 +52,7 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 
 ## Delegation
 - Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. Coding goes to **in-harness sub-agents** (Opus, Sonnet, Haiku in Claude CLI · Sol, Terra, Luna from Codex CLI); the thinker verifies.
-- A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; computer/browser use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
+- A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; native-app/GUI computer use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value.
@@ -86,8 +86,10 @@ Pushed a change to a shared skill core that projects carry as a committed copy? 
 - Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
 - Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser in T3 (Claude + Codex): native `t3-code` `preview_*` tools. `preview_status` → `preview_open` if needed → `preview_snapshot`; retain `tabId`, use snapshot locators. Routing: {purpose → browser profile → verified account}; verify the signed-in identity. Profile selection/recovery → {absolute browser-guide path}; read before authenticated browsing.
-- Fallback when T3 cannot handle the task (or explicit browser/extension work): {browser / computer-use tools}; profiles: {profile name per account}. Account/extension routing → {browser guide}. A closed T3 preview alone isn't a reason to fall back.
+- Browser, pick by job (recipes → {absolute browser-guide path}; read before authenticated browsing):
+  - **User watches / localhost** → T3 `preview_*`. Tabs are per thread; a new tab opens in T3's default profile, so verify the signed-in identity. Snapshot caps ~50 elements: read lists with `preview_evaluate`.
+  - **User's logged-in Chrome** (background, never steals focus) → shell CLI over CDP after the user enables `chrome://inspect/#remote-debugging`: Playwright CLI to drive (`attach --cdp=chrome`, `find` → `click <ref>`), `chrome-devtools` to read/debug (`start --autoConnect`, `new_page --background`). One attach sees all profiles ({profile name per account}): pick the tab by account. Snapshots → file + grep. Claude in Chrome needs a `/login` credential (a setup-token disables it).
+  - **Native apps / OS dialogs** → computer use ({computer-use tool}). Foreground only, races the user: not for browser work. Never script keystrokes into a browser.
 
 ## Writing in my name
 - Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
