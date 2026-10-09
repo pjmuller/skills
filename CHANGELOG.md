@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-route: optional preferred model per task type, with a wrapper tier map and reported cross-provider fallback when the preferred provider is exhausted.
+
 - agents-md: git rule — pull is a merge, rebase only your own unpushed commits, never rewrite pushed history or force-push the shared branch; plus the recovery recipe when a local branch has swallowed foreign history (`git cherry` to prove your commits landed, `git reset --keep origin/<branch>`).
 
 ## v0.4.6 (2026-10-08)
