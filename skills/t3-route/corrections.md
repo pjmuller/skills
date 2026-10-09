@@ -7,8 +7,10 @@ One ticket's wording does not establish a company-wide policy. State uncertainty
 when evidence supports only a provisional rule.
 
 Edit the existing owner: project boundaries in the project catalog, ticket/workflow
-precedents in its triage reference, account rules in the account wrapper. Cross-cutting
-lessons may use a small private reference if none fits; keep it bounded (roughly
+precedents in its triage reference, account rules in the account wrapper. Trigger
+gaps or wrong intent matches belong in the wrapper's private lookup
+([pattern](onboarding.md#trigger-lookup)); update its row without duplicating owning policy.
+Cross-cutting lessons may use a small private reference if none fits; keep it bounded (roughly
 40 lines), replacing superseded rules rather than accumulating contradictions.
 Read the existing rule first, preserve unrelated policy, and allow later correction
 or removal. Do not save these lessons in harness-native memory.
