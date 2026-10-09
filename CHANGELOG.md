@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: git rule — pull is a merge, rebase only your own unpushed commits, never rewrite pushed history or force-push the shared branch; plus the recovery recipe when a local branch has swallowed foreign history (`git cherry` to prove your commits landed, `git reset --keep origin/<branch>`).
+
 ## v0.4.6 (2026-10-08)
 
 - t3-manage-thread: automatic profile routing is plan-aware. The headroom-per-hour score is multiplied by the multiplier the login label states (`max_20x` → 20, `max_5x` → 5, no multiplier → 1), and session tightness is measured in the same plan units relative to the largest verified plan (a 5x beside a 20x is tight from 60 % used; a 1x beside a 20x is overflow only). Unlabelled providers (Codex `pro`/`prolite`) keep the unweighted ranking; exclusion, unknown/stale handling, model-only caps and explicit `--profile` are unchanged. Routing output shows `%/h × Nx = score`.
