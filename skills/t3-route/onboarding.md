@@ -55,6 +55,8 @@ Create or refine a committed sibling skill, outside `t3-route`, with:
   Lifecycle defaults tailor the core's eligibility decision, not authorization or explicit keep-open choices.
 - A small project catalog: roots, ownership and sibling boundaries.
 - Links to the user's own integration wrappers and relevant triage/playbooks.
+- For recurring short requests, a private trigger lookup (below), explicitly loaded
+  by the wrapper on first invocation and used for later dispatch messages.
 
 Reuse existing owning references rather than another rulebook. Add a narrow setup-repo
 entrypoint note: "In the designated dispatch conversation, invoke `<private-wrapper>`;
@@ -65,6 +67,30 @@ never invent an ID or infer it from cwd. An onboarding request can authorize cre
 that dedicated conversation; it does not redispatch this execution task.
 Link global rules instead of duplicating them. Keep account and personal policy in
 the wrapper. Reruns preserve custom policy; propose only evidence-backed changes.
+
+### Trigger lookup
+
+Keep `trigger-lookup.md` beside the private wrapper. Map **when** to owner and exact
+entrypoint; omit procedures and exhaustive installed-skill inventories. Start from
+real requests and verified local files. Example (replace with the user's own targets):
+
+```markdown
+| User phrasing / intent | Owner repo | Read |
+| --- | --- | --- |
+| “laptop hot”, “CPU”, “RAM” | personal setup repo | ../resource-audit/SKILL.md |
+| “assistant answer tone” | selected product brain | AGENTS.md |
+```
+
+Wrapper instruction: “Read `trigger-lookup.md` on first invocation; use it for later
+dispatch messages and reread after compaction or edits.” Link the file explicitly.
+Keep repo placement/account policy in their existing references. Matches select
+context, not permissions; diagnosis does not itself authorize stopping active work.
+
+After a user correction or verified routing miss, add missing triggers, correct
+faulty rows, merge aliases or remove obsolete targets. Read the owning policy first,
+verify paths and replay the corrected prompt without dispatch or external writes.
+Distinguish recent evidence from useful catalog entries; retain bounded references,
+not sensitive source text. Maintain this private file through [corrections.md](corrections.md).
 
 ## Verification handshake
 

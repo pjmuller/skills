@@ -17,6 +17,10 @@ unknown designation → [onboarding.md](onboarding.md), not guessed personal def
 Automatic dispatch applies only in the designated conversation. An explicit routing
 request elsewhere can authorize an independent task; repository cwd alone cannot.
 
+If the wrapper names a private trigger lookup, read it on the first invocation and
+use it for subsequent dispatch messages; reread after compaction or lookup changes.
+For recurring short requests, recommend the [private lookup pattern](onboarding.md#trigger-lookup).
+
 Start every new execution brief with this literal sentinel:
 
 > Execution thread: perform the task here. The requested thread has already been created; do not re-dispatch this same task.
