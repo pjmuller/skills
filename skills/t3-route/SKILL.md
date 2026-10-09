@@ -62,6 +62,19 @@ and `--thinking` unless the user specifies them or an applicable authorized play
 requires them. Resolve a named account with `t3-list-profiles`; never guess its ID.
 Check wrapper capacity guidance for batches. A dry run can verify flags and routing.
 
+### Model tier and fallback
+
+A wrapper may give a task type (trigger lookup row, playbook) a **preferred model**,
+plus a private **tier map** pairing comparable models across providers (thinker ↔
+thinker, coder ↔ coder, cheap ↔ cheap). Precedence: explicit user model > task
+preference > wrapper default. Before spawning a preferred model, check its provider's
+windows (`t3-usage-windows status`, or the spawn helper's capacity verdict). Exhausted,
+rate-limited or unavailable → spawn the tier map's comparable model on another provider
+and report `preferred X → used Y (reason)`. Never drop a tier silently; no comparable
+capacity → report the blocker. An explicit user model is never substituted: report
+instead. A capability-bound preference (e.g. one provider's computer use) falls back
+only to the wrapper's named alternative route for that capability, not to a bare tier swap.
+
 ### Lifecycle
 
 Decide eligibility at each standalone dispatch; omit `--settle-when-done` unless
