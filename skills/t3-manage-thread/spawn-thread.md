@@ -11,6 +11,9 @@ the local checkout and gets focus. Inheriting from a parent in another T3
 project is refused unless `--allow-cross-project-source`: an accidental inherit
 silently runs the work under the wrong project/provider.
 
+**Model floor:** OpenAI below `gpt-6` and Sol below 6.1 are refused ("5.5" in a brief means
+Opus 5.5). Deliberately older, e.g. a cyber task the current model refuses: `--allow-old-model "<reason>"`.
+
 ## 🏓 round-trip workers
 
 A `🏓` title appends a ping-back footer with the resolved parent id and hides
