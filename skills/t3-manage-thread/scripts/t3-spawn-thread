@@ -25,6 +25,8 @@ Options:
   --title TITLE                                     Default: first 72 prompt chars
   --project PATH                                    Default: current git root
   --allow-cross-project-source                      Confirm a deliberate source-project -> target-project spawn
+  --allow-old-model REASON                          Permit a model below the floor (OpenAI < gpt-6, Sol < 6.1),
+                                                    e.g. a cyber task the current model refuses
   --hide / --no-hide                                Keep the new thread out of the sidebar with a
                                                     detached snooze keeper (the agent keeps running).
                                                     Default: on only when --title starts with 🏓
@@ -53,6 +55,7 @@ project_path=""
 open_thread=1
 dry_run=0
 allow_cross_project_source=0
+allow_old_model_reason=""
 hide_choice=auto
 settle_when_done=0
 
@@ -92,6 +95,11 @@ while (($#)); do
     --allow-cross-project-source)
       allow_cross_project_source=1
       shift
+      ;;
+    --allow-old-model)
+      [[ $# -ge 2 && -n "$2" ]] || usage
+      allow_old_model_reason="$2"
+      shift 2
       ;;
     --hide)
       hide_choice=on
@@ -382,6 +390,23 @@ fi
 # pinned exactly as requested.
 if [[ "$(printf '%s' "$model_choice" | tr '[:upper:]' '[:lower:]')" == "sol" ]] || ((defaulted_to_sol)); then
   model_name="$(normalize_model sol "$provider_instance_id")"
+fi
+
+# Model floor: "5.5" in a brief means Opus 5.5, and an older OpenAI build is never the default
+# choice. Only an explicit, reasoned override (e.g. a cyber task the current model refuses) passes.
+below_model_floor() {
+  local m
+  m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ "$m" =~ ^gpt-([0-9]+)(\.([0-9]+))?(-|$) ]] || return 1
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[3]:-0}"
+  ((major < 6)) && return 0
+  [[ "$m" == *-sol ]] && ((major == 6 && minor < 1)) && return 0
+  return 1
+}
+if below_model_floor "$model_name" && [[ -z "$allow_old_model_reason" ]]; then
+  echo "Model $model_name is below the floor (OpenAI >= gpt-6, Sol >= 6.1). \"5.5\" means Opus 5.5 (--model opus)." >&2
+  echo "Deliberately older? Rerun with --allow-old-model \"<reason>\"." >&2
+  exit 2
 fi
 
 selected_family="$(model_family "$model_name")"
