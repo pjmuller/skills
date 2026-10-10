@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.4.7 (2026-10-10)
+
+- t3-manage-thread: Claude plan discovery reads live OAuth profile metadata, cached with usage for 90 s, so subscription upgrades/downgrades override stale login tiers. Failed discovery preserves valid usage with a marked login fallback; cache identity survives token rotation when local account ids exist. No credential changes or quota overrides.
+  Spawn-selection fixtures now use the current model floor and explicitly verify rejection of older Sol models.
+
 - agents-md global template: browser routing by job (T3 preview / CLI over CDP / computer use), from measured Gmail tests.
 
 - t3-route: optional preferred model per task type, with a wrapper tier map and reported cross-provider fallback when the preferred provider is exhausted.

@@ -118,11 +118,11 @@ near-simultaneous spawns are not spread across equal accounts (the next read,
 ≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
 
 For a huge or batched job, check `t3-spawn-thread --dry-run`, `t3-limits`, and
-the active fleet before launch. Plan weights come from the login label, which
-can lag a billing change (Claude) or state no multiplier (Codex `pro`/`prolite`):
-an unweighted or stale-labelled account is ranked by percentage alone, so stage
-huge jobs on it one at a time and recheck actual consumption. Explicit
-`--profile` still wins.
+the active fleet before launch. Claude weights use live profile metadata, cached
+with usage for 90 s; discovery failure marks `(login fallback)`, whose tier may
+lag billing. Codex `pro`/`prolite` states no multiplier. Stage huge jobs on
+uncertain or unweighted accounts one at a time and recheck consumption.
+Explicit `--profile` still wins.
 
 Profile names come from T3's native registry on every call (exact id, else a
 unique case-insensitive id/display-name match narrowed by `--model`'s driver),

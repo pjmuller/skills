@@ -29,6 +29,8 @@ def settings(tmp_path):
         "new_instance": {"driver": "futureDriver", "displayName": "Future Gamma", "enabled": True},
         "codex_disabled": {"driver": "codex", "displayName": "Codex Beta", "enabled": False},
     }}))
+    (path.parent / "model-manifest.json").write_text(json.dumps({"manifest": {
+        "currentModels": {"codex": ["gpt-6.1-sol"]}}}))
     return path
 
 
@@ -69,7 +71,8 @@ def test_auto_preserves_codex_and_sibling_tie(settings):
     ("beta", "auto", "codex", None, None),
     ("auto", "astra", "claudeAgent", "codex_beta", "reasoningEffort"),
     ("auto", "astra", "new_instance", "codex", "reasoningEffort"),  # no sibling: capacity routing, first id
-    ("codex_beta", "gpt-5.6-sol", "codex", "codex_beta", "reasoningEffort"),
+    ("codex_beta", "gpt-6.1-sol", "codex", "codex_beta", "reasoningEffort"),
+    ("codex_beta", "gpt-5.6-sol", "codex", None, None),
     ("auto", "claude-opus-5", "claudeAgent", "claudeAgent", "effort"),
     ("auto", "claude-fable-9", "claudeAgent", "claudeAgent", "effort"),  # future id: family effort
     ("codex_beta", "gpt-9-astra", "codex", "codex_beta", "reasoningEffort"),
@@ -82,11 +85,12 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
     code = functions + selection
     code = code.replace('$(dirname "$(readlink -f "$0")")', str(SCRIPTS))
     inherited_model = ("claude-opus-5" if inherited == "claudeAgent" else
-                       "future-model" if inherited == "new_instance" else "gpt-5.6-sol")
+                       "future-model" if inherited == "new_instance" else "gpt-6.1-sol")
     payload = json.dumps({"instanceId": inherited, "model": inherited_model,
                           "options": [{"id": "fastMode", "value": True}]})
     runner = tmp_path / "selection.sh"
     runner.write_text("set -eu\n" +
+        "allow_old_model_reason=''\n" +
         f"provider_choice={shlex.quote(profile)}; model_choice={shlex.quote(model)}; thinking_choice=auto\n" +
         f"t3_base_dir={shlex.quote(str(settings.parent.parent))}\n" +
         f"model_selection_json={shlex.quote(payload)}\n" + code + '\necho "$model_selection_json"\n')
@@ -99,7 +103,7 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
     result = subprocess.run(["bash", str(runner)], capture_output=True, text=True, env=env)
     if expected is None:
         assert result.returncode != 0
-        assert any(word in result.stderr for word in ["incompatible", "Ambiguous", "Choose --profile"])
+        assert any(word in result.stderr for word in ["incompatible", "Ambiguous", "Choose --profile", "below the floor"])
     else:
         assert result.returncode == 0, result.stderr
         selected = json.loads(result.stdout)
@@ -111,12 +115,12 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
         if model == "astra":
             assert selected["model"] == "gpt-6-astra"
             assert {"id": "reasoningEffort", "value": "medium"} in selected["options"]
-        if model in ("gpt-5.6-sol", "claude-opus-5"):
+        if model in ("gpt-6.1-sol", "claude-opus-5"):
             assert selected["model"] == model
         if model in ("claude-fable-9", "gpt-9-astra"):
             assert {"id": option, "value": "medium"} in selected["options"]
         if profile == "codex_beta" and model == "auto" and inherited == "claudeAgent":
-            assert selected["model"] == "gpt-6-sol"
+            assert selected["model"] == "gpt-6.1-sol"
         if model == "auto" and inherited == "codex":
             assert {"id": "fastMode", "value": True} in selected["options"]
 

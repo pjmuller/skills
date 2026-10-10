@@ -11,9 +11,11 @@ Glossary:
 - `pace` = share of the window already elapsed (what an even load would have
   used); `room` = pace − used: **+20** = spare capacity, **−20** = burning ahead
   of pace. No pace for a stale window (no reset / reset in the past).
-- Plan label = `rateLimitTier`, plus `(subscriptionType)` when they disagree
-  (e.g. `max_20x (pro)`); both come from the local credential written at login,
-  so reconcile it with the current subscription if the login label looks stale.
+- Claude plan label comes from live `/api/oauth/profile` organization metadata,
+  cached with usage for 90 s; `--fresh` refreshes both. Discovery failures retain
+  valid usage and mark the saved credential label `(login fallback)`.
+  Login and `.claude.json` tier fields can lag subscription changes; neither
+  overrides a live tier. Disagreement appears in `t3-limits` notes.
   Codex `pro` does not distinguish
   a 5x from a 20x allowance; `unknown` means no label was available.
 - Percentages are relative to each account's own allowance. A 1x account at
@@ -36,7 +38,8 @@ Behaviour worth knowing:
   copy); an expired one reports itself and the other accounts still report.
 - The endpoints are shared with other pollers and often 429. Last good payloads
   are cached in `$T3CODE_HOME/userdata/t3-limits-cache.json` (no tokens), bound
-  to home + account id, served fresh for 90 s and as marked-stale fallback up to
+  to home + account identity (Claude: hash of account/org ids, token fingerprint
+  if no local identity), served fresh for 90 s and as marked-stale fallback up to
   15 min. A cached exhausted window stays until its reset so routing keeps
   excluding it. `T3_LIMITS_DEBUG=1` traces cache hits.
 - Paid overage is never shown or counted as capacity.
