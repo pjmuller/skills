@@ -80,7 +80,9 @@ only to the wrapper's named alternative route for that capability, not to a bare
 Decide eligibility at each standalone dispatch; omit `--settle-when-done` unless
 the outcome is bounded and clear, expected durable delivery is independently
 verifiable, the full path already has authorization, and no user review/dialogue
-is needed. Eligible work uses `--settle-when-done --no-hide`: visible while running.
+is needed. Review/dialogue means a concrete outstanding user decision or requested
+discussion; task class, completed agent review or a readable result alone do not
+require it. Eligible work uses `--settle-when-done --no-hide`: visible while running.
 Known outstanding approval prevents arming; conditional project gates stay in force
 and unmet gates prevent settling. Result verification belongs to execution.
 Wrappers may tailor defaults/playbooks, never explicit keep-open instructions or
@@ -88,8 +90,8 @@ authorization/safety limits. Simplicity or a confidence percentage is insufficie
 Dispatchers and tasks needing user review/dialogue stay open; 🏓 workers are
 always settled by their parent. This policy authorizes lifecycle only, not
 ticket writes or deployment. Each brief records one **Lifecycle:** sentence with
-mode and concrete destination, referencing the `t3-manage-thread` completion
-footer for conditional self-settlement; do not duplicate that footer. Name live
+mode and concrete destination (or specific pending action for keep-open), referencing
+the `t3-manage-thread` completion footer for conditional self-settlement; do not duplicate that footer. Name live
 production/ticket delivery only when actually authorized and required.
 
 Brief: sentinel above, **Source:** exact user task text/link and attachment paths,
