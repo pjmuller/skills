@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import hashlib
+import io
 import json
 import math
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +30,7 @@ sys.modules["t3_limits"] = t3_limits
 SPEC.loader.exec_module(t3_limits)
 
 NOW = datetime(2026, 9, 5, 7, 5, tzinfo=timezone.utc)
+FIXTURE_IDENTITY = hashlib.sha256(b"fixture-token").hexdigest()
 
 CLAUDE_PAYLOAD = {
     "five_hour": {
@@ -182,7 +185,7 @@ class CacheTest(unittest.TestCase):
                     "claudeAgent_work": {
                         "payload": CLAUDE_PAYLOAD,
                         "fetched_at": NOW.timestamp() - age_seconds,
-                        "identity": "~/.claude_work_home|",
+                        "identity": f"~/.claude_work_home|{FIXTURE_IDENTITY}",
                     }
                 }
             )
@@ -277,7 +280,61 @@ class CacheTest(unittest.TestCase):
         [account] = self._accounts(fetch)
         self.assertEqual(len(calls), 1)  # a different home/account never reuses the entry
         self.assertEqual(json.loads(self.cache.read_text())["claudeAgent_work"]["identity"],
-                         "~/.claude_work_home|")
+                         f"~/.claude_work_home|{FIXTURE_IDENTITY}")
+
+
+class LiveClaudePlanTest(unittest.TestCase):
+    def test_live_upgrade_and_downgrade_are_cached_without_profile_data(self):
+        for old, live in (("max_5x", "max_20x"), ("max_20x", "max_5x")):
+            with self.subTest(live=live), tempfile.TemporaryDirectory() as directory:
+                cache = Path(directory) / "cache.json"
+                profile = Mock(return_value={"organization": {
+                    "rate_limit_tier": f"default_claude_{live}", "uuid": "private-org"},
+                    "account": {"email": "private@example.com"}})
+                credentials = {"accessToken": "fixture-token", "rateLimitTier": old,
+                               "subscriptionType": "pro"}
+                with patch.object(t3_limits, "claude_credentials", return_value=credentials), \
+                        patch.object(t3_limits.urllib.request, "urlopen", return_value=
+                                     io.BytesIO(json.dumps(CLAUDE_PAYLOAD).encode())):
+                    fetch = lambda token: t3_limits.fetch_claude_usage(token, fetch_profile=profile)
+                    [account] = t3_limits.claude_accounts(fetch=fetch, settings_path=settings_fixture(),
+                                                        cache_path=cache, now=NOW)
+                self.assertEqual(account.plan, live)  # stale subscriptionType is ignored
+                self.assertEqual(credentials["rateLimitTier"], old)  # no credential mutation
+                self.assertIn("saved login label", account.notes[0])
+                text = cache.read_text()
+                for secret in ("fixture-token", "private@example.com", "private-org"):
+                    self.assertNotIn(secret, text)
+                with patch.object(t3_limits, "claude_credentials", return_value=credentials):
+                    [cached] = t3_limits.claude_accounts(fetch=Mock(side_effect=AssertionError("network")),
+                        settings_path=settings_fixture(), cache_path=cache, now=NOW + timedelta(seconds=30))
+                self.assertEqual(cached.plan, live)
+                self.assertEqual(cached.rows[0].used_percent, 100)  # exhausted cap preserved
+                profile.assert_called_once_with("fixture-token")
+
+    def test_profile_failures_keep_valid_usage_without_retrying(self):
+        results = [urllib.error.HTTPError(t3_limits.PROFILE_URL, 429, "rate limit", {}, None),
+                   TimeoutError(), ValueError("invalid json"), {}, {"organization": None}]
+        for result in results:
+            profile = Mock(side_effect=result) if isinstance(result, Exception) else Mock(return_value=result)
+            with self.subTest(result=result), patch.object(t3_limits.urllib.request, "urlopen",
+                    return_value=io.BytesIO(json.dumps(CLAUDE_PAYLOAD).encode())) as usage:
+                payload = t3_limits.fetch_claude_usage("fixture-token", fetch_profile=profile)
+            plan, rows, _ = t3_limits.claude_reading(payload, {"rateLimitTier": "max_5x"})
+            self.assertEqual(plan, "max_5x (login fallback)")
+            self.assertEqual(rows[0].used_percent, 100)
+            usage.assert_called_once()
+
+    def test_identity_survives_token_rotation_but_changes_with_account(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / ".claude.json"
+            config.write_text(json.dumps({"oauthAccount": {"accountUuid": "account-a"}}))
+            with patch.object(t3_limits, "claude_credentials", side_effect=[
+                    {"accessToken": "old"}, {"accessToken": "new"}, {"accessToken": "new"}]):
+                old = t3_limits.claude_usage_credentials(directory)["identity"]
+                self.assertEqual(old, t3_limits.claude_usage_credentials(directory)["identity"])
+                config.write_text(json.dumps({"oauthAccount": {"accountUuid": "account-b"}}))
+                self.assertNotEqual(old, t3_limits.claude_usage_credentials(directory)["identity"])
 
 
 class CodexRowsTest(unittest.TestCase):

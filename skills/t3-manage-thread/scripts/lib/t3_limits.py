@@ -8,7 +8,8 @@ profile T3 Code knows about.
 
 Read-only and deterministic: T3's `settings.json` lists the enabled provider
 instances; each Claude instance's OAuth token is read from macOS Keychain or Linux credentials and
-each Codex instance's from `<home>/auth.json`; the percentages come from Anthropic's
+each Codex instance's from `<home>/auth.json`; Claude's current plan comes from
+`/api/oauth/profile`, and percentages come from Anthropic's
 `/api/oauth/usage` and ChatGPT's `/backend-api/wham/usage`. Tokens are never printed
 and never refreshed (a refresh would rotate them out from under the CLI itself); an
 expired token just reports itself.
@@ -49,10 +50,12 @@ TZ = ZoneInfo("Europe/Brussels")
 SETTINGS = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "settings.json"
 KEYCHAIN_BASE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 CODEX_HOME = Path.home() / ".codex"  # Codex CLI default; T3's empty homePath
 HEADERS = {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "t3-limits/0.1"}
 TIMEOUT = 10
+PROFILE_TIMEOUT = 3
 CACHE = SETTINGS.parent / "t3-limits-cache.json"
 FRESH_SECONDS = 90  # windows only move on the minute scale
 STALE_SECONDS = 15 * 60  # older than this and "no data" beats a wrong number
@@ -198,12 +201,48 @@ def claude_credentials(home_path: str) -> dict:
     raise LookupError("; ".join(errors + [f"no Claude login in {path.parent}"]))
 
 
-def fetch_claude_usage(token: str) -> dict:
+def fetch_claude_profile(token: str) -> dict:
+    request = urllib.request.Request(
+        PROFILE_URL, headers={"Authorization": f"Bearer {token}",
+                              "Cache-Control": "no-cache", **HEADERS}
+    )
+    with urllib.request.urlopen(request, timeout=PROFILE_TIMEOUT) as response:
+        return json.loads(response.read())
+
+
+def fetch_claude_usage(token: str, fetch_profile=fetch_claude_profile) -> dict:
     request = urllib.request.Request(
         USAGE_URL, headers={"Authorization": f"Bearer {token}", **HEADERS}
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        return json.loads(response.read())
+        payload = json.loads(response.read())
+    if not isinstance(payload, dict):
+        return payload  # collect reports malformed usage independently
+    # Discovery is optional: never retry valid usage or demote it for a profile error.
+    payload["_t3_claude_plan"] = None
+    try:
+        profile = fetch_profile(token)
+        tier = profile.get("organization", {}).get("rate_limit_tier")
+        if isinstance(tier, str) and tier:
+            payload["_t3_claude_plan"] = tier.removeprefix("default_claude_")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return payload  # cache only the tier, never the profile's identity/billing data
+
+
+def claude_usage_credentials(home_path: str) -> dict:
+    credentials = dict(claude_credentials(home_path))
+    config = (claude_home(home_path) / ".claude.json" if home_path or os.environ.get("CLAUDE_CONFIG_DIR")
+              else Path.home() / ".claude.json")
+    try:
+        account = json.loads(config.read_text()).get("oauthAccount") or {}
+        if not isinstance(account.get("accountUuid"), str) or not account["accountUuid"]:
+            raise ValueError("no stable account identity")
+        identity = f"{account['accountUuid']}|{account.get('organizationUuid', '')}"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        identity = credentials["accessToken"]  # rotate only when no stable account id exists
+    credentials["identity"] = hashlib.sha256(identity.encode()).hexdigest()
+    return credentials
 
 
 
@@ -378,6 +417,19 @@ def claude_plan(credentials: dict) -> str:
     return tier or subscription
 
 
+def claude_reading(payload: dict, credentials: dict) -> tuple:
+    rows, notes = claude_rows(payload)
+    login = claude_plan(credentials)
+    live = payload.get("_t3_claude_plan")
+    if isinstance(live, str) and live:
+        if login and login != live:
+            notes.append(f"live plan {live}; saved login label {login}")
+        return live, rows, notes
+    if login:
+        login = login[:-1] + ", login fallback)" if login.endswith(")") else login + " (login fallback)"
+    return login, rows, notes
+
+
 def claude_accounts(
     fetch=fetch_claude_usage,
     settings_path: Path = SETTINGS,
@@ -387,9 +439,9 @@ def claude_accounts(
 ) -> list[Account]:
     return collect(
         claude_profiles(settings_path),
-        claude_credentials,
+        claude_usage_credentials,
         lambda credentials: fetch(credentials["accessToken"]),
-        lambda payload, credentials: (claude_plan(credentials), *claude_rows(payload)),
+        claude_reading,
         cache_path, fresh, now or datetime.now(timezone.utc),
     )
 
@@ -514,7 +566,7 @@ def reset_text(when: datetime | None, now: datetime) -> str:
 
 
 PACE_LEGEND = "pace = % of window elapsed · room = pace − used (+ under pace, − over pace)"
-PLAN_HINT = "Percentages are per account; routing weights them by the label's multiplier (max_20x → 20, none → 1; Claude login may lag, Codex pro states none); free quota does not reserve running work."
+PLAN_HINT = "Percentages are per account; routing weights them by the discovered multiplier (max_20x → 20, none → 1; Claude live profile, marked login fallback if unavailable; Codex pro states none); free quota does not reserve running work."
 
 
 def plan_label(account: Account) -> str:
