@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-route / agents-md: align standalone self-settlement with authorized routing policy; keep-open review requires a concrete pending user decision, not merely completed agent review or a readable result. Template links private settling-policy notes for iteration.
+
 ## v0.4.7 (2026-10-10)
 
 - t3-manage-thread: Claude plan discovery reads live OAuth profile metadata, cached with usage for 90 s, so subscription upgrades/downgrades override stale login tiers. Failed discovery preserves valid usage with a marked login fallback; cache identity survives token rotation when local account ids exist. No credential changes or quota overrides.

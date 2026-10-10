@@ -173,3 +173,14 @@ Parent task: “Implement the billing change and obtain independent review befor
 Dispatch: this spawn is the review worker with a real parent address; parent owns release.
 End: review finished and findings sent to parent. Parent has not assessed findings
 or confirmed closure; no review activity remains running.
+
+### j. Routine tooling maintenance
+
+User: “I upgraded my subscription; check discovery, correct stale routing metadata
+if needed, and push verified fixes.” No request for user review or keep-open.
+Dispatch: read-only authenticated metadata and bounded helper/docs fixes authorized;
+delivery is pushed source plus independently verified live routing.
+End: live tier confirmed, stale-label defect fixed, tests pass, pushed/tagged helper
+and docs verified; independent agent review finished, worker settled. No pending
+user decision, unexpected finding or background task. Class is meta-tooling;
+the final report is available to read. This qualifies for conditional self-settlement.
