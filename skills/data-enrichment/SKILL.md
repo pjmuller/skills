@@ -93,6 +93,7 @@ answered. Any other id is one specific provider.
 | Need | Read |
 | --- | --- |
 | Which platforms exist, with counts and starting prices | `curl -s https://treg.to/catalog/platforms` |
+| Everything one platform offers (e.g. all Instagram endpoints, JSON) | `curl -s https://treg.to/catalog/platforms/<slug>` (`instagram`, `tiktok`, …); `/catalog/<slug>` is the human HTML page. The `.md` variants llms.txt promises 404 (checked 2026-10-10) |
 | The right endpoint for a job | `TREG search "<job>"`, then `TREG get <id>` |
 | One provider's whole offering | `https://treg.to/tools/<provider>` (e.g. `hunter`) |
 | Jobs compared across providers, chained recipes | [use cases](https://treg.to/use-cases), [workflows](https://treg.to/workflows) |
