@@ -86,8 +86,12 @@ The one home for account-routing policy. Omitted `--profile` (or `auto`) picks a
 the enabled T3 instances of the resolved model's driver — Claude **and** Codex,
 one policy (`scripts/lib/profile_routing.py`, usage from `scripts/lib/t3_limits.py`,
 the same cached numbers `t3-limits` prints; see [limits.md](limits.md) for pace/room).
-Explicit `--profile` or `T3_SPAWN_PROVIDER` wins unchanged and never polls; it is
-also the override when every account is exhausted.
+User named several accounts → `--profile a,b`: same policy among only those
+(same driver as the model, else exit 2). A single explicit `--profile NAME` is
+capacity-checked: an exhausted relevant window (session, weekly, or a model-only
+cap like "Fable only") refuses with the best alternative and a rerun command;
+unknown usage only warns. `--force-profile` overrides (e.g. deliberately queue for
+after the reset). `T3_SPAWN_PROVIDER` wins unchanged and never polls.
 
 - **Excluded**: any relevant window at 100 % until its reset, including a
   `<Model> only` cap for the requested family.
@@ -122,7 +126,7 @@ the active fleet before launch. Claude weights use live profile metadata, cached
 with usage for 90 s; discovery failure marks `(login fallback)`, whose tier may
 lag billing. Codex `pro`/`prolite` states no multiplier. Stage huge jobs on
 uncertain or unweighted accounts one at a time and recheck consumption.
-Explicit `--profile` still wins.
+`--force-profile` still wins.
 
 Profile names come from T3's native registry on every call (exact id, else a
 unique case-insensitive id/display-name match narrowed by `--model`'s driver),

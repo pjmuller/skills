@@ -25,8 +25,11 @@ Three rules (spawn-thread.md §Automatic profile routing):
 3. Ties prefer the inherited account (or its cross-driver sibling), then the
    instance id. Paid overage is never capacity.
 
-    profile_routing.py MODEL PREFERRED_INSTANCE SETTINGS_JSON   # prints the chosen id;
-                                                                 # the explanation goes to stderr
+    profile_routing.py MODEL PREFERRED_INSTANCE SETTINGS_JSON [ALLOWED_IDS_CSV]
+        prints the chosen id (only among ALLOWED when given); explanation on stderr
+    profile_routing.py --check MODEL INSTANCE SETTINGS_JSON
+        explicit single account: exit 0 when usable or unverified (warning on
+        stderr), exit 2 printing the best alternative id when it is excluded
 """
 import math
 import re
@@ -174,13 +177,13 @@ def choose(accounts, model, preferred, now):
         best = min(unknown, key=tie)
         return best.instance_id, "usage unknown/stale for every candidate; capacity unverified", candidates
     error = ValueError("every compatible profile has an exhausted subscription window; "
-                       "wait for a reset or pass --profile NAME to override")
+                       "wait for a reset or pass --profile NAME --force-profile to override")
     error.candidates = candidates
     raise error
 
 
 def explain(model, candidates, now, selected=None, reason=""):
-    lines = [f"Profile routing for {model} (usage cached ≤90 s; explicit --profile NAME bypasses this):", PLAN_HINT]
+    lines = [f"Profile routing for {model} (usage cached ≤90 s; --force-profile bypasses this):", PLAN_HINT]
     width = max((len(c.instance_id) for c in candidates), default=8)
     for c in candidates:
         if c.status == "ok":
@@ -200,11 +203,18 @@ def explain(model, candidates, now, selected=None, reason=""):
     return "\n".join(lines)
 
 
-def route(model, preferred, settings_path=SETTINGS, collect=None):
+def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None):
     """(instance_id, reason, explanation). Drivers without per-instance usage keep
-    the inherited account (sibling on a driver switch)."""
+    the inherited account (sibling on a driver switch). `allowed` (ids) narrows
+    the candidates to the accounts the user named."""
     family = model_family(model)
     instances = registry(settings_path)
+    if allowed:
+        driver = DRIVERS.get(family, (None,))[0]
+        wrong = [id for id in allowed if instances.get(id, {}).get("driver") != driver]
+        if driver is None or wrong:
+            raise ValueError(f"--profile {','.join(allowed)}: every account must be a {family} profile "
+                             f"for {model}" + (f"; not: {', '.join(wrong)}" if wrong else ""))
     if family not in DRIVERS:
         if family == "unknown":
             return preferred, "", ""
@@ -222,6 +232,8 @@ def route(model, preferred, settings_path=SETTINGS, collect=None):
     now = datetime.now(timezone.utc)
     accounts = (collect or accounts_for)(settings_path=settings_path,
                                          cache_path=settings_path.parent / "t3-limits-cache.json", now=now)
+    if allowed:
+        accounts = [a for a in accounts if a.instance_id in allowed]
     try:
         selected, reason, candidates = choose(accounts, model, preferred, now)
     except ValueError as error:
@@ -230,9 +242,51 @@ def route(model, preferred, settings_path=SETTINGS, collect=None):
     return selected, reason, explain(model, candidates, now, selected, reason)
 
 
-if __name__ == "__main__":
+def check(model, instance_id, settings_path=SETTINGS, collect=None):
+    """Capacity check for one explicit account. Returns a stderr note (empty
+    when not applicable); raises ValueError with .alternative/.explanation when
+    a relevant window is exhausted."""
+    family = model_family(model)
+    if family not in DRIVERS or registry(settings_path).get(instance_id, {}).get("driver") != DRIVERS[family][0]:
+        return ""  # other drivers have no per-account usage; a family mismatch fails later
+    driver, accounts_for = DRIVERS[family]
+    now = datetime.now(timezone.utc)
+    accounts = (collect or accounts_for)(settings_path=settings_path,
+                                         cache_path=settings_path.parent / "t3-limits-cache.json", now=now)
+    named = next((a for a in accounts if a.instance_id == instance_id), None)
+    if named is None:
+        return f"warning: no usage reading for {instance_id}; capacity unverified"
+    candidate = assess(named, model, now)
+    if candidate.status == "unknown":
+        return f"warning: {instance_id} usage unknown ({candidate.detail}); capacity unverified"
+    if candidate.status == "ok":
+        return explain(model, [candidate], now, instance_id, "explicit --profile, capacity ok")
+    error = ValueError(f"{instance_id} cannot run {model}: {candidate.detail}")
+    error.alternative, reason = None, ""
+    others = [a for a in accounts if a.instance_id != instance_id]
     try:
-        selected, reason, explanation = route(sys.argv[1], sys.argv[2], Path(sys.argv[3]))
+        error.alternative, reason, candidates = choose(others, model, instance_id, now)
+    except ValueError as exhausted:
+        candidates = exhausted.candidates
+    error.explanation = explain(model, [candidate, *candidates], now, error.alternative, reason)
+    raise error
+
+
+if __name__ == "__main__":
+    if sys.argv[1] == "--check":
+        try:
+            note = check(sys.argv[2], sys.argv[3], Path(sys.argv[4]))
+        except ValueError as error:
+            print(error.explanation, file=sys.stderr)
+            print(f"Profile check: {error}", file=sys.stderr)
+            print(error.alternative or "")
+            raise SystemExit(2)
+        if note:
+            print(note, file=sys.stderr)
+        raise SystemExit(0)
+    try:
+        allowed = [id for id in (sys.argv[4] if len(sys.argv) > 4 else "").split(",") if id]
+        selected, reason, explanation = route(sys.argv[1], sys.argv[2], Path(sys.argv[3]), allowed=allowed)
     except ValueError as error:
         print(getattr(error, "explanation", ""), file=sys.stderr)
         print(f"Profile routing: {error}", file=sys.stderr)
