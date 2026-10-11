@@ -9,7 +9,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
-from profile_routing import choose, explain, relevant, route
+from profile_routing import check, choose, explain, relevant, route
 from t3_limits import Account, Row, claude_profiles, claude_rows
 
 NOW = datetime.now(timezone.utc)
@@ -247,3 +247,27 @@ def test_unused_1x_beside_20x_is_overflow_only_and_says_so():
     big.rows[0].used_percent = 95  # both tight → plan-weighted score decides: 20·1 vs 1·100 per 48 h
     big.rows[1].used_percent = 99
     assert choose([pro, big], "claude-fable-5", "pro", NOW)[0] == "pro"
+
+
+def test_named_accounts_route_among_themselves_and_explicit_one_is_checked(tmp_path):
+    """Incident 2026-10-11: --profile kampkompas for Fable while its "Fable only" cap was 100 %."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"providerInstances": {
+        id: {"driver": "claudeAgent", "enabled": True} for id in ("kamp", "dentai", "probackup")} | {
+        "codex": {"driver": "codex", "enabled": True}}}))
+    accounts = [account("kamp", scoped=("Fable", 100)), account("dentai", 70), account("probackup", 1)]
+    collect = Mock(return_value=accounts)
+    assert route("claude-fable-5-1", "kamp", settings, collect, ["kamp", "dentai"])[0] == "dentai"
+    assert route("claude-fable-5-1", "kamp", settings, collect)[0] == "probackup"  # unnamed account wins otherwise
+    with pytest.raises(ValueError, match="must be a claude profile.*not: codex"):
+        route("claude-fable-5-1", "kamp", settings, collect, ["kamp", "codex"])
+    with pytest.raises(ValueError, match="Fable only exhausted") as info:
+        check("claude-fable-5-1", "kamp", settings, collect)
+    assert info.value.alternative == "probackup" and "← selected" in info.value.explanation
+    assert "capacity ok" in check("claude-opus-5", "kamp", settings, collect)  # a Fable-only cap spares Opus
+    collect = Mock(return_value=[Account("kamp", "kamp", error="HTTP 429"), *accounts[1:]])
+    assert "unverified" in check("claude-fable-5-1", "kamp", settings, collect)  # unknown never blocks
+    collect = Mock(return_value=[accounts[0], account("dentai", 100)])
+    with pytest.raises(ValueError) as info:
+        check("claude-fable-5-1", "kamp", settings, collect)
+    assert info.value.alternative is None

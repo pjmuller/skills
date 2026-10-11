@@ -25,8 +25,9 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 - A 🏓 title hides the thread while it runs. When the user asks for a "separate / own /
   standalone thread" (they want to watch or talk to it), spawn it visible: `--no-hide` keeps the
   🏓 ping-back, 📤 drops it. Hide only when they just want the result back here.
-- No `--profile` / `--thinking` unless the user names an account or level:
-  [routing policy](spawn-thread.md#automatic-profile-routing).
+- No `--profile` / `--thinking` unless the user names an account or level;
+  several named accounts → `--profile a,b` (routes among them). Explicit profiles
+  are capacity-checked: [routing policy](spawn-thread.md#automatic-profile-routing).
 - Brief = file on disk, path in the argument ([quoting trap](cross-thread-ping.md)).
 - `--source-thread` when the parent is not auto-detected (a Codex CLI session
   outside T3 has no T3 address).

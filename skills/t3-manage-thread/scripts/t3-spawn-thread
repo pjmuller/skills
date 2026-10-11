@@ -10,7 +10,7 @@ usage() {
 Usage: t3-spawn-thread [options] -- "task brief"
 
 Options:
-  --profile auto|NAME                               Account, not driver: NAME is a provider
+  --profile auto|NAME|NAME,NAME[,…]                 Account, not driver: NAME is a provider
                                                     instance id or a unique (case-insensitive)
                                                     substring of its display name; --model picks
                                                     the driver ("probackup" + astra = Codex
@@ -18,6 +18,12 @@ Options:
                                                     Default: Claude/Codex by capacity (ties keep
                                                     the parent's account or its sibling); other
                                                     drivers stay on the inherited account.
+                                                    A comma list routes by capacity among only
+                                                    those accounts. A single NAME is capacity-
+                                                    checked: an exhausted relevant window
+                                                    (session, weekly, "<Model> only") refuses
+                                                    and names the best alternative.
+  --force-profile                                   Use the single --profile NAME even when exhausted
   --provider PROFILE                                Alias for --profile
   --model auto|sol|astra|luna|haiku|fable|opus|gemini|MODEL  Default: inherit
   --thinking auto|low|med|medium|high                Default: inherit, else high
@@ -45,7 +51,10 @@ EOF
   exit "${1:-2}"
 }
 
+original_args=("$@")
 provider_choice="${T3_SPAWN_PROVIDER:-auto}"
+provider_from_flag=0
+force_profile=0
 model_choice="${T3_SPAWN_MODEL:-auto}"
 thinking_choice="${T3_SPAWN_THINKING:-auto}"
 source_thread_id="${T3_SOURCE_THREAD_ID:-}"
@@ -64,7 +73,12 @@ while (($#)); do
     --profile|--provider)
       [[ $# -ge 2 ]] || usage
       provider_choice="$2"
+      provider_from_flag=1
       shift 2
+      ;;
+    --force-profile)
+      force_profile=1
+      shift
       ;;
     --model)
       [[ $# -ge 2 ]] || usage
@@ -361,7 +375,17 @@ inherited_provider_instance_id="$provider_instance_id"
 model_name="$(printf '%s' "$model_selection_json" | jq -r '.model')"
 inherited_model_name="$model_name"
 defaulted_to_sol=0
-normalized_provider="$(normalize_provider "$provider_choice")"
+allowed_profiles=""
+if [[ "$provider_choice" == *,* ]]; then
+  IFS=',' read -ra profile_parts <<< "$provider_choice"
+  for profile_part in "${profile_parts[@]}"; do
+    [[ -n "$profile_part" ]] || continue
+    allowed_profiles+="${allowed_profiles:+,}$(normalize_provider "$profile_part")"
+  done
+  normalized_provider="${allowed_profiles%%,*}"
+else
+  normalized_provider="$(normalize_provider "$provider_choice")"
+fi
 if [[ "$normalized_provider" != "auto" ]]; then
   provider_instance_id="$normalized_provider"
 fi
@@ -379,10 +403,36 @@ elif [[ "$(provider_family "$provider_instance_id")" != "$(provider_family "$inh
 fi
 
 # Resolve capacity only after model intent and source-project safety are fixed.
-# Explicit profile/environment overrides never poll or switch accounts.
-if [[ "$provider_choice" == "auto" ]]; then
+# A comma list routes among only the named accounts. A single explicit --profile
+# is capacity-checked (refused when exhausted, unless --force-profile); the
+# T3_SPAWN_PROVIDER environment override never polls or switches accounts.
+if [[ "$provider_choice" == "auto" || -n "$allowed_profiles" ]]; then
   provider_instance_id="$(uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_routing.py" \
-    "$model_name" "$provider_instance_id" "$t3_base_dir/userdata/settings.json")"
+    "$model_name" "$inherited_provider_instance_id" "$t3_base_dir/userdata/settings.json" "$allowed_profiles")"
+elif ((provider_from_flag && !force_profile)); then
+  if ! alternative_profile="$(uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_routing.py" \
+      --check "$model_name" "$provider_instance_id" "$t3_base_dir/userdata/settings.json")"; then
+    rerun=(t3-spawn-thread)
+    replace_next=0
+    for arg in "${original_args[@]}"; do
+      if ((replace_next)); then
+        arg="${alternative_profile:-$arg}"
+        replace_next=0
+      elif [[ "$arg" == --profile || "$arg" == --provider ]]; then
+        replace_next=1
+      fi
+      rerun+=("$arg")
+    done
+    if [[ -n "$alternative_profile" ]]; then
+      echo "Best alternative: $alternative_profile. Rerun:" >&2
+      printf ' %q' "${rerun[@]}" >&2
+      printf '\n' >&2
+    else
+      echo "No compatible account has room; wait for the reset." >&2
+    fi
+    echo "Deliberately this account (e.g. queue for after the reset)? Add --force-profile." >&2
+    exit 2
+  fi
 fi
 
 # Recheck Codex's account-specific catalog after capacity routing. An alias

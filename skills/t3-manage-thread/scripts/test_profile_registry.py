@@ -56,9 +56,41 @@ def test_auto_preserves_codex_and_sibling_tie(settings):
     assert route("gpt-6-astra", "new_instance", settings, unknown)[0] == "codex"  # no sibling: first id
 
 
+def run_selection(settings, tmp_path, profile, model, inherited, force=0, routing=None):
+    """The real spawn selection block (no live T3), optionally with a fake routing helper."""
+    script = (SCRIPTS / "t3-spawn-thread").read_text()
+    functions = script[script.index("normalize_provider()") : script.index("detect_source_thread_id()")]
+    selection = script[script.index('provider_instance_id="$(printf') : script.index('if [[ -z "$thread_title"')]
+    # Keep the real helpers but point their relative paths at this checkout.
+    code = functions + selection
+    code = code.replace('$(dirname "$(readlink -f "$0")")', str(SCRIPTS))
+    if routing:
+        code = code.replace(f"{SCRIPTS}/lib/profile_routing.py", str(routing))
+    inherited_model = ("claude-opus-5" if inherited == "claudeAgent" else
+                       "future-model" if inherited == "new_instance" else "gpt-6.1-sol")
+    payload = json.dumps({"instanceId": inherited, "model": inherited_model,
+                          "options": [{"id": "fastMode", "value": True}]})
+    runner = tmp_path / "selection.sh"
+    runner.write_text("set -eu\n" +
+        "allow_old_model_reason=''\n" +
+        f"provider_choice={shlex.quote(profile)}; model_choice={shlex.quote(model)}; thinking_choice=auto\n" +
+        f"provider_from_flag=1; force_profile={force}\n" +
+        f"original_args=(--model {shlex.quote(model)} --profile {shlex.quote(profile)} -- brief)\n" +
+        f"t3_base_dir={shlex.quote(str(settings.parent.parent))}\n" +
+        f"model_selection_json={shlex.quote(payload)}\n" + code + '\necho "$model_selection_json"\n')
+    # Hermetic: no Keychain (fake `security`) and no Codex homes → every account is "unknown".
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / "security").write_text("#!/bin/sh\nexit 1\n")
+    (fake_bin / "security").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
+    return subprocess.run(["bash", str(runner)], capture_output=True, text=True, env=env)
+
+
 @pytest.mark.parametrize("profile,model,inherited,expected,option", [
     ("beta", "astra", "claudeAgent", "codex_beta", "reasoningEffort"),
     ("auto", "astra", "codex_beta", "codex_beta", "reasoningEffort"),
+    ("alpha,beta", "astra", "codex_beta", "codex_beta", "reasoningEffort"),  # list: tie keeps inherited
     ("codex_beta", "auto", "codex", "codex_beta", "reasoningEffort"),
     ("codex_beta", "auto", "claudeAgent", "codex_beta", "reasoningEffort"),
     ("beta", "fable", "codex_beta", "claudeAgent", "effort"),
@@ -78,29 +110,7 @@ def test_auto_preserves_codex_and_sibling_tie(settings):
     ("codex_beta", "gpt-9-astra", "codex", "codex_beta", "reasoningEffort"),
 ])
 def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected, option):
-    script = (SCRIPTS / "t3-spawn-thread").read_text()
-    functions = script[script.index("normalize_provider()") : script.index("detect_source_thread_id()")]
-    selection = script[script.index('provider_instance_id="$(printf') : script.index('if [[ -z "$thread_title"')]
-    # Keep the real helpers but point their relative paths at this checkout.
-    code = functions + selection
-    code = code.replace('$(dirname "$(readlink -f "$0")")', str(SCRIPTS))
-    inherited_model = ("claude-opus-5" if inherited == "claudeAgent" else
-                       "future-model" if inherited == "new_instance" else "gpt-6.1-sol")
-    payload = json.dumps({"instanceId": inherited, "model": inherited_model,
-                          "options": [{"id": "fastMode", "value": True}]})
-    runner = tmp_path / "selection.sh"
-    runner.write_text("set -eu\n" +
-        "allow_old_model_reason=''\n" +
-        f"provider_choice={shlex.quote(profile)}; model_choice={shlex.quote(model)}; thinking_choice=auto\n" +
-        f"t3_base_dir={shlex.quote(str(settings.parent.parent))}\n" +
-        f"model_selection_json={shlex.quote(payload)}\n" + code + '\necho "$model_selection_json"\n')
-    # Hermetic: no Keychain (fake `security`) and no Codex homes → every account is "unknown".
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir(exist_ok=True)
-    (fake_bin / "security").write_text("#!/bin/sh\nexit 1\n")
-    (fake_bin / "security").chmod(0o755)
-    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-    result = subprocess.run(["bash", str(runner)], capture_output=True, text=True, env=env)
+    result = run_selection(settings, tmp_path, profile, model, inherited)
     if expected is None:
         assert result.returncode != 0
         assert any(word in result.stderr for word in ["incompatible", "Ambiguous", "Choose --profile", "below the floor"])
@@ -123,6 +133,20 @@ def test_spawn_selection(settings, tmp_path, profile, model, inherited, expected
             assert selected["model"] == "gpt-6.1-sol"
         if model == "auto" and inherited == "codex":
             assert {"id": "fastMode", "value": True} in selected["options"]
+
+
+
+def test_explicit_exhausted_profile_refuses_unless_forced(settings, tmp_path):
+    """Incident 2026-10-11: --profile kampkompas with its "Fable only" cap at 100 %."""
+    fake = tmp_path / "routing.py"
+    fake.write_text('import sys\nif sys.argv[1] == "--check":\n'
+                    '    print("Fable only exhausted", file=sys.stderr); print("codex"); raise SystemExit(2)\n'
+                    'print(sys.argv[2])\n')
+    refused = run_selection(settings, tmp_path, "codex_beta", "astra", "codex", routing=fake)
+    assert refused.returncode == 2
+    assert "--model astra --profile codex -- brief" in refused.stderr and "--force-profile" in refused.stderr
+    forced = run_selection(settings, tmp_path, "codex_beta", "astra", "codex", force=1, routing=fake)
+    assert forced.returncode == 0 and json.loads(forced.stdout)["instanceId"] == "codex_beta"
 
 
 def test_list_profiles_rows(settings):
