@@ -70,6 +70,20 @@ def lookup(ident: str) -> tuple[str, str]:
     return rows[0]
 
 
+def environment_id_or_none() -> str | None:
+    try:
+        origin = json.loads(RUNTIME_FILE.read_text())["origin"]
+    except Exception:
+        origin = FALLBACK_ORIGIN
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{origin}/.well-known/t3/environment", timeout=2) as response:
+            return json.loads(response.read()).get("environmentId")
+    except Exception:
+        return None
+
+
 def web_url(thread_id: str) -> str:
     try:
         origin = json.loads(RUNTIME_FILE.read_text())["origin"]
@@ -126,7 +140,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("target", help="thread id / prefix, or web URL")
     parser.add_argument("--browser", action="store_true", help="skip the palette, open the web client")
     parser.add_argument("--dry-run", action="store_true", help="print what would happen")
+    parser.add_argument("--link", action="store_true",
+                        help="print a markdown thread link for T3 chat (t3-thread://v1/<env>/<thread>, native from 0.0.46) and exit")
     args = parser.parse_args(argv)
+    if args.link:
+        thread_id, title = lookup(parse_ident(args.target))
+        environment_id = environment_id_or_none()
+        if not environment_id:
+            sys.exit("T3 server not reachable; cannot resolve environment id")
+        print(f"[{title}](t3-thread://v1/{environment_id}/{thread_id})")
+        return 0
     if sys.platform != "darwin" and not args.browser:
         print("t3-open-thread drives the macOS desktop app (osascript); on Linux/WSL open the thread "
               "from the sidebar by title, or pass --browser for the web client.", file=sys.stderr)

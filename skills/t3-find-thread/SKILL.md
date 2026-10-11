@@ -42,7 +42,8 @@ sidebar, or `--browser` when the web client is enabled.
 it runs `t3-open-thread <url>`, log in `~/.cache/t3-find-thread/open.log`. Link: `<a href="t3open://7310f5ae">`.
 Install: `url-scheme/install` (`--check`); rebuilds only when the source changed, because a rebuild
 re-signs ad hoc and voids the one-time grant: Accessibility for **T3 Open**. Chrome asks once per
-origin to allow the scheme. Works outside T3 chat only (HTML reports, Notes); T3's sanitizer drops it.
+origin to allow the scheme. Works outside T3 chat only (HTML reports, Notes): the desktop renderer opens only http/https + editor schemes (`parseSafeExternalUrl`, v0.0.45).
+Inside T3 chat use the native link instead: `t3-open-thread <id> --link` prints `[title](t3-thread://v1/<env>/<thread>)` (PR [#16782](https://github.com/pingdotgg/t3code/pull/16782), main 2026-10-07, ships with 0.0.46; plain text on 0.0.45). OS-level `t3code://threads/…` is still PR [#8246](https://github.com/pingdotgg/t3code/pull/8246), open.
 
 ## Install
 
