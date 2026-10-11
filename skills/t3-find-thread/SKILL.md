@@ -30,12 +30,22 @@ separator-split copy). Thread ids: any prefix ≥ 8 chars.
 
 **Links to threads do not work inside T3 chat**: its markdown sanitizer allows only
 http/https/mailto/file, http(s) opens externally, and there is no desktop deep link upstream
-(pingdotgg/t3code#4996) — custom schemes and helper applets were tried and dropped. Hence short
+(#4996 closed unshipped, #9745 open; native `t3code://` only routes `/welcome`, `/settings`). Hence short
 ids, and `scripts/t3-open-thread <id>` drives the desktop app's cmd+k palette (macOS only:
 osascript; needs Accessibility rights; archived threads are not in the palette; log in the cache
 dir). On Linux/WSL searching works, opening does not: give the user the title to click in the
 sidebar, or `--browser` when the web client is enabled.
 
-Install: `scripts/install` (`--check` verifies deps, store, symlinks). Related:
+## Links from HTML files (`t3open://`)
+
+`url-scheme/` builds "T3 Open.app" (AppleScript applet, `~/Applications`) owning `t3open://<id>`;
+it runs `t3-open-thread <url>`, log in `~/.cache/t3-find-thread/open.log`. Link: `<a href="t3open://7310f5ae">`.
+Install: `url-scheme/install` (`--check`); rebuilds only when the source changed, because a rebuild
+re-signs ad hoc and voids the one-time grant: Accessibility for **T3 Open**. Chrome asks once per
+origin to allow the scheme. Works outside T3 chat only (HTML reports, Notes); T3's sanitizer drops it.
+
+## Install
+
+`scripts/install` (`--check` verifies deps, store, symlinks). Related:
 [t3-manage-thread](../t3-manage-thread/SKILL.md) (spawn/ping/read/settle),
 [t3-maintenance](../t3-maintenance/SKILL.md) (fleet).
