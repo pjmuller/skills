@@ -21,13 +21,14 @@ def _check_n(n):
         raise ValueError(f"n must be between 1 and {MAX_MESSAGES}")
 
 
-def _call(operation: str, **kwargs):
+def _call(operation: str, ai_label: bool = False, **kwargs):
     # Text travels over stdin, never shell interpolation or process arguments.
+    # WhatsApp's AI badge is opt-in per send; Neonize only stamps it on 1:1 chats, never in groups.
     result = subprocess.run(
         [sys.executable, "-m", "whatsapp_bridge.worker"],
         input=json.dumps({"operation": operation, **kwargs}),
         text=True, stdout=subprocess.PIPE, timeout=300,
-        env={**os.environ, "NEONIZE_BOT_TAG": "off"},
+        env={**os.environ, "NEONIZE_BOT_TAG": "on" if ai_label else "off"},
     )
     for line in reversed(result.stdout.splitlines()):
         if line.startswith("WA_RESULT="):
@@ -108,13 +109,16 @@ def _bounded_context(contact, messages, n):
             "truncated": truncated, "history_complete": False}
 
 
-def send_text(number: str, text: str) -> str:
-    """Send once to an explicit international number; return server-accepted message ID."""
-    from .store import normalize_number
-    number = normalize_number(number)
+def send_text(target: str, text: str, ai_label: bool = False) -> str:
+    """Send once to an explicit international number or allowlisted group JID; return message ID.
+
+    ai_label=True asks WhatsApp to show its native "AI" badge; only 1:1 chats render it.
+    """
+    from .store import normalize_target
+    target = normalize_target(target)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text must not be empty")
-    return _call("send", number=number, text=text)
+    return _call("send", ai_label=ai_label, target=target, text=text)
 
 
 def main():
@@ -133,9 +137,10 @@ def main():
     contacts.add_argument("--limit", type=int, default=10)
     resolve = sub.add_parser("resolve", help="resolve an exact name or number")
     resolve.add_argument("chat")
-    send = sub.add_parser("send")
-    send.add_argument("number")
+    send = sub.add_parser("send", help="send to an international number or an allowlisted group JID")
+    send.add_argument("target", help="+32470123456 or 120363...@g.us")
     send.add_argument("text")
+    send.add_argument("--ai-label", action="store_true", help="opt into WhatsApp's native AI badge (1:1 chats only)")
     args = parser.parse_args()
     try:
         if args.command == "login":
@@ -152,7 +157,7 @@ def main():
         elif args.command == "resolve":
             result = resolve_contact(args.chat)
         else:
-            result = send_text(args.number, args.text)
+            result = send_text(args.target, args.text, ai_label=args.ai_label)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"{exc}\n")

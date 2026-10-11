@@ -15,12 +15,20 @@ def normalize_number(value: str) -> str:
     return value.lstrip("+")
 
 
-def check_recipient(number: str, own: str):
+def normalize_target(value: str) -> str:
+    """A send target: explicit international number, or a group JID like 120363...@g.us."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{6,32}@g\.us", value):
+        return value
+    return normalize_number(value)
+
+
+def check_recipient(target: str, own: str):
+    """Groups are never implicit: a group JID must be listed verbatim in WA_ALLOWED_RECIPIENTS."""
     allowed = {normalize_number(own)}
     for item in os.environ.get("WA_ALLOWED_RECIPIENTS", "").split(","):
         if item.strip():
-            allowed.add(normalize_number(item.strip()))
-    if normalize_number(number) not in allowed:
+            allowed.add(normalize_target(item.strip()))
+    if normalize_target(target) not in allowed:
         raise ValueError("Recipient blocked by WA_ALLOWED_RECIPIENTS (default: self only)")
 
 

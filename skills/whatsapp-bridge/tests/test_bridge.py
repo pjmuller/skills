@@ -5,15 +5,40 @@ import unittest
 from unittest.mock import patch
 
 from whatsapp_bridge import send_text, _call
-from whatsapp_bridge.store import Store, check_recipient, normalize_number
+from whatsapp_bridge.store import Store, check_recipient, normalize_number, normalize_target
 
 
 class SafetyTests(unittest.TestCase):
     def test_bot_marker_disabled_before_native_process_starts(self):
         with patch.dict(os.environ, {'NEONIZE_BOT_TAG': 'on'}), patch('whatsapp_bridge.subprocess.run') as run:
             run.return_value.stdout = 'WA_RESULT={"value":"accepted"}\n'
-            self.assertEqual(_call('send', number='32470123456', text='test'), 'accepted')
+            self.assertEqual(_call('send', target='32470123456', text='test'), 'accepted')
             self.assertEqual(run.call_args.kwargs['env']['NEONIZE_BOT_TAG'], 'off')
+            _call('send', ai_label=True, target='32470123456', text='test')
+            self.assertEqual(run.call_args.kwargs['env']['NEONIZE_BOT_TAG'], 'on')
+            self.assertNotIn('ai_label', run.call_args.kwargs['input'])
+
+    def test_ai_label_is_per_send_and_off_by_default(self):
+        with patch('whatsapp_bridge._call', return_value='id') as call:
+            send_text('+32470123456', 'hi')
+            self.assertFalse(call.call_args.kwargs['ai_label'])
+            send_text('+32470123456', 'hi', ai_label=True)
+            self.assertTrue(call.call_args.kwargs['ai_label'])
+
+    def test_group_targets_need_explicit_allowlist_entry(self):
+        group = '120363421529066560@g.us'
+        self.assertEqual(normalize_target(group), group)
+        self.assertEqual(normalize_target('+32470123456'), '32470123456')
+        for bad in ('x@g.us', '123@s.whatsapp.net', 'Dentist software', '@g.us'):
+            with self.assertRaises(ValueError):
+                normalize_target(bad)
+        with patch.dict(os.environ, {'WA_ALLOWED_RECIPIENTS': '+32470123457'}):
+            with self.assertRaises(ValueError):
+                check_recipient(group, '32470123456')
+        with patch.dict(os.environ, {'WA_ALLOWED_RECIPIENTS': group}):
+            check_recipient(group, '32470123456')
+            with self.assertRaises(ValueError):
+                check_recipient('32470123457', '32470123456')
 
     def test_explicit_number_and_allowlist(self):
         for bad in ('me', 'Alice', '', '0470123456', '*', '123@s.whatsapp.net', '+32 470123456'):
