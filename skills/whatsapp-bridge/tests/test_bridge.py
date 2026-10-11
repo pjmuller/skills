@@ -15,7 +15,7 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(_call('send', target='32470123456', text='test'), 'accepted')
             self.assertEqual(run.call_args.kwargs['env']['NEONIZE_BOT_TAG'], 'off')
             _call('send', ai_label=True, target='32470123456', text='test')
-            self.assertEqual(run.call_args.kwargs['env']['NEONIZE_BOT_TAG'], 'on')
+            self.assertEqual(run.call_args.kwargs['env']['NEONIZE_BOT_TAG'], 'always')
             self.assertNotIn('ai_label', run.call_args.kwargs['input'])
 
     def test_ai_label_is_per_send_and_off_by_default(self):
