@@ -14,9 +14,9 @@ fi
 [[ "$(git -C .build/neonize rev-parse HEAD)" == "$revision" ]] || {
   echo 'Unexpected Neonize checkout revision; refusing to build.' >&2; exit 1;
 }
-git -C .build/neonize diff --quiet HEAD -- || {
-  echo 'Neonize source modified; refusing to build.' >&2; exit 1;
-}
+# Only our committed patch may differ from upstream: NEONIZE_BOT_TAG=always (AI badge in groups too).
+git -C .build/neonize checkout -q -- .
+git -C .build/neonize apply "$PWD/scripts/neonize-bot-tag-always.patch"
 mise install
 (
   cd .build/neonize/goneonize
@@ -24,4 +24,4 @@ mise install
     CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 \
     go build -buildmode=c-shared -ldflags=-s -o ../neonize/neonize-darwin-arm64.dylib .
 )
-echo 'Built upstream Neonize 0.4.7. Run uv sync to install.'
+echo 'Built Neonize 0.4.7 + bot-tag patch. Run uv sync to install.'

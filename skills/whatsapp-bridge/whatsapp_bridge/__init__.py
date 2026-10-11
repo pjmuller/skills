@@ -23,12 +23,12 @@ def _check_n(n):
 
 def _call(operation: str, ai_label: bool = False, **kwargs):
     # Text travels over stdin, never shell interpolation or process arguments.
-    # WhatsApp's AI badge is opt-in per send; Neonize only stamps it on 1:1 chats, never in groups.
+    # WhatsApp's AI badge is opt-in per send; "always" (our Neonize patch) also stamps group sends.
     result = subprocess.run(
         [sys.executable, "-m", "whatsapp_bridge.worker"],
         input=json.dumps({"operation": operation, **kwargs}),
         text=True, stdout=subprocess.PIPE, timeout=300,
-        env={**os.environ, "NEONIZE_BOT_TAG": "on" if ai_label else "off"},
+        env={**os.environ, "NEONIZE_BOT_TAG": "always" if ai_label else "off"},
     )
     for line in reversed(result.stdout.splitlines()):
         if line.startswith("WA_RESULT="):
@@ -112,7 +112,7 @@ def _bounded_context(contact, messages, n):
 def send_text(target: str, text: str, ai_label: bool = False) -> str:
     """Send once to an explicit international number or allowlisted group JID; return message ID.
 
-    ai_label=True asks WhatsApp to show its native "AI" badge; only 1:1 chats render it.
+    ai_label=True asks WhatsApp to show its native "AI" badge on this one message.
     """
     from .store import normalize_target
     target = normalize_target(target)
@@ -140,7 +140,7 @@ def main():
     send = sub.add_parser("send", help="send to an international number or an allowlisted group JID")
     send.add_argument("target", help="+32470123456 or 120363...@g.us")
     send.add_argument("text")
-    send.add_argument("--ai-label", action="store_true", help="opt into WhatsApp's native AI badge (1:1 chats only)")
+    send.add_argument("--ai-label", action="store_true", help="opt into WhatsApp's native AI badge for this message")
     args = parser.parse_args()
     try:
         if args.command == "login":
