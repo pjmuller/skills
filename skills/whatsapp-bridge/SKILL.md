@@ -19,7 +19,8 @@ This core owns mechanics only: the Neonize build, the session/history store, the
 
 ## Safety (hard rules)
 
-- Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,…` (explicit international numbers; no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes.
+- Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,120363…@g.us,…` (explicit international numbers or verbatim group JIDs from `wa contacts`; no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes.
+- WhatsApp's native **AI badge** is off by default and opt-in per send (`wa send … --ai-label` / `send_text(…, ai_label=True)`). Neonize only stamps it on 1:1 chats; a group send never carries the badge, so disclose in the text there if the wrapper wants it.
 - Never bulk-send, never widen the allowlist just to make a test pass, never auto-retry an uncertain send (a worker crash can mean it went out).
 - Reading any chat is allowed. Never print or copy session/credential files.
 
@@ -27,7 +28,7 @@ These are the ban/abuse guardrails for an unofficial protocol client; breaking t
 
 ## Neonize pin
 
-Neonize 0.4.7 is built from a pinned, unmodified upstream checkout by `scripts/build-neonize` into gitignored `.build/neonize`; `pyproject.toml` resolves it from there, so build before any `uv sync` (a fresh checkout or consumer fails otherwise). The API sets `NEONIZE_BOT_TAG=off` before the native worker starts; PyPI's older 0.4.3.post0 ignores that variable and stamps WhatsApp's AI badge on every message, so do not downgrade. No compiled artifacts in git; switch to an upstream PyPI wheel once one ships with the flag.
+Neonize 0.4.7 is built from a pinned, unmodified upstream checkout by `scripts/build-neonize` into gitignored `.build/neonize`; `pyproject.toml` resolves it from there, so build before any `uv sync` (a fresh checkout or consumer fails otherwise). The API sets `NEONIZE_BOT_TAG` per worker call (`off` unless `ai_label`); PyPI's older 0.4.3.post0 ignores that variable and stamps WhatsApp's AI badge on every message, so do not downgrade. No compiled artifacts in git; switch to an upstream PyPI wheel once one ships with the flag.
 
 ## Pairing UX
 

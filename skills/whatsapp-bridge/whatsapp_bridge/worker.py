@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 
-from .store import STATE, Store, check_recipient, normalize_number
+from .store import STATE, Store, check_recipient, normalize_number, normalize_target
 from . import _bounded_context
 
 
@@ -127,14 +127,17 @@ def execute(request):
         own = normalize_number(client.get_me().JID.User)
         op = request["operation"]
         if op == "send":
-            number = normalize_number(request["number"])
-            check_recipient(number, own)
+            target = normalize_target(request["target"])
+            check_recipient(target, own)
             if not request["text"].strip():
                 raise ValueError("text must not be empty")
             store.reserve_send()
+            user, _, server = target.partition("@")
+            chat = target if server else target + "@s.whatsapp.net"
             # Raw protobuf avoids automatic mention/link expansion.
-            response = client.send_message(build_jid(number), Message(conversation=request["text"]))
-            store.put(number + "@s.whatsapp.net", response.ID, response.Timestamp,
+            response = client.send_message(build_jid(user, server or "s.whatsapp.net"),
+                                           Message(conversation=request["text"]))
+            store.put(chat, response.ID, response.Timestamp,
                       own + "@s.whatsapp.net", True, request["text"], "sent")
             return response.ID
         # Give offline/history events time to arrive; not an arbitrary-history API.
