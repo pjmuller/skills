@@ -4,6 +4,8 @@
 
 - t3-manage-thread: `t3-spawn-thread --profile a,b` routes by capacity among only the named accounts; a single explicit `--profile` is capacity-checked and refuses an exhausted relevant window (incl. "Fable only") with the best alternative and a rerun command. `--force-profile` overrides; unknown usage only warns.
 
+- agents-md: global template — several named profiles → `--profile a,b`; explicit profiles are capacity-checked.
+
 - t3-route / agents-md: align standalone self-settlement with authorized routing policy; keep-open review requires a concrete pending user decision, not merely completed agent review or a readable result. Template links private settling-policy notes for iteration.
 
 ## v0.4.7 (2026-10-10)
