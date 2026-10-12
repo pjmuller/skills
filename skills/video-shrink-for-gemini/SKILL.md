@@ -75,23 +75,26 @@ machine: `VIDEO_GEMINI_API_KEY` from the env or `~/.config/transcribe-gemini/env
 in a repo); else a project's `GEMINI_API_KEY`; else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). None →
 [agy-route.md](agy-route.md). `scripts/install --check` reports the key.
 `--thinking medium` (default) kept every visual step at ~$0.02 per 2 minutes; `high` doubles cost
-for no speech gain; `low` dropped visual steps.
+for no speech gain; `low` dropped visual steps. Frames go at `--media-resolution high` by default (4×
+the video tokens of `low`): it decides whether screen text is read or invented (small UI facts 0.08 →
+0.76, [evidence](compression.md#crop-the-meet-share-tile)). `--media-resolution low` only for long
+videos whose screen content doesn't matter.
 
 Google Meet recordings (Fathom, Leexi): first `detect-screenshare <name>.gemini.mp4` (seconds per
 hour, local) → `<name>.gemini.screenshare.json`, then pass it as `--ranges`: frames only while a
 screen is shared, audio throughout; no share → audio only. Not Meet (Loom, Zoom, phone) → the JSON
 says `full-fallback` and the whole video is sent. 10 Meet calls: 42% of video seconds skipped,
-recall 1.00; a 29-minute call cost $0.14 instead of ~$0.17. Transcript cues ("share my screen")
+recall 1.00; a 29-minute call cost $0.14 instead of ~$0.17 (low resolution). Transcript cues ("share my screen")
 missed most share starts: don't use them. Then `shrink-video --crop <name>.gemini.screenshare.json SOURCE`
 → `<name>.gemini.crop.mp4` (share tile fills the frame, no webcam faces); transcribe that with the same
-`--ranges`. Same tokens, small UI text read 0.08 → 0.43 ([evidence](compression.md#crop-the-meet-share-tile)).
+`--ranges`. Same tokens, small UI text read 0.76 → 0.88 (0.08 → 0.43 at low resolution).
 
 Read the file; check speech, visual changes, timestamps and coverage against the recording;
 report gaps.
 
 Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
-screen names on a 29-minute 720p share (2026-09-24); crop + `--media-resolution high` read 0.88 of
-small UI facts (2.4× cost, 2026-10-12). Compare 3–4 source frames first; if they
+screen names on a 29-minute 720p share at low resolution (2026-09-24); crop + high resolution read 0.88
+of small UI facts (2026-10-12). Opaque IDs still need source frames: compare 3–4 first; if they
 disagree, use [video-frames-for-vision](../video-frames-for-vision/SKILL.md) as the source and the
 Gemini draft as hypotheses. `gemini-3.1-pro-high` did not read small opaque IDs better.
 

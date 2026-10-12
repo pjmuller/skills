@@ -21,6 +21,8 @@ Writes OUT (the model's markdown) and OUT with .usage.json (tokens per modality,
 Measured 2026-10-08, 2-min 480p clip, 11.2k input tokens (video 66/frame at default resolution, audio
 25/s): thinking low $0.016/20 s (drops visual steps), medium $0.023/34 s, high $0.03-0.06/95 s.
 --ranges with 65 of 120 s shared: video tokens 7.9k -> 4.3k, speech unchanged.
+Frames default to media resolution high (~264 tokens/frame, 4x low): on a 4-min Meet demo (2026-10-12) it
+read 0.76 of 25 small UI facts where low read 0.08 (0.88 with shrink-video --crop) for 2.4x the cost.
 """
 from __future__ import annotations
 
@@ -115,8 +117,9 @@ def main() -> None:
     parser.add_argument("--out", type=Path, help="default <video stem>.transcript.md beside the video")
     parser.add_argument("--model", default="gemini-3.8-flash")
     parser.add_argument("--thinking", default="medium", choices=["minimal", "low", "medium", "high"])
-    parser.add_argument("--media-resolution", choices=["low", "medium", "high"],
-                        help="default: model default (66-70 tokens/frame); high (~280) for small screen text")
+    parser.add_argument("--media-resolution", choices=["low", "medium", "high"], default="high",
+                        help="high (default, ~264 tokens/frame) reads screen text; low/medium (66) cost 4x less "
+                             "video tokens but invent most small text: only for long videos where the screen doesn't matter")
     parser.add_argument("--ranges", type=Path, help="JSON with ranges [{start,end}] that get frames; audio covers all")
     args = parser.parse_args()
 
@@ -129,8 +132,7 @@ def main() -> None:
         # The shared prompt template also serves agent runs that write files; here the reply is the file.
         system_instruction="Reply with the complete markdown document itself. You have no file access: ignore "
                            "instructions to write files or to return only paths.")
-    if args.media_resolution:
-        config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
+    config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
