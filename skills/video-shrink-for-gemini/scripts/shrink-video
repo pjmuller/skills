@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Shrink a screen recording so Gemini swallows it whole while speech stays transcribable.
-# Usage: shrink-video [--preset normal|compact|heavy|extreme] [--out DIR] [--max-bytes SIZE] FILE...
+# Usage: shrink-video [--preset normal|compact|heavy|extreme] [--out DIR] [--max-bytes SIZE] [--crop JSON] FILE...
 #   FILE may be a bare name; it is looked up in ~/screenshots and ~/Downloads.
 #   --max-bytes SIZE (bytes, or K/M/G = KiB/MiB/GiB, e.g. 48M): if the output is larger, also
 #     write overlapping parts <name>.gemini.partNN.mp4, each <= SIZE, and <name>.chunks.md
 #     (absolute start/end per part). Default: off. Native agy's hard limit is 50M.
+#   --crop JSON (detect-screenshare output for this FILE): inside each range with a "crop" box, frames show
+#     only the share tile scaled to fill the frame (no webcam filmstrip); other frames stay whole.
+#     Output <name>.gemini.crop.mp4; transcribe-gemini takes the same JSON as --ranges.
 # Output: <name>.gemini.mp4 next to the source (or in --out DIR).
 set -euo pipefail
 
-preset=normal; outdir=""; max_bytes=""
+preset=normal; outdir=""; max_bytes=""; crop=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --preset) preset=$2; shift 2 ;;
     --out) outdir=$2; shift 2 ;;
     --max-bytes) max_bytes=$2; shift 2 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    --crop) crop=$2; shift 2 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) break ;;
   esac
 done
@@ -59,11 +63,28 @@ margin=0.92   # plan parts at 92% of SIZE: bitrate varies along the recording
 calc() { awk "BEGIN { printf \"%.3f\", $* }"; }
 hms() { awk -v t="$1" 'BEGIN { printf "%02d:%02d:%04.1f", t / 3600, (t % 3600) / 60, t - int(t / 60) * 60 }'; }
 
+# video_filter IN: -vf args, or with --crop a graph that overlays each range's scaled share tile.
+video_filter() {
+  [[ -n $crop ]] || { video=(-vf "fps=$fps,scale='min($width,iw)':-2:flags=lanczos"); return; }
+  local iw ih w h
+  IFS=x read -r iw ih < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$1")
+  w=$(( iw < width ? iw : width )); h=$(( (ih * w / iw + 1) / 2 * 2 ))
+  video=(-filter_complex "$(jq -r --arg fps "$fps" --argjson w "$w" --argjson h "$h" '
+    [.ranges[] | select(.crop)] as $r | ($r | length) as $n
+    | "[0:v]fps=\($fps),split=\($n + 1)[v]\([range($n)] | map("[c\(.)]") | join(""));"
+      + "[v]scale=\($w):\($h):flags=lanczos[b0]"
+      + ([range($n) as $i | $r[$i] as $x | ";[c\($i)]crop=iw*\($x.crop[2]):ih*\($x.crop[3]):iw*\($x.crop[0]):ih*\($x.crop[1]),"
+          + "scale=\($w):\($h):force_original_aspect_ratio=decrease:flags=lanczos,pad=\($w):\($h):-1:-1[o\($i)];"
+          + "[b\($i)][o\($i)]overlay=enable=\u0027between(t,\($x.start),\($x.end))\u0027[b\($i + 1)]"] | join(""))
+      + ";[b\($n)]null[out]"' "$crop")" -map "[out]" -map "0:a?")
+}
+
 # encode IN OUT [FFMPEG_ARG...]: the preset recipe.
 encode() {
+  local video; video_filter "$1"
   ffmpeg -hide_banner -loglevel error -stats -y \
     -i "$1" \
-    -vf "fps=$fps,scale='min($width,iw)':-2:flags=lanczos" \
+    "${video[@]}" \
     -c:v libx264 -preset slow -crf "$crf" -pix_fmt yuv420p "${@:3}" \
     -movflags +faststart \
     -ac 1 -ar 16000 -c:a aac -b:a 32k \
@@ -126,7 +147,7 @@ for arg in "$@"; do
   base=$(basename "${in%.*}")
   dir=${outdir:-$(dirname "$in")}
   mkdir -p "$dir"
-  out="$dir/$base.gemini.mp4"
+  out="$dir/$base.gemini${crop:+.crop}.mp4"
   echo "→ $in  [$preset: ${fps}fps ${width}w crf$crf]"
   encode "$in" "$out"
   printf '   %s → %s  (%s)\n' "$(du -h "$in" | cut -f1)" "$(du -h "$out" | cut -f1)" "$out"

@@ -22,3 +22,21 @@ Merging: one Gemini run per part; give each its absolute start offset and contex
 distinct drafts, then stitch. Deduplicate the overlap without dropping unfinished sentences.
 Fathom timings help align speech, but crop times only locate visual evidence, never spoken-topic
 starts. Mark uncertain timings.
+
+## Crop the Meet share tile
+
+Gemini bills a fixed token count per frame, not per pixel ([media resolution](https://ai.google.dev/gemini-api/docs/media-resolution):
+Gemini 3 video 70/frame default, 280 high), so cropping saves nothing; it gives the shared screen the
+pixels (the tile is ~51% of a 720p Meet frame). 2026-10-12, one Leexi Meet call, 4-min web-app demo clip
+(booking form, calendar dashboard, mobile agenda), 3.8 Flash, thinking medium, same prompt, 3 runs per
+arm, 25 small-UI facts read from source frames:
+
+| | default (66/frame) | `--media-resolution high` (264/frame) |
+| --- | --- | --- |
+| no crop | 0.08 (2/25 every run) · $0.032 | 0.76 · $0.078 |
+| crop | 0.43 · $0.040 | 0.88 · $0.081 |
+
+Input tokens identical per column (22,791 / 71,103); crop costs only longer output. Uncropped default
+invented page names, 2023 dates and practitioners. Bonus: webcam faces are not uploaded. Video tokens =
+seconds × 66 although the file has 0.5 fps: Gemini samples 1 fps, duplicating frames. Tile box:
+`share_box` (detect-screenshare), overlay graph: `video_filter` (shrink-video).
