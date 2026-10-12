@@ -25,7 +25,17 @@ Use the current session when already executing this task; do not spawn the same 
 invoice list need not shrink. Do not use disappearance or a changed count as upload proof.
 Leave missing, ambiguous and failed documents unmarked; report the concrete remaining items.
 
-Validation boundary: route confirmed from the supplied Yuki purchase-screen reference; upload
-dialog and acceptance controls must be inspected live. Do not invent selectors or claim that a
-reference screenshot proves an upload succeeded. Company URLs and tested UI details belong in
-its wrapper; no private account or sheet IDs in this public core.
+## Browser mechanics verified 2026-10-12
+
+- Clicking **Aankoop** refreshes controls inside a legacy iframe: take a fresh snapshot before
+  clicking **Uploaden**. It redirects to `/domain/archive/upload-files/1`; confirm **Map = Aankoop**.
+- **Bladeren** selects files; selection is not delivery. Verify filenames and count, then click
+  **Uploaden** once. Wait for **Uploaden voltooid!** and the accepted count.
+- Success redirects to `/domain/aspx/UploadedFiles.aspx?Batch=<id>`. The batch lists uploader,
+  timestamp, individual document links and **Aankoop**. Save those links in the manifest before
+  editing DONE. The transient success notification may disappear by itself.
+- Where host policy permits logged-in Chrome: `chrome-devtools start --autoConnect`, find the
+  tenant with `list_pages`, select it without bringing it forward, then open your own tab with
+  `new_page <url> --background`. Verify profile identity in the top-right user menu.
+  `upload_file <pageId> <Bladeren-uid> <paths...>` attaches multiple files; obtain UIDs from
+  each current `take_snapshot`. Close only your created tab, then stop the CLI daemon.
