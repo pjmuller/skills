@@ -89,7 +89,7 @@ Pushed a change to a shared skill core that projects carry as a committed copy? 
 - Browser, pick by job (recipes → {absolute browser-guide path}; read before authenticated browsing):
   - **User watches / localhost** → T3 `preview_*`. Tabs are per thread; a new tab opens in T3's default profile, so verify the signed-in identity. Snapshot caps ~50 elements: read lists with `preview_evaluate`.
   - **User's logged-in Chrome** (background, never steals focus) → shell CLI over CDP after the user enables `chrome://inspect/#remote-debugging`: Playwright CLI to drive (`attach --cdp=chrome`, `find` → `click <ref>`), `chrome-devtools` to read/debug (`start --autoConnect`, `new_page --background`). One attach sees all profiles ({profile name per account}): pick the tab by account. Snapshots → file + grep. Claude in Chrome needs a `/login` credential (a setup-token disables it).
-  - **Native apps / OS dialogs** → computer use ({computer-use tool}). Foreground only, races the user: not for browser work. Never script keystrokes into a browser.
+  - **Native apps / OS dialogs** → computer use ({computer-use tool}). Races the user's own clicks: not for browser work, never on the T3 browser itself (use `preview_*`). Claude computer use is interactive-CLI only. Never script keystrokes into a browser.
 
 ## Writing in my name
 - Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
