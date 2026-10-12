@@ -4,8 +4,9 @@ Use an Astra Medium agent for browser judgment and ambiguous scans. A smaller mo
 vendor/date/amount/invoice number, but verify the source image before accepting its match.
 Use the current session when already executing this task; do not spawn the same task again.
 
-1. Verify the wrapper's company, administration and Workspace account. Read the actual tab
-   headers and all rows, including filtered-out rows. Candidates have DONE other than TRUE.
+1. Verify the wrapper's company, administration and Workspace account. Use its Workspace API
+   CLI for Drive downloads and all Sheet reads/writes. Read actual headers and all rows; filter
+   DONE in memory (blank/FALSE are open; boolean TRUE or formatted "TRUE" are done).
 2. Download the supplied folder; inspect PDFs/images. Match vendor or verified trading name,
    currency/amount and invoice or transaction date. Bank booking dates can differ: inspect the
    raw transaction date. Date/amount alone cannot resolve a contradictory vendor identity.
@@ -18,12 +19,24 @@ Use the current session when already executing this task; do not spawn the same 
    Use a supported browser file-upload mechanism, or computer use for the native file picker.
    Record accepted filenames/receipts or history entries. An uncertain timeout is not a failure:
    inspect history before retrying, never blindly resubmit.
-6. Only after acceptance, re-read the sheet and locate each row by stable item_id. Update only
-   its DONE cell to boolean TRUE. Read back typed values and verify other cells are unchanged.
+6. Only after acceptance, re-read through the API and locate each row by stable item_id. Update
+   only its DONE cell to boolean TRUE; verify typed readback and unchanged unrelated cells.
 
 **DONE means delivered, not booked.** Yuki processes uploads asynchronously; the outstanding
 invoice list need not shrink. Do not use disappearance or a changed count as upload proof.
 Leave missing, ambiguous and failed documents unmarked; report the concrete remaining items.
+
+## Sheets API mechanics
+
+Use `gws.py --config <wrapper-config>`: `sheet-meta` resolves the tab; `sheet-read` reads the
+full used range. UI filters do not restrict these values: keep each row's original grid index
+while filtering in memory. No browser cell editing or filter-view manipulation is needed.
+
+Re-resolve unique `item_id`s immediately before writing because sorting/inserting rows changes
+A1 coordinates. `sheet-batch-write` accepts a JSON range-to-values map; send `[[true]]` for each
+accepted row's single DONE cell. Never rewrite a compacted list of visible rows over the sheet.
+Verify via `api GET` on the Sheets values endpoint with `valueRenderOption=UNFORMATTED_VALUE`
+that the results are booleans; compare the full readback to ensure only intended cells changed.
 
 ## Browser mechanics verified 2026-10-12
 
