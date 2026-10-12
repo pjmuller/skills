@@ -7,7 +7,8 @@ description: Pull Yuki's "Aan te leveren aankoopfacturen" (bank/card payments st
 
 **Intent.** Every quarter the accountant needs an invoice for each bank/card payment Yuki could not
 match. This core lists those payments and appends them to a shared sheet tab; people fill the
-manual columns (who, status, comment) and upload the invoices in Yuki. It never writes to Yuki.
+manual columns (who, status, comment). The SOAP client stays read-only. Explicitly authorized
+invoice uploads and DONE updates use the separate [browser workflow](upload-invoices.md).
 
 Code: [`scripts/yuki.py`](scripts/yuki.py) (CLI), `scripts/yuki_core/` — `client.py` (zeep, read-only
 allowlist), `outstanding.py` (parse, clean, quarter selection, CSV), `sheet.py` (append-only push via
@@ -66,7 +67,8 @@ the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?, lookup_c
 
 ## Out of scope
 
-Per-person filter views, marking rows done from Yuki, uploading invoices to Yuki (a 2-minute manual batch).
+Per-person filter views, automatic DONE updates from disappearance in Yuki, and accounting postings.
+Browser invoice delivery requires explicit authorization; it does not expand the SOAP allowlist.
 
 ## Yuki API gotchas
 
