@@ -12,4 +12,9 @@ Project policy (replace with real values): ticket language, owner, prioritizatio
 recipient, closure criteria, notification etiquette, required custom fields, and any overrides of
 core's comment discipline.
 
+Define a bounded **before-create lookup scope**: owning list plus relevant shared/cross-product
+lists (aliases or numeric IDs), when each applies, and which wrapper owns writes. Follow core's
+metadata shortlist → candidate body/comments check; recent closed + all open, aliases/body fallback.
+Compare intended work, not titles; incomplete scope cannot prove absence.
+
 Refresh stale enums with core `topology`, `statuses`, `fields` and `members`.

@@ -12,6 +12,7 @@ import random
 import re
 import string
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -223,6 +224,28 @@ def task_row(t: dict) -> dict:
     return row
 
 
+def updated_since(value: str) -> int:
+    """Strict ISO date/datetime; dates and naive datetimes use UTC."""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?", value):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return int(dt.replace(tzinfo=dt.tzinfo or timezone.utc).timestamp() * 1000)
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError("use an ISO date (YYYY-MM-DD) or datetime (YYYY-MM-DDTHH:MM[:SS][Z|±HH:MM]); no epoch numbers")
+
+
+def task_summary(t: dict) -> dict:
+    row = {k: v for k, v in task_row(t).items()
+           if k in {"id", "name", "list", "status", "assignees", "url"}}
+    row["parent"] = t.get("parent")
+    for key in ("date_created", "date_updated", "date_closed"):
+        value = t.get(key)
+        row[key] = (datetime.fromtimestamp(int(value) / 1000, timezone.utc)
+                    .isoformat(timespec="milliseconds").replace("+00:00", "Z")) if value not in (None, "") else None
+    return row
+
+
 def download_attachments(t: dict, directory: str | None) -> list[dict]:
     """Fetch every attachment to disk so an agent can open images with native vision.
 
@@ -259,17 +282,23 @@ def download_looms(t: dict, comments: list[dict], directory: str | None) -> list
     return done
 
 
-def fetch_tasks(list_key: str, assignee: str | None, statuses: list[str], include_closed: bool, tags=()) -> list[dict]:
-    params = [("include_closed", "true" if include_closed else "false"), ("subtasks", "true")]
+def fetch_tasks(list_key: str, assignee: str | None, statuses: list[str], include_closed: bool, tags=(), updated_after=None) -> list[dict]:
+    params = [("include_closed", "true" if include_closed else "false"), ("subtasks", "true"),
+              ("include_timl", "true")]
+    if updated_after is not None:
+        params.append(("date_updated_gt", updated_after))
     if assignee:
         params.append(("assignees[]", str(user_id(assignee))))
     for s in statuses:
         params.append(("statuses[]", s))
     params += [("tags[]", tag) for tag in tags]
-    tasks, page = [], 0
+    tasks, seen, page = [], set(), 0
     while True:
         d = api("GET", f"/list/{list_id(list_key)}/task", params=params + [("page", page)])
-        tasks += d.get("tasks", [])
+        for task in d.get("tasks", []):
+            if task["id"] not in seen:
+                tasks.append(task)
+                seen.add(task["id"])
         if d.get("last_page") is True or not d.get("tasks") or ("last_page" not in d and len(d["tasks"]) < 100):
             return tasks
         page += 1
@@ -1198,10 +1227,18 @@ def cmd_topology(a):
 def cmd_tasks(a):
     for status in a.status or []:
         check_status(a.list or CONFIG.get("workspace", {}).get("default_list"), status)
-    tasks = fetch_tasks(a.list, a.assignee, a.status or [], a.include_closed or bool(a.status), a.tag or [])
+    tasks = fetch_tasks(a.list, a.assignee, a.status or [], a.include_closed or bool(a.status),
+                        a.tag or [], a.updated_since)
     if a.search:
-        needle = a.search.casefold()
-        tasks = [t for t in tasks if needle in (t["name"] + "\n" + (t.get("description") or "")).casefold()]
+        needles = [term.casefold() for term in a.search]
+        tasks = [t for t in tasks if any(needle in (t["name"] + ("" if a.titles_only else
+                 "\n" + (t.get("description") or ""))).casefold() for needle in needles)]
+    if a.summary:
+        rows = [task_summary(t) for t in sorted(tasks, key=lambda t: int(t.get("date_updated") or 0), reverse=True)]
+        table = "\n".join(f"{r['date_updated'] or '-'}  {r['id']}  {r['list']}  {r['status']}  "
+                          f"{' '.join(r['name'].split())}  {'/'.join(r['assignees']) or '-'}  "
+                          f"parent={r['parent'] or '-'}  {r['url']}" for r in rows)
+        return out(rows, a.json, table)
     if a.json:
         return out(tasks, True)
     rows = [task_row(t) for t in tasks]
@@ -1499,7 +1536,10 @@ def main(argv=None):
         s.add_argument("--status", action="append")
         s.add_argument("--tag", action="append")
         s.add_argument("--include-closed", action="store_true")
-        s.add_argument("--search", required=cmd == "search", help="case-insensitive substring in name/description of selected list")
+        s.add_argument("--search", action="append", required=cmd == "search", help="case-insensitive substring in name/description of selected list; repeat for OR matching in one fetch")
+        s.add_argument("--titles-only", action="store_true", help="match --search terms against names only")
+        s.add_argument("--summary", action="store_true", help="body-free metadata, newest updated first; text: updated, id, list, status, name, assignees, parent, URL")
+        s.add_argument("--updated-since", type=updated_since, help="strict ISO date/datetime; date or naive datetime = UTC; strictly newer updates, does not imply --include-closed")
         s.set_defaults(fn=cmd_tasks)
     s = sub.add_parser("customers")
     s.add_argument("--search")
