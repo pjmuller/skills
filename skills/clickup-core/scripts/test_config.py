@@ -108,8 +108,86 @@ def test_filtered_tasks_paginate_and_resolve_list_and_member(cli, config, monkey
     assert cli.fetch_tasks("queue", "reviewer", ["todo"], False, ["bug"]) == [{"id": "1"}, {"id": "2"}]
     for index, (method, path, params) in enumerate(calls):
         assert (method, path) == ("GET", "/list/30/task")
-        assert dict(params) == {"include_closed": "false", "subtasks": "true", "assignees[]": "102", "statuses[]": "todo", "tags[]": "bug", "page": index}
+        assert dict(params) == {"include_closed": "false", "subtasks": "true", "include_timl": "true", "assignees[]": "102", "statuses[]": "todo", "tags[]": "bug", "page": index}
     assert cli.list_id("999") == "999"
+
+
+@pytest.mark.parametrize("value", ["2026-10-12", "2026-10-12T00:00", "2026-10-12T00:00:00Z",
+                                   "2026-10-12T02:00:00+02:00"])
+def test_lookup_dates_are_utc_milliseconds(cli, value):
+    assert cli.updated_since(value) == 1791763200000
+    assert cli.updated_since("2026-10-12T00:00:00.123Z") == 1791763200123
+
+
+@pytest.mark.parametrize("value", ["1791763200", "1791763200000", "20261012", "12/10/2026",
+                                   "2026-02-30", "2026-10-12junk00:00", "2026-10-12T25:00",
+                                   "2026-10-12T00:00+01:99", "2026-10-12T00:00+24:00"])
+def test_lookup_dates_reject_non_iso_or_invalid(cli, value):
+    with pytest.raises(cli.argparse.ArgumentTypeError, match="ISO"):
+        cli.updated_since(value)
+
+
+def test_lookup_numeric_list_pagination_dedupes_multilist_tasks(cli, config, monkeypatch):
+    cli.configure(config)
+    calls = []
+    foreign = {"id": "shared", "list": {"id": "999"}}
+    def api(method, path, **kw):
+        calls.append((method, path, dict(kw["params"])))
+        return {"tasks": [foreign, {"id": str(len(calls))}], "last_page": len(calls) == 2}
+    monkeypatch.setattr(cli, "api", api)
+    assert cli.fetch_tasks("123", None, [], False, updated_after=1791763200000) == [foreign, {"id": "1"}, {"id": "2"}]
+    assert cli.list_key_of(foreign) == "999"
+    for page, (method, path, params) in enumerate(calls):
+        assert (method, path) == ("GET", "/list/123/task")
+        assert params == {"include_closed": "false", "subtasks": "true", "include_timl": "true",
+                          "date_updated_gt": 1791763200000, "page": page}
+
+
+@pytest.mark.parametrize("flags, expected", [([], ["a", "b"]), (["--titles-only"], ["a"])])
+def test_search_or_terms_one_fetch_and_default_body_matching(cli, config, monkeypatch, capsys, flags, expected):
+    tasks = [{"id": "a", "name": "ALPHA issue", "description": "unrelated"},
+             {"id": "b", "name": "generic title", "description": "BETA symptom"},
+             {"id": "c", "name": "other", "description": "none"}]
+    calls = []
+    def api(method, path, **kw):
+        calls.append((method, path, kw))
+        return {"tasks": tasks, "last_page": True}
+    monkeypatch.setattr(cli, "api", api)
+    cli.main(["search", "--search", "alpha", "--search", "beta", "--json", "--config", str(config), *flags])
+    assert [t["id"] for t in json.loads(capsys.readouterr().out)] == expected
+    assert len(calls) == 1
+    cli.main(["tasks", "--search", "beta", "--json", "--config", str(config)])
+    assert json.loads(capsys.readouterr().out) == [tasks[1]]
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_summary_body_free_dates_sort_and_text(cli, config, monkeypatch, capsys, closed):
+    base = {"list": {"id": "30"}, "status": {"status": "todo"}, "name": "Issue\nname",
+            "assignees": [{"username": "Sam"}], "description": "BODY_SENTINEL",
+            "markdown_description": "MARKDOWN_SENTINEL", "custom_fields": [{"id": "secret"}],
+            "date_created": "1791763200000", "date_closed": None, "url": "https://app.clickup.com/t/example"}
+    tasks = [{**base, "id": "old", "date_updated": "1791763200001"},
+             {**base, "id": "new", "date_updated": "1791763200123", "parent": "parent-task"}]
+    def api(method, path, **kw):
+        assert dict(kw["params"])["date_updated_gt"] == 1791763200000
+        assert dict(kw["params"])["include_closed"] == str(closed).lower()
+        return {"tasks": tasks, "last_page": True}
+    monkeypatch.setattr(cli, "api", api)
+    flags = ["tasks", "--summary", "--updated-since", "2026-10-12", "--config", str(config)]
+    if closed:
+        flags.append("--include-closed")
+    cli.main([*flags, "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["id"] for r in rows] == ["new", "old"]
+    assert set(rows[0]) == {"id", "name", "list", "status", "assignees", "parent",
+                            "date_created", "date_updated", "date_closed", "url"}
+    assert rows[0]["date_updated"] == "2026-10-12T00:00:00.123Z"
+    assert rows[0]["date_created"] == "2026-10-12T00:00:00.000Z"
+    assert rows[0]["date_closed"] is None and rows[0]["parent"] == "parent-task"
+    cli.main(flags)
+    text = capsys.readouterr().out
+    assert text.startswith("2026-10-12T00:00:00.123Z  new  queue  todo  Issue name  Sam  parent=parent-task")
+    assert len(text.splitlines()) == 2 and "SENTINEL" not in text
 
 
 def test_custom_field_enum_and_raw_json_payload(cli, config, monkeypatch):

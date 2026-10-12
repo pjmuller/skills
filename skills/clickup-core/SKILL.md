@@ -30,7 +30,8 @@ is parsed, never executed. Never commit tokens. Platform OAuth/client credential
 
 Semantics `--help` doesn't show:
 
-- `search` / `tasks --search` = substring filter over the selected list, not ClickUp search.
+- `search` / `tasks --search` = substring filter over one selected list; repeated terms match OR
+  in one fetch. Default matches name + description; `--titles-only` limits it to names.
 - `update --description[-file]` replaces the body; `--append-description[-file]` preserves native
   embeds. Never rebuild a body from `description`/`markdown_description` (lossy projections).
 - `comment --mention ALIAS` always names the recipient; `--mention-first PREFIX` only moves it to
@@ -41,6 +42,44 @@ Semantics `--help` doesn't show:
 - `chat read URL` / `chat post URL --text … [--image FILE…]`: channels, DMs and threads from their
   app URL (`/t/<id>` = reply in that thread, also when the id is a reply). Text-only posts use the
   public v3 API; `--image` needs the web-app session (`chat session`, [reference.md](reference.md#chat)).
+
+## Before creating work
+
+Use the wrapper's lookup scope: shortlist metadata, then read candidate IDs with comments. Compare
+intent and outcome, not title equality. Check relevant implementation/skills when applicable:
+completed work may have no active ticket. Reuse or extend existing work; create only after this
+bounded check. Missing results from incomplete scope do not prove absence.
+
+<details>
+<summary>Lookup commands and limits</summary>
+
+```sh
+CU() { uv run .agents/skills/clickup-core/scripts/clickup.py "$@"; }
+# Repeat in each relevant list from the wrapper's scope, using --list ALIAS_OR_NUMERIC_ID.
+CU search --summary --json --include-closed --updated-since <YYYY-MM-DD> --search "stem" --search "alias"
+CU search --summary --json --search "stem" --search "alias"  # older open work too; no date
+CU task <candidate-id> --comments --json
+```
+
+Choose a recent boundary for the first pass; `--updated-since` never implies `--include-closed`.
+It accepts ISO dates/datetimes, treating dates and naive datetimes as UTC; the server filter is
+strictly newer (`date_updated_gt`). Whether comments advance `date_updated` is unknown, so a
+recent pass alone cannot establish absence.
+
+`--summary` emits body-free metadata, newest updated first, with ISO UTC dates (missing = null).
+Text mode is one line per task: updated, id, list, status, name, assignees, parent, URL.
+Default JSON/text output stays unchanged. Subtasks and tasks added to multiple lists are included;
+`list` identifies the home list. Pagination keeps the server's default created order and dedupes IDs.
+
+Optional first pass: `--titles-only`. If no candidate, remove it, try short stems/product aliases
+and inspect plausible bodies/comments. Matching is literal case-insensitive substring: spelling,
+spaces and hyphens matter. Archived tasks, comments and custom fields are excluded from matching;
+comments are read only for selected candidates. No workspace-wide search.
+
+After an uncertain create, shortlist the exact title with `--include-closed --updated-since <today>`
+before retrying; inspect the returned task.
+
+</details>
 
 ## Comment discipline
 
