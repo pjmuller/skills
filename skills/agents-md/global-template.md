@@ -23,7 +23,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - 👀 needs review/course-change
 - 🚫 blocked
 - 🏓 awaiting a ping-back from a **separate T3 thread**: keep this thread open, nothing to do yet
-- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread self`, give the date): keep it open
+- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread self`, give the date). A resume works on a settled thread too, so ⏰ never keeps a thread open.
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
