@@ -58,6 +58,26 @@ def test_meet_layout_end_to_end(tmp_path):
     assert len(result["ranges"]) == 1
     r = result["ranges"][0]
     assert abs(r["start"] - 16) <= 2 and abs(r["end"] - 64) <= 2
+    # Share tile at x 6-460, y 28-334 of 640x360: filmstrip and dark margins cut off.
+    assert r["crop"] == pytest.approx([0.009, 0.078, 0.71, 0.85], abs=0.015)
+
+
+@needs_tools
+def test_shrink_video_crop_fills_frame_with_share_tile(tmp_path):
+    path = video(tmp_path, "meet", [("meet-gallery", 10), ("meet-share", 30), ("meet-gallery", 10)], gop=2)
+    plan = run(path)
+    subprocess.run([str(HERE / "scripts" / "shrink-video"), "--crop", str(path.with_suffix(".json")), str(path)],
+                   check=True, capture_output=True)
+    out = tmp_path / "meet.gemini.crop.mp4"
+
+    def top_band(t: float) -> float:  # mean luma of the top rows, middle columns, of the frame at t
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1", "-vf",
+                              "scale=64:36,format=gray", "-f", "rawvideo", "pipe:"], check=True, capture_output=True).stdout
+        return sum(raw[y * 64 + x] for y in range(2) for x in range(24, 40)) / 32
+
+    r = plan["ranges"][0]
+    assert top_band((r["start"] + r["end"]) / 2) > 150  # the share's light title bar, not Meet's dark header
+    assert top_band(4) < 60                             # gallery outside the range stays whole
 
 
 @needs_tools
