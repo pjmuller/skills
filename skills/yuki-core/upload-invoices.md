@@ -7,11 +7,14 @@ Use the current session when already executing this task; do not spawn the same 
 1. Verify the wrapper's company, administration and Workspace account. Use its Workspace API
    CLI for Drive downloads and all Sheet reads/writes. Read actual headers and all rows; filter
    DONE in memory (blank/FALSE are open; boolean TRUE or formatted "TRUE" are done).
-2. Download the supplied folder; inspect PDFs/images. Match vendor or verified trading name,
+2. Download the supplied Drive folder or use the supplied local downloads; inspect PDFs/images. Match vendor or verified trading name,
    currency/amount and invoice or transaction date. Bank booking dates can differ: inspect the
    raw transaction date. Date/amount alone cannot resolve a contradictory vendor identity.
 3. Keep a local manifest: Drive ID, original filename/hash, sheet item_id, matched row,
    document identity and upload status. Exclude duplicates, already-done and ambiguous items.
+   For invoices absent from the sheet, check the matching quarter with `Y outstanding`; an
+   outdated sheet is not evidence that the invoice was delivered. Keep accepted document links
+   for those invoices; do not fabricate a row or mark a different payment DONE.
 4. Open the wrapper's Yuki tenant. Follow the host's browser policy; verify the signed-in
    identity and administration. A logged-out page is not upload access. Never substitute a
    different company's account. Route: **Postbus → Aanleveren → Aankoop binder → Uploaden**.
@@ -52,3 +55,11 @@ that the results are booleans; compare the full readback to ensure only intended
   `new_page <url> --background`. Verify profile identity in the top-right user menu.
   `upload_file <pageId> <Bladeren-uid> <paths...>` attaches multiple files; obtain UIDs from
   each current `take_snapshot`. Close only your created tab, then stop the CLI daemon.
+
+## Reusable tooling
+
+The maintained Python tools are `scripts/yuki.py` (read-only outstanding payments and append-only
+sheet reporting) and the wrapper's Google Workspace core `gws.py` (Drive and targeted Sheets
+operations). Run `scripts/install --check` for Yuki readiness. Browser uploads follow this recipe;
+there is no unattended upload/OCR pipeline. Invoice matching remains a verified agent decision.
+Company/account IDs stay in each `yuki` wrapper; consumer repos carry committed core copies.
