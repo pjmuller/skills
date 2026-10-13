@@ -27,6 +27,9 @@ Options:
   --provider PROFILE                                Alias for --profile
   --model auto|sol|astra|luna|haiku|fable|opus|gemini|MODEL  Default: inherit
   --thinking auto|low|med|medium|high                Default: inherit, else high
+  --permissions full-access|approval-required       Default: T3's new-thread default for the
+                                                    project (project override → environment
+                                                    setting → full-access)
   --source-thread THREAD_ID                          Override the detected parent
   --title TITLE                                     Default: first 72 prompt chars
   --project PATH                                    Default: current git root
@@ -57,6 +60,7 @@ provider_from_flag=0
 force_profile=0
 model_choice="${T3_SPAWN_MODEL:-auto}"
 thinking_choice="${T3_SPAWN_THINKING:-auto}"
+permissions_choice="${T3_SPAWN_PERMISSIONS:-}"
 source_thread_id="${T3_SOURCE_THREAD_ID:-}"
 thread_title=""
 title_is_explicit=0
@@ -88,6 +92,11 @@ while (($#)); do
     --thinking|--effort)
       [[ $# -ge 2 ]] || usage
       thinking_choice="$2"
+      shift 2
+      ;;
+    --permissions)
+      [[ $# -ge 2 ]] || usage
+      permissions_choice="$2"
       shift 2
       ;;
     --source-thread)
@@ -169,6 +178,11 @@ fi
   exit 2
 }
 
+case "$permissions_choice" in
+  ""|full-access|approval-required) ;;
+  *) echo "--permissions must be full-access or approval-required: $permissions_choice" >&2; exit 2 ;;
+esac
+
 t3_require jq curl uuidgen
 t3_bootstrap
 
@@ -219,6 +233,26 @@ if [[ -z "$project_id" ]]; then
     echo "note: registered T3 project $project_title ($project_id)" >&2
   fi
 fi
+
+# Permissions: T3's server decodes a missing runtimeMode as full-access and never
+# reads settings on thread.create, so resolve the web client's precedence here:
+# project override → environment default → full-access. Unreadable settings → default.
+runtime_mode=full-access
+runtime_mode_source=default
+if [[ -n "$permissions_choice" ]]; then
+  runtime_mode="$permissions_choice"
+  runtime_mode_source=flag
+else
+  resolved_mode="$(jq -r --arg id "$project_id" '
+    [ ((.projectSettingsOverrides? // {})[$id]?.defaultRuntimeMode? | strings | select(. != "") | "project \(.)"),
+      (.defaultRuntimeMode? | strings | select(. != "") | "environment \(.)") ] | first // empty' \
+    "$t3_base_dir/userdata/settings.json" 2>/dev/null || true)"
+  if [[ -n "$resolved_mode" ]]; then
+    runtime_mode_source="${resolved_mode%% *}"
+    runtime_mode="${resolved_mode#* }"
+  fi
+fi
+# End permissions.
 
 # Native registry lookup: explicit model intent disambiguates account names.
 normalize_provider() {
@@ -622,9 +656,10 @@ create_payload="$(jq -n \
   --arg projectId "$project_id" \
   --arg title "$thread_title" \
   --argjson modelSelection "$model_selection_json" \
+  --arg runtimeMode "$runtime_mode" \
   --arg branch "$git_branch" \
   --arg createdAt "$created_at" \
-  '{type:"thread.create",commandId:$commandId,threadId:$threadId,projectId:$projectId,title:$title,modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",branch:(if $branch == "" then null else $branch end),worktreePath:null,createdAt:$createdAt}')"
+  '{type:"thread.create",commandId:$commandId,threadId:$threadId,projectId:$projectId,title:$title,modelSelection:$modelSelection,runtimeMode:$runtimeMode,interactionMode:"default",branch:(if $branch == "" then null else $branch end),worktreePath:null,createdAt:$createdAt}')"
 
 # T3's auto-titler only overwrites a thread title when it still equals the
 # titleSeed we sent (or is literally "New thread") — see canReplaceThreadTitle
@@ -643,8 +678,9 @@ turn_payload="$(jq -n \
   --arg title "$thread_title" \
   --argjson explicitTitle "$title_is_explicit" \
   --argjson modelSelection "$model_selection_json" \
+  --arg runtimeMode "$runtime_mode" \
   --arg createdAt "$created_at" \
-  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",createdAt:$createdAt}
+  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:$runtimeMode,interactionMode:"default",createdAt:$createdAt}
    | if $explicitTitle == 1 then . else .titleSeed = $title end')"
 
 # Belt-and-braces: re-assert the exact title after the turn starts. Cheap,
@@ -662,6 +698,7 @@ if ((dry_run)); then
   fi
   printf 'Provider: %s · Model: %s · Thinking: %s\n' \
     "$provider_instance_id" "$model_name" "$thinking_level"
+printf 'permissions: %s (source: %s)\n' "$runtime_mode" "$runtime_mode_source"
   if [[ -n "$source_thread_id" ]]; then
     printf 'Inherited from thread: %s\n' "$source_thread_id"
   fi
@@ -715,6 +752,7 @@ fi
 printf 'Created T3 thread: %s\n' "$thread_title"
 printf 'Provider: %s · Model: %s · Thinking: %s\n' \
   "$provider_instance_id" "$model_name" "$thinking_level"
+printf 'permissions: %s (source: %s)\n' "$runtime_mode" "$runtime_mode_source"
 if [[ -n "$source_thread_id" ]]; then
   printf 'Inherited from thread: %s\n' "$source_thread_id"
 fi
