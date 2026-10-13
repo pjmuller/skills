@@ -77,7 +77,17 @@ same-origin iframe `name="Main"`: select Aankoop with `evaluate_script` (leaf el
 navigates to `UploadedFiles.aspx?Batch=<id>` whose iframe lists filename, Map, Status "Open" per file.
 Sources for the files: [fetch-invoices.md](fetch-invoices.md).
 
-## T3 preview upload, verified 2026-10-13
+## T3 preview upload, verified 2026-10-13 (KA, 4 PDFs, no base64 in chat)
+
+Cheaper than base64 evaluate calls: serve the PDFs from a throwaway local folder with a tiny CORS HTTP server
+(`Access-Control-Allow-Origin: *`, free port, only the files to upload, kill it afterwards; http://127.0.0.1 is
+allowed from the https page). Then one `preview_evaluate`: `fetch` each file, `new File([blob], name)`, add to a
+`DataTransfer`, assign `input[type=file].files`, dispatch `change`; the page lists "N bestand(en) klaar"; a second
+evaluate checks `Map` = Aankoop and clicks the Uploaden button; `preview_wait_for urlIncludes UploadedFiles.aspx`.
+Select the binder first via evaluate inside iframe `name="Main"` (click the leaf whose text is `Aankoop`, then `Uploaden`).
+Never serve ~/Downloads itself; check `lsof -iTCP:<port>` because other agents run servers too.
+
+## T3 preview upload, verified 2026-10-13 (first run)
 
 Prefer `preview_*` when its Yuki session is signed in. Close the profile drawer after checking
 identity: it can cover Uploaden and intercept clicks. Legacy page content is inside the same-origin
