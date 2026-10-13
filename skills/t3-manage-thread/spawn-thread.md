@@ -6,8 +6,10 @@ routing decision, parent, model, thinking and any appended footer, creating noth
 Resolution order in `scripts/t3-spawn-thread`: project (current git root,
 registered if needed) → parent thread (Claude process ancestry, or
 `CODEX_THREAD_ID` inside T3; `--source-thread` overrides) → model/thinking →
-account ([routing](#automatic-profile-routing)). The thread runs full-access in
-the local checkout and gets focus. Inheriting from a parent in another T3
+account ([routing](#automatic-profile-routing)). Permissions follow T3's new-thread
+default for the project (project override → environment setting → full-access);
+`--permissions full-access|approval-required` overrides. The thread runs in the
+local checkout and gets focus. Inheriting from a parent in another T3
 project is refused unless `--allow-cross-project-source`: an accidental inherit
 silently runs the work under the wrong project/provider.
 

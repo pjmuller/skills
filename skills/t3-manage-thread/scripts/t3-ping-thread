@@ -113,6 +113,9 @@ model_selection_json="$(printf '%s' "$target_thread_json" | jq -c \
   exit 1
 }
 
+# The server drives provider sessions from the thread's runtimeMode; keep it.
+runtime_mode="$(printf '%s' "$target_thread_json" | jq -r '.runtimeMode // "full-access"')"
+
 # Preserve the target's visibility: T3 clears a snooze on every incoming turn, so a
 # thread that is snoozed NOW (raw snoozedUntil — even if a completed turn popped it,
 # the intent was "hidden") gets its keeper re-armed after the ping; a visible thread
@@ -129,6 +132,7 @@ if ((dry_run)); then
   printf 'Dry run — nothing sent.\n'
   printf 'Target thread: %s (%s) · Project: %s\n' "$target_thread_id" "$target_title" "$target_project_title"
   printf 'Model selection: %s\n' "$model_selection_json"
+  printf 'permissions: %s\n' "$runtime_mode"
   if ((hide)); then
     printf 'Hide: would arm keeper (t3-hide-thread --hide %s)\n' "$target_thread_id"
   else
@@ -162,8 +166,9 @@ turn_payload="$(jq -n \
   --arg messageId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
   --arg text "$message_text" \
   --argjson modelSelection "$model_selection_json" \
+  --arg runtimeMode "$runtime_mode" \
   --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:"full-access",interactionMode:"default",createdAt:$createdAt}')"
+  '{type:"thread.turn.start",commandId:$commandId,threadId:$threadId,message:{messageId:$messageId,role:"user",text:$text,attachments:[]},modelSelection:$modelSelection,runtimeMode:$runtimeMode,interactionMode:"default",createdAt:$createdAt}')"
 
 attempt=0
 while :; do
