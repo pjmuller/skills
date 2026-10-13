@@ -12,9 +12,9 @@ Three rules (spawn-thread.md §Automatic profile routing):
    ranks after the ones that still have session room.
 2. Score = the tightest relevant weekly-class window's headroom per hour until
    its reset (`headroom% / max(hours, 1)`; an untouched window counts as
-   100 % over its full length), times the plan multiplier stated in the label
-   (`max_20x` → 20, `max_5x` → 5; a label without a multiplier → 1, so Codex
-   `pro`/`prolite` and `unknown` stay unweighted among themselves). Highest
+   100 % over its full length), times the plan multiplier (t3_limits.plan_multiplier:
+   stated by the label, `max_20x` → 20; else the user's private map, Codex
+   `prolite` → 5; else 1, never optimistic about an unknown tier). Highest
    wins: quota that expires soonest is worth the most, growing continuously as
    the reset nears — the same thing a human reads off the reset times. A
    heuristic for urgency, not a throughput estimate.
@@ -38,11 +38,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from t3_limits import PLAN_HINT, SETTINGS, WEEKLY_SECONDS, claude_accounts, codex_accounts, plan_label, provider_profiles, relative
+from t3_limits import (PLAN_HINT, SETTINGS, claude_accounts, codex_accounts, plan_label, plan_multiplier,
+                       provider_profiles, relative, tier_text)
 from profile_registry import registry, compatible
 
 SESSION_TIGHT_SHARE = 0.10  # session room below this share of the largest verified plan's session demotes
-PLAN_MULTIPLIER = re.compile(r"^max_(\d+)x\b")  # `max_20x`, `max_5x (pro)`; any other label shape → 1
 WEEKLY_CLASS_SECONDS = 24 * 3600  # windows at least this long carry the urgency score
 MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
@@ -77,17 +77,13 @@ class Candidate:
     plan: str = "unknown"
     detail: str = ""       # why unknown/excluded, or "tight" label
     rows: list = field(default_factory=list)
-    weight: int = 1        # plan multiplier from the label, 1 when it states none
+    weight: int = 1        # plan multiplier (label, private map, else 1)
+    tier: str = "1x?"       # weight and its source, for the explanation
     rate: float = 0.0      # tightest weekly-class window's headroom % per hour to reset (ok only)
     score: float = 0.0     # rate × weight: plan units per hour
     bottleneck: str = ""
     session_room: float | None = None  # weight × tightest session headroom %, None without a session window
     session_tight: bool = False
-
-
-def plan_weight(plan):
-    match = PLAN_MULTIPLIER.search(plan or "")
-    return int(match.group(1)) if match else 1
 
 
 def hourly_headroom(row, now):
@@ -104,8 +100,9 @@ def hourly_headroom(row, now):
 
 def assess(account, model, now):
     rows = [r for r in account.rows if relevant(r.window, model)]
+    weight, source = plan_multiplier(account)
     candidate = Candidate(account.instance_id, account.label, "ok", plan=plan_label(account), rows=rows,
-                          weight=plan_weight(plan_label(account)))
+                          weight=weight, tier=tier_text(weight, source))
     # A cached exhausted cap remains a reason to avoid an account until its
     # reset, even when a failed refresh makes the rest of the data uncertain.
     exhausted = [r for r in rows if r.used_percent >= 100 and (r.resets_at is None or r.resets_at > now)]
@@ -197,7 +194,7 @@ def explain(model, candidates, now, selected=None, reason=""):
             windows = f"{c.status}: {c.detail}"
             tag = ""
         mark = "  ← selected" if c.instance_id == selected else ""
-        lines.append(f"  {c.instance_id:<{width}}  [{c.plan}] {windows}{tag}{mark}")
+        lines.append(f"  {c.instance_id:<{width}}  [{c.plan} · {c.tier}] {windows}{tag}{mark}")
     if selected:
         lines.append(f"  → {selected}: {reason}")
     return "\n".join(lines)

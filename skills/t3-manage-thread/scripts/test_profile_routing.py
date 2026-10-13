@@ -10,7 +10,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 from profile_routing import check, choose, explain, relevant, route
-from t3_limits import Account, Row, claude_profiles, claude_rows
+from t3_limits import Account, Row, claude_profiles, claude_rows, plan_multiplier, tier_text
 
 NOW = datetime.now(timezone.utc)
 
@@ -50,7 +50,7 @@ def test_score_headroom_per_hour_and_stable_ties():
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
     selected, reason, candidates = choose([b, a], "claude-fable-5", "a", NOW)
     explanation = explain("claude-fable-5", candidates, NOW, selected, reason)
-    assert "a  [max_20x]" in explanation and "b  [max_20x]" in explanation and "%/h × 20x" in explanation
+    assert "a  [max_20x · 20x]" in explanation and "b  [max_20x · 20x]" in explanation and "%/h × 20x" in explanation
     assert "Percentages are per account" in explanation and "tie → inherited" in reason
     b.rows[1].resets_at = NOW + timedelta(days=6)  # same headroom, later reset → less urgent
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
@@ -129,7 +129,7 @@ def test_single_enabled_and_builtin_fallback(tmp_path):
     collect = Mock(return_value=[Account("a", "a", error="HTTP 429")])
     selected, reason, explanation = route("claude-fable-5", "b", settings, collect)
     assert selected == "a" and "unverified" in reason and "unknown: HTTP 429" in explanation
-    assert "[unknown] unknown: HTTP 429" in explanation
+    assert "[unknown · 1x?] unknown: HTTP 429" in explanation
     collect = Mock(return_value=[account("a", 100)])
     with pytest.raises(ValueError, match="--profile") as info:
         route("claude-fable-5", "b", settings, collect)
@@ -197,10 +197,32 @@ def test_plan_multiplier_weights_identical_percentages():
     assert round(candidates[1].score / candidates[0].score, 3) == 4.0
     assert choose([small, account("pro", 40, plan="pro")], "claude-fable-5", "pro", NOW)[0] == "small"
     # The label format is controlled; stray digits in prose or e-mails never become a multiplier.
-    from profile_routing import plan_weight
-    assert plan_weight("max_20x (pro)") == 20 and plan_weight("max_5x") == 5
-    assert plan_weight("pro") == plan_weight("prolite · x20x@example.com") == plan_weight("unknown") == 1
-    assert plan_weight("legacy_20x") == plan_weight("20x") == 1  # only the `max_Nx` shape is trusted
+    weight = lambda plan: plan_multiplier(Account("x", "x", plan=plan), Path("/nonexistent"))
+    assert weight("max_20x (pro)") == (20, "label") and weight("max_5x") == (5, "label")
+    assert weight("pro") == weight("prolite · x20x@example.com") == weight("") == (1, "unknown")
+    assert weight("legacy_20x") == weight("20x") == (1, "unknown")  # only the `max_Nx` shape is trusted
+
+
+def test_private_map_weights_codex_tiers_per_driver(tmp_path, monkeypatch):
+    """PJ 2026-10-13: Codex labels state no multiplier (ProBackup `prolite` = 5x, DentAI
+    `pro` = 20x); the private map supplies it, scoped to the driver, never optimistic."""
+    multipliers = tmp_path / "t3-plan-multipliers.json"
+    multipliers.write_text(json.dumps({"codex": {"prolite": 5, "pro": 20, "plus": True, "free": 0}}))
+    # Patch the module routing actually uses: test_t3_limits may reload `t3_limits`.
+    monkeypatch.setitem(plan_multiplier.__globals__, "MULTIPLIERS", multipliers)
+    codex = lambda id, used, plan: account(id, used, plan=plan, driver="codex")
+    small, big = codex("small", 40, "prolite · a@example.com"), codex("big", 40, "pro · b@example.com")
+    selected, reason, candidates = choose([small, big], "gpt-6.1-sol", "small", NOW)
+    assert selected == "big" and "× 20x" in reason and [c.weight for c in candidates] == [5, 20]
+    assert "[prolite · a@example.com · 5x map]" in explain("gpt-6.1-sol", candidates, NOW, selected, reason)
+    big.rows[1].used_percent = 95  # 20·5 < 5·60: a nearly exhausted 20x loses to the 5x
+    assert choose([small, big], "gpt-6.1-sol", "big", NOW)[0] == "small"
+    # Same label under another driver, a non-int/zero value, or a broken file: unverified 1x.
+    assert plan_multiplier(account("c", plan="pro", driver="claudeAgent")) == (1, "unknown")
+    assert plan_multiplier(codex("p", 0, "plus")) == plan_multiplier(codex("f", 0, "free")) == (1, "unknown")
+    assert plan_multiplier(account("m", plan="max_5x", driver="codex")) == (5, "label")  # a stated tier wins
+    multipliers.write_text("{broken")
+    assert plan_multiplier(big) == (1, "unknown") and tier_text(1, "unknown") == "1x?"
 
 
 def test_small_plan_still_wins_when_its_reset_is_urgent_or_the_big_one_is_nearly_out():

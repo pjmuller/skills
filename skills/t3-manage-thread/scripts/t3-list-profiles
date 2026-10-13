@@ -3,7 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""List enabled T3 provider instances per ecosystem with the exact --profile value.
+"""List enabled T3 provider instances per ecosystem with the exact --profile value
+and plan tier (1x/5x/20x) from the last cached usage reading, without network.
 
     t3-list-profiles          # human table
     t3-list-profiles --json   # machine-readable
@@ -15,14 +16,35 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from profile_registry import registry, enabled, family, account_label  # noqa: E402
+from t3_limits import Account, plan_label, plan_multiplier, plan_tier, provider_profiles  # noqa: E402
 
 ECOSYSTEM = {"claude": ("Claude", "fable · opus · haiku"),
              "codex": ("OpenAI", "astra · sol"),
              "antigravity": ("Google", "gemini")}
 
 
-def rows(settings_path):
+PLAN_FIELD = {"claudeAgent": "_t3_claude_plan", "codex": "plan_type"}  # as t3_limits caches them
+
+
+def tiers(settings_path):
+    """instance id → Account carrying the last cached plan label, any age: tiers change
+    on billing, not by the minute. No cache → `unknown`; `t3-limits` refreshes it."""
+    try:
+        cache = json.loads((settings_path.parent / "t3-limits-cache.json").read_text())
+    except (OSError, ValueError):
+        cache = {}
+    out = {}
+    for driver, key in PLAN_FIELD.items():
+        for id, label, _ in provider_profiles(settings_path, driver):
+            payload = (cache.get(id) or {}).get("payload") if isinstance(cache.get(id), dict) else None
+            plan = payload.get(key) if isinstance(payload, dict) else None
+            out[id] = Account(label, id, driver=driver, plan=plan if isinstance(plan, str) else "")
+    return out
+
+
+def rows(settings_path, accounts=None):
     instances = {id: e for id, e in registry(settings_path).items() if enabled(e)}
+    accounts = tiers(settings_path) if accounts is None else accounts
     out = []
     for id, entry in instances.items():
         fam = family(entry)
@@ -31,8 +53,13 @@ def rows(settings_path):
         same = [i for i, e in instances.items() if family(e) == fam and account_label(e) == account_label(entry)]
         profile = label if label and len(same) == 1 else id
         name = entry.get("displayName") or (entry.get("config") or {}).get("displayName") or id
-        out.append({"ecosystem": ECOSYSTEM.get(fam, (fam, ""))[0], "models": ECOSYSTEM.get(fam, (fam, ""))[1],
-                    "instance_id": id, "display_name": name, "profile": profile})
+        row = {"ecosystem": ECOSYSTEM.get(fam, (fam, ""))[0], "models": ECOSYSTEM.get(fam, (fam, ""))[1],
+               "instance_id": id, "display_name": name, "profile": profile}
+        if id in accounts:
+            multiplier, source = plan_multiplier(accounts[id])
+            row |= {"plan": plan_label(accounts[id]), "multiplier": multiplier, "multiplier_source": source,
+                    "tier": plan_tier(accounts[id])}
+        out.append(row)
     order = {"Claude": 0, "OpenAI": 1, "Google": 2}
     return sorted(out, key=lambda r: (order.get(r["ecosystem"], 9), r["display_name"]))
 
@@ -43,13 +70,17 @@ def main():
     if "--json" in sys.argv[1:]:
         print(json.dumps(data, indent=2))
         return 0
-    print("--profile is the account; --model picks the ecosystem. Omit both to inherit.")
+    print("--profile is the account; --model picks the ecosystem. Omit both to inherit.\n"
+          "Tier = advertised plan size (label, `map` = private t3-plan-multipliers.json, `1x?` = unverified), "
+          "not quota left: see t3-limits.")
     current = None
+    width = max((len(r["instance_id"]) for r in data), default=0) + 2
     for r in data:
         if r["ecosystem"] != current:
             current = r["ecosystem"]
             print(f"\n{current}" + (f"  (--model {r['models']})" if r["models"] else ""))
-        print(f"  --profile {r['profile']:<14} {r['display_name']:<22} [{r['instance_id']}]")
+        tier = f"  {r['tier']}" if "tier" in r else ""
+        print(f"  --profile {r['profile']:<14} {r['display_name']:<22} {'[' + r['instance_id'] + ']':<{width}}{tier}".rstrip())
     return 0
 
 
