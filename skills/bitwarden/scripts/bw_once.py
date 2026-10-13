@@ -1,4 +1,7 @@
-"""One fixed vault operation per human Terminal unlock; never a session broker."""
+"""One fixed vault operation per human Terminal unlock, or a time-boxed session holder.
+
+The session key never leaves this process: a holder started in the human Terminal serves
+exact-host list/copy requests over a private Unix socket and locks the CLI at expiry."""
 import argparse
 import base64
 from contextlib import contextmanager
@@ -13,6 +16,7 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -23,6 +27,8 @@ from urllib.parse import urlsplit
 import uuid
 
 AUTH_SECONDS = 180
+TTL_DEFAULT_MINUTES = 60
+TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
 TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit.
 ROOT = Path(__file__).resolve().parent
@@ -75,10 +81,17 @@ def validate(request):
     op = request.get("op")
     allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "field"},
                "send-text": {"op", "input_file", "name", "views"},
-               "send-file": {"op", "input_file", "name", "views"}}
-    if op not in allowed or set(request) != allowed[op]:
+               "send-file": {"op", "input_file", "name", "views"},
+               "session-start": {"op", "ttl", "hosts"}, "session-stop": {"op"}, "session-status": {"op"}}
+    if not isinstance(request, dict) or op not in allowed or set(request) != allowed[op]:
         raise Failure("Invalid request")
     request = dict(request)
+    if op == "session-start":
+        if type(request["ttl"]) is not int or not 1 <= request["ttl"] <= TTL_MAX_MINUTES:
+            raise Failure(f"Session ttl must be 1-{TTL_MAX_MINUTES} minutes")
+        if not isinstance(request["hosts"], list):
+            raise Failure("Session hosts must be a list")
+        request["hosts"] = sorted({host(value) for value in request["hosts"]})
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
     if op == "copy":
@@ -148,13 +161,22 @@ class Vault:
                 self.session = None
 
 
-@contextmanager
-def mutex():
+def cache_dir():
     cache = Path.home() / ".cache" / "bw-once"
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     if cache.is_symlink() or cache.stat().st_uid != os.getuid():
         raise Failure("Unsafe helper lock directory")
     os.chmod(cache, 0o700)
+    return cache
+
+
+def session_socket():
+    return cache_dir() / "session.sock"
+
+
+@contextmanager
+def mutex():
+    cache = cache_dir()
     fd = os.open(cache / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
@@ -308,6 +330,139 @@ def transaction(vault, request, ask=confirm, deliver=clipboard):
         return result
 
 
+class Stop(Exception):
+    pass
+
+
+def read_line(connection, limit=65536):
+    data = b""
+    while not data.endswith(b"\n") and len(data) < limit:
+        chunk = connection.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+class Session:
+    """Holds one unlocked session in memory; serves list/copy until the deadline, then locks."""
+
+    def __init__(self, vault, request, deliver=clipboard):
+        self.vault, self.deliver = vault, deliver
+        self.hosts = set(request["hosts"])
+        self.deadline = time.monotonic() + request["ttl"] * 60
+        self.expires = datetime.now(timezone.utc) + timedelta(minutes=request["ttl"])
+
+    def status(self):
+        return {"active": True, "expires_at": self.expires.isoformat(timespec="seconds"),
+                "remaining_seconds": max(0, int(self.deadline - time.monotonic())), "hosts": sorted(self.hosts)}
+
+    def handle(self, request):
+        request = validate(request)
+        if request["op"] == "session-status":
+            return self.status()
+        if request["op"] == "session-stop":
+            raise Stop()
+        if request["op"] not in ("list", "copy"):
+            raise Failure("A session serves list and copy only; Sends need their own Terminal request")
+        if self.hosts and request["host"] not in self.hosts:
+            raise Failure("Host is outside this session's allowlist")
+        if time.monotonic() >= self.deadline:
+            raise Failure("Session expired")
+        result, secret = operate(self.vault, request, None)
+        if secret is not None:
+            self.deliver(secret)
+        return {"via": "session", **result}
+
+
+def serve_session(vault, request, announce=lambda status: None, deliver=clipboard, audit=lambda line: None):
+    path = session_socket()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    previous = os.umask(0o177)
+    try:
+        server.bind(str(path))
+    finally:
+        os.umask(previous)
+    server.listen(4)
+    session = Session(vault, request, deliver)
+    announce(session.status())
+    try:
+        while session.deadline > time.monotonic():
+            if not select.select([server], [], [], min(5.0, session.deadline - time.monotonic()))[0]:
+                continue
+            connection, _ = server.accept()
+            with connection:
+                connection.settimeout(5)
+                incoming = None
+                try:
+                    incoming = json.loads(read_line(connection, 4096))
+                    result = {"ok": True, **session.handle(incoming)}
+                except Stop:
+                    connection.sendall(b'{"ok": true, "active": false}\n')
+                    audit({"op": "session-stop"})
+                    break
+                except Failure as error:
+                    result = {"ok": False, "error": str(error)}
+                except Exception:
+                    result = {"ok": False, "error": "Request failed"}
+                connection.settimeout(90)
+                try:
+                    connection.sendall(json.dumps(result).encode() + b"\n")
+                except OSError:
+                    pass
+                if isinstance(incoming, dict) and incoming.get("op") in ("list", "copy"):
+                    audit({key: incoming.get(key) for key in ("op", "host", "id", "field") if key in incoming}
+                          | {"ok": result["ok"]})
+    finally:
+        server.close()
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def session_transaction(vault, request, ask=confirm, announce=lambda status: None, deliver=clipboard,
+                        audit=lambda line: None):
+    request = validate(request)
+    with mutex():
+        vault.relock()
+        try:
+            vault.call("sync")
+            vault.locked()
+            if not ask(request, None):
+                raise Failure("Request cancelled")
+            key = vault.call("unlock", "--raw", unlock=True).decode().strip()
+            if not key or not re.fullmatch(r"[A-Za-z0-9+/=]+", key):
+                raise Failure("Unlock did not return a session")
+            vault.session = key
+            serve_session(vault, request, announce, deliver, audit)
+        finally:
+            vault.relock()
+    return {"active": False}
+
+
+def via_session(request):
+    """Ask a running holder; None when there is none (caller falls back to the Terminal flow)."""
+    path = session_socket()
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(120)
+    try:
+        client.connect(str(path))
+    except OSError:
+        client.close()
+        return None
+    with client:
+        client.sendall(json.dumps(request).encode() + b"\n")
+        try:
+            return json.loads(read_line(client))
+        except ValueError:
+            raise Failure("Invalid session helper response") from None
+
+
 APPLE_SCRIPT = '''on run argv
 tell application "Terminal"
 activate
@@ -341,6 +496,13 @@ def private_json(path, value):
         json.dump(value, stream)
 
 
+def ttl_minutes(value):
+    match = re.fullmatch(r"(\d+)([mh]?)", str(value).strip())
+    if not match:
+        raise Failure("ttl must look like 60m or 1h")
+    return int(match.group(1)) * (60 if match.group(2) == "h" else 1)
+
+
 def interrupted(*_):
     raise Failure("Request interrupted or timed out")
 
@@ -358,20 +520,38 @@ def worker(directory):
     signal.alarm(AUTH_SECONDS)
     try:
         request = json.loads((directory / "request.json").read_text())
-        result = {"ok": True, **transaction(Vault(), request)}
+        if isinstance(request, dict) and request.get("op") == "session-start":
+            def announce(status):
+                signal.alarm(0)
+                publish(directory, {"ok": True, **status})
+                print(f"Session active until {status['expires_at']} for hosts {status['hosts'] or 'any'}. "
+                      "Each request is logged below; Ctrl-C or `bw-once session stop` locks earlier.", flush=True)
+            result = {"ok": True, **session_transaction(Vault(), request, announce=announce,
+                                                        audit=lambda line: print(json.dumps(line), flush=True))}
+        else:
+            result = {"ok": True, **transaction(Vault(), request)}
     except Failure as error:
         result = {"ok": False, "error": str(error)}
     except Exception:
         result = {"ok": False, "error": "Request failed; CLI result withheld"}
     finally:
         signal.alarm(0)
-    try:
-        private_json(directory / "result.tmp", result)
-        os.rename(directory / "result.tmp", directory / "result.json")
-    except OSError:
+    if (directory / "result.json").is_file():
+        print("Session ended, CLI locked. Close this Terminal window.", flush=True)
+        return
+    if not publish(directory, result):
         print("Result channel closed; CLI cleanup finished. Close this Terminal window.", flush=True)
         return
     print("Request finished. Close this Terminal window.", flush=True)
+
+
+def publish(directory, result):
+    try:
+        private_json(directory / "result.tmp", result)
+        os.rename(directory / "result.tmp", directory / "result.json")
+        return True
+    except OSError:
+        return False
 
 
 def launch(request):
@@ -395,7 +575,7 @@ def launch(request):
                 time.sleep(0.2)
             raise Failure("Human Terminal request timed out")
         finally:
-            if (path / "worker.json").is_file() and not (path / "result.json").is_file():
+            if request["op"] != "session-start" and (path / "worker.json").is_file() and not (path / "result.json").is_file():
                 try:
                     os.kill(json.loads((path / "worker.json").read_text())["pid"], signal.SIGTERM)
                     end = time.monotonic() + 10
@@ -423,7 +603,18 @@ def main():
         send.add_argument("--input-file", required=True)
         send.add_argument("--name", required=True)
         send.add_argument("--views", type=int, default=1)
+    session = commands.add_parser("session").add_subparsers(dest="action")
+    start = session.add_parser("start")
+    start.add_argument("--ttl", default=f"{TTL_DEFAULT_MINUTES}m", help="minutes, e.g. 60m or 1h")
+    start.add_argument("--host", action="append", default=[], dest="hosts", help="restrict to exact hosts")
+    session.add_parser("stop")
+    session.add_parser("status")
     args = vars(parser.parse_args())
+    if args["op"] == "session":
+        action = args.pop("action")
+        if not action:
+            parser.error("Choose session start|stop|status")
+        args["op"] = f"session-{action}"
     try:
         reject_injection()
         directory = args.pop("worker")
@@ -438,7 +629,15 @@ def main():
                 raise Failure("Invalid CLI version response")
             result = {"ok": True, "status": state if state in ("locked", "unlocked", "unauthenticated") else "unknown",
                       "bw_version": version, "ready": state == "locked" and sys.platform == "darwin",
-                      "clipboard_ready": (ROOT / "clipboard").is_file()}
+                      "clipboard_ready": (ROOT / "clipboard").is_file(),
+                      "session": via_session({"op": "session-status"}) or {"active": False}}
+        elif args["op"] == "session-start":
+            args["ttl"] = ttl_minutes(args["ttl"])
+            result = launch(args)
+        elif args["op"] in ("session-stop", "session-status"):
+            result = via_session(args) or {"ok": True, "active": False}
+        elif args["op"] in ("list", "copy"):
+            result = via_session(args) or launch(args)
         elif args["op"]:
             result = launch(args)
         else:
