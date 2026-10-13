@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- bitwarden: `bw-once session start --ttl 60m [--host …]` — PJ unlocks once in Terminal, a holder keeps the key in memory, serves exact-host `list`/`copy` over a private socket (same commands, automatic fallback to per-request unlock), logs each request and runs `bw lock` at expiry/stop; design + paste mechanics in `session.md`.
+
 ## v0.4.8 (2026-10-13)
 
 - agents-md: global template uses progressive disclosure — browser routing, T3 thread mechanics and handoff checklist move to pointer files inside installed skills (new `t3-manage-thread/browser.md`); `scripts/check-pointers <prompt>` flags missing files and unfilled placeholders, run at merge, re-sync and in t3-setup verification (install the owning skill or drop the line).

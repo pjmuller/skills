@@ -1,0 +1,98 @@
+# Time-boxed session (`bw-once session`)
+
+Intent: PJ unlocks once ("I can give a one-hour token"), an agent then reads which login exists for a host and
+copies one credential into a browser login form, several times, without a Terminal round-trip per request. The
+session key never reaches the agent, a file, an env dump or a transcript; the vault locks itself at expiry.
+
+## Why a holder process, not a `BW_SESSION` variable
+
+`bw unlock --raw` prints a fresh random AES key that wraps the user key stored in
+`~/Library/Application Support/Bitwarden CLI/data.json` (`__PROTECTED__<userId>_user_auto`). Anyone with that
+key plus `data.json` reads the whole vault. Bitwarden gives it **no lifetime**: "Session keys are valid until
+invalidated using `bw lock` or `bw logout`"; staff: "You are responsible for maintaining your session key"
+(cli#107, `--ttl` request still open 2026-09). `bw lock` removes the protected key, so every earlier session key
+dies; a new `bw unlock` does the same. A session also has **no scope**: no flag limits it to a collection or
+item. Hence:
+
+- the holder keeps the key in its own memory and enforces the deadline by running `bw lock` (the only real
+  revocation); no Keychain item (no expiry attribute), no launchd plist, no `export BW_SESSION`;
+- the holder, not `bw`, enforces scope: exact hosts, list/copy only, one field per copy, result = metadata.
+
+Sources: [CLI docs](https://bitwarden.com/help/cli/) ·
+[unlock.command.ts](https://github.com/bitwarden/clients/blob/main/apps/cli/src/key-management/commands/unlock.command.ts) ·
+[lock.command.ts](https://github.com/bitwarden/clients/blob/main/apps/cli/src/auth/commands/lock.command.ts) ·
+[session key wraps the user key](https://sdk-api-docs.bitwarden.com/bitwarden_unlock/session_key/index.html) ·
+[CLI session expiration thread](https://community.bitwarden.com/t/cli-session-expiration/43611) ·
+[secrets on disk](https://community.bitwarden.com/t/bitwarden-cli-usage-can-easily-result-in-secrets-stored-on-disk/80009).
+
+## Flow
+
+```mermaid
+sequenceDiagram
+  participant A as Agent
+  participant H as Holder (Terminal, PJ)
+  participant B as bw CLI
+  participant C as Clipboard / T3 tab
+  A->>H: bw-once session start --ttl 60m --host sentry.io
+  H->>B: lock, sync, unlock --raw (PJ types master password)
+  H-->>A: {active, expires_at, hosts}
+  A->>H: bw-once list --host sentry.io
+  H-->>A: items [{id, name, username, host}]
+  A->>H: bw-once copy --id … --host sentry.io --field password
+  H->>C: clipboard (concealed, 30 s clear)
+  H-->>A: {copied: password} (never the value)
+  A->>C: preview_press Meta+V in the preverified login tab
+  Note over H,B: deadline, Ctrl-C, `session stop` or any error → bw lock, verify locked, exit
+```
+
+1. **Mint** (PJ): the agent runs `bw-once session start --ttl 60m [--host a.example.com …]`; a real macOS
+   Terminal opens, shows the request (ttl, hosts) and runs official `bw unlock`. PJ types the master password
+   there. Default 60 min, hard cap 240. Prefer `--host` for the hosts the task needs; an empty allowlist means
+   any exact host but still only list/copy.
+2. **Hold**: the holder keeps `BW_SESSION` in process memory and in the env of its own `bw` subprocesses only,
+   holds the `bw-once` mutex (no concurrent per-request flow can relock), listens on
+   `~/.cache/bw-once/session.sock` (dir 0700, socket 0600) and prints one audit line per request in the
+   Terminal PJ can watch. It never writes the key, a result or a secret to disk.
+3. **Use** (agent): the normal commands pick the socket automatically when it exists, else fall back to the
+   per-request Terminal flow: `bw-once list --host <exact host>` → pick the item by username,
+   `bw-once copy --id <uuid> --host <host> --field username|password|totp` → clipboard, then paste into the
+   form. `bw-once session status` shows remaining seconds; `bw-once session stop` locks early.
+4. **Lock**: at the deadline (or stop, Ctrl-C, SIGTERM, any failure) the holder runs `bw lock`, verifies
+   `status == locked`, forgets the key and exits. Kill switch from anywhere: `bw lock` in any shell also
+   invalidates the key; the holder then fails closed on its next call.
+
+## Getting the secret into the login form without model text
+
+- T3 browser: focus the field (`preview_click`), then `preview_press {key:"v", modifiers:["Meta"]}`. T3
+  synthesises the paste from the system clipboard in its main process; the value never enters the model
+  (verified 2026-10-06 on text and password inputs; a human Cmd+V may land in another tab,
+  [t3code #13897](https://github.com/pingdotgg/t3code/issues/13897)). Verify URL/host of the tab
+  **before** the copy, never `preview_evaluate` the field value or snapshot a revealed field afterwards.
+- PJ's Chrome over CDP (`playwright-cli attach --cdp=chrome`): `press Meta+V` on the focused field of your
+  own background tab works the same way; `chrome-devtools fill` would need the value as an argument, so it is
+  not allowed for secrets.
+- Username is not secret: `copy --field username` + paste keeps the pattern uniform, or read it from the
+  `list` output.
+- TOTP: `--field totp` delivers the current 6-8 digit code, never the seed.
+- Clipboard clears after 30 s; paste promptly, one copy per field.
+
+## Never
+
+`bw export`, `bw list items` without a host, `bw get item` dumps, `bw get password` to stdout, reading
+`pbpaste`/the clipboard, passing a secret to `preview_type`/`fill`/any text-entry tool, screenshotting a
+revealed password field, TOTP seeds or notes, `--passwordenv`/`--passwordfile`, copying `data.json`, setting
+`BW_SESSION` in any shell/env file/repo, or asking PJ to paste a key into the chat. A session is exposure
+reduction with consent, not containment against malicious same-user code (it can still read process memory
+or the clipboard).
+
+## Alternatives considered
+
+- **Bitwarden Secrets Manager (`bws`)**: access tokens with an expiry and project scope are the native answer
+  for machine secrets, but a secret is a key/value, not a login with URIs/TOTP, so every credential would be
+  duplicated and drift. Keep for CI, not for "log in as PJ" ([access tokens](https://bitwarden.com/help/access-tokens/)).
+- **Browser extension autofill**: no automation API; the Cmd+Shift+L shortcut needs focus in Chrome, which
+  the browser rules forbid ([URI match detection](https://bitwarden.com/help/uri-match-detection/)).
+- **Keychain item with expiry**: generic-password items have no expiration attribute; the reader would have
+  to enforce it anyway, so the holder is simpler and leaves nothing on disk.
+- **Biometric CLI unlock**: merged upstream 2026-09 ([PR #22448](https://github.com/bitwarden/clients/pull/22448)),
+  needs Desktop ≥ 2026.7 and an interactive unlock; not in the installed 2026.6.0. Revisit after upgrading.

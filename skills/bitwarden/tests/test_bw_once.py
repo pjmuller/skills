@@ -7,6 +7,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -341,3 +342,90 @@ def test_installer_copy_link_and_help_without_vault_access(fake, tmp_path):
     result = subprocess.run([str(command), "--help"], env=dict(os.environ, UV_PYTHON=sys.executable), capture_output=True)
     assert result.returncode == 0, result.stderr.decode()
     assert not (directory / "events").exists()
+
+
+def start_session(fake, monkeypatch, request_values=None, ttl_seconds=None, deliver=None):
+    import threading
+    directory, _, events = fake
+    short_dir = Path(tempfile.mkdtemp(prefix="bwo-", dir="/tmp"))  # macOS AF_UNIX paths max 104 bytes
+    monkeypatch.setattr(bw, "session_socket", lambda: short_dir / "s.sock")
+    if ttl_seconds is not None:
+        original_init = bw.Session.__init__
+
+        def short(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            self.deadline = bw.time.monotonic() + ttl_seconds
+        monkeypatch.setattr(bw.Session, "__init__", short)
+    ready, announced, outcome = threading.Event(), {}, {}
+
+    def announce(status):
+        announced.update(status)
+        ready.set()
+
+    def run():
+        try:
+            outcome["result"] = bw.session_transaction(bw.Vault(), {"op": "session-start", "ttl": 1, "hosts": [],
+                                                                  **(request_values or {})}, ask=lambda *_: True,
+                                                       announce=announce, deliver=deliver or (lambda _: None),
+                                                       audit=outcome.setdefault("audit", []).append)
+        except Exception as error:  # pragma: no cover - surfaced by the test
+            outcome["error"] = error
+        finally:
+            ready.set()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert ready.wait(5)
+    assert "error" not in outcome, repr(outcome.get("error"))
+    return thread, announced, outcome
+
+
+def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake, monkeypatch, capsys):
+    directory, _, events = fake
+    delivered = []
+    thread, announced, outcome = start_session(fake, monkeypatch, deliver=delivered.append)
+    assert announced["active"] and announced["hosts"] == [] and 0 < announced["remaining_seconds"] <= 60
+    assert bw.via_session({"op": "session-status"})["active"]
+    listed = bw.via_session(request("list"))
+    assert listed == {"ok": True, "via": "session", "items": [{"id": ID, "name": "Example", "username": "user",
+                                                               "host": "admin.example.com"}]}
+    copied = bw.via_session(request())
+    assert copied["ok"] and copied["copied"] == "password" and SECRET not in json.dumps(copied)
+    assert delivered == [SECRET]
+    assert not json.loads((directory / "state").read_text())["locked"]  # unlocked while the holder lives
+    assert bw.via_session({"op": "send-text", "input_file": "/x", "name": "n", "views": 1})["ok"] is False
+    assert bw.via_session({"op": "session-stop"}) == {"ok": True, "active": False}
+    thread.join(5)
+    assert outcome.get("result") == {"active": False} and "error" not in outcome
+    assert json.loads((directory / "state").read_text())["locked"]
+    assert events()[-1]["args"] == ["status"]
+    assert sum(event["args"][0] == "unlock" for event in events()) == 1
+    assert [line["op"] for line in outcome["audit"]] == ["list", "copy", "session-stop"]
+    assert bw.via_session({"op": "session-status"}) is None and not bw.session_socket().exists()
+    assert SECRET not in capsys.readouterr().out and SECRET not in json.dumps(outcome["audit"])
+
+
+def test_session_host_allowlist_and_expiry_lock(fake, monkeypatch):
+    directory, _, events = fake
+    thread, announced, outcome = start_session(fake, monkeypatch, {"hosts": ["other.example.com"]}, ttl_seconds=1.0)
+    assert announced["hosts"] == ["other.example.com"]
+    denied = bw.via_session(request())
+    assert denied["ok"] is False and "allowlist" in denied["error"]
+    assert not any(event["args"][:2] == ["get", "item"] for event in events())
+    thread.join(5)
+    assert not thread.is_alive() and outcome.get("result") == {"active": False}
+    assert json.loads((directory / "state").read_text())["locked"]
+    assert bw.via_session(request("list")) is None  # client falls back to the Terminal flow
+
+
+def test_session_start_request_validation():
+    with pytest.raises(bw.Failure):
+        bw.validate({"op": "session-start", "ttl": 0, "hosts": []})
+    with pytest.raises(bw.Failure):
+        bw.validate({"op": "session-start", "ttl": bw.TTL_MAX_MINUTES + 1, "hosts": []})
+    with pytest.raises(bw.Failure):
+        bw.validate({"op": "session-start", "ttl": 60, "hosts": ["*.example.com"]})
+    assert bw.validate({"op": "session-start", "ttl": 60, "hosts": ["B.example.com", "a.example.com"]})["hosts"] == [
+        "a.example.com", "b.example.com"]
+    assert bw.ttl_minutes("1h") == 60 and bw.ttl_minutes("45m") == 45 and bw.ttl_minutes("30") == 30
+    with pytest.raises(bw.Failure):
+        bw.ttl_minutes("1d")

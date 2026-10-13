@@ -3,20 +3,25 @@ name: bitwarden
 description: Discover exact-host Bitwarden logins, copy one approved credential, or create a text/file Send through a fresh human Terminal unlock. Use when the user requests Bitwarden access or secure sharing.
 ---
 
-Use `bw-once`; never obtain a broad session for the agent. Install with
+Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. Two modes: a fresh human
+unlock per request (default), or a time-boxed **session holder** PJ unlocks once
+(`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
+commands serve from it; design, paste mechanics and never-list: [session.md](session.md)). Install with
 `scripts/install`; `scripts/install --check` checks dependencies and the installed
 copy. Installer exposes `~/.local/bin/bw-once`, without globally registering this
 skill or installing dependencies. Requires macOS, existing `bw` login, `uv`, and
 Xcode command-line tools. Start with `bw-once doctor` (no unlock).
 
 ```sh
+bw-once session start --ttl 60m --host admin.example.com   # optional: PJ unlocks once, auto-lock at expiry
+bw-once session status | bw-once session stop
 bw-once list --host admin.example.com
 bw-once copy --id 12345678-1234-1234-1234-123456789abc --host admin.example.com --field password
 bw-once send-text --input-file /path/to/message.txt --name 'Account details'
 bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1
 ```
 
-Each request opens **real macOS Terminal** through a POSIX-compatible shell
+Without a session, each request opens **real macOS Terminal** through a POSIX-compatible shell
 (zsh/bash; fish unsupported), locks the CLI, verifies locked, refreshes the locked
 cache for login requests, shows
 the request, and asks the human to continue and type the master password into
@@ -32,9 +37,8 @@ before any result or clipboard delivery. A private request result contains only
 metadata or Send link, never session/password. Raw CLI failures are suppressed.
 
 Clipboard carries transient/concealed markers and a 30-second clear timer that
-checks its write's `changeCount` and owner marker. Human paste is the pilot path.
-A separately authorized native paste shortcut into a **preverified tab/host** can
-avoid putting the value into model text; never read `pbpaste`, use a text-entry
+checks its write's `changeCount` and owner marker. Human paste, or the agent's
+`preview_press Meta+V` into a **preverified tab/host**, keeps the value out of model text; never read `pbpaste`, use a text-entry
 tool with the secret, or snapshot/reveal the populated field. No browser-fill
 automation is included. Clipboard observers can still read it, and apps may ignore
 markers; count-check/clear is best effort, not an atomic clipboard transaction.
@@ -54,8 +58,11 @@ environments; lock cleanup does not erase already copied keys/data. Our mutex
 does not govern other `bw` clients. CLI locking does not lock desktop/extensions.
 Cleanup handles normal errors, timeout, SIGINT/SIGTERM; SIGKILL/power loss can
 prevent cleanup. A lock failure withholds delivery and requires a manual lock.
-No login/logout, account switching, daemon, password/session injection or vault
-database copies. Status/doctor remain read-only.
+No login/logout, account switching, password/session injection or vault
+database copies. The session holder is the only long-lived process: it keeps the key
+in memory, serves exact-host list/copy over a 0600 Unix socket, logs each request in
+PJ's Terminal and runs `bw lock` at the deadline (`bw lock` anywhere revokes it).
+Status/doctor remain read-only.
 
 Official references: [CLI](https://bitwarden.com/help/cli/),
 [Send CLI](https://bitwarden.com/help/send-cli/),
