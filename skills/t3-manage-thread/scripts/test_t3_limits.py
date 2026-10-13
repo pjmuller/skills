@@ -462,12 +462,37 @@ class FormattingTest(unittest.TestCase):
         rows = t3_limits.json_rows([account], NOW)
         self.assertEqual(rows[0]["instance_id"], "codex")
         self.assertEqual(rows[0]["plan"], "pro · user@example.com")
+        self.assertEqual((rows[0]["multiplier"], rows[0]["multiplier_source"]), (1, "unknown"))
         self.assertEqual(rows[0]["window"], "weekly")
         self.assertEqual(rows[0]["resets_at"], "2026-09-07T05:25:09Z")
         self.assertEqual(rows[0]["resets_in_seconds"], 166809)
         self.assertEqual(rows[0]["window_seconds"], 604800)
         self.assertEqual(rows[0]["pace_percent"], 72.4)  # 166809 s left of 7 d
         self.assertEqual(rows[0]["room_percent"], -18.6)
+
+    def test_plan_tier_in_every_output(self):
+        account = codex_account()
+        account.driver = "codex"
+        with tempfile.TemporaryDirectory() as directory:
+            multipliers = Path(directory) / "t3-plan-multipliers.json"
+            multipliers.write_text(json.dumps({"codex": {"pro": 20}}))
+            with patch.object(t3_limits, "MULTIPLIERS", multipliers):
+                self.assertIn("Codex Alpha  (codex)  pro · user@example.com · 20x map", t3_limits.render([account], NOW))
+                self.assertIn("| pro · user@example.com · 20x map | weekly", t3_limits.render_markdown([account], NOW))
+                self.assertEqual(t3_limits.json_rows([account], NOW)[0]["multiplier"], 20)
+
+    def test_default_instance_ignores_another_instances_config_dir(self):
+        """2026-10-13: inside a KampKompas thread T3 sets CLAUDE_CONFIG_DIR to its home, so
+        the default (ProBackup) instance mirrored KampKompas's usage."""
+        profiles = [("claudeAgent", "Default", ""), ("claudeAgent_k", "K", "~/.k_home")]
+        home = str(Path("~/.k_home").expanduser())
+        with patch.dict(t3_limits.os.environ, {"CLAUDE_CONFIG_DIR": home}):
+            with t3_limits.default_home_env(profiles):
+                self.assertNotIn("CLAUDE_CONFIG_DIR", t3_limits.os.environ)
+            self.assertEqual(t3_limits.os.environ["CLAUDE_CONFIG_DIR"], home)
+        with patch.dict(t3_limits.os.environ, {"CLAUDE_CONFIG_DIR": "/global/claude"}):  # WSL-style global dir
+            with t3_limits.default_home_env(profiles):
+                self.assertEqual(t3_limits.os.environ["CLAUDE_CONFIG_DIR"], "/global/claude")
 
     def test_json_rows_include_errored_accounts(self):
         account = t3_limits.Account(label="Boom", instance_id="x", error="token expired")
@@ -478,6 +503,8 @@ class FormattingTest(unittest.TestCase):
                     "account": "Boom",
                     "instance_id": "x",
                     "plan": "unknown",
+                    "multiplier": 1,
+                    "multiplier_source": "unknown",
                     "window": None,
                     "error": "token expired",
                 }
@@ -502,10 +529,10 @@ class PaceTest(unittest.TestCase):
     def test_markdown_has_one_row_per_window(self):
         account = codex_account()
         text = t3_limits.render_markdown([account], NOW)
-        self.assertIn("| Codex Alpha | `codex` | pro · user@example.com | weekly | 91% | 72% | -19 |", text)
+        self.assertIn("| Codex Alpha | `codex` | pro · user@example.com · 1x? | weekly | 91% | 72% | -19 |", text)
         self.assertIn("Percentages are per account", text)
         error = t3_limits.Account("Unknown", "x", error="token expired")
-        self.assertIn("| Unknown | `x` | unknown | — |", t3_limits.render_markdown([error], NOW))
+        self.assertIn("| Unknown | `x` | unknown · 1x? | — |", t3_limits.render_markdown([error], NOW))
 
 
 if __name__ == "__main__":

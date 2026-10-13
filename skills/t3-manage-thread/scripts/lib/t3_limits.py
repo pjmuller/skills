@@ -34,6 +34,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,6 +59,8 @@ HEADERS = {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "t3-limits/0.1"}
 TIMEOUT = 10
 PROFILE_TIMEOUT = 3
 CACHE = SETTINGS.parent / "t3-limits-cache.json"
+MULTIPLIERS = SETTINGS.parent / "t3-plan-multipliers.json"  # private: {driver: {plan label: N}}
+STATED_MULTIPLIER = re.compile(r"^max_(\d+)x\b")  # `max_20x`, `max_5x (pro)`; nothing else is trusted
 FRESH_SECONDS = 90  # windows only move on the minute scale
 STALE_SECONDS = 15 * 60  # older than this and "no data" beats a wrong number
 MAX_RETRY_SECONDS = 5
@@ -101,6 +105,7 @@ class Account:
     error: str = ""
     stale: bool = False  # served from cache after a failed fetch
     fetched_at: datetime | None = None
+    driver: str = ""  # T3 driver; scopes the private plan-multiplier map
 
 
 # --- Claude ------------------------------------------------------------------
@@ -351,6 +356,7 @@ def collect(
     cache_path: Path,
     fresh: bool,
     now: datetime,
+    driver: str = "",
 ) -> list[Account]:
     """One Account per T3 instance: local credential → usage payload → rows, with
     the shared fresh/stale cache keyed by instance id (never tokens). A cache entry
@@ -358,7 +364,7 @@ def collect(
     cache = read_cache(cache_path)
     accounts, dirty = [], False
     for instance_id, label, home in profiles:
-        account = Account(label=label, instance_id=instance_id)
+        account = Account(label=label, instance_id=instance_id, driver=driver)
         credentials: dict = {}
         payload = None
         entry: dict = {}
@@ -430,6 +436,22 @@ def claude_reading(payload: dict, credentials: dict) -> tuple:
     return login, rows, notes
 
 
+@contextmanager
+def default_home_env(profiles: list[tuple[str, str, str]]):
+    """Inside a thread of a homePath instance, T3 sets CLAUDE_CONFIG_DIR to that home;
+    the default (empty homePath) instance would then read the caller's account twice."""
+    current = os.environ.get("CLAUDE_CONFIG_DIR")
+    homes = {Path(home).expanduser() for _, _, home in profiles if home}
+    if not current or Path(current).expanduser() not in homes:
+        yield
+        return
+    del os.environ["CLAUDE_CONFIG_DIR"]
+    try:
+        yield
+    finally:
+        os.environ["CLAUDE_CONFIG_DIR"] = current
+
+
 def claude_accounts(
     fetch=fetch_claude_usage,
     settings_path: Path = SETTINGS,
@@ -437,13 +459,15 @@ def claude_accounts(
     fresh: bool = False,
     now: datetime | None = None,
 ) -> list[Account]:
-    return collect(
-        claude_profiles(settings_path),
-        claude_usage_credentials,
-        lambda credentials: fetch(credentials["accessToken"]),
-        claude_reading,
-        cache_path, fresh, now or datetime.now(timezone.utc),
-    )
+    profiles = claude_profiles(settings_path)
+    with default_home_env(profiles):
+        return collect(
+            profiles,
+            claude_usage_credentials,
+            lambda credentials: fetch(credentials["accessToken"]),
+            claude_reading,
+            cache_path, fresh, now or datetime.now(timezone.utc), "claudeAgent",
+        )
 
 
 # --- Codex -------------------------------------------------------------------
@@ -527,7 +551,7 @@ def codex_accounts(
     return collect(
         codex_profiles(settings_path), codex_credentials, fetch,
         lambda payload, _credentials: codex_rows(payload),
-        cache_path, fresh, now or datetime.now(timezone.utc),
+        cache_path, fresh, now or datetime.now(timezone.utc), "codex",
     )
 
 
@@ -566,11 +590,39 @@ def reset_text(when: datetime | None, now: datetime) -> str:
 
 
 PACE_LEGEND = "pace = % of window elapsed · room = pace − used (+ under pace, − over pace)"
-PLAN_HINT = "Percentages are per account; routing weights them by the discovered multiplier (max_20x → 20, none → 1; Claude live profile, marked login fallback if unavailable; Codex pro states none); free quota does not reserve running work."
+PLAN_HINT = ("Percentages are per account; routing multiplies headroom by plan tier: label (max_20x → 20x), "
+             "else private t3-plan-multipliers.json (`5x map`), else `1x?` (unverified, ranked smallest); "
+             "free quota does not reserve running work.")
 
 
 def plan_label(account: Account) -> str:
     return account.plan or "unknown"
+
+
+def plan_multiplier(account: Account, path: Path | None = None) -> tuple[int, str]:
+    """(multiplier, source): `label` when the live label states it, `map` from the
+    user's private {driver: {bare plan: N}} file for labels that state none (Codex
+    `pro`/`prolite`), else (1, "unknown"). A tier is advertised size, not capacity left."""
+    plan = plan_label(account)
+    stated = STATED_MULTIPLIER.search(plan)
+    if stated:
+        return int(stated.group(1)), "label"
+    try:
+        mapped = json.loads((path or MULTIPLIERS).read_text()).get(account.driver, {}).get(re.split(r" · | \(", plan)[0])
+    except (OSError, ValueError, AttributeError):
+        mapped = None
+    if isinstance(mapped, int) and not isinstance(mapped, bool) and mapped >= 1:
+        return mapped, "map"
+    return 1, "unknown"
+
+
+def tier_text(multiplier: int, source: str) -> str:
+    return {"label": f"{multiplier}x", "map": f"{multiplier}x map"}.get(source, "1x?")
+
+
+def plan_tier(account: Account) -> str:
+    """Label plus tier, e.g. `prolite · a@b.c · 5x map`."""
+    return f"{plan_label(account)} · {tier_text(*plan_multiplier(account))}"
 
 
 def relative_age(account: Account, now: datetime) -> str:
@@ -598,7 +650,7 @@ def render(accounts: list[Account], now: datetime) -> str:
         head = f"{account.label}  ({account.instance_id})"
         if account.stale:
             head += f"  (cached {relative_age(account, now)} ago)"
-        out.append(f"{head}  {plan_label(account)}")
+        out.append(f"{head}  {plan_tier(account)}")
         if account.error:
             out.append(f"  {account.error}")
         for row in account.rows:
@@ -620,33 +672,37 @@ def render_markdown(accounts: list[Account], now: datetime) -> str:
         "|---|---|---|---|---:|---:|---:|---|",
     ]
     for account in accounts:
+        plan = plan_tier(account)
         if account.error:
             out.append(
-                f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | — | | | | {account.error} |"
+                f"| {account.label} | `{account.instance_id}` | {plan} | — | | | | {account.error} |"
             )
         for row in account.rows:
             pace = row.pace(now)
             expected = f"{pace[0]:.0f}%" if pace else "-"
             room = f"{pace[1]:+.0f}" if pace else "-"
             out.append(
-                f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | {row.window} "
+                f"| {account.label} | `{account.instance_id}` | {plan} | {row.window} "
                 f"| {used_text(row).strip()}% | {expected} | {room} "
                 f"| {reset_text(row.resets_at, now).removeprefix('resets ')} |"
             )
         for note in account.notes:
-            out.append(f"| {account.label} | `{account.instance_id}` | {plan_label(account)} | {note} | | | | |")
+            out.append(f"| {account.label} | `{account.instance_id}` | {plan} | {note} | | | | |")
     return "\n".join(out)
 
 
 def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
     out = []
     for account in accounts:
+        multiplier, source = plan_multiplier(account)
+        tier = {"multiplier": multiplier, "multiplier_source": source}
         if account.error:  # consumers must tell "unknown" from "stale"
             out.append(
                 {
                     "account": account.label,
                     "instance_id": account.instance_id,
                     "plan": plan_label(account),
+                    **tier,
                     "window": None,
                     "error": account.error,
                 }
@@ -658,6 +714,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "account": account.label,
                     "instance_id": account.instance_id,
                     "plan": plan_label(account),
+                    **tier,
                     "window": row.window,
                     "used_percent": None if math.isnan(row.used_percent) else row.used_percent,
                     "window_seconds": row.length_seconds,

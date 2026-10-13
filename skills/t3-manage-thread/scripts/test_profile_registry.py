@@ -159,6 +159,21 @@ def test_list_profiles_rows(settings):
     assert ("OpenAI", "codex_disabled") not in got
 
 
+def test_list_profiles_shows_cached_plan_tier_without_network(settings):
+    userdata = settings.parent
+    (userdata / "t3-limits-cache.json").write_text(json.dumps({
+        "codex": {"payload": {"plan_type": "prolite"}}, "codex_beta": {"payload": {"plan_type": "pro"}},
+        "claudeAgent": {"payload": {"_t3_claude_plan": "max_20x"}}}))
+    (userdata / "t3-plan-multipliers.json").write_text(json.dumps({"codex": {"prolite": 5}}))
+    env = {**os.environ, "T3CODE_HOME": str(userdata.parent)}
+    run = lambda *args: subprocess.run([str(SCRIPTS / "t3-list-profiles"), *args], capture_output=True, text=True, env=env)
+    rows = {r["instance_id"]: r for r in json.loads(run("--json").stdout)}
+    assert (rows["codex"]["multiplier"], rows["codex"]["multiplier_source"]) == (5, "map")
+    assert rows["codex_beta"]["tier"] == "pro · 1x?" and rows["claudeAgent"]["tier"] == "max_20x · 20x"
+    assert "tier" not in rows["antigravity_beta"]
+    assert "prolite · 5x map" in run().stdout
+
+
 def test_native_enablement_defaults():
     assert enabled({"driver": "futureDriver"})
     assert enabled({"driver": "codex"})

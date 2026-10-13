@@ -100,9 +100,8 @@ after the reset). `T3_SPAWN_PROVIDER` wins unchanged and never polls.
 - **Score** (PJ, 2026-09-27; plan-weighted 2026-10-08): the tightest relevant
   weekly-class window's **headroom per hour until its reset** (`headroom% /
   max(hours, 1)`; an untouched window counts as 100 % over its full length),
-  **times the plan multiplier** stated in the label (`max_20x` → 20, `max_5x` → 5;
-  a label without one — Claude `pro`, Codex `pro`/`prolite`, `unknown` — → 1, so
-  such accounts stay unweighted among themselves). Highest wins. This is what a
+  **times the plan tier** ([limits.md](limits.md): label `max_20x` → 20, else the
+  private multiplier map, e.g. Codex `prolite` → 5, else `1x?` → 1). Highest wins. This is what a
   human reads off the reset times and plan sizes: the first weekly cap to expire
   gets priority, growing continuously as the reset nears, but 25 % left on a 5x
   is a quarter of 25 % left on a 20x.
@@ -124,8 +123,8 @@ near-simultaneous spawns are not spread across equal accounts (the next read,
 For a huge or batched job, check `t3-spawn-thread --dry-run`, `t3-limits`, and
 the active fleet before launch. Claude weights use live profile metadata, cached
 with usage for 90 s; discovery failure marks `(login fallback)`, whose tier may
-lag billing. Codex `pro`/`prolite` states no multiplier. Stage huge jobs on
-uncertain or unweighted accounts one at a time and recheck consumption.
+lag billing. Codex tiers come only from the private map. Stage huge jobs on
+`1x?` or small-tier accounts one at a time and recheck consumption.
 `--force-profile` still wins.
 
 Profile names come from T3's native registry on every call (exact id, else a

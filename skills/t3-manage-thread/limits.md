@@ -16,19 +16,27 @@ Glossary:
   valid usage and mark the saved credential label `(login fallback)`.
   Login and `.claude.json` tier fields can lag subscription changes; neither
   overrides a live tier. Disagreement appears in `t3-limits` notes.
-  Codex `pro` does not distinguish
-  a 5x from a 20x allowance; `unknown` means no label was available.
+  `unknown` means no label was available.
+- **Tier** (`20x`, `5x map`, `1x?`) is printed after the plan in `t3-limits`
+  (`multiplier`/`multiplier_source` in `--json`), `t3-list-profiles` and spawn
+  routing. Source: a label stating it (`max_20x`), else the private
+  `$T3CODE_HOME/userdata/t3-plan-multipliers.json` (`{"codex": {"prolite": 5}}`,
+  driver → plan label → N) for labels that state none (Codex `pro`/`prolite`;
+  OpenAI publishes no multiplier in metadata), else `1x?`: unverified, ranked as
+  the smallest plan, never optimistic. Tier = advertised size, not quota left.
 - Percentages are relative to each account's own allowance. A 1x account at
   20% and a 20x account at 20% do not have equal quota left; routing multiplies
-  headroom by the multiplier the label states (`max_20x` → 20, none → 1). Plan
-  labels are advisory, and a fresh reading does not reserve capacity for running jobs.
+  headroom by the tier. A fresh reading does not reserve capacity for running jobs.
+- Windows are whatever the endpoint reports, nothing is hardcoded per provider
+  (e.g. Codex Pro currently reports weekly only, Plus also a 5 h window).
 
 Source per enabled T3 provider instance, so each row is the account T3 would run:
 - Claude on macOS: Keychain item `Claude Code-credentials`, suffixed
   `-<sha256(config dir)[:8]>` when the instance sets `config.homePath` →
   Anthropic OAuth usage endpoint. Linux/WSL reads `<homePath>/.credentials.json`;
   macOS falls back to that file if Keychain has no usable login. Empty homePath
-  uses `CLAUDE_CONFIG_DIR`, then `~/.claude`. Windows execution stays inside WSL.
+  uses `CLAUDE_CONFIG_DIR` (ignored when it is another instance's homePath: T3
+  sets it inside that instance's threads), then `~/.claude`. Windows execution stays inside WSL.
 - Codex: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint.
   The login e-mail is shown so a mis-assigned home is visible. Only top-level
   windows; API-key logins have none.
