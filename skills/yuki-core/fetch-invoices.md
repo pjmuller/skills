@@ -24,8 +24,15 @@ Verify each PDF with `pdftotext -layout`: company name (Pro Backup BV / KampAdmi
 Save as `~/Downloads/vat-q<n>-<year>/<company>/<vendor>-<YYYY-MM-DD or period>[-<invoice no>].pdf`.
 Then follow [upload-invoices.md](upload-invoices.md). Yuki duplicates are harmless; a wrong company is not.
 
-Alternative delivery when the browser is unavailable: forward the PDF to the tenant's mail-in address
-(wrapper SKILL.md), subject = vendor + period. Yuki confirms with "Je hebt een nieuwe … factuur ontvangen".
+Alternative delivery when the browser is unavailable (Yuki tenant logged out in Chrome and T3): forward the PDF to the
+tenant's mail-in address, subject = vendor + period (`gmail-draft --attach`, PJ sends, or `gmail-send` when PJ said so).
+Yuki confirms with "Je hebt een nieuwe … factuur ontvangen". Many suppliers mail invoices there directly (Peppol/forward).
+
+| Company | Yuki mail-in | Tenant |
+|---|---|---|
+| Pro Backup | `l1605-pro-backup@yukiworks.be` | `l1605-pro-backup.yukiworks.be` |
+| KampAdmin | `l3038-kampadmin@yukiworks.be` | `l3038-kampadmin.yukiworks.be` |
+| Momentum Tools | `l3039-momentum-tools@yukiworks.be` | `l3039-momentum-tools.yukiworks.be` |
 
 ## AWS: pure CLI, no browser
 `scripts/aws-invoices --profile <aws profile> --out <dir> 2026-07 2026-08` lists the billing months via the AWS
@@ -34,6 +41,8 @@ Invoicing API and downloads every invoice PDF (`invoicing:ListInvoiceSummaries` 
 verify it. Billing month = usage month: the card line of the 2nd of month M+1 matches billing month M; a mid-month
 extra invoice (e.g. 26 Aug) is a separate line. The AWS profile per company lives in the wrapper's `yuki.json`
 (`aws_profiles`, informational) and SKILL.md; profiles are in `~/.aws/credentials`, never in a repo.
+An account with no invoices for the quarter is normal when the company buys AWS through a reseller (PB via Automat:
+the reseller mails its invoice, PJ forwards it to Yuki).
 
 ## Learn a vendor from a screen recording
 PJ records a CleanShot clip of one download (Bitwarden autofill → clicks → PDF). Turn it into recipe bullets:
