@@ -7,8 +7,10 @@ description: Pull Yuki's "Aan te leveren aankoopfacturen" (bank/card payments st
 
 **Intent.** Every quarter the accountant needs an invoice for each bank/card payment Yuki could not
 match. This core lists those payments and appends them to a shared sheet tab; people fill the
-manual columns (who, status, comment). The SOAP client stays read-only. Explicitly authorized
-invoice uploads and DONE updates use the separate [browser workflow](upload-invoices.md).
+manual columns (who, status, comment). The SOAP client stays read-only. Fetching the invoices
+(Gmail, supplier portals via PJ's Chrome, learning a vendor from a screen recording) is
+[fetch-invoices.md](fetch-invoices.md); explicitly authorized uploads and DONE updates are
+[upload-invoices.md](upload-invoices.md). One thread per quarter does list → fetch → upload → DONE.
 
 Code: [`scripts/yuki.py`](scripts/yuki.py) (CLI), `scripts/yuki_core/` — `client.py` (zeep, read-only
 allowlist), `outstanding.py` (parse, clean, quarter selection, CSV), `sheet.py` (append-only push via
