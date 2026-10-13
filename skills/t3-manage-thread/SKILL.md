@@ -47,6 +47,7 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 | Fleet view of workers, bulk repair, hard purge | [t3-maintenance](../t3-maintenance/SKILL.md) |
 | Stay on the newest release (`skills-refresh`) | [skills-refresh.md](skills-refresh.md) |
 | Native upstream tools (when to retire these helpers) | [upstream-checkpoint.md](upstream-checkpoint.md) |
+| Browser / computer use: T3 preview, logged-in Chrome over CDP, native apps | [browser.md](browser.md) |
 
 ## Install
 

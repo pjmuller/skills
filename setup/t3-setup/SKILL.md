@@ -171,6 +171,8 @@ one canonical tree.
   `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,
   then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered and
   settled. Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
+- Pointer check from [global.md](../../skills/agents-md/global.md#merge-the-template-into-someones-existing-file) step 6
+  on `ai/AGENTS.md` (`.agents/skills/agents-md/scripts/check-pointers`): ok (install the owning skill or drop the line).
 - `t3-schedule list` shows `skills-refresh`; `t3-usage-windows topup status` loaded when selected;
   `skills-refresh --version` prints a tag.
 - SETUP.md in the setup repo: bootstrap URL + full revision, installed skill

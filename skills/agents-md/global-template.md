@@ -34,7 +34,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - Propose the 80/20 cut before building; list bigger options, don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
 - External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
 - Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
-- Visual replies: when T3 exposes `html_preview`/`html_render` (T3 ≥0.0.46), a chart/table/collage/mockup renders inline in the thread — prefer it over prose or a one-off HTML file; mermaid fences render natively. Durable reports still → `~/Downloads`.
+- Visual replies: when T3 exposes `html_preview`/`html_render` (T3 ≥0.0.46), a chart/table/collage/mockup renders inline in the thread — prefer it over prose or a one-off HTML file; mermaid fences render natively.
 - Writing instructions for a colleague's agent → first read that person's machine/profile notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
 
 ## Verify your own work
@@ -46,21 +46,18 @@ AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by 
 Same for my numbers/mechanisms and other models' reviews: proxies for an intent, not orders. Restate the intent, pick the better mechanism, push back when I'm wrong. Not up for reinterpretation: safety limits and account/token routing.
 
 ## Coding: implementing complex specs (>100 loc)
-- Bigger features only: code review by the **opposite model** (Claude-built → Astra reviews; OpenAI-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: skill `t3-manage-thread` → `code-review.md`.
+- Bigger features only: code review by the **opposite model** (Claude-built → Astra reviews; OpenAI-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: `~/.agents/skills/t3-manage-thread/code-review.md`.
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
 ## Delegation
 - Threads start in a thinker (Claude Fable or OpenAI Astra): planning, critical thinking, orchestration, taste, judgement, verification. Coding goes to **in-harness sub-agents** (Opus, Sonnet, Haiku in Claude CLI · Sol, Terra, Luna from Codex CLI); the thinker verifies.
 - A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; native-app/GUI computer use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
-  - Claude CLI → OpenAI: `t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
-  - Codex CLI → Claude: `t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 …" -- "<brief>"`
   - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value; several named → `--profile a,b` (routes among those by capacity). Explicit profiles are capacity-checked (model-only caps count); `--force-profile` only on purpose.
 
-### T3 threads (skill `t3-manage-thread`; helpers on PATH)
-`t3-spawn-thread` · `t3-ping-thread` (arrives as a user turn, wakes the agent) · `t3-read-thread` (read before pinging) · `t3-hide-thread` · `t3-rename-thread` · `t3-list-profiles` · `t3-find-thread` (fuzzy-find a past thread; skill `t3-find-thread`) → `t3-open-thread <id>` (macOS; on WSL open it from the sidebar).
-- Title `🏓 <task>` = round-trip worker: ping-back footer auto-appended to the brief, thread hidden while it runs. Needs a real T3 parent ID (`--source-thread` fixes the recipient); a standalone CLI session has no ping-back address.
-- **Settling autonomy** → read skill `t3-route` → Lifecycle when dispatching; personal policy/iteration notes → `{absolute settling-policy path}`. Standalone self-settlement requires my request or an authorized routing policy; a verified result alone is not pending user review. Explicit keep-open instructions win. **Settle = kill**: finish background work first; 🏓 parent verifies then `t3-settle-thread --wait THREAD_ID`; authorized self-settle uses `t3-settle-thread --self` as the LAST tool call, then the final answer.
+### T3 threads (helpers `t3-*` on PATH)
+- Spawning/pinging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md` first (🏓 title mechanics, ping-back needs a real parent ID).
+- **Settling autonomy** → read `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle when dispatching; personal policy/iteration notes → `{absolute settling-policy path}`. Standalone self-settlement requires my request or an authorized routing policy; a verified result alone is not pending user review. Explicit keep-open instructions win. **Settle = kill**: finish background work first; 🏓 parent verifies then `t3-settle-thread --wait THREAD_ID`; authorized self-settle uses `t3-settle-thread --self` as the LAST tool call, then the final answer.
 - Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread self`, skill `t3-schedule`) and report ⏰ with the date.
 
 ## Git
@@ -87,14 +84,11 @@ Pushed a change to a shared skill core that projects carry as a committed copy? 
 - Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
 - Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser, pick by job (recipes → {absolute browser-guide path}; read before authenticated browsing):
-  - **User watches / localhost** → T3 `preview_*`. Tabs are per thread; a new tab opens in T3's default profile, so verify the signed-in identity. Snapshot caps ~50 elements: read lists with `preview_evaluate`.
-  - **User's logged-in Chrome** (background, never steals focus) → shell CLI over CDP after the user enables `chrome://inspect/#remote-debugging`: Playwright CLI to drive (`attach --cdp=chrome`, `find` → `click <ref>`), `chrome-devtools` to read/debug (`start --autoConnect`, `new_page --background`). One attach sees all profiles ({profile name per account}): pick the tab by account. Snapshots → file + grep. Claude in Chrome needs a `/login` credential (a setup-token disables it).
-  - **Native apps / OS dialogs** → computer use ({computer-use tool}). Races the user's own clicks: not for browser work, never on the T3 browser itself (use `preview_*`). Claude computer use is interactive-CLI only. Never script keystrokes into a browser.
+- Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first. By job: I watch / localhost → T3 `preview_*`; my logged-in Chrome → Playwright / `chrome-devtools` CLI over CDP, background only; native apps / OS dialogs → computer use ({computer-use tool}), never for browser work. Chrome profiles: {profile name per account}. Verify the signed-in identity; never script keystrokes into a browser.
 
 ## Writing in my name
 - Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
-- Handoffs (prompt for a colleague's agent, dev → product owner, bug report → dev) → read skill `agents-md` → `handoff.md` first. Goal + key insights/decisions + current state + next steps; symptoms over conclusions. No filler.
+- Handoffs (prompt for a colleague's agent, dev → product owner, bug report → dev) → read `{/abs/setup-repo}/.agents/skills/agents-md/handoff.md` first.
 
 ## Abbreviations
 {Company/product abbreviations you use in prompts.}

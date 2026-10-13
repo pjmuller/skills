@@ -32,7 +32,9 @@ help, not a lower code-quality bar.
 - Portable progressive disclosure = a plain pointer with a trigger: "doing X →
   read `/abs/path.md` first". Works in both harnesses. `@import` and
   `~/.claude/rules/` are Claude-only, and imports load eagerly (no saving).
-  Use absolute paths: the working directory differs per session.
+  Use absolute paths: the working directory differs per session. Point into an
+  installed skill (`~/.agents/skills/<skill>/…` refreshes daily via `skills-refresh`;
+  repo-local ones in the setup repo) or the user's own setup repo, never a loose copy.
 - One file, several harnesses/models: put the harness in the heading and tell
   the others to skip the block ("Claude Code only; Codex: skip").
 
@@ -105,12 +107,14 @@ Adapt the [role](roles.md) without creating a second competing Git policy.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
 6. Verify links resolve to the tracked source and fresh harness sessions load
-   it. Commit/push under the setup repo's rules; report source, commit/PR and any
+   it. Every pointer must exist on this machine; missing → install the owning
+   skill at its scope, else drop the line (`scripts/check-pointers <file>` lists them).
+   Commit/push under the setup repo's rules; report source, commit/PR and any
    unresolved difference or failed check. Don't change accounts or working
    tooling as part of prompt installation.
 
 Re-sync later: `git log -p <sha>.. -- skills/agents-md/global-template.md` in a
-clone of the skills repo; offer each change as adopt/skip, then update the marker.
+clone of the skills repo; offer each change as adopt/skip, rerun the pointer check of step 6, then update the marker.
 
 ## Port a live file's improvements into a shared template
 
