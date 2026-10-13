@@ -64,6 +64,16 @@ operations). Run `scripts/install --check` for Yuki readiness. Browser uploads f
 there is no unattended upload/OCR pipeline. Invoice matching remains a verified agent decision.
 Company/account IDs stay in each `yuki` wrapper; consumer repos carry committed core copies.
 
+## Chrome CDP upload, verified 2026-10-13 (PB, 2 PDFs)
+
+`new_page <tenant>/domain/inbox/aspx/uploadarchive.aspx --background`. The binder picker lives in the
+same-origin iframe `name="Main"`: select Aankoop with `evaluate_script` (leaf element whose text is
+`Aankoop`, `.click()`; its `onclick` is `Ordner_OnClick(1)`), re-snapshot, click **Uploaden** → lands on
+`/domain/archive/upload-files/1` with `Map = Aankoop` and a **Bladeren** button. `upload_file <pageId>
+<Bladeren-uid> <pdf...>`; snapshot shows "N bestand(en) klaar om te uploaden"; click **Uploaden**; the page
+navigates to `UploadedFiles.aspx?Batch=<id>` whose iframe lists filename, Map, Status "Open" per file.
+Sources for the files: [fetch-invoices.md](fetch-invoices.md).
+
 ## T3 preview upload, verified 2026-10-13
 
 Prefer `preview_*` when its Yuki session is signed in. Close the profile drawer after checking
