@@ -24,15 +24,16 @@ Verify each PDF with `pdftotext -layout`: company name (Pro Backup BV / KampAdmi
 Save as `~/Downloads/vat-q<n>-<year>/<company>/<vendor>-<YYYY-MM-DD or period>[-<invoice no>].pdf`.
 Then follow [upload-invoices.md](upload-invoices.md). Yuki duplicates are harmless; a wrong company is not.
 
-Alternative delivery when the browser is unavailable (Yuki tenant logged out in Chrome and T3): forward the PDF to the
-tenant's mail-in address, subject = vendor + period (`gmail-draft --attach`, PJ sends, or `gmail-send` when PJ said so).
-Yuki confirms with "Je hebt een nieuwe … factuur ontvangen". Many suppliers mail invoices there directly (Peppol/forward).
+Delivery is always the browser upload ([upload-invoices.md](upload-invoices.md)): T3 browser (`preview_*`) or
+PJ's Chrome over CDP. Tenant shows the Visma Connect login page → ask PJ to sign in to that tenant in the T3 browser
+and say "ready"; never fall back to mail. Yuki's mail-in addresses below are reference only (suppliers and PJ's
+phone forward invoices there; Yuki confirms with "Je hebt een nieuwe … factuur ontvangen"), not an agent upload route.
 
-| Company | Yuki mail-in | Tenant |
+| Company | Tenant | Yuki mail-in (reference) |
 |---|---|---|
-| Pro Backup | `l1605-pro-backup@yukiworks.be` | `l1605-pro-backup.yukiworks.be` |
-| KampAdmin | `l3038-kampadmin@yukiworks.be` | `l3038-kampadmin.yukiworks.be` |
-| Momentum Tools | `l3039-momentum-tools@yukiworks.be` | `l3039-momentum-tools.yukiworks.be` |
+| Pro Backup | `l1605-pro-backup.yukiworks.be` | `l1605-pro-backup@yukiworks.be` |
+| KampAdmin | `l3038-kampadmin.yukiworks.be` | `l3038-kampadmin@yukiworks.be` |
+| Momentum Tools | `l3039-momentum-tools.yukiworks.be` | `l3039-momentum-tools@yukiworks.be` |
 
 ## AWS: pure CLI, no browser
 `scripts/aws-invoices --profile <aws profile> --out <dir> 2026-07 2026-08` lists the billing months via the AWS

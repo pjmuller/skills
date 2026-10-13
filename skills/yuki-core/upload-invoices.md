@@ -1,5 +1,8 @@
 # Deliver invoices from a folder
 
+Only route: the Yuki web upload (T3 browser `preview_*` first, PJ's Chrome over CDP second). A tenant that
+shows the Visma Connect login is blocked: ask PJ to sign in there, do not mail PDFs to the mail-in address.
+
 Use an Astra Medium agent for browser judgment and ambiguous scans. A smaller model may extract
 vendor/date/amount/invoice number, but verify the source image before accepting its match.
 Use the current session when already executing this task; do not spawn the same task again.
