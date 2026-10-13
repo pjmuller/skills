@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Every `~/…` or `/abs/…` *.md pointer in a global prompt must exist on this machine.
+# Usage: check-pointers <prompt-file>   → prints MISSING lines, exit 1 if any.
+set -euo pipefail
+f="${1:?usage: check-pointers <prompt-file>}"
+missing=0
+while IFS= read -r p; do
+  case "$p" in *'{'*) echo "PLACEHOLDER $p"; missing=1; continue ;; esac
+  path="${p/#\~/$HOME}"
+  [ -f "$path" ] || { echo "MISSING $p"; missing=1; }
+done < <(grep -oE '`[{~/][^`]*\.md}?`' "$f" | tr -d '`' | sort -u)
+[ "$missing" = 0 ] && echo "ok: all pointers resolve"
+exit "$missing"

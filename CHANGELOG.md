@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: global template uses progressive disclosure — browser routing, T3 thread mechanics and handoff checklist move to pointer files inside installed skills (new `t3-manage-thread/browser.md`); `scripts/check-pointers <prompt>` flags missing files and unfilled placeholders, run at merge, re-sync and in t3-setup verification (install the owning skill or drop the line).
+
 - t3-manage-thread: plan tier (`20x`, `5x map`, `1x?`) shown in `t3-limits` (all formats; `multiplier`/`multiplier_source` in JSON), `t3-list-profiles` (cached, no network) and routing output. Labels without a stated multiplier (Codex `pro`/`prolite`) take it from an optional private `$T3CODE_HOME/userdata/t3-plan-multipliers.json` (driver → plan → N); unmapped stays 1x, never optimistic. Fix: inside a homePath instance's thread, the default Claude instance no longer inherits that thread's `CLAUDE_CONFIG_DIR` (it mirrored the caller's usage).
 
 - agents-md: global template — pre-task feedback-loop check (build minimal self-verification tooling first, little human QA) and post-task improvement loop for recurring work; `global.md` budget raised to ~6k tokens (~24 KB).
