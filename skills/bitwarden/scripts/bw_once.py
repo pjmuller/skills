@@ -147,7 +147,11 @@ class Vault:
             raise Failure("Invalid Bitwarden response") from None
 
     def locked(self):
-        if self.json("status").get("status") != "locked":
+        state = self.json("status").get("status")
+        if state == "unauthenticated":
+            raise Failure("CLI is logged out (bw drops the login when its refresh token expired, e.g. months "
+                          "without sync); run `bw login <email>` in a human Terminal, then retry")
+        if state != "locked":
             raise Failure("CLI must be logged in and locked; login manually first")
 
     def relock(self):
@@ -155,6 +159,10 @@ class Vault:
             try:
                 self.call("lock")
                 self.locked()  # Keep the former session for this verification.
+            except Failure as error:
+                if "logged out" in str(error):
+                    raise Failure(f"Nothing to lock: {error}") from None
+                raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
             except Exception:
                 raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
             finally:

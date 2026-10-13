@@ -43,7 +43,7 @@ elif args[0]=='unlock':
  state['locked']=False
  print(config['session'])
 elif args[0]=='status':
- print(json.dumps({'status':'locked' if state['locked'] else 'unlocked','userId':'private-user'}))
+ print(json.dumps({'status':'unauthenticated' if config.get('logged_out') else 'locked' if state['locked'] else 'unlocked','userId':'private-user'}))
 elif args[0]=='--version':print('2026.9.1')
 elif args[0]=='sync':
  if not state['locked'] or os.environ.get('BW_SESSION'):sys.exit(5)
@@ -429,3 +429,11 @@ def test_session_start_request_validation():
     assert bw.ttl_minutes("1h") == 60 and bw.ttl_minutes("45m") == 45 and bw.ttl_minutes("30") == 30
     with pytest.raises(bw.Failure):
         bw.ttl_minutes("1d")
+
+
+def test_logged_out_cli_is_reported_as_login_needed_not_lock_failure(fake):
+    _, update, events = fake
+    update(logged_out=True)
+    with pytest.raises(bw.Failure, match="bw login"):
+        bw.transaction(bw.Vault(), request("list"), ask=lambda *_: pytest.fail("asked while logged out"))
+    assert not any(event["args"][0] == "unlock" for event in events())
