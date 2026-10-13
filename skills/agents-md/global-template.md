@@ -39,7 +39,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 
 ## Verify your own work
 - Frontend → browser; backend → unit/integration/e2e tests. Minimal set covering the critical paths; don't test to test.
-- Before building anything non-trivial, silently work out how you will prove it works end to end without my hands (seed data, demo UI, real device, scheduled later check). Proof needs me? Build that tooling first; flag it only when that tooling is a chunk of work on its own, then carry on unless I object. A "can you check…" question to me is a defect, not a handoff.
+- Before a bigger task, silently check your feedback loop: can you see the result of each change yourself (frontend, backend, data, anything) and iterate on it? Missing → first build the minimal tooling (seed data, demo UI, renderer/diff on real cases, real device, scheduled later check), no over-engineering; goal = the result needs little human QA. Flag that tooling only when it is a chunk of work on its own, then carry on unless I object. A "can you check…" question to me is a defect, not a handoff.
 
 ## Docs are hints, not law
 AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by weaker models. Treat their guidance as *one* known-good path, not a constraint: if you see a better/more pragmatic way, take it and propose a doc update (which stays a hint too).
@@ -78,6 +78,7 @@ Register as few skills globally as possible. Occasional machine/prompt maintenan
 High-level map for future agents: the **INTENT** behind each architecture/feature/component, and which source files to open. Progressive disclosure (no "god" md files); link related skill files. Code stays the source of truth: reference filenames/methods, not snippets. After a coding task, create/update relevant skill files.
 Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory which stays user bound (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
 Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets the core fix in code/config, not a workaround note.
+**Improvement loop**: after a substantial task likely to recur (skip one-offs), ask what would have made it easier, generalised beyond this thread's details (missing context, tool, seed data, unclear error). Apply cheap fixes autonomously (skill line, script); propose the rest in ≤3 lines, backed by a quick non-destructive experiment when that proves the gain.
 Pushed a change to a shared skill core that projects carry as a committed copy? Same session: refresh every consumer repo now, not in two weeks.
 
 ## Tooling: one tool per job
