@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.8 (2026-10-13)
 
 - agents-md: global template uses progressive disclosure — browser routing, T3 thread mechanics and handoff checklist move to pointer files inside installed skills (new `t3-manage-thread/browser.md`); `scripts/check-pointers <prompt>` flags missing files and unfilled placeholders, run at merge, re-sync and in t3-setup verification (install the owning skill or drop the line).
 
