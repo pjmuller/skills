@@ -147,10 +147,37 @@ def user_id(who: str) -> int:
     if uid is None and str(who).isdigit():
         uid = int(who)
     if uid is None:
-        sys.exit(f"unknown user {who!r}; use a configured alias or numeric id")
+        uid = workspace_member_id(who)
+    if uid is None:
+        sys.exit(f"unknown user {who!r}; use a configured alias, a workspace member's name/email, or a numeric id")
     if uid in CONFIG.get("policy", {}).get("ignored_assignees", []):
         sys.exit(f"workspace policy forbids assigning or mentioning user {uid}")
     return uid
+
+
+def workspace_member_id(who: str) -> int | None:
+    """Resolve a workspace member by full name, username or email (case-insensitive) when the wrapper
+    has no alias for them — a one-off recipient (Alexey on the Rootcause list) must still get a real tag."""
+    key = who.strip().lstrip("@").casefold()
+    for m in api("GET", f"/team/{TEAM_ID}").get("team", {}).get("members", []):
+        u = m.get("user", {})
+        if key in {str(u.get(k, "")).casefold() for k in ("username", "email")}:
+            return int(u["id"])
+    return None
+
+
+LITERAL_MENTION = re.compile(r"(?<![\w`])@[A-Z][\w.-]*(?: [A-Z][\w.-]*)?")
+
+
+def refuse_literal_mention(text: str, mention):
+    """A typed ``@Name`` is plain text in the API: ClickUp notifies nobody (2026-10-13, an Alexey ping
+    that never arrived). Without ``--mention`` such text is a silent no-op, so refuse it."""
+    if mention:
+        return
+    hit = LITERAL_MENTION.search(text or "")
+    if hit:
+        sys.exit(f"{hit.group(0)!r} is plain text, not a mention — nobody is notified. "
+                 "Pass --mention <alias|name|email|id> and drop the literal @ from --text.")
 
 
 def task_id_of(ref: str) -> str:
@@ -1385,6 +1412,7 @@ def cmd_comment(a):
     # silently (2026-09-22): a ping nobody receives is worse than an error.
     if a.mention_first is not None and not a.mention:
         sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
+    refuse_literal_mention(a.text, a.mention)
     text = link_attachments(a.text, get_task(a.id))
     post_comment(a.id, text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
                  reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None)
