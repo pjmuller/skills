@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Download AWS invoice PDFs for billing months via the Invoicing API (needs invoicing:ListInvoiceSummaries + GetInvoicePDF).
+# Usage: aws-invoices --profile <aws profile> --out <dir> <YYYY-MM>...   (billing month = usage month; invoice is issued ~1st of next month)
+set -euo pipefail
+profile=""; out="."; months=()
+while [[ $# -gt 0 ]]; do case $1 in --profile) profile=$2; shift 2;; --out) out=$2; shift 2;; *) months+=("$1"); shift;; esac; done
+[[ -n $profile && ${#months[@]} -gt 0 ]] || { sed -n 2,3p "$0"; exit 2; }
+mkdir -p "$out"
+acct=$(aws sts get-caller-identity --profile "$profile" --query Account --output text)
+for ym in "${months[@]}"; do
+  y=${ym%-*}; m=$((10#${ym#*-}))
+  aws invoicing list-invoice-summaries --profile "$profile" --region us-east-1 \
+    --selector "{\"ResourceType\":\"ACCOUNT_ID\",\"Value\":\"$acct\"}" --filter "{\"BillingPeriod\":{\"Month\":$m,\"Year\":$y}}" \
+    --query 'InvoiceSummaries[].[InvoiceId,BaseCurrencyAmount.TotalAmount,BaseCurrencyAmount.CurrencyCode,InvoiceType]' --output text |
+  while read -r id amount cur type; do
+    [[ -n $id ]] || continue
+    f="$out/aws-$acct-$ym-$id-$amount$cur.pdf"
+    url=$(aws invoicing get-invoice-pdf --profile "$profile" --region us-east-1 --invoice-id "$id" --query 'InvoicePDF.DocumentUrl' --output text)
+    curl -sSf -o "$f" "$url" && echo "$f ($type)"
+  done
+done
