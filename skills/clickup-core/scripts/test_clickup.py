@@ -165,6 +165,13 @@ class CommentPartsTests(unittest.TestCase):
         self.assertEqual(table["cells"]["2:1"]["content"][0], {"insert": "lang woord"})
         self.assertEqual(parts[3], {"text": "na"})
 
+    def test_table_widths_fit_short_columns_and_share_budget(self):
+        widths = MODULE["_column_widths"]
+        self.assertEqual(widths([["ID", "x" * 200]], 2, 840), [60, 420])  # long column capped
+        short, long_a, long_b = widths([["Step", "y" * 120, "z" * 120]], 3, 840)
+        self.assertEqual(short, 68)  # short column keeps its natural width
+        self.assertLessEqual(short + long_a + long_b, 840)
+
     def test_checklists_quotes_and_fenced_lang_stay_flat(self):
         parts = comment_parts("- [x] klaar\n- [ ] open\n> citaat\n```python\nx = 1\n```")
         attrs = [p["attributes"] for p in parts if p.get("attributes")]
