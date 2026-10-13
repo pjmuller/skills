@@ -154,6 +154,67 @@ def test_gmail_keeps_an_authored_plain_text_body_beside_an_html_alternative():
     assert parts["text/html"].strip() == "<h1>Rich report</h1>"
 
 
+def invoice_files(tmp_path):
+    pdf, csv = tmp_path / "factuur 2026-09.pdf", tmp_path / "lines.unknownext"
+    pdf.write_bytes(b"%PDF-1.7 invoice")
+    csv.write_bytes(b"\x00\x01")
+    return [str(pdf), str(csv)]
+
+
+def test_gmail_attach_builds_mixed_with_the_alternative_first(tmp_path):
+    raw, _ = GmailClient(FakeSession(), sender=ACCOUNT).build(
+        "in@yuki.example", "Invoice", "Plain", html_body="<p>Rich</p>", attach=invoice_files(tmp_path))
+    message = message_from_bytes(decode_websafe(raw), policy=default)
+    assert message.get_content_type() == "multipart/mixed"
+    first, *files = message.get_payload()
+    assert first.get_content_type() == "multipart/alternative"
+    assert message.get_body(("plain",)).get_content().strip() == "Plain"
+    assert [(f.get_filename(), f.get_content_type(), f.get_content_disposition(), f.get_content())
+            for f in files] == [
+        ("factuur 2026-09.pdf", "application/pdf", "attachment", b"%PDF-1.7 invoice"),
+        ("lines.unknownext", "application/octet-stream", "attachment", b"\x00\x01")]
+
+
+def test_gmail_attach_refuses_missing_symlinked_and_oversized_files(tmp_path, monkeypatch):
+    real = tmp_path / "real.pdf"
+    real.write_bytes(b"%PDF")
+    (tmp_path / "link.pdf").symlink_to(real)
+    gmail = GmailClient(FakeSession(), sender=ACCOUNT)
+    for path, error in ((tmp_path / "gone.pdf", "no such file"), (tmp_path / "link.pdf", "symlink"),
+                        (tmp_path, "no such file")):
+        with pytest.raises(WorkspaceError, match=error):
+            gmail.create_draft("a@b.c", "s", "b", attach=[str(path)])
+    monkeypatch.setattr("gws_core.gmail.MAX_ATTACH_BYTES", 6)
+    with pytest.raises(WorkspaceError, match="total more than"):
+        gmail.send("a@b.c", "s", "b", attach=[str(real), str(real)])
+    assert gmail.session.calls == []
+
+
+def test_gmail_draft_with_attachment_reads_back_the_stored_files(tmp_path):
+    stored = {"id": "d1", "message": {"id": "m1", "payload": {"mimeType": "multipart/mixed", "parts": [
+        body_part("Plain"),
+        {"mimeType": "application/pdf", "filename": "factuur 2026-09.pdf",
+         "body": {"attachmentId": "a1", "size": 16}}]}}}
+    session = FakeSession([Recorded({"id": "d1", "message": {"id": "m1"}}), Recorded(stored)])
+    draft = GmailClient(session, sender=ACCOUNT).create_draft(
+        "in@yuki.example", "Invoice", "Plain", attach=invoice_files(tmp_path)[:1])
+    assert draft["verified"] == {"files": 1}
+    assert session.calls[1][0] == "GET" and session.calls[1][1].endswith("/drafts/d1")
+
+    session = FakeSession([Recorded({"id": "d1", "message": {"id": "m1"}}), Recorded({"id": "d1"})])
+    with pytest.raises(WorkspaceError, match="read back 0 of 2 attached file"):
+        GmailClient(session, sender=ACCOUNT).create_draft(
+            "in@yuki.example", "Invoice", "Plain", attach=invoice_files(tmp_path))
+
+
+def test_gmail_without_attach_is_unchanged_and_skips_the_read_back():
+    session = FakeSession([Recorded({"id": "d1", "message": {"id": "m1"}})])
+    draft = GmailClient(session, sender=ACCOUNT).create_draft("a@b.c", "s", "Plain")
+    assert len(session.calls) == 1 and draft["verified"] == {"files": 0}
+    message = message_from_bytes(decode_websafe(session.calls[0][2]["json"]["message"]["raw"]))
+    assert message.get_content_type() == "text/plain"
+
+
 class DraftSession(FakeSession):
     """One stored draft: GET returns it, PUT replaces it under a new message id, as Gmail does."""
 
@@ -201,6 +262,28 @@ def test_gmail_draft_update_replaces_only_the_body_and_keeps_thread_headers_and_
     pdf = next(stored.iter_attachments())
     assert pdf.get_filename() == "offerte.pdf" and pdf.get_content() == b"%PDF-1.4 bytes"
     assert result["verified"] == {"threadId": "t1", "files": 1}
+
+
+@pytest.mark.parametrize("draft", ["reply", "plain"])
+def test_gmail_draft_update_appends_attachments_after_the_existing_parts(tmp_path, draft):
+    if draft == "reply":
+        raw = reply_draft_with_attachment()
+    else:
+        plain = EmailMessage()
+        plain["To"], plain["Subject"] = "in@yuki.example", "Invoice"
+        plain.set_content("Old")
+        raw = base64.urlsafe_b64encode(plain.as_bytes()).decode()
+    session = DraftSession(raw)
+    result = GmailClient(session, sender=ACCOUNT).update_draft(
+        "d1", "New", attach=invoice_files(tmp_path)[:1])
+    stored = message_from_bytes(put_raw(session), policy=default)
+    assert stored.get_content_type() == "multipart/mixed"
+    assert stored.get_body(("plain",)).get_content().strip() == "New"
+    names = [part.get_filename() for part in stored.iter_attachments()]
+    expected = ["offerte.pdf", "factuur 2026-09.pdf"] if draft == "reply" else ["factuur 2026-09.pdf"]
+    assert names == expected and result["verified"]["files"] == len(expected)
+    if draft == "reply":
+        assert next(stored.iter_attachments()).get_content() == b"%PDF-1.4 bytes"
 
 
 @pytest.mark.parametrize("kw, autosave_on_get", [({"expect_message": "m0"}, None), ({}, 2)])

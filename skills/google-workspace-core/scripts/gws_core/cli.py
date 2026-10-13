@@ -408,17 +408,19 @@ def cmd_gmail_recent(a, ws):
 def cmd_gmail_draft(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     draft = ws.gmail.create_draft(a.to, a.subject, body, cc=a.cc, html=a.html,
-                                  html_body=html_body, reply_to_message=a.reply_to_message)
+                                  html_body=html_body, reply_to_message=a.reply_to_message,
+                                  attach=a.attach)
     message = draft.get("message") or {}
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
-                       f"thread={message.get('threadId')}")
+                       f"thread={message.get('threadId')}  files={draft['verified']['files']}")
 
 
 def cmd_gmail_send(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     sent = ws.gmail.send(a.to, a.subject, body, cc=a.cc, html=a.html,
-                         html_body=html_body, reply_to_message=a.reply_to_message)
-    out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})")
+                         html_body=html_body, reply_to_message=a.reply_to_message, attach=a.attach)
+    out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})  "
+                      f"files={sent['verified']['files']}")
 
 
 def cmd_gmail_draft_list(a, ws):
@@ -435,7 +437,7 @@ def cmd_gmail_draft_get(a, ws):
 
 def cmd_gmail_draft_update(a, ws):
     draft = ws.gmail.update_draft(a.id, body_text(a), html_body=alternative_html(a),
-                                  expect_message=a.expect_message)
+                                  expect_message=a.expect_message, attach=a.attach)
     message = draft.get("message") or {}
     out(draft, a.json, f"draft updated and read back: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
@@ -925,6 +927,10 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--max-chars", type=int, default=4000)
     command.add_argument("--no-codes", action="store_true")
 
+    def attach_argument(command, text="attach this file, e.g. an invoice PDF (repeatable; "
+                                      "no symlinks, 20 MB total)"):
+        command.add_argument("--attach", action="append", metavar="PATH", help=text)
+
     def compose(command):
         command.add_argument("--to", required=True)
         command.add_argument("--cc")
@@ -939,6 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="keep the body as plain text and attach this HTML alternative")
         command.add_argument("--reply-to-message",
                              help="message id to thread and quote; subject must match")
+        attach_argument(command)
         return command
 
     compose(add("gmail-draft", cmd_gmail_draft, "create a draft (never sends)"))
@@ -961,6 +968,7 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--html-file", help="new HTML part; default: the body text, escaped")
     command.add_argument("--expect-message",
                          help="message id gmail-draft-get showed; refuse if the draft changed since")
+    attach_argument(command, "append this file to the draft's existing parts (repeatable)")
 
     command = add("gmail-draft-send", cmd_gmail_draft_send, "send an existing draft by id")
     command.add_argument("id", help="draft id")

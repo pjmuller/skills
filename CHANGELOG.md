@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- google-workspace-core: `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send` and `gmail-draft-update` builds `multipart/mixed` (text first, one attachment part per file); refuses missing files, symlinks and >20 MB total; `files=<n>` is the read-back attachment count.
+
 - clickup-core: body-free lookup summaries, repeated keyword OR matching, title-only first pass, strict ISO recency filters, and tasks added from other lists. Before-create guidance checks recent closed plus older open work; project wrappers define relevant read scopes.
 
 - t3-manage-thread: `t3-spawn-thread --profile a,b` routes by capacity among only the named accounts; a single explicit `--profile` is capacity-checked and refuses an exhausted relevant window (incl. "Fable only") with the best alternative and a rerun command. `--force-profile` overrides; unknown usage only warns.

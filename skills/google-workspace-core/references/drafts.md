@@ -23,6 +23,16 @@ Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/dr
 [Python MIME](https://docs.python.org/3/library/email.contentmanager.html),
 [RFC 3676](https://www.rfc-editor.org/rfc/rfc3676.html).
 
+## Attachments
+
+- `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send` and `gmail-draft-update`: text
+  part(s) first, then one `attachment` part per file in a `multipart/mixed` (mimetype guessed,
+  else `application/octet-stream`). Use it to forward invoice PDFs, e.g. to a Yuki mail-in address.
+- Missing files, symlinks and more than 20 MB in total are refused before Gmail is called; larger
+  files go as a Drive link.
+- Output `files=<n>` is the read-back count of stored attachments; a mismatch is an error.
+  `gmail-draft-update --attach` appends to the draft's existing files.
+
 ## Existing Gmail drafts (either account)
 
 Edit the latest text from `gmail-draft-get`, keeping the user's wording outside the requested change;

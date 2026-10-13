@@ -24,6 +24,7 @@ from .session import GMAIL, Session
 
 HEADER_ORDER = ("Date", "From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References")
 KEPT_HEADERS = ("From", "To", "Cc", "Bcc", "Subject", "In-Reply-To", "References")
+MAX_ATTACH_BYTES = 20 * 1024 * 1024  # total of --attach files; Gmail caps a message at 25 MB
 # A 4-10 character run of letters+digits containing at least one digit: 123456, A1B2C3, 9F4K2.
 CODE_RE = re.compile(r"\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,10}\b")
 QUOTE_MARKERS = (
@@ -437,13 +438,15 @@ class GmailClient:
 
     def build(self, to: str, subject: str, body: str, *, cc: str | None = None,
               html: bool = False, html_body: str | None = None,
-              reply_to_message: str | None = None) -> tuple[str, str | None]:
+              reply_to_message: str | None = None,
+              attach: list[str] | None = None) -> tuple[str, str | None]:
         """Build the base64url MIME payload; replies thread, quote and keep the subject.
 
         `html=True` means `body` is HTML and the plain-text alternative is derived from it;
         `html_body` instead keeps `body` as the authored plain text and adds that HTML
-        alternative beside it.
+        alternative beside it. `attach` files follow the text part(s) in a multipart/mixed.
         """
+        files = read_attachments(attach)
         message = EmailMessage()
         message["From"] = self.sender
         message["To"] = to
@@ -483,6 +486,7 @@ class GmailClient:
             message.add_alternative(html_body + quote_html, subtype="html")
         else:
             message.set_content(body + quote_plain)
+        add_attachments(message, files)
         raw = base64.urlsafe_b64encode(message.as_bytes(policy=SMTP)).decode("ascii")
         return raw, thread_id
 
@@ -493,14 +497,33 @@ class GmailClient:
         return payload
 
     def create_draft(self, to: str, subject: str, body: str, **kw) -> dict:
-        """Create a draft. Nothing is sent."""
+        """Create a draft. Nothing is sent. With `attach`, the stored files are read back."""
         raw, thread_id = self.build(to, subject, body, **kw)
-        return self.session.api("POST", f"{GMAIL}/drafts", json={"message": self._payload(raw, thread_id)})
+        draft = self.session.api("POST", f"{GMAIL}/drafts",
+                                 json={"message": self._payload(raw, thread_id)})
+        files = 0
+        if kw.get("attach"):
+            stored = self.session.api("GET", f"{GMAIL}/drafts/{draft['id']}", params={"format": "full"})
+            files = self._stored_files(stored.get("message") or {}, len(kw["attach"]),
+                                       f"draft {draft['id']}", "gmail-draft-get")
+        return {**draft, "verified": {"files": files}}
 
     def send(self, to: str, subject: str, body: str, **kw) -> dict:
         """Send immediately. No idempotency guard: one call is one mail."""
         raw, thread_id = self.build(to, subject, body, **kw)
-        return self.session.api("POST", f"{GMAIL}/messages/send", json=self._payload(raw, thread_id))
+        sent = self.session.api("POST", f"{GMAIL}/messages/send", json=self._payload(raw, thread_id))
+        files = 0
+        if kw.get("attach"):
+            files = self._stored_files(self.get(sent["id"]), len(kw["attach"]),
+                                       f"message {sent['id']} was sent but", "gmail-get")
+        return {**sent, "verified": {"files": files}}
+
+    def _stored_files(self, message: dict, expected: int, what: str, inspect: str) -> int:
+        files = len(self.attachment_index(message.get("payload") or {}))
+        if files != expected:
+            raise WorkspaceError(f"{what} read back {files} of {expected} attached file(s); "
+                                 f"inspect it with {inspect}")
+        return files
 
     def drafts(self, limit: int = 20) -> list[dict]:
         return self.session.api("GET", f"{GMAIL}/drafts", params={"maxResults": limit}).get("drafts", [])
@@ -510,12 +533,14 @@ class GmailClient:
         return {"id": data.get("id"), "message": self.view(data.get("message", {}), trim=False)}
 
     def update_draft(self, draft_id: str, body: str, *, html_body: str | None = None,
-                     expect_message: str | None = None) -> dict:
+                     expect_message: str | None = None, attach: list[str] | None = None) -> dict:
         """Replace only the body text of a draft in place; headers, thread and files stay. Never sends.
 
         The text/plain part gets `body`; an existing text/html part gets `html_body`, else `body`
         escaped (the transform build() uses for quoted text) so both alternatives say the same.
+        `attach` files are appended after the existing parts (wrapped in multipart/mixed if needed).
         """
+        files = read_attachments(attach)
         base = self.session.api("GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "raw"})
         # Gmail gives a draft a new message id on every save (API or composer autosave), so that
         # id is a compare-and-swap token. `expect_message` (the id the caller's gmail-draft-get
@@ -549,6 +574,13 @@ class GmailClient:
         if problems:
             raise WorkspaceError(f"draft {draft_id} not updated: its MIME layout would change "
                                  f"{', '.join(problems)}; edit this draft in Gmail instead")
+        if files:
+            # The body edit above is verified against the original tree; the new files are added
+            # to that verified result and the read-back is held to the grown tree.
+            grown = message_from_bytes(candidate, policy=default)
+            add_attachments(grown, files)
+            candidate = grown.as_bytes(policy=default.clone(refold_source="none", linesep=linesep))
+            kept = _kept_facts(message_from_bytes(candidate, policy=default))
         raw = base64.urlsafe_b64encode(candidate).decode("ascii")
         _refuse_if_changed(draft_id, self.session.api(
             "GET", f"{GMAIL}/drafts/{draft_id}", params={"format": "minimal"}), seen)
@@ -562,8 +594,7 @@ class GmailClient:
         if problems:
             raise WorkspaceError(f"draft {draft_id} was updated but the read-back differs in "
                                  f"{', '.join(problems)}; inspect it with gmail-draft-get")
-        files = sum(1 for fact in kept[1] if fact[1] != "body" and fact[2] is not None)
-        return {**updated, "verified": {"threadId": thread_id, "files": files}}
+        return {**updated, "verified": {"threadId": thread_id, "files": _file_count(stored)}}
 
     def send_draft(self, draft_id: str) -> dict:
         return self.session.api("POST", f"{GMAIL}/drafts/send", json={"id": draft_id})
@@ -696,6 +727,40 @@ def _related_root(part: EmailMessage) -> int | None:
         return 0
     return next((index for index, child in enumerate(part.get_payload())
                  if str(child.get("Content-ID", "")).strip() == start.strip()), -1)
+
+
+def read_attachments(paths: list[str] | None) -> list[tuple[str, bytes, str]]:
+    """Read --attach files as (basename, bytes, mimetype); refuse missing files, symlinks and
+    a total above MAX_ATTACH_BYTES before anything reaches Gmail."""
+    files, total = [], 0
+    for value in paths or []:
+        path = Path(value).expanduser()
+        if path.is_symlink():
+            raise WorkspaceError(f"--attach {value}: refusing a symlink; pass the real file")
+        if not path.is_file():
+            raise WorkspaceError(f"--attach {value}: no such file")
+        total += path.stat().st_size
+        if total > MAX_ATTACH_BYTES:
+            raise WorkspaceError(f"--attach files total more than {MAX_ATTACH_BYTES // 2**20} MB; "
+                                 "share large files as a Drive link instead")
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if mime.startswith("message/"):  # RFC 2046: message/* may not be base64-encoded
+            mime = "application/octet-stream"
+        files.append((path.name, path.read_bytes(), mime))
+    return files
+
+
+def add_attachments(message: EmailMessage, files: list[tuple[str, bytes, str]]) -> None:
+    """Append file parts; the first makes the message multipart/mixed with the text part(s) first."""
+    for name, data, mime in files:
+        maintype, subtype = mime.split("/", 1)
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+
+
+def _file_count(message: EmailMessage) -> int:
+    return sum(1 for part in message.walk()
+               if part.get_content_maintype() != "multipart"
+               and (part.get_content_disposition() == "attachment" or part.get_filename()))
 
 
 def _stamp(when: datetime | None) -> str:
