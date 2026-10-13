@@ -407,13 +407,26 @@ def _table_rows(lines: list[str]) -> list[list[str]]:
     return rows
 
 
-def _table_embed(rows: list[list[str]]) -> dict:
-    """Native ClickUp table (the shape the UI writes; ids are opaque, cells are plain text)."""
+def _column_widths(rows: list[list[str]], ncols: int, budget: int) -> list[int]:
+    """Pixel width per column: fits its longest cell, short columns first, long ones share the rest
+    of `budget`. ClickUp renders `width` as fixed px with no auto-fit (a flat 150 wrapped per word)."""
+    natural = [min(32 + 9 * max((len(r[c]) for r in rows if c < len(r)), default=0), 420) for c in range(ncols)]
+    widths, left = natural[:], budget
+    for k, c in enumerate(sorted(range(ncols), key=natural.__getitem__)):
+        widths[c] = max(60, min(natural[c], left // (ncols - k)))
+        left -= widths[c]
+    return widths
+
+
+def _table_embed(rows: list[list[str]], budget: int = 840) -> dict:
+    """Native ClickUp table (the shape the UI writes; ids are opaque, cells are plain text).
+    `budget` ≈ usable px: ~860 in a task body, ~490 in the comment panel (measured 2026-10-13)."""
     ncols = max(map(len, rows))
     rid = lambda p: p + "-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))  # noqa: E731
     return {
         "rows": [{"insert": {"id": rid("row")}} for _ in rows],
-        "columns": [{"insert": {"id": rid("column")}, "attributes": {"width": "150"}} for _ in range(ncols)],
+        "columns": [{"insert": {"id": rid("column")}, "attributes": {"width": str(w)}}
+                    for w in _column_widths(rows, ncols, budget)],
         "cells": {f"{r + 1}:{c + 1}": {"content": [{"insert": row[c] if c < len(row) else ""},
                                                    {"insert": "\n"}],
                                        "attributes": {"colspan": "1", "rowspan": "1"}}
@@ -817,7 +830,7 @@ def comment_parts(text: str) -> list[dict]:
         elif kind == "code":
             parts += [{"text": event[2]}, {"text": "\n", "attributes": {"code-block": event[1]}}]
         elif kind == "table":
-            parts.append({"type": "table-embed", "table-embed": _table_embed(event[1])})
+            parts.append({"type": "table-embed", "table-embed": _table_embed(event[1], budget=480)})
         elif kind == "divider":
             parts.append({"text": "─" * 24 + ("" if last else "\n")})
         elif kind == "image":

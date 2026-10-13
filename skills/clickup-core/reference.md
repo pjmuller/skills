@@ -38,7 +38,8 @@ is proven (a Markdown link to a Doc works). Threads: `/comment/{root_id}/reply`,
 One parser (`_md_blocks` + `_inline_events`); `md_to_delta` and `comment_parts` are thin emitters
 sharing Quill attributes. `comment_text` is plain text (Markdown shows literally). A Markdown table
 becomes a `table-embed` part in the shape the UI writes (opaque row/column ids, `cells` keyed
-`"r:c"`). Dividers/images have no comment part: they degrade to a rule line / plain link.
+`"r:c"`). Column `width` is fixed px (no auto-fit): `_column_widths` sizes each column to its
+longest cell, short columns first, within ~840 px (body) / 480 px (comment panel). Dividers/images have no comment part: they degrade to a rule line / plain link.
 
 ## Normalization and limits
 
