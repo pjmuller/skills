@@ -63,3 +63,16 @@ sheet reporting) and the wrapper's Google Workspace core `gws.py` (Drive and tar
 operations). Run `scripts/install --check` for Yuki readiness. Browser uploads follow this recipe;
 there is no unattended upload/OCR pipeline. Invoice matching remains a verified agent decision.
 Company/account IDs stay in each `yuki` wrapper; consumer repos carry committed core copies.
+
+## T3 preview upload, verified 2026-10-13
+
+Prefer `preview_*` when its Yuki session is signed in. Close the profile drawer after checking
+identity: it can cover Uploaden and intercept clicks. Legacy page content is inside the same-origin
+`iframe[src*="uploadarchive"]`; inspect its DOM with `preview_evaluate` when snapshots omit it.
+For small local PDFs when no file-upload tool is exposed, read bytes locally, transfer base64 in
+bounded evaluate calls, construct `File` objects and assign a `DataTransfer.files` list to the
+observed `input[type=file]`, then dispatch one bubbling `change` event. Each expression must stay
+below 64,000 characters; never print file payloads. Verify queued filenames/count and Aankoop before
+clicking Uploaden. Read the resulting UploadedFiles iframe for receipt rows and document links.
+A navigation can make evaluate report failure even when the click worked: inspect the current URL
+before retrying. No Chrome remote-debugging connection is needed for this route.
