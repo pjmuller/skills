@@ -29,6 +29,9 @@ PJ's Chrome over CDP. Tenant shows the Visma Connect login page → ask PJ to si
 and say "ready"; never fall back to mail. Yuki's mail-in addresses below are reference only (suppliers and PJ's
 phone forward invoices there; Yuki confirms with "Je hebt een nieuwe … factuur ontvangen"), not an agent upload route.
 
+One Visma Connect login (you@example.com) for all three tenants; the session is per subdomain, so each tenant
+needs its own sign-in. Mail-in intake takes hours before Yuki confirms: wait, do not re-send.
+
 | Company | Tenant | Yuki mail-in (reference) |
 |---|---|---|
 | Pro Backup | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
