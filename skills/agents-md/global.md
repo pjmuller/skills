@@ -28,7 +28,7 @@ help, not a lower code-quality bar.
   truncates silently from the end, so a fat global file cuts the repo's file.
   Check what loaded: Claude `/context`; Codex: ask it to summarize its instructions.
 - Adherence drops as instruction count grows, with a bias toward earlier lines.
-  Budget: ≤ 4k tokens (~16 KB); behaviour-defining rules first, lookup facts last.
+  Budget: ≤ 6k tokens (~24 KB); behaviour-defining rules first, lookup facts last.
 - Portable progressive disclosure = a plain pointer with a trigger: "doing X →
   read `/abs/path.md` first". Works in both harnesses. `@import` and
   `~/.claude/rules/` are Claude-only, and imports load eagerly (no saving).

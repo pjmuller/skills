@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: global template — pre-task feedback-loop check (build minimal self-verification tooling first, little human QA) and post-task improvement loop for recurring work; `global.md` budget raised to ~6k tokens (~24 KB).
+
 - google-workspace-core: `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send` and `gmail-draft-update` builds `multipart/mixed` (text first, one attachment part per file); refuses missing files, symlinks and >20 MB total; `files=<n>` is the read-back attachment count.
 
 - clickup-core: body-free lookup summaries, repeated keyword OR matching, title-only first pass, strict ISO recency filters, and tasks added from other lists. Before-create guidance checks recent closed plus older open work; project wrappers define relevant read scopes.
