@@ -10,7 +10,8 @@ match. This core lists those payments and appends them to a shared sheet tab; pe
 manual columns (who, status, comment). The SOAP client stays read-only. Fetching the invoices
 (Gmail, supplier portals via PJ's Chrome, learning a vendor from a screen recording) is
 [fetch-invoices.md](fetch-invoices.md); explicitly authorized uploads and DONE updates are
-[upload-invoices.md](upload-invoices.md). One thread per quarter does list → fetch → upload → DONE.
+[upload-invoices.md](upload-invoices.md); the closing status mail to the accountant is
+[close-quarter.md](close-quarter.md). One thread per quarter does list → fetch → upload → DONE → mail.
 
 Code: [`scripts/yuki.py`](scripts/yuki.py) (CLI), `scripts/yuki_core/` — `client.py` (zeep, read-only
 allowlist), `outstanding.py` (parse, clean, quarter selection, CSV), `sheet.py` (append-only push via
