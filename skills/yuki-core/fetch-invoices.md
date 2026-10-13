@@ -27,6 +27,14 @@ Then follow [upload-invoices.md](upload-invoices.md). Yuki duplicates are harmle
 Alternative delivery when the browser is unavailable: forward the PDF to the tenant's mail-in address
 (wrapper SKILL.md), subject = vendor + period. Yuki confirms with "Je hebt een nieuwe … factuur ontvangen".
 
+## AWS: pure CLI, no browser
+`scripts/aws-invoices --profile <aws profile> --out <dir> 2026-07 2026-08` lists the billing months via the AWS
+Invoicing API and downloads every invoice PDF (`invoicing:ListInvoiceSummaries` + `GetInvoicePDF`, presigned URL,
+15 min). File name = `aws-<account>-<YYYY-MM>-<invoice id>-<amount><cur>.pdf`; the PDF shows the company name,
+verify it. Billing month = usage month: the card line of the 2nd of month M+1 matches billing month M; a mid-month
+extra invoice (e.g. 26 Aug) is a separate line. The AWS profile per company lives in the wrapper's `yuki.json`
+(`aws_profiles`, informational) and SKILL.md; profiles are in `~/.aws/credentials`, never in a repo.
+
 ## Learn a vendor from a screen recording
 PJ records a CleanShot clip of one download (Bitwarden autofill → clicks → PDF). Turn it into recipe bullets:
 ```bash
