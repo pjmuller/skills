@@ -34,6 +34,9 @@ transcribe-gemini --prompt prompt.md --thinking medium --out <clip>.transcript.m
 ```
 Prompt: "screen recording of downloading an invoice from <vendor>; give a timestamped table of URL, exact element
 label clicked, Bitwarden entry/email shown, invoice numbers/amounts; quote on-screen text, say 'unreadable' over guessing".
-Clips over 20 MB: `shrink-video` first. Reproduce once via CDP (route 2), then add to the wrapper's `vendor-recipes.md`:
+Send the CleanShot clip as-is (3 to 6 MB): Gemini samples 1 fps and bills per second whatever the file's fps
+(27 s clip: original vs `shrink-video --preset normal` = same 8158 tokens, same steps, $0.013). `shrink-video` only over
+20 MB; keep `--media-resolution high`. Reproduce once via CDP (route 2), then add to the wrapper's `vendor-recipes.md`:
 `## vendor` · Bitwarden entry + account · billing URL · clicks · PDF URL pattern · card line text · which company.
+Invoice rendered as HTML/modal without a PDF URL (e.g. Obsidian): route = print to PDF; say so in the recipe.
 Delete the transcript afterwards; the recipe is the artifact.
