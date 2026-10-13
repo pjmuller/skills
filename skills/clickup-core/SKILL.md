@@ -90,7 +90,8 @@ attention.
 - ≤ 5 short lines in the reader's language: what they must do or check, then what changed as they
   see it. No code identifiers for non-engineers.
 - Open with a native `--mention` of the one person who must act; don't ping authors about their own
-  ticket unless urgent.
+  ticket unless urgent. `--mention` takes a wrapper alias, a workspace member's name/email, or an id;
+  a typed `@Name` in `--text` is plain text that notifies nobody, so `comment` refuses it.
 - Shipped facts only; never post pending decisions or questions. In limbo → write nothing.
 - Reader acts through a coding agent: one ```md block addressed to their agent, English,
   copy-paste whole. Reverse direction (reporter → developer): symptoms, data, intended outcome.
