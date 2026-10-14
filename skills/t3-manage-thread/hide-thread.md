@@ -32,7 +32,7 @@ Gotchas:
   (`scripts/test_hide_thread.py`): a completion 1 ms later wakes the UI.
 - A derived snooze wake makes a thread an auto-settle candidate
   ([#11788](https://github.com/pingdotgg/t3code/issues/11788); default 3 idle
-  days, per-project). An active keeper prevents that; a thread whose keeper died
+  days, per-project; fixed on main by #16674, expected 0.0.46). An active keeper prevents that; a thread whose keeper died
   can eventually be stopped by T3. `t3-spawn-thread` therefore opts hidden
   spawns out of auto-settle (`thread.auto-settle.set`, T3 ≥ 0.0.43); a thread
   hidden later with `t3-hide-thread` alone is not opted out.

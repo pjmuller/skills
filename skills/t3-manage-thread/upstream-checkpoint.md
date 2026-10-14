@@ -29,7 +29,7 @@ When it reaches stable, every helper here breaks before anything can be retired:
   declarations [#16335](https://github.com/pingdotgg/t3code/pull/16335).
 - `message.dispatch` still clears a snooze (`thread.unsnoozed`), so the
   `t3-hide-thread` keeper survives V2 ([#6368](https://github.com/pingdotgg/t3code/issues/6368)
-  closed by the merge, hold-until-time snooze [#14625](https://github.com/pingdotgg/t3code/issues/14625) open).
+  closed by the merge, hold-until-time snooze [#14625](https://github.com/pingdotgg/t3code/issues/14625) bulk-closed 2026-10-11 unshipped).
 
 - **History:** Orchestrator V2 [PR #2829](https://github.com/pingdotgg/t3code/pull/2829)
   carried native `create_threads`, `t3_thread_start/send/wait/read/list/interrupt`,
