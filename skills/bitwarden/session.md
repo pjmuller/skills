@@ -76,6 +76,16 @@ sequenceDiagram
 - TOTP: `--field totp` delivers the current 6-8 digit code, never the seed.
 - Clipboard clears after 30 s; paste promptly, one copy per field.
 
+## Verified live 2026-10-14
+
+One 60-minute session with `--host sentry.io --host mapbox.com --host account.mapbox.com`: 3 `list` + 7 `copy` calls
+served from memory, four Sentry logins and one Mapbox login via `preview_press Meta+V`, `session stop` locked the
+CLI (`bw status` = locked) after ~30 minutes. Gotchas: the first `session start` timed out after 180 s because PJ was
+not at the Terminal yet (ask first, then start); a T3 automation blip between `copy` and the paste means the 30 s
+clipboard window is gone, so re-copy before retrying; `Meta+A` then `Meta+V` recovers a field that caught a stray
+character. Mint it only after `bw status` shows `locked` with a userEmail: a refresh token that expired after months
+without sync logs the CLI out during the pre-unlock sync, and only PJ can `bw login` again (YubiKey, `--method 3`).
+
 ## Never
 
 `bw export`, `bw list items` without a host, `bw get item` dumps, `bw get password` to stdout, reading

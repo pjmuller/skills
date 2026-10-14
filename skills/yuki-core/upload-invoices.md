@@ -92,10 +92,12 @@ Never serve ~/Downloads itself; check `lsof -iTCP:<port>` because other agents r
 Prefer `preview_*` when its Yuki session is signed in. Close the profile drawer after checking
 identity: it can cover Uploaden and intercept clicks. Legacy page content is inside the same-origin
 `iframe[src*="uploadarchive"]`; inspect its DOM with `preview_evaluate` when snapshots omit it.
-For small local PDFs when no file-upload tool is exposed, read bytes locally, transfer base64 in
-bounded evaluate calls, construct `File` objects and assign a `DataTransfer.files` list to the
-observed `input[type=file]`, then dispatch one bubbling `change` event. Each expression must stay
-below 64,000 characters; never print file payloads. Verify queued filenames/count and Aankoop before
+When no file-upload tool is exposed, serve the PDFs from a loopback HTTP server (background Bash
+task, see fetch-invoices.md) and let the Yuki page `fetch('http://127.0.0.1:<port>/get?name=…')`
+each one (Yuki has no CSP; verified 2026-10-14, 4 files in one evaluate), construct `File` objects,
+assign a `DataTransfer.files` list to the observed `input[type=file]`, then dispatch one bubbling
+`change` event. Base64 through evaluate calls is the fallback only (each expression below 64,000
+characters, never print payloads). Verify queued filenames/count and Aankoop before
 clicking Uploaden. Read the resulting UploadedFiles iframe for receipt rows and document links.
 A navigation can make evaluate report failure even when the click worked: inspect the current URL
 before retrying. No Chrome remote-debugging connection is needed for this route.
