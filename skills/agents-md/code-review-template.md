@@ -12,9 +12,9 @@ The full T3 procedure lives in [code-review.md](../t3-manage-thread/code-review.
 
 Catch wrong assumptions, not just broken code. For complex features or changes
 touching data, auth, money or external contracts, use an opposite-family reviewer:
-Claude-built → Astra; OpenAI-built → Fable. Small fixes and doc edits need the
-builder's own verification. Consequential design choices get a second opinion
-before implementation.
+Claude-built → Sol; OpenAI-built → Fable. Small fixes and doc edits need the
+builder's own verification. Consequential design choices get a second planner's
+opinion (Claude-planned → Astra) before implementation; merge the best of both.
 
 - **Brief:** goal, chosen approach, rejected alternatives, exact diff/revision,
   deliberate quirks and verification results. The reviewer may challenge the plan.

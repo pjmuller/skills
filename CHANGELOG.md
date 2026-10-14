@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md / t3-manage-thread: default model split — plan in a thinker (Astra as 🏓 second planner on consequential designs), build with Opus sub-agents, verify/review with a Sol 🏓 worker (Codex-built → Fable); `code-review.md` spawns `--model sol`. Global template: copy chat file paths verbatim from tool output, never retype them.
+
 - bitwarden: `bw-once session start --ttl 60m [--host …]` — PJ unlocks once in Terminal, a holder keeps the key in memory, serves exact-host `list`/`copy` over a private socket (same commands, automatic fallback to per-request unlock), logs each request and runs `bw lock` at expiry/stop; design + paste mechanics in `session.md`.
 
 ## v0.4.8 (2026-10-13)

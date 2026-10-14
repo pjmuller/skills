@@ -2,10 +2,10 @@
 
 A model reads its own code the way it wrote it and misses the same things, so the
 reviewer is never the builder's model family: built in Claude (Fable/Opus) →
-**Astra** reviews; built in Codex (Sol/Astra) → **Fable** reviews. Reviewer =
-thinker model, not the implementer model. The review is a 🏓
-round-trip worker: the builder thread spawns it, the reviewer pings back, the
-builder triages.
+**Sol** reviews (house effort high); built in Codex (Sol/Astra) → **Fable** reviews.
+Astra is the second *planner* (design trade-offs before building), not the default
+reviewer. The review is a 🏓 round-trip worker: the builder thread spawns it, the
+reviewer pings back, the builder triages.
 
 ## When
 Not every change: small fixes, one-concern edits, config/doc tweaks → trust the
@@ -16,7 +16,7 @@ once per long session; a diff > ~1000 LOC is too big → split it.
 ## Spawn the reviewer
 ```bash
 # builder runs in Claude → OpenAI reviews
-t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model sol --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 # builder runs in Codex → Claude reviews
 t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 ```
@@ -29,8 +29,8 @@ the review. The reviewer is read-only on the shared checkout;
 another revision needed → `/tmp` worktree.
 
 **Reuse a live opposite-model thread.** If this builder thread already used an
-opposite-model worker for planning or a second opinion (not yet settled), ping
-*that* thread for the review (`t3-ping-thread`, brief path in the message)
+opposite-model worker for planning or a second opinion (not yet settled, e.g. the
+Astra planner), ping *that* thread for the review (`t3-ping-thread`, brief path in the message)
 instead of spawning a new one: it already holds the intent and the rejected
 alternatives. Settle it once, after the final review.
 
