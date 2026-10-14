@@ -417,6 +417,9 @@ class LinksBeforeCodeBlockTests(unittest.TestCase):
             self.guard(self.delta("See [retro](https://example.com/r).\n\n```\nhello\n```"))
         self.assertIn("'retro'", str(cm.exception))
 
+    def test_links_without_code_block_are_fine(self):
+        self.guard(self.delta("See [retro](https://example.com/r) and [plan](https://example.com/p)."))
+
     def test_code_block_before_link_is_fine(self):
         self.guard(self.delta("```\nhello\n```\n\nSee [retro](https://example.com/r)."))
 
