@@ -38,6 +38,18 @@ needs its own sign-in. Mail-in intake takes hours before Yuki confirms: wait, do
 | KampAdmin | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
 | Momentum Tools | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
 
+## Getting PDF bytes out of a T3 browser tab (verified 2026-10-14, Sentry)
+Never return file bytes through `preview_evaluate` (a 47 KB PDF is 63 KB of base64 per call and burns context twice).
+Run a tiny local HTTP server (`python3 -I server.py`, loopback only, **as a background Bash task**: a `nohup … &` inside a
+normal Bash call dies with the call) and move bytes to it:
+- Vendor page without a CSP (Yuki itself): `fetch('http://127.0.0.1:<port>/…')` works both ways from the page.
+- Vendor page with a CSP (Sentry: `connect-src`, `frame-src`): fetch and iframes to localhost are blocked, a **top-level
+  form POST** (`form.target='_top'`, hidden `name` + base64 `b64` fields, `application/x-www-form-urlencoded`) is not.
+  Submit, wait for `urlIncludes 127.0.0.1`, navigate back; the vendor session cookies survive. One file per round trip.
+- Sentry receipts: same-origin `/organizations/<org>/payments/<id>/pdf/` (the API's `us.sentry.io` URL is cross-origin).
+- HTML-only invoices (Mapbox console): `preview_resize` to the page height, `preview_snapshot save=true`, `sips -s format pdf`.
+Stop the server and delete its directory afterwards.
+
 ## AWS: pure CLI, no browser
 `scripts/aws-invoices --profile <aws profile> --out <dir> 2026-07 2026-08` lists the billing months via the AWS
 Invoicing API and downloads every invoice PDF (`invoicing:ListInvoiceSummaries` + `GetInvoicePDF`, presigned URL,

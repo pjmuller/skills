@@ -11,7 +11,7 @@ commands serve from it; design, paste mechanics and never-list: [session.md](ses
 copy. Installer exposes `~/.local/bin/bw-once`, without globally registering this
 skill or installing dependencies. Requires macOS, existing `bw` login, `uv`, and
 Xcode command-line tools. Start with `bw-once doctor` (no unlock). `status: unauthenticated` = bw dropped the login
-(refresh token expired after months without sync): PJ runs `bw login <email>` in Terminal; bw-once never logs in.
+(refresh token expired after months without sync): PJ runs `bw login <email> --method 3` in Terminal (his CLI 2FA is a YubiKey OTP, method 3); bw-once never logs in.
 
 ```sh
 bw-once session start --ttl 60m --host admin.example.com   # optional: PJ unlocks once, auto-lock at expiry
