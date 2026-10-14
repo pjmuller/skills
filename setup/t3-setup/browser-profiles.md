@@ -16,7 +16,7 @@ Browser profiles are separate from AI provider/billing profiles.
    login. Record pass / needs sign-in; let the user complete login or MFA when needed.
 4. Test native `preview_status` → `preview_open` → focused snapshot/DOM read in each
    installed harness. Check its actual tool schema: v0.0.45 ignores `profileId` on MCP
-   opens. Workaround: T3's **+ → Browser submenu → profile**, via computer use if available,
+   opens (main adds `profileId` + driving unclaimed human tabs, [#16956](https://github.com/pingdotgg/t3code/pull/16956); expected in 0.0.46, re-test). Workaround: T3's **+ → Browser submenu → profile**, via computer use if available,
    then target the tab. With no assigned agent tab, `preview_open({})` adopts the active
    UI tab; an existing assignment wins. Don't switch global defaults during parallel work.
 5. Merge one routing line into the user's canonical global AGENTS.md/CLAUDE.md:

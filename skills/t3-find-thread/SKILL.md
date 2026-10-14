@@ -30,7 +30,7 @@ separator-split copy). Thread ids: any prefix ≥ 8 chars.
 
 **Links to threads do not work inside T3 chat**: its markdown sanitizer allows only
 http/https/mailto/file, http(s) opens externally, and there is no desktop deep link upstream
-(#4996 closed unshipped, #9745 open; native `t3code://` only routes `/welcome`, `/settings`). Hence short
+on stable 0.0.45 (native `t3code://` only routes `/welcome`, `/settings`; `t3code://threads/<env>/<thread>` lands with 0.0.46 via [#18454](https://github.com/pingdotgg/t3code/pull/18454), fixing #9745). Hence short
 ids, and `scripts/t3-open-thread <id>` drives the desktop app's cmd+k palette (macOS only:
 osascript; needs Accessibility rights; archived threads are not in the palette; log in the cache
 dir). On Linux/WSL searching works, opening does not: give the user the title to click in the
@@ -43,7 +43,7 @@ it runs `t3-open-thread <url>`, log in `~/.cache/t3-find-thread/open.log`. Link:
 Install: `url-scheme/install` (`--check`); rebuilds only when the source changed, because a rebuild
 re-signs ad hoc and voids the one-time grant: Accessibility for **T3 Open**. Chrome asks once per
 origin to allow the scheme. Works outside T3 chat only (HTML reports, Notes): the desktop renderer opens only http/https + editor schemes (`parseSafeExternalUrl`, v0.0.45).
-Inside T3 chat use the native link instead: `t3-open-thread <id> --link` prints `[title](t3-thread://v1/<env>/<thread>)` (PR [#16782](https://github.com/pingdotgg/t3code/pull/16782), main 2026-10-07, ships with 0.0.46; plain text on 0.0.45). OS-level `t3code://threads/…` is still PR [#8246](https://github.com/pingdotgg/t3code/pull/8246), open.
+Inside T3 chat use the native link instead: `t3-open-thread <id> --link` prints `[title](t3-thread://v1/<env>/<thread>)` (PR [#16782](https://github.com/pingdotgg/t3code/pull/16782), main 2026-10-07, ships with 0.0.46; plain text on 0.0.45). From 0.0.46, HTML links can use `t3code://threads/<env>/<thread>` directly and T3 Open.app retires (#18454; #8246 closed in its favour).
 
 ## Install
 
