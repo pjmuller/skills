@@ -862,7 +862,7 @@ def _autolink_of(text: str, url: str) -> bool:
 def guard_links_before_code(content: str):
     ops = json.loads(content)["ops"]
     last_code = max((i for i, op in enumerate(ops) if "code-block" in (op.get("attributes") or {})), default=-1)
-    doomed = [op["insert"] for op in ops[:last_code]
+    doomed = [op["insert"] for op in ops[:max(last_code, 0)]
               if isinstance(op.get("insert"), str) and (link := (op.get("attributes") or {}).get("link"))
               and not _autolink_of(op["insert"], link)]
     if doomed:
