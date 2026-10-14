@@ -44,6 +44,10 @@ Same for re-reviews after fixes. Settle it once, after the final review.
   reason (lib workaround, perf trade-off, spec said so, out of scope). Without
   this the reviewer "fixes" intentional choices.
 - **What was verified and how** (tests run, curl, browser).
+- **Heartbeat:** ask the reviewer to post a one-line progress message in its own thread after each
+  reproduction or every ~5 min. A worker running testcontainer loops shows no activity in T3 for 10+
+  min and gets mistaken for blocked and settled mid-review (2026-10-14: three reviewers, six real
+  findings, all cut off). Before settling a silent worker: `t3-read-thread <id> --outline`.
 - Quoting rule for inline text: [cross-thread-ping.md](cross-thread-ping.md).
 
 ## Reviewer output (the ping-back)
