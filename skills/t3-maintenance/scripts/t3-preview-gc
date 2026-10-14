@@ -1,0 +1,243 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["websockets>=13"]
+# ///
+"""Free the RAM held by T3 Code browser-preview tabs (macOS desktop app).
+
+Every preview tab is a <webview> guest of the T3 window's UI renderer, one
+`T3 Code Helper (Renderer)` process each, and nothing closes them: agents have no
+preview_close and tabs of settled threads stay mounted. Verified on v0.0.45:
+killing a guest makes T3 respawn it; the server RPC `preview.close` only drops the
+server session; View -> Reload may hit a guest instead of the window. What works:
+
+1. `preview.close` every tab of a settled/archived thread idle past --idle-hours,
+   so the window does not remount it.
+2. When guests >= --min-guests, SIGSEGV the UI renderer. T3's own crash recovery
+   (reason "crashed") reloads the window in ~2 s; every guest dies with it. The T3
+   server (parent of the claude/codex CLIs) and composer drafts (localStorage)
+   survive. Not SIGHUP/SIGTERM: those count as "killed", T3 does not recover and the
+   window stays dead until refocused + View -> Reload (the fallback below).
+
+Guards before step 2: an agent drove a preview tab in the last --busy-minutes ->
+skip; the user touched keyboard/mouse in the last --quiet-seconds -> wait up to
+--wait-minutes for a pause, else skip. Dry-run unless --apply.
+Log: ~/.local/state/t3-maintenance/preview-gc.log
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+import websockets
+
+APP_BINARY = "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)"
+RENDERER_MARK = "Helper (Renderer)"
+GUEST_FLAG = "--enable-blink-features"  # webview guests carry it, the UI renderer does not
+LOG = Path.home() / ".local/state/t3-maintenance/preview-gc.log"
+
+
+def log(line: str) -> None:
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(line)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a") as handle:
+        handle.write(f"{stamp} {line}\n")
+
+
+def notify(message: str) -> None:
+    subprocess.run(["osascript", "-e", f'display notification "{message}" with title "t3-preview-gc"'],
+                   check=False, capture_output=True)
+
+
+# --- processes ---------------------------------------------------------------
+def renderers() -> tuple[int | None, list[int]]:
+    """(UI renderer pid or None if ambiguous, guest pids) under the running T3 app."""
+    table = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=,ppid=,args="],
+                           capture_output=True, text=True, check=True).stdout
+    rows = [re.match(r"\s*(\d+)\s+(\d+)\s+(.*)", line).groups() for line in table.splitlines() if line.strip()]
+    app = [int(pid) for pid, _ppid, args in rows if args == APP_BINARY]
+    if len(app) != 1:
+        return None, []
+    ui, guests = [], []
+    for pid, ppid, args in rows:
+        if int(ppid) == app[0] and RENDERER_MARK in args and "--type=renderer" in args:
+            (guests if GUEST_FLAG in args else ui).append(int(pid))
+    return (ui[0] if len(ui) == 1 else None), guests
+
+
+def footprint_mb(pids: list[int]) -> int:
+    if not pids:
+        return 0
+    wanted = {str(pid) for pid in pids}
+    out = subprocess.run(["top", "-l", "1", "-stats", "pid,mem"], capture_output=True, text=True).stdout
+    total = 0.0
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in wanted:
+            match = re.match(r"([\d.]+)([KMG]?)", parts[1])
+            if match:
+                value, unit = float(match.group(1)), match.group(2)
+                total += value / 1024 if unit == "K" else value * 1024 if unit == "G" else value
+    return round(total)
+
+
+def user_idle_seconds() -> int:
+    out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True).stdout
+    match = re.search(r'"HIDIdleTime" = (\d+)', out)
+    return int(match.group(1)) // 1_000_000_000 if match else 0
+
+
+# --- T3 server ---------------------------------------------------------------
+def t3_connection() -> tuple[str, str, list[str]]:
+    """origin, base dir and version-matched t3 CLI, via the t3-manage-thread bootstrap."""
+    helper = shutil.which("t3-spawn-thread")
+    if not helper:
+        sys.exit("t3-spawn-thread not on PATH; install the t3-manage-thread helpers")
+    common = Path(helper).resolve().parent / "lib/t3-common.sh"
+    script = f'source "{common}"; t3_bootstrap >&2; printf "%s\\0%s\\0" "$t3_origin" "$t3_base_dir"; printf "%s\\0" "${{t3_cli[@]}}"'
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
+    origin, base_dir, *cli = out.rstrip("\0").split("\0")
+    return origin, base_dir, cli
+
+
+class Session:
+    def __init__(self) -> None:
+        self.origin, self.base_dir, self.cli = t3_connection()
+        issued = json.loads(subprocess.run(
+            [*self.cli, "auth", "session", "issue", "--base-dir", self.base_dir, "--ttl", "10m",
+             "--label", "t3-preview-gc", "--subject", "local-skill", "--json"],
+            capture_output=True, text=True, check=True).stdout)
+        self.session_id, self.token = issued["sessionId"], issued["token"]
+
+    def close(self) -> None:
+        subprocess.run([*self.cli, "auth", "session", "revoke", "--base-dir", self.base_dir, self.session_id],
+                       capture_output=True, timeout=15, check=False)
+
+    def threads(self) -> list[dict]:
+        request = urllib.request.Request(f"{self.origin}/api/orchestration/shell",
+                                         headers={"Authorization": f"Bearer {self.token}"})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.load(response)["threads"]
+
+    def rpc(self, method: str, payloads: list[dict]) -> list[dict]:
+        """Batch one Effect-RPC method over /ws; returns the Exit per payload, in order."""
+        return asyncio.run(self._rpc(method, payloads)) if payloads else []
+
+    async def _rpc(self, method: str, payloads: list[dict]) -> list[dict]:
+        url = self.origin.replace("http", "ws", 1) + "/ws"
+        exits: dict[str, dict] = {}
+        async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {self.token}"},
+                                      max_size=None) as socket:
+            for index, payload in enumerate(payloads):
+                await socket.send(json.dumps({"_tag": "Request", "id": str(index), "tag": method,
+                                              "payload": payload, "headers": []}))
+            async with asyncio.timeout(60):
+                while len(exits) < len(payloads):
+                    messages = json.loads(await socket.recv())
+                    for message in messages if isinstance(messages, list) else [messages]:
+                        if message.get("_tag") == "Ping":
+                            await socket.send(json.dumps({"_tag": "Pong"}))
+                        elif message.get("_tag") == "Exit":
+                            exits[message["requestId"]] = message["exit"]
+        return [exits[str(index)] for index in range(len(payloads))]
+
+
+def age_hours(stamp: str) -> float:
+    return (datetime.now(timezone.utc) - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds() / 3600
+
+
+# --- main --------------------------------------------------------------------
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--apply", action="store_true", help="act; default is a dry run")
+    parser.add_argument("--idle-hours", type=float, default=1.0, help="close settled threads' tabs idle this long")
+    parser.add_argument("--min-guests", type=int, default=15, help="reload the window only at this many tab renderers")
+    parser.add_argument("--busy-minutes", type=float, default=10, help="skip reload if an active thread used a tab this recently")
+    parser.add_argument("--quiet-seconds", type=int, default=60, help="required keyboard/mouse pause before reloading")
+    parser.add_argument("--wait-minutes", type=float, default=15, help="how long to wait for that pause")
+    args = parser.parse_args()
+    mode = "apply" if args.apply else "dry-run"
+
+    ui, guests = renderers()
+    if ui is None:
+        log(f"{mode} SKIP T3 not running or UI renderer ambiguous (guests={len(guests)})")
+        return 0
+
+    session = Session()
+    try:
+        threads = {thread["id"]: thread for thread in session.threads()}
+        ids = list(threads)
+        tabs = [tab for exit_ in session.rpc("preview.list", [{"threadId": tid} for tid in ids])
+                if exit_.get("_tag") == "Success" for tab in exit_["value"]["sessions"]]
+
+        def finished(thread: dict) -> bool:
+            return bool(thread.get("settledAt") or thread.get("archivedAt"))
+
+        stale = [tab for tab in tabs
+                 if finished(threads[tab["threadId"]]) and age_hours(tab["updatedAt"]) >= args.idle_hours]
+        busy = [tab for tab in tabs
+                if not finished(threads[tab["threadId"]])
+                and (threads[tab["threadId"]].get("session") or {}).get("status") == "running"
+                and age_hours(tab["updatedAt"]) * 60 < args.busy_minutes]
+
+        closed = 0
+        if args.apply:
+            exits = session.rpc("preview.close", [{"threadId": t["threadId"], "tabId": t["tabId"]} for t in stale])
+            closed = sum(exit_.get("_tag") == "Success" for exit_ in exits)
+        log(f"{mode} sessions={len(tabs)} stale={len(stale)} closed={closed} busy={len(busy)} "
+            f"guests={len(guests)} guest_mb={footprint_mb(guests)}")
+    finally:
+        session.close()
+
+    if len(guests) < args.min_guests:
+        return 0
+    if busy:
+        log(f"{mode} SKIP reload: agent browsing in {sorted({t['threadId'][:8] for t in busy})}")
+        return 0
+    deadline = time.monotonic() + args.wait_minutes * 60
+    while user_idle_seconds() < args.quiet_seconds:
+        if not args.apply or time.monotonic() > deadline:
+            log(f"{mode} SKIP reload: user active (idle {user_idle_seconds()}s < {args.quiet_seconds}s)")
+            return 0
+        time.sleep(15)
+    if not args.apply:
+        log(f"dry-run would reload the T3 window: {len(guests)} tab renderers")
+        return 0
+
+    before_mb = footprint_mb([ui, *guests])
+    os.kill(ui, signal.SIGSEGV)
+    for attempt in ("crash recovery", "menu reload"):
+        if attempt == "menu reload":  # View -> Reload acts on the focused window: focus it first
+            for menu, item in (("Window", "T3 Code (Alpha)"), ("View", "Reload")):
+                subprocess.run(["osascript", "-e", f'tell application "System Events" to click menu item "{item}" '
+                                f'of menu "{menu}" of menu bar 1 of process "T3 Code (Alpha)"'],
+                               capture_output=True, timeout=30, check=False)
+        for _ in range(30):
+            time.sleep(1)
+            new_ui, new_guests = renderers()
+            if new_ui and new_ui != ui:
+                time.sleep(5)
+                new_ui, new_guests = renderers()
+                log(f"apply RELOADED window via {attempt}: renderers {len(guests) + 1}->{len(new_guests) + 1}, "
+                    f"footprint {before_mb}->{footprint_mb([new_ui, *new_guests])} MB")
+                return 0
+    log("apply ERROR window did not come back; Window menu -> T3 Code (Alpha), then View -> Reload")
+    notify("T3 window did not reload: Window menu > T3 Code, then View > Reload")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
