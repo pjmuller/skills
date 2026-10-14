@@ -7,7 +7,7 @@ install_dir="${T3_MAINTENANCE_INSTALL_DIR:-$HOME/.local/bin}"
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
 [[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
-  for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads; do
+  for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads t3-preview-gc; do
     target="$install_dir/$name"
     [[ -L "$target" && "$(readlink -f "$target")" == "$script_dir/$name" ]] || {
       echo "missing or stale: $target" >&2
@@ -31,7 +31,7 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/t3-maintenance" ]] || warn_project=true
-for command_name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads; do
+for command_name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads t3-preview-gc; do
   existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
@@ -46,7 +46,7 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$install_dir"
-for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads; do
+for name in t3-thread-maintenance t3-my-prompts t3-fleet t3-drafts t3-purge-threads t3-preview-gc; do
   ln -sfn "$script_dir/$name" "$install_dir/$name"
   echo "installed $install_dir/$name"
 done

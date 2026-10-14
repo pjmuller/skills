@@ -16,6 +16,8 @@ Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Fl
   listing still works and `--limited` fails closed.
 - `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
 - `t3-purge-threads` — delete old threads + provider transcripts (they hold secrets).
+- `t3-preview-gc` — free browser-preview renderers (macOS desktop): close settled threads' tabs, then
+  crash-reload the window when many remain. Mechanism, guards and why: its docstring.
 - Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).
 
 Neighbours: rate-limited threads → [t3-usage-windows](../t3-usage-windows/SKILL.md); recurring
