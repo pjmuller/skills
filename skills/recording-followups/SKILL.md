@@ -26,7 +26,10 @@ where the note lives and its frontmatter; they link here for the prompt step.
 
 Repo path + the two or three skill files to read first. Context: the decision, the evidence with
 **verified** identifiers only (run ids, ticket ids, URLs; a Gemini pass invents small on-screen
-text, take them from source frames or the API). Target behaviour as a numbered list. Verify: which
+text, take them from source frames or the API). Point at the **verified transcript**
+(`*.transcript.md`, provenance header) when one exists beside the raw vendor ASR, and say so: the
+worker works from that text and never re-runs the video pass; only when no verified transcript
+exists does the prompt name the raw file and the media path. Target behaviour as a numbered list. Verify: which
 tests, which live run or browser check. Ship: commit, push, promote when the repo deploys. Report
 tersely. Add the house rules the thread needs (opposite-model review over 100 loc, no per-project
 code paths) instead of assuming the worker knows them.

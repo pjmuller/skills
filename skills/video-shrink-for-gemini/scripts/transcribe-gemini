@@ -110,6 +110,23 @@ def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[d
     return parts
 
 
+def provenance_header(video: Path, prompt: Path, model: str, thinking: str, resolution: str, plan: dict,
+                      when: str) -> str:
+    """Header prepended to the transcript so a downstream agent knows this text already IS the
+    audiovisual pass and must not re-run it (the raw vendor ASR beside it says the opposite)."""
+    ranges = plan.get("ranges") or []
+    frames = (f"{len(ranges)} screen-share ranges" if plan.get("method") != "full-fallback" and ranges
+              else "whole video")
+    return "\n".join([
+        "<!-- provenance: Gemini audiovisual pass -->",
+        f"- Verified transcript of: {video.resolve()} (frames: {frames}; audio throughout)",
+        f"- Pass: {model} · thinking {thinking} · media resolution {resolution} · {when}",
+        f"- Prompt (speakers, vocabulary, context files): {prompt.resolve()}",
+        "- Work from this text. Do not re-run the video pass; re-open the video only to check one timestamp "
+        "(source frames via video-frames-for-vision).",
+        "", ""])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("video", type=Path, help="<name>.gemini.mp4 from shrink-video (any video/audio ffmpeg reads)")
@@ -162,7 +179,9 @@ def main() -> None:
     text = response.text or ""
     if not text.strip():
         sys.exit(f"empty response (finish reason {response.candidates[0].finish_reason if response.candidates else '?'})")
-    out.write_text(text, encoding="utf-8")
+    header = provenance_header(args.video, args.prompt, response.model_version or args.model, args.thinking,
+                               args.media_resolution, plan, time.strftime("%Y-%m-%d %H:%M %Z"))
+    out.write_text(header + text, encoding="utf-8")
     usage = response.usage_metadata
     output_tokens = (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
     price = PRICES.get(args.model)
