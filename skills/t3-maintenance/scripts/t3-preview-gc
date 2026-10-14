@@ -261,6 +261,9 @@ def main() -> int:
         log(f"apply SKIP reload after wait: busy={len(busy)} ui={ui} guests={len(guests)}")
         return 0
     before_mb = footprint_mb([ui, *guests])
+    if user_idle_seconds() < args.quiet_seconds:  # the re-check above takes seconds; PJ may be back
+        log("apply SKIP reload: user became active during the final checks")
+        return 0
     try:
         os.kill(ui, signal.SIGSEGV)
     except ProcessLookupError:
