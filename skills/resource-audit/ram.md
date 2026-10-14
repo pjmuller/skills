@@ -40,8 +40,15 @@ thresholds, protected ports, and installation paths in local operator docs.
 
 ## T3 Code renderer swarm
 
-Every T3 browser-preview tab (any thread, hidden or not) stays mounted as its own
-`T3 Code Helper (Renderer)`; agents have no `preview_close`, so they pile up (85 on
-2026-10-08). The main UI renderer started with the app (same etime as its parent).
-Killing a preview renderer does **not** close its tab: T3 reloads most of them at once,
-fresh and larger. Kill only a single huge one; otherwise close tabs in the T3 UI.
+Every T3 browser-preview tab (any thread, settled or not) is a `<webview>` guest of the
+UI renderer, one `T3 Code Helper (Renderer)` each; agents have no `preview_close`, so they
+pile up (80 = ~5 GB on 2026-10-14). Verified 2026-10-14 on v0.0.45:
+- Killing a guest renderer: T3 respawns it. Server RPC `preview.close {threadId, tabId}`
+  (WS `/ws`, Effect RPC JSON, bearer from `t3 auth session issue`; `preview.list` per
+  thread) only drops the server session; the guest keeps running.
+- View → Reload hits the *focused webContents*, which may be a guest
+  ([t3code #13897](https://github.com/pingdotgg/t3code/issues/13897) root cause), not the window.
+- What works: `kill -SEGV <UI renderer>` (the oldest renderer, older than every guest)
+  → T3's crash recovery reloads the window in ~2 s, all guests die. Server (parent of
+  claude/codex CLIs) and composer drafts (`t3-drafts list` identical) survive. Close
+  settled threads' sessions via `preview.close` first, so they are not remounted.
