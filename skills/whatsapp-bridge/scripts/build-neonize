@@ -2,10 +2,16 @@
 # Build the official release until upstream publishes its native binaries/PyPI wheel.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [[ "$(uname -s)/$(uname -m)" != Darwin/arm64 ]]; then
-  echo 'This local build currently supports Apple Silicon macOS only.' >&2
-  exit 1
-fi
+# Library name = what neonize/utils/platform.py generated_name() loads.
+cgo_flags=()
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64) lib=neonize-darwin-arm64.dylib
+    cgo_flags=(CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0) ;;
+  Linux/x86_64) lib=neonize-linux-amd64.so ;;
+  Linux/aarch64) lib=neonize-linux-arm64.so ;;
+  *) echo 'Supported builds: Apple Silicon macOS, Linux x86_64/arm64 (incl. WSL2).' >&2; exit 1 ;;
+esac
+command -v cc >/dev/null || { echo 'Install a C compiler first (Ubuntu: sudo apt-get install -y build-essential)' >&2; exit 1; }
 revision=d5d17b8579db56e66bf396e2d5a77ac72f391e7d
 mkdir -p .build
 if [[ ! -d .build/neonize ]]; then
@@ -20,8 +26,7 @@ git -C .build/neonize apply "$PWD/scripts/neonize-bot-tag-always.patch"
 mise install
 (
   cd .build/neonize/goneonize
-  mise exec go@1.26.0 -- env GOTOOLCHAIN=local CGO_ENABLED=1 \
-    CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 \
-    go build -buildmode=c-shared -ldflags=-s -o ../neonize/neonize-darwin-arm64.dylib .
+  mise exec go@1.26.0 -- env GOTOOLCHAIN=local CGO_ENABLED=1 "${cgo_flags[@]}" \
+    go build -buildmode=c-shared -ldflags=-s -o "../neonize/$lib" .
 )
 echo 'Built Neonize 0.4.7 + bot-tag patch. Run uv sync to install.'
