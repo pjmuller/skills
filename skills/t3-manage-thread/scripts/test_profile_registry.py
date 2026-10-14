@@ -62,7 +62,7 @@ def run_selection(settings, tmp_path, profile, model, inherited, force=0, routin
     functions = script[script.index("normalize_provider()") : script.index("detect_source_thread_id()")]
     selection = script[script.index('provider_instance_id="$(printf') : script.index('if [[ -z "$thread_title"')]
     # Keep the real helpers but point their relative paths at this checkout.
-    code = functions + selection
+    code = f"source {SCRIPTS}/lib/t3-common.sh\n" + functions + selection
     code = code.replace('$(dirname "$(readlink -f "$0")")', str(SCRIPTS))
     if routing:
         code = code.replace(f"{SCRIPTS}/lib/profile_routing.py", str(routing))

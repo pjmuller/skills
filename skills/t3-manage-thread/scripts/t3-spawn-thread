@@ -264,37 +264,6 @@ normalize_provider() {
     resolve "$t3_base_dir/userdata/settings.json" "$1" "$requested_family"
 }
 
-normalize_model() {
-  local normalized
-  normalized="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  case "$normalized" in
-    sol|opus)
-      uv run --script "$(dirname "$(readlink -f "$0")")/lib/model_resolution.py" \
-        "$normalized" "$t3_base_dir" "${2:-}"
-      ;;
-    astra) printf '%s' "gpt-6-astra" ;;
-    luna) printf '%s' "gpt-6-luna" ;;
-    haiku) printf '%s' "claude-haiku-4-5" ;;
-    fable) printf '%s' "claude-fable-5-1" ;;
-    gemini) printf '%s' "gemini-3.8-flash-high" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
-
-model_family() {
-  case "$1" in
-    gpt-*|codex-*) printf '%s' "codex" ;;
-    claude-*) printf '%s' "claude" ;;
-    gemini-*) printf '%s' "antigravity" ;;
-    *) printf '%s' "unknown" ;;
-  esac
-}
-
-provider_family() {
-  uv run --script "$(dirname "$(readlink -f "$0")")/lib/profile_registry.py" \
-    family "$t3_base_dir/userdata/settings.json" "$1"
-}
-
 detect_source_thread_id() {
   local session_marker=""
   local marker_kind=""
@@ -476,17 +445,7 @@ if [[ "$(printf '%s' "$model_choice" | tr '[:upper:]' '[:lower:]')" == "sol" ]] 
   model_name="$(normalize_model sol "$provider_instance_id")"
 fi
 
-# Model floor: "5.5" in a brief means Opus 5.5, and an older OpenAI build is never the default
-# choice. Only an explicit, reasoned override (e.g. a cyber task the current model refuses) passes.
-below_model_floor() {
-  local m
-  m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  [[ "$m" =~ ^gpt-([0-9]+)(\.([0-9]+))?(-|$) ]] || return 1
-  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[3]:-0}"
-  ((major < 6)) && return 0
-  [[ "$m" == *-sol ]] && ((major == 6 && minor < 1)) && return 0
-  return 1
-}
+# Only an explicit, reasoned override (e.g. a cyber task the current model refuses) passes.
 if below_model_floor "$model_name" && [[ -z "$allow_old_model_reason" ]]; then
   echo "Model $model_name is below the floor (OpenAI >= gpt-6, Sol >= 6.1). \"5.5\" means Opus 5.5 (--model opus)." >&2
   echo "Deliberately older? Rerun with --allow-old-model \"<reason>\"." >&2
@@ -514,11 +473,8 @@ fi
 # default (sol/opus → high, fable/astra → medium, haiku → low) instead of
 # inheriting the caller's level.
 if [[ "$model_choice" != "auto" && "$thinking_choice" == "auto" ]]; then
-  case "$model_name" in
-    gpt-*-sol|claude-opus-*) thinking_choice="high" ;;
-    claude-fable-*|gpt-*-astra*) thinking_choice="medium" ;;
-    claude-haiku-*) thinking_choice="low" ;;
-  esac
+  thinking_choice="$(house_thinking "$model_name")"
+  thinking_choice="${thinking_choice:-auto}"
 fi
 
 thinking_choice_normalized="$(printf '%s' "$thinking_choice" | tr '[:upper:]' '[:lower:]')"
@@ -531,12 +487,7 @@ case "$thinking_choice_normalized" in
         '[.options[] | select(.id == "effort" or .id == "reasoningEffort") | .value][0] // "high"')"
     fi
     ;;
-  med|medium) thinking_level="medium" ;;
-  low|high) thinking_level="$thinking_choice_normalized" ;;
-  *)
-    echo "Invalid thinking level: $thinking_choice (use auto, low, med, medium, or high)" >&2
-    exit 2
-    ;;
+  *) thinking_level="$(normalize_thinking "$thinking_choice")" || exit 2 ;;
 esac
 
 if [[ "$selected_provider_family" == "codex" ]]; then

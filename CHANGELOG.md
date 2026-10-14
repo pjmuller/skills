@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-manage-thread: `t3-ping-thread --model/--thinking [--no-turn]` resumes an existing thread on another model/effort of its own provider account (Fable → Opus, Astra → Sol), history intact; persisted via native `thread.meta.update` so later plain pings keep it (a raw `turn.start` modelSelection is per-turn only). Other provider/account refused. Docs: reuse threads with relevant context (planner → reviewer, re-review), new thread when unrelated. Model aliases/floor/house effort shared with spawn in `lib/t3-common.sh`.
+
 - agents-md / t3-manage-thread: default model split — plan in a thinker (Astra as 🏓 second planner on consequential designs), build with Opus sub-agents, verify/review with a Sol 🏓 worker (Codex-built → Fable); `code-review.md` spawns `--model sol`. Global template: copy chat file paths verbatim from tool output, never retype them.
 
 - bitwarden: `bw-once session start --ttl 60m [--host …]` — PJ unlocks once in Terminal, a holder keeps the key in memory, serves exact-host `list`/`copy` over a private socket (same commands, automatic fallback to per-request unlock), logs each request and runs `bw lock` at expiry/stop; design + paste mechanics in `session.md`.

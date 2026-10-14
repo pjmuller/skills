@@ -14,6 +14,7 @@ t3-spawn-thread --title "🏓 <task>" -- "Read and execute /abs/path/brief.md"  
 t3-spawn-thread --model astra --source-thread <parent-id> --title "🏓 …" -- "<brief>" # other ecosystem (fable from Codex)
 t3-spawn-thread --title "📤 <task>" [--settle-when-done] -- "<brief>"                 # standalone / fire-and-forget
 t3-ping-thread --thread <id> --from "<label>" -- "<report>"   # arrives as a user turn, wakes the agent
+t3-ping-thread --thread <id> --model sol -- "<brief path>"   # reuse thread on another model, same account
 t3-read-thread <id> --outline                                 # read before pinging
 t3-settle-thread --wait <id>                                  # settle = kill session + its sub-agents
 t3-settle-thread --self                                       # "…then settle this thread": LAST tool call
@@ -37,7 +38,7 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 | Spawn: 🏓/📤/fire-and-forget, titles, models, thinking, images, account routing | [spawn-thread.md](spawn-thread.md) |
 | Dispatch tickets/findings as worker threads: titles, thinker model, brief shapes | [dispatch-workers.md](dispatch-workers.md) |
 | Opposite-model code review as a 🏓 worker | [code-review.md](code-review.md) |
-| Ping an existing thread | [cross-thread-ping.md](cross-thread-ping.md) |
+| Ping an existing thread; reuse it on another model/effort (same account) | [cross-thread-ping.md](cross-thread-ping.md) |
 | Read a transcript / brief / progress | [read-thread.md](read-thread.md) |
 | Settle / unsettle / settle yourself (settle = kill) | [settle-thread.md](settle-thread.md) |
 | Hide / unhide a live worker (snooze keeper) | [hide-thread.md](hide-thread.md) |
