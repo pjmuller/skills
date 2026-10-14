@@ -6,7 +6,7 @@ Why Neonize: [Baileys](https://github.com/WhiskeySockets/Baileys) is maintained 
 
 ## Install
 
-`scripts/install` (Apple Silicon macOS; needs uv, mise, `brew install libmagic`, Xcode command-line tools) builds pinned Neonize via `scripts/build-neonize`, then `uv sync --locked`; `scripts/install --check` verifies. Neither links a global command: use `uv run --project <this dir> wa …`, or `uv tool install --force --editable . --with ./.build/neonize --python "$(mise which python)"`. From another project: `uv add --editable <path-to>/whatsapp-bridge` after building. Rerun the build on every fresh checkout (`.build/` is gitignored).
+`scripts/install` (Apple Silicon macOS: uv, mise, `brew install libmagic`, Xcode command-line tools; Linux x86_64/arm64 incl. WSL2 Ubuntu: uv, mise, git, `sudo apt-get install -y build-essential libmagic1`) builds pinned Neonize via `scripts/build-neonize`, then `uv sync --locked`; `scripts/install --check` verifies. Neither links a global command: use `uv run --project <this dir> wa …`, or `uv tool install --force --editable . --with ./.build/neonize --python "$(mise which python)"`. From another project: `uv add --editable <path-to>/whatsapp-bridge` after building. Rerun the build on every fresh checkout (`.build/` is gitignored).
 
 ## Checks
 

@@ -32,7 +32,7 @@ Neonize 0.4.7 is built from a pinned upstream checkout plus one committed patch 
 
 ## Pairing UX
 
-Run `wa login --window` **first**: it opens a large macOS Terminal immediately; only then ask the human to scan via WhatsApp → Settings → Linked devices → Link a device. Never ask them to hunt for QR codes in hidden agent output. The command returns before pairing finishes, so it is not proof of login: wait for the Terminal to report the own number after initial sync (phone online; no session-file inspection). Codes refresh in place; on timeout, rerun. Once paired, reads reconnect without another scan; an expired/unlinked session needs `wa login --window` again.
+Run `wa login --window` **first**: it opens a large macOS Terminal immediately; only then ask the human to scan via WhatsApp → Settings → Linked devices → Link a device. Never ask them to hunt for QR codes in hidden agent output. The command returns before pairing finishes, so it is not proof of login: wait for the Terminal to report the own number after initial sync (phone online; no session-file inspection). Codes refresh in place; on timeout, rerun. Once paired, reads reconnect without another scan; an expired/unlinked session needs `wa login --window` again. Linux/WSL2 has no `--window`: run plain `wa login` in a terminal the human can see (full QR on screen, not an agent tool log).
 
 ## History limits
 
