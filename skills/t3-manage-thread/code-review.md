@@ -30,9 +30,11 @@ another revision needed → `/tmp` worktree.
 
 **Reuse a live opposite-model thread.** If this builder thread already used an
 opposite-model worker for planning or a second opinion (not yet settled, e.g. the
-Astra planner), ping *that* thread for the review (`t3-ping-thread`, brief path in the message)
-instead of spawning a new one: it already holds the intent and the rejected
-alternatives. Settle it once, after the final review.
+Astra planner), ping *that* thread for the review instead of spawning a new one:
+it already holds the intent and the rejected alternatives. Switch it to the
+reviewer model on its own account: `t3-ping-thread --thread <id> --model sol -- "<brief path>"`
+([model switch](cross-thread-ping.md#reuse-a-thread-on-another-model)).
+Same for re-reviews after fixes. Settle it once, after the final review.
 
 ## Brief the reviewer (file on disk, path in the spawn argument)
 - **Macro before micro:** top-level goal, approach chosen, alternatives rejected —

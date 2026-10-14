@@ -11,6 +11,8 @@
 #   t3_thread_snapshot ID             # one thread out of the shell snapshot
 #   t3_dispatch_command TYPE ID ...   # thread.* command + server-side refusal reason
 #   t3_supervise LABEL LOG ARGV...    # detached worker under launchd / systemd --user
+#   normalize_model / model_family / provider_family / normalize_thinking /
+#   house_thinking / below_model_floor  # model selection shared by spawn + ping
 #
 # Define a `t3_extra_cleanup` function before calling t3_issue_session to hook
 # extra teardown into the EXIT trap (t3-settle-thread uses it to drop its
@@ -25,6 +27,73 @@ t3_require() {
       exit 1
     }
   done
+}
+
+t3_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# --- model selection (needs t3_base_dir from t3_bootstrap) --------------------
+# normalize_model ALIAS [INSTANCE_ID] — alias → model id; sol/opus follow T3's
+# catalog (sol: the given Codex account's own catalog). Full ids pass through.
+normalize_model() {
+  local normalized
+  normalized="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    sol|opus)
+      uv run --script "$t3_lib_dir/model_resolution.py" "$normalized" "$t3_base_dir" "${2:-}"
+      ;;
+    astra) printf '%s' "gpt-6-astra" ;;
+    luna) printf '%s' "gpt-6-luna" ;;
+    haiku) printf '%s' "claude-haiku-4-5" ;;
+    fable) printf '%s' "claude-fable-5-1" ;;
+    gemini) printf '%s' "gemini-3.8-flash-high" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+model_family() {
+  case "$1" in
+    gpt-*|codex-*) printf '%s' "codex" ;;
+    claude-*) printf '%s' "claude" ;;
+    gemini-*) printf '%s' "antigravity" ;;
+    *) printf '%s' "unknown" ;;
+  esac
+}
+
+provider_family() {
+  uv run --script "$t3_lib_dir/profile_registry.py" \
+    family "$t3_base_dir/userdata/settings.json" "$1"
+}
+
+# normalize_thinking LEVEL — low|med|medium|high → T3 effort value; non-zero if invalid.
+normalize_thinking() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    low) printf 'low' ;;
+    med|medium) printf 'medium' ;;
+    high) printf 'high' ;;
+    *) echo "Invalid thinking level: $1 (use low, med, medium, or high)" >&2; return 1 ;;
+  esac
+}
+
+# House effort for an explicitly chosen model: sol/opus high, fable/astra medium,
+# haiku low; empty when the model has no house default.
+house_thinking() {
+  case "$1" in
+    gpt-*-sol|claude-opus-*) printf 'high' ;;
+    claude-fable-*|gpt-*-astra*) printf 'medium' ;;
+    claude-haiku-*) printf 'low' ;;
+  esac
+}
+
+# Model floor: "5.5" in a brief means Opus 5.5, and an older OpenAI build is never
+# the default choice (OpenAI >= gpt-6, Sol >= 6.1).
+below_model_floor() {
+  local m
+  m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ "$m" =~ ^gpt-([0-9]+)(\.([0-9]+))?(-|$) ]] || return 1
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[3]:-0}"
+  ((major < 6)) && return 0
+  [[ "$m" == *-sol ]] && ((major == 6 && minor < 1)) && return 0
+  return 1
 }
 
 # --- server discovery + pinned CLI -------------------------------------------

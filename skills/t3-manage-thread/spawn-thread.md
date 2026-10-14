@@ -135,4 +135,5 @@ so adding accounts in T3 needs no helper change. Drivers without per-instance
 usage (Antigravity, forks) keep the inherited account or its unique sibling.
 Existing threads are separate: changing their instance restarts the session and
 T3 rejects Codex continuation across different homes — don't patch thread
-metadata to migrate running work.
+metadata to migrate running work. Another model on the *same* account:
+`t3-ping-thread --model` ([cross-thread-ping.md](cross-thread-ping.md)).
