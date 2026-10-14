@@ -65,7 +65,10 @@ seen written. Without them Gemini and OpenAI invent plausible spellings.
 Fill [prompt-template.md](prompt-template.md) (`MODE`, ffprobe durations, situation, language,
 speakers, skips, vocabulary, one-line intro per context file; keep applicable rule blocks), then
 `build-prompt --header header.md --out session.gemini-prompt.md CONTEXT_FILE...` appends context
-files verbatim. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
+files verbatim. **When the shared screen is an artefact we already hold** (a deck in the repo, a
+Claude Design export, a ticket, a mockup), pass it as a context file: the pass still watches the
+video to know what is on screen at which second, but names slides, frames and labels by their real
+titles/ids instead of guessing from pixels. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
 
 ## Execute and verify
 
@@ -90,7 +93,9 @@ missed most share starts: don't use them. Then `shrink-video --crop <name>.gemin
 `--ranges`. Same tokens, small UI text read 0.76 → 0.88 (0.08 → 0.43 at low resolution).
 
 Read the file; check speech, visual changes, timestamps and coverage against the recording;
-report gaps.
+report gaps. The file opens with a provenance header (source video, pass settings, prompt path,
+"work from this text, do not re-run the video pass"): downstream briefs point at **this** file, never
+at the raw vendor ASR beside it, so no later thread watches the video again.
 
 Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
 screen names on a 29-minute 720p share at low resolution (2026-09-24); crop + high resolution read 0.88
