@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- clickup-core: description readback compares the Quill normal form, so ClickUp's own autolinks on bare URLs and merged code-block newlines no longer report a false `content readback differs`; a real link rewrite still fails.
+
 - whatsapp-bridge: `scripts/install` / `scripts/build-neonize` also build the pinned Neonize on Linux x86_64/arm64 (incl. WSL2 Ubuntu; needs `build-essential libmagic1`), verified in Ubuntu 24.04 containers up to a live login QR. `--window` stays macOS-only; on Linux run `wa login` in a terminal the human sees.
 
 - t3-manage-thread: `t3-ping-thread --model/--thinking [--no-turn]` resumes an existing thread on another model/effort of its own provider account (Fable → Opus, Astra → Sol), history intact; persisted via native `thread.meta.update` so later plain pings keep it (a raw `turn.start` modelSelection is per-turn only). Other provider/account refused. Docs: reuse threads with relevant context (planner → reviewer, re-review), new thread when unrelated. Model aliases/floor/house effort shared with spawn in `lib/t3-common.sh`.

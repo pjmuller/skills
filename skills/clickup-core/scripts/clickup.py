@@ -745,20 +745,20 @@ def verify_embed(task_id: str, embed_op: dict):
 
 
 def content_signature(content: str) -> list[tuple[str, object]]:
-    """Preserve ordering while tolerating merged adjacent unformatted strings."""
-    delta = json.loads(content)
+    """Quill normal form: ClickUp merges adjacent same-attribute strings (code-block "\n"+"\n")
+    and autolinks bare URLs ({"link": url} on text == url) on save; neither loses content."""
     signature: list[tuple[str, object]] = []
-    plain = ""
-    for op in delta["ops"]:
-        if isinstance(op.get("insert"), str) and not op.get("attributes"):
-            plain += op["insert"]
+    for op in json.loads(content)["ops"]:
+        insert, attrs = op.get("insert"), op.get("attributes") or None
+        if not isinstance(insert, str):
+            signature.append(("op", op))
             continue
-        if plain:
-            signature.append(("text", plain))
-            plain = ""
-        signature.append(("op", op))
-    if plain:
-        signature.append(("text", plain))
+        if attrs and list(attrs) == ["link"] and _autolink_of(insert, attrs["link"]):
+            attrs = None
+        if signature and signature[-1][0] == "text" and signature[-1][1][1] == attrs:
+            signature[-1] = ("text", (signature[-1][1][0] + insert, attrs))
+        else:
+            signature.append(("text", (insert, attrs)))
     return signature
 
 

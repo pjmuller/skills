@@ -99,6 +99,24 @@ class RichDescriptionTests(unittest.TestCase):
             MODULE["content_signature"](split), MODULE["content_signature"](merged)
         )
 
+    def test_signature_ignores_clickup_autolinks(self):
+        url = "https://example.com/a_b"
+        sent = json.dumps({"ops": [{"insert": f"Bron: {url}\n"}]})
+        stored = json.dumps({"ops": [{"insert": "Bron: "}, {"insert": url, "attributes": {"link": url}}, {"insert": "\n"}]})
+        relinked = json.dumps({"ops": [{"insert": "Bron: "}, {"insert": url, "attributes": {"link": "https://evil.example"}}, {"insert": "\n"}]})
+        sig = MODULE["content_signature"]
+        self.assertEqual(sig(sent), sig(stored))
+        self.assertNotEqual(sig(sent), sig(relinked))
+
+    def test_signature_tolerates_merged_code_block_newlines(self):
+        code = {"code-block": {"code-block": "md"}}
+        sent = json.dumps({"ops": [{"insert": "a"}, {"insert": "\n", "attributes": code},
+                                   {"insert": "\n", "attributes": code}]})
+        stored = json.dumps({"ops": [{"insert": "a"}, {"insert": "\n\n", "attributes": code}]})
+        sig = MODULE["content_signature"]
+        self.assertEqual(sig(sent), sig(stored))
+        self.assertNotEqual(sig(sent), sig(json.dumps({"ops": [{"insert": "a\n\n"}]})))
+
     def test_signature_preserves_text_position_around_embeds(self):
         embed = {"insert": {"task_mention": {"task_id": "abc123"}}}
         expected = json.dumps(
