@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: try the account-correct Chrome/CDP session when T3 is unavailable or lacks the needed login; inspect existing signed-in tabs before asking for authentication help.
+
 ## v0.4.9 (2026-10-15)
 
 - clickup-core: urllib3 2.8.0 fixes GHSA-8988-9cw3-xx77, GHSA-vxq7-64xx-v4gw and GHSA-gh4c-6fx4-qh6g; root test lock updated too. Source fix prevents consumer refreshes from restoring 2.7.0.

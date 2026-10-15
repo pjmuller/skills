@@ -85,7 +85,7 @@ Pushed a change to a shared skill core that projects carry as a committed copy? 
 - Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
 - Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
 - Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first. By job: I watch / localhost → T3 `preview_*`; my logged-in Chrome → Playwright / `chrome-devtools` CLI over CDP, background only; native apps / OS dialogs → computer use ({computer-use tool}), never for browser work. Chrome profiles: {profile name per account}. Verify the signed-in identity; never script keystrokes into a browser.
+- Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first. By job: I watch / localhost → T3 `preview_*`; my logged-in Chrome → Playwright / `chrome-devtools` CLI over CDP, background only; native apps / OS dialogs → computer use ({computer-use tool}), never for browser work. Chrome profiles: {profile name per account}. Verify the signed-in identity; never script keystrokes into a browser. If T3 is unavailable or lacks the needed login, immediately try the account-correct Chrome profile and existing signed-in tabs over CDP; ask for authentication/help only after both routes fail.
 
 ## Writing in my name
 - Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
