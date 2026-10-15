@@ -28,7 +28,7 @@ The footprint ranking includes compressed memory; RSS can hide the largest offen
 summing RSS overcounts shared pages. One snapshot cannot establish a leak: compare two.
 `vmmap -summary <pid>` breaks a suspect down (may be restricted). After stopping the owner,
 pressure should drop; swap need not return to zero. Compressed-memory discrepancies,
-swarms, abandoned dev servers, existing watchdogs: [RAM investigation recipes](ram.md).
+swarms, abandoned dev servers, existing watchdogs: [RAM investigation recipes, including blank T3 window recovery](ram.md).
 
 ## Identify the owner and work
 

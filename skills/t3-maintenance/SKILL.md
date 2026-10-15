@@ -17,7 +17,9 @@ Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Fl
 - `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
 - `t3-purge-threads` — delete old threads + provider transcripts (they hold secrets).
 - `t3-preview-gc` — free browser-preview renderers (macOS desktop): close settled threads' tabs, then
-  crash-reload the window when many remain. Mechanism, guards and why: its docstring.
+  crash-reload the window when many remain. Default dry-run is suitable for monitoring;
+  `--apply` deliberately crashes the UI, not a blank-window repair. Recovery: native
+  File → Close Window, reactivate T3 (macOS); verify server/worker PIDs survive.
 - `t3-git-leftovers` — repos with uncommitted/unpushed work, one hidden worker per repo
   ([below](#git-leftovers-t3-git-leftovers)).
 - Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).
