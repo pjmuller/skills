@@ -23,6 +23,9 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 
 - 🏓 only when the result feeds back into this thread's deliverable; a "separate process/job" or a new orthogonal scope → 📤 ([return path](spawn-thread.md#-round-trip-workers)); hidden ≠ stopped; settle a 🏓 worker only
   after its ping-back is verified ([spawn-thread.md](spawn-thread.md)).
+- One topic + multiple models = one standalone lead; the lead delegates to hidden 🏓
+  workers and owns synthesis/verification. Never split model roles into standalone peers
+  for the user to combine. Multiple standalones are for different topics, unless explicitly requested.
 - A 🏓 title hides the thread while it runs. When the user asks for a "separate / own /
   standalone thread" (they want to watch or talk to it), spawn it visible: `--no-hide` keeps the
   🏓 ping-back, 📤 drops it. Hide only when they just want the result back here.
