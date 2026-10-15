@@ -1,0 +1,501 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Find uncommitted or unpushed leftovers in the repos you worked in lately; one T3 worker per repo.
+
+  survey    select repos (T3 threads + recent commits + --always), fetch, one verdict per repo
+  dispatch  spawn one worker thread per `worker` repo, capped and idempotent (RUN_DIR/ledger.json)
+  status    worker thread state + a fresh git re-check per repo -> landed/protected/blocked counts
+
+Verdicts:
+  clean    nothing dirty, level with upstream          ff      clean, only behind (--apply-ff)
+  fresh    every dirty path changed < --fresh-minutes  local   no upstream, nothing stale
+  owned    a worker thread for this repo is running    worker  stale dirty paths, ahead/diverged,
+                                                               fetch failed or ff refused
+Age only filters; it never proves work is finished. Judgment lives in the worker: ../git-leftovers.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+SKILL_DIR = Path(__file__).resolve().parent.parent
+PLAYBOOK = SKILL_DIR / "git-leftovers.md"
+TITLE_PREFIX = "🧹 git leftovers"
+FETCH_TIMEOUT = 60
+WALK_CAP = 5000  # files scanned per untracked directory before calling it fresh (unknown = protect)
+VERDICTS = ["worker", "owned", "fresh", "ff", "local", "clean"]
+DISPATCHABLE = ("worker", "owned")
+
+
+def run(args: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=timeout)
+
+
+def git(cwd: Path, *args: str) -> str:
+    p = run(["git", *args], cwd=cwd)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------- T3 fleet
+
+def fleet(recent: str, title_prefix: str | None = None) -> list[dict]:
+    cmd = ["t3-fleet", "list", "--recent", recent, "--limit", "10000", "--json"]
+    if title_prefix:
+        cmd += ["--title-prefix", title_prefix]
+    try:
+        p = run(cmd, timeout=180)
+        data = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else []
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return []
+    return data if isinstance(data, list) else data.get("threads", [])
+
+
+def under(path: str, root: Path) -> bool:
+    path = os.path.realpath(path) if path else ""
+    return path == str(root) or path.startswith(str(root) + "/")
+
+
+def worker_title(root: Path) -> str:
+    return f"{TITLE_PREFIX} {root.name}"
+
+
+# ---------------------------------------------------------------- selection
+
+def canonical_root(path: Path) -> Path | None:
+    """Shared checkout for a path: worktrees collapse onto their main checkout."""
+    if not path.is_dir():
+        return None
+    common = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not common:
+        return None
+    c = Path(common)
+    return c.parent if c.name == ".git" else c
+
+
+def committed_recently(roots: list[Path], days: int) -> set[Path]:
+    found: set[Path] = set()
+    for base in roots:
+        for repo in sorted(base.glob("*/*")):
+            if (repo / ".git").exists() and git(repo, "log", "-1", f"--since={days}.days", "--format=%H"):
+                found.add(repo)
+    return found
+
+
+def select(threads: list[dict], args) -> tuple[dict[Path, list[str]], list[str]]:
+    if args.repos:
+        cands = {Path(p).expanduser().resolve(): {"explicit"} for p in args.repos}
+    else:
+        cands: dict[Path, set[str]] = {}
+        for t in threads:
+            if t.get("workspace_root"):
+                cands.setdefault(Path(t["workspace_root"]), set()).add("t3")
+        for r in committed_recently([Path(r).expanduser() for r in args.root or ["~/code"]], args.days):
+            cands.setdefault(r, set()).add("commits")
+        for r in args.always:
+            cands.setdefault(Path(r).expanduser(), set()).add("always")
+    repos: dict[Path, set[str]] = {}
+    missing = []
+    for path, src in cands.items():
+        root = canonical_root(path)
+        if root is None:
+            missing.append(str(path))
+        elif not ({str(root), root.name} & set(args.exclude)):
+            repos.setdefault(root, set()).update(src)
+    return {r: sorted(s) for r, s in sorted(repos.items())}, sorted(missing)
+
+
+# ---------------------------------------------------------------- per repo
+
+def newest_mtime(path: Path) -> float | None:
+    """Newest mtime under path; None when unknown (walk cap hit / unreadable) so callers protect it."""
+    try:
+        if path.is_symlink() or not path.is_dir():
+            return path.lstat().st_mtime
+        newest, seen = path.stat().st_mtime, 0
+        for base, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for name in files:
+                seen += 1
+                if seen > WALK_CAP:
+                    return None
+                try:
+                    newest = max(newest, os.lstat(os.path.join(base, name)).st_mtime)
+                except OSError:
+                    pass
+        return newest
+    except OSError:
+        return None
+
+
+def dirty_paths(root: Path, fresh_minutes: int, now: float) -> list[dict]:
+    """One row per `git status` entry with its age; deletions take their parent directory's mtime."""
+    out = run(["git", "status", "--porcelain=v1", "-z"], cwd=root).stdout
+    parts = out.split("\0")
+    rows, i = [], 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        xy, path = entry[:2], entry[3:]
+        if xy[0] in "RC":
+            i += 1  # -z puts the rename source in the next field
+        target = root / path
+        mtime = newest_mtime(target) if os.path.lexists(target) else newest_mtime(target.parent)
+        age = None if mtime is None else round((now - mtime) / 60, 1)
+        rows.append({"xy": xy, "path": path, "age_min": age,
+                     "fresh": age is None or age < fresh_minutes})
+    return rows
+
+
+def ahead_behind(root: Path, upstream: str) -> tuple[int, int]:
+    lr = git(root, "rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+    if not lr:
+        return 0, 0
+    behind, ahead = lr.split()
+    return int(ahead), int(behind)
+
+
+def check(root: Path, sources: list[str], threads: list[dict], args, now: float) -> dict:
+    info: dict = {"repo": str(root), "name": root.name, "sources": sources,
+                  "branch": git(root, "rev-parse", "--abbrev-ref", "HEAD")}
+    upstream = git(root, "rev-parse", "--abbrev-ref", "@{u}") or None
+    info["upstream"] = upstream
+    live = [t for t in threads if t.get("session_status") == "running"
+            and under(t.get("workspace_root") or "", root) and t.get("thread_id") not in args.ignore_thread]
+    info["live_threads"] = [f"{t.get('short_id')} {t.get('title')}" for t in live]
+    owned = [t for t in live if (t.get("title") or "").startswith(worker_title(root) + " ")]
+    if upstream and not args.no_fetch:
+        try:
+            p = run(["git", "fetch", "--quiet", upstream.split("/", 1)[0]], cwd=root, timeout=FETCH_TIMEOUT)
+            if p.returncode:
+                info["fetch_error"] = (p.stderr.strip().splitlines() or ["fetch failed"])[-1]
+        except subprocess.TimeoutExpired:
+            info["fetch_error"] = "fetch timeout"
+    info["ahead"], info["behind"] = ahead_behind(root, upstream) if upstream else (0, 0)
+    dirty = dirty_paths(root, args.fresh_minutes, now)
+    info["dirty"] = dirty[:200]
+    info["dirty_count"] = len(dirty)
+    info["stale_count"] = sum(1 for d in dirty if not d["fresh"])
+    info["aux_worktrees"] = max(0, git(root, "worktree", "list", "--porcelain").count("worktree ") - 1)
+    if owned:
+        v = "owned"
+    elif info["stale_count"] or info["ahead"] or info.get("fetch_error"):
+        v = "worker"
+    elif not upstream:
+        v = "local"
+    elif dirty:
+        v = "fresh"
+    else:
+        v = "ff" if info["behind"] else "clean"
+    info["verdict"] = v
+    return info
+
+
+def apply_ff(entry: dict) -> None:
+    p = run(["git", "pull", "--ff-only", "--quiet"], cwd=Path(entry["repo"]), timeout=FETCH_TIMEOUT)
+    if p.returncode == 0:
+        entry.update(ff_applied=True, behind=0, verdict="clean")
+    else:  # e.g. an untracked file collides with an incoming path
+        entry.update(ff_applied=False, verdict="worker",
+                     ff_error=(p.stderr.strip().splitlines() or ["pull failed"])[-1])
+
+
+def note(r: dict) -> str:
+    if r.get("ff_applied"):
+        return "fast-forwarded"
+    if r.get("ff_error") or r.get("fetch_error"):
+        return r.get("ff_error") or r["fetch_error"]
+    bits = [f"{d['xy'].strip()} {d['path']}" + (" (fresh)" if d["fresh"] else "") for d in r["dirty"][:3]]
+    if r["live_threads"]:
+        bits.append("live: " + "; ".join(r["live_threads"])[:120])
+    return ", ".join(bits)
+
+
+def survey_markdown(report: dict) -> str:
+    rows = sorted(report["repos"], key=lambda r: (VERDICTS.index(r["verdict"]), r["repo"]))
+    out = [f"# git leftovers survey {report['at']}", "",
+           " · ".join(f"{v} {n}" for v, n in report["counts"].items() if n), "",
+           "| repo | verdict | branch | ahead/behind | dirty (stale) | note |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        if r["verdict"] == "clean":
+            continue
+        out.append(f"| `{r['repo']}` | **{r['verdict']}** | {r['branch']} | {r['ahead']}/{r['behind']} "
+                   f"| {r['dirty_count']} ({r['stale_count']}) | {note(r).replace('|', '/')} |")
+    if report["missing"]:
+        out += ["", "Missing on disk: " + ", ".join(report["missing"])]
+    return "\n".join(out) + "\n"
+
+
+def cmd_survey(args) -> int:
+    threads = fleet(f"{args.days}d")
+    repos, missing = select(threads, args)
+    now = time.time()
+    entries = [check(r, src, threads, args, now) for r, src in repos.items()]
+    if args.apply_ff:
+        for e in entries:
+            if e["verdict"] == "ff":
+                apply_ff(e)
+    report = {"at": now_iso(), "days": args.days, "fresh_minutes": args.fresh_minutes,
+              "t3_threads_seen": len(threads), "missing": missing, "repos": entries,
+              "counts": {v: sum(e["verdict"] == v for e in entries) for v in VERDICTS}}
+    if args.out:
+        args.out.mkdir(parents=True, exist_ok=True)
+        (args.out / "survey.json").write_text(json.dumps(report, indent=1))
+        (args.out / "survey.md").write_text(survey_markdown(report))
+    print(survey_markdown(report) if args.markdown else json.dumps(report, indent=1))
+    return 0
+
+
+# ---------------------------------------------------------------- dispatch
+
+def load_json(path: Path, default):
+    return json.loads(path.read_text()) if path.exists() else default
+
+
+def save_json(path: Path, data) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(path)
+
+
+def worker_brief(row: dict, run_dir: Path, extra: str) -> str:
+    protect = [d["path"] for d in row["dirty"] if d["fresh"]]
+    lines = [
+        f"Read and follow {PLAYBOOK} for the checkout {row['repo']}.",
+        f"Survey ({run_dir / 'survey.json'}): branch {row['branch']}, upstream {row['upstream'] or 'none'}, "
+        f"ahead {row['ahead']}, behind {row['behind']}, {row['dirty_count']} dirty ({row['stale_count']} stale).",
+    ]
+    if protect:
+        lines.append("Fresh at survey time, leave untouched unless they age out and pass every check: "
+                     + ", ".join(protect[:20]))
+    if row["live_threads"]:
+        lines.append("Live threads in this checkout at survey time: " + "; ".join(row["live_threads"]))
+    if row.get("fetch_error") or row.get("ff_error"):
+        lines.append(f"Git error: {row.get('fetch_error') or row.get('ff_error')}")
+    if extra:
+        lines.append(extra)
+    return "\n".join(lines)
+
+
+def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
+    root = Path(row["repo"])
+    if not root.is_dir():
+        return False
+    stale = [d for d in dirty_paths(root, fresh_minutes, time.time()) if not d["fresh"]]
+    ahead = ahead_behind(root, row["upstream"])[0] if row["upstream"] else 0
+    return bool(stale or ahead or row.get("fetch_error") or row.get("ff_error"))
+
+
+def spawn(row: dict, args) -> tuple[str | None, str]:
+    title = f"{worker_title(Path(row['repo']))} {datetime.now().strftime('%Y-%m-%d')}"
+    cmd = ["t3-spawn-thread", "--settle-when-done", "--no-open", "--hide", "--project", row["repo"],
+           "--allow-cross-project-source", "--title", title]
+    if args.model:
+        cmd += ["--model", args.model]
+    if args.thinking:
+        cmd += ["--thinking", args.thinking]
+    brief = worker_brief(row, args.run_dir, args.extra)
+    if args.dry_run:
+        cmd.append("--dry-run")
+        print(f"--- {title}\n{brief}")
+    cmd += ["--", brief]
+    p = run(cmd, timeout=300)
+    m = re.search(r"^Thread ID: (\S+)", p.stdout, re.M)
+    if p.returncode == 0 and (m or args.dry_run):
+        return (m.group(1) if m else "dry-run"), title
+    return None, ((p.stderr or p.stdout).strip().splitlines() or ["spawn failed"])[-1]
+
+
+def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
+    """One pass: adopt or spawn until --max-parallel workers run. Returns (active, pending)."""
+    threads = {t["thread_id"]: t for t in fleet(f"{args.days}d", TITLE_PREFIX)}
+    by_title = {}
+    for t in threads.values():
+        if not t.get("settled") and not t.get("deleted") and not t.get("archived"):
+            ws = os.path.realpath(t.get("workspace_root") or "/")
+            by_title.setdefault((ws, (t.get("title") or "").rsplit(" ", 1)[0]), t)
+    active = sum(1 for e in ledger.values() if e.get("thread_id") in threads
+                 and threads[e["thread_id"]].get("session_status") == "running")
+    for row in survey["repos"]:
+        repo = row["repo"]
+        if row["verdict"] not in DISPATCHABLE or ledger.get(repo, {}).get("thread_id") or ledger.get(repo, {}).get("skipped"):
+            continue
+        twin = by_title.get((repo, worker_title(Path(repo))))
+        if twin:  # another run (or a resumed one) already owns this repo: adopt, never duplicate
+            ledger[repo] = {"thread_id": twin["thread_id"], "title": twin["title"], "adopted_at": now_iso()}
+            active += twin.get("session_status") == "running"
+            continue
+        if row["verdict"] == "owned" or active >= args.max_parallel:
+            continue  # owned: its worker is outside the fleet window; stays pending, never a second one
+        if not still_needs_worker(row, survey["fresh_minutes"]):
+            ledger[repo] = {"skipped": "nothing stale left at dispatch time", "at": now_iso()}
+            continue
+        tid, detail = spawn(row, args)
+        entry = ledger.setdefault(repo, {})
+        if tid:
+            entry.update(thread_id=tid, title=detail, spawned_at=now_iso())
+            active += not args.dry_run
+        else:
+            entry["errors"] = entry.get("errors", []) + [detail]
+            print(f"spawn refused for {repo}: {detail}", file=sys.stderr)
+            if len(entry["errors"]) >= 3:
+                entry["skipped"] = "spawn failed 3x"
+            break  # capacity refusals hit every repo alike; retry next pass
+    pending = sum(1 for row in survey["repos"] if row["verdict"] in DISPATCHABLE
+                  and not ledger.get(row["repo"], {}).get("thread_id") and not ledger.get(row["repo"], {}).get("skipped"))
+    return active, pending
+
+
+def cmd_dispatch(args) -> int:
+    args.run_dir = args.run_dir.expanduser().resolve()
+    survey = load_json(args.run_dir / "survey.json", None)
+    if survey is None:
+        sys.exit(f"no survey.json in {args.run_dir}; run `survey --out {args.run_dir}` first")
+    lock = open(args.run_dir / ".dispatch.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"another dispatcher holds {args.run_dir}; not competing")
+    ledger_path = args.run_dir / ("ledger.dry-run.json" if args.dry_run else "ledger.json")
+    deadline = time.time() + args.max_hours * 3600
+    while True:
+        ledger = load_json(ledger_path, {})
+        active, pending = dispatch_pass(args, survey, ledger)
+        save_json(ledger_path, ledger)
+        print(f"{now_iso()} active {active} · pending {pending} · ledger {len(ledger)}", flush=True)
+        if not args.wait or (active == 0 and pending == 0) or args.dry_run or time.time() > deadline:
+            return 0 if pending == 0 else 3
+        time.sleep(args.poll)
+
+
+# ---------------------------------------------------------------- status
+
+def verify(root: Path, upstream: str | None, fresh_minutes: int, now: float, fetch: bool) -> tuple[list, int, str]:
+    """(dirty, ahead, error) from a strict re-read; any git failure is an error, never a clean result."""
+    try:
+        if not root.is_dir():
+            return [], 0, "repo missing"
+        if upstream and fetch:
+            p = run(["git", "fetch", "--quiet", upstream.split("/", 1)[0]], cwd=root, timeout=FETCH_TIMEOUT)
+            if p.returncode:
+                return [], 0, "fetch: " + ((p.stderr.strip().splitlines() or ["failed"])[-1])
+        if run(["git", "status", "--porcelain"], cwd=root).returncode:
+            return [], 0, "git status failed"
+        ahead = 0
+        if upstream:
+            p = run(["git", "rev-list", "--count", f"{upstream}..HEAD"], cwd=root)
+            if p.returncode:
+                return [], 0, "rev-list failed"
+            ahead = int(p.stdout.strip())
+        return dirty_paths(root, fresh_minutes, now), ahead, ""
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        return [], 0, f"{type(exc).__name__}: {exc}"
+
+
+def cmd_status(args) -> int:
+    run_dir = args.run_dir.expanduser().resolve()
+    survey = load_json(run_dir / "survey.json", {"repos": [], "fresh_minutes": 30})
+    ledger = load_json(run_dir / "ledger.json", {})
+    threads = {t["thread_id"]: t for t in fleet(f"{args.days}d", TITLE_PREFIX)}
+    rows, now = [], time.time()
+    for row in survey["repos"]:
+        repo, entry = row["repo"], ledger.get(row["repo"], {})
+        if row["verdict"] not in DISPATCHABLE and not entry:
+            continue
+        dirty, ahead, error = verify(Path(repo), row["upstream"], survey["fresh_minutes"], now, not args.no_fetch)
+        t = threads.get(entry.get("thread_id") or "")
+        if error:
+            outcome = "unverified"  # git could not be read: never count it landed
+        elif entry.get("skipped"):
+            outcome = "skipped"
+        elif not t:
+            outcome = "pending" if not entry.get("thread_id") else "unknown-thread"
+        elif t.get("session_status") == "running":
+            outcome = "running"
+        elif not t.get("settled"):
+            outcome = "blocked"  # the worker ended without settling: it needs the user
+        elif ahead and row["upstream"]:
+            outcome = "blocked"  # settled yet unpushed: verify by hand
+        elif dirty:
+            outcome = "protected"
+        else:
+            outcome = "landed"
+        rows.append({"repo": repo, "outcome": outcome, "thread_id": entry.get("thread_id"),
+                     "ahead": ahead, "dirty": [f"{d['xy'].strip()} {d['path']}" for d in dirty][:10],
+                     "last_text": (t or {}).get("last_text", "")[:200], "skipped": error or entry.get("skipped")})
+    order = ["blocked", "unverified", "unknown-thread", "running", "pending", "protected", "skipped", "landed"]
+    rows.sort(key=lambda r: (order.index(r["outcome"]), r["repo"]))
+    counts = {o: sum(r["outcome"] == o for r in rows) for o in order}
+    report = {"at": now_iso(), "counts": counts, "survey_counts": survey.get("counts"), "repos": rows}
+    md = [f"# git leftovers status {report['at']}", "",
+          " · ".join(f"{o} {n}" for o, n in counts.items() if n) or "no worker repos", ""]
+    for r in rows:
+        tail = r["skipped"] or ("; ".join(r["dirty"][:4]) if r["outcome"] == "protected" else r["last_text"][:140])
+        md.append(f"- **{r['outcome']}** `{r['repo']}` {(r['thread_id'] or '')[:8]} {tail}".rstrip())
+    save_json(run_dir / "status.json", report)
+    (run_dir / "status.md").write_text("\n".join(md) + "\n")
+    print("\n".join(md) if args.markdown else json.dumps(report, indent=1))
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("survey", help="pick active repos and give each a verdict")
+    s.add_argument("repos", nargs="*", help="explicit repo paths (skips auto-selection)")
+    s.add_argument("--root", action="append", default=[], help="scan <root>/*/* for recent commits (repeatable; default ~/code)")
+    s.add_argument("--always", action="append", default=[], help="always include this repo (repeatable)")
+    s.add_argument("--exclude", action="append", default=[], help="repo name or path to leave out")
+    s.add_argument("--ignore-thread", action="append", default=[], help="thread id that is not 'live' (the caller)")
+    s.add_argument("--days", type=int, default=14)
+    s.add_argument("--fresh-minutes", type=int, default=30)
+    s.add_argument("--no-fetch", action="store_true")
+    s.add_argument("--apply-ff", action="store_true", help="fast-forward `ff` repos in place (only mutation)")
+    s.add_argument("--out", type=Path, help="run dir: writes survey.json + survey.md")
+    s.add_argument("--markdown", action="store_true")
+    s.set_defaults(fn=cmd_survey)
+
+    d = sub.add_parser("dispatch", help="spawn one worker per `worker` repo; resumable via ledger.json")
+    d.add_argument("run_dir", type=Path)
+    d.add_argument("--model")
+    d.add_argument("--thinking")
+    d.add_argument("--max-parallel", type=int, default=4)
+    d.add_argument("--extra", default="", help="extra line appended to every worker brief")
+    d.add_argument("--wait", action="store_true", help="keep filling slots until every repo is dispatched")
+    d.add_argument("--poll", type=int, default=60)
+    d.add_argument("--max-hours", type=float, default=3)
+    d.add_argument("--days", type=int, default=3, help="fleet window for adopting existing workers")
+    d.add_argument("--dry-run", action="store_true", help="spawn --dry-run, ledger.dry-run.json")
+    d.set_defaults(fn=cmd_dispatch)
+
+    st = sub.add_parser("status", help="outcome per dispatched repo; writes status.json + status.md")
+    st.add_argument("run_dir", type=Path)
+    st.add_argument("--days", type=int, default=3)
+    st.add_argument("--no-fetch", action="store_true")
+    st.add_argument("--markdown", action="store_true")
+    st.set_defaults(fn=cmd_status)
+
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
