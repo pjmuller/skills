@@ -326,6 +326,8 @@ def test_override_never_beats_guards_and_ends_by_itself(tmp_path):
     assert "dentai waits until" in reason and "kamp session tight" in reason and "probackup excluded" in reason
     started = write_override(tmp_path / "s.json", prefer=[{"id": "dentai", "from": NOW.isoformat()}])
     assert choose(accounts, "claude-fable-5", "x", NOW, load_override(NOW, started))[0] == "dentai"
+    ended = write_override(tmp_path / "e.json", prefer=[{"id": "x", "until": NOW.isoformat()}, "dentai"])
+    assert choose(accounts, "claude-fable-5", "x", NOW, load_override(NOW, ended))[0] == "dentai"
     expired = load_override(NOW + timedelta(days=4), path)
     selected, reason, _ = choose(accounts, "claude-fable-5", "x", NOW, expired)
     assert selected == "x" and "override expired" in reason
