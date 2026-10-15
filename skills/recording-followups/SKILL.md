@@ -10,6 +10,9 @@ Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKI
 transcript is on disk. Project skills (rootcause `fathom-interviews`, redcell's Fathom wrapper) own
 where the note lives and its frontmatter; they link here for the prompt step.
 
+Several teammates' machines polling one recorder account: elect a single processor first,
+[owner-election.md](owner-election.md).
+
 ## Deliverables
 
 1. **Debrief note** in the project's notes location (else `~/Downloads`). Per topic: what was said,
