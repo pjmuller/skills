@@ -257,3 +257,11 @@ def test_forget_reelects_skips_but_never_spawns(cfg, tmp_path, monkeypatch):
                                             "fathom:p": {"status": "spawned", "thread_id": "t"}}})
     assert rw.forget(Namespace(keys=["fathom:s", "fathom:p"]), now=NOW) == 1
     assert list(json.loads((tmp_path / "state" / "state.json").read_text())["calls"]) == ["fathom:p"]
+
+
+def test_missing_credentials_fail_the_poll_visibly(cfg, tmp_path, monkeypatch):
+    monkeypatch.delenv("FATHOM_API_KEY", raising=False)
+    monkeypatch.setattr(rw, "STATE_DIR", tmp_path / "state")
+    one = config(tmp_path, sources={"fathom": {"env_file": str(tmp_path / "missing.env")}})
+    assert rw.poll(Namespace(dry_run=False, since=None, force_hours=True), cfg=one, now=NOW) == 1
+    assert "FATHOM_API_KEY" in json.loads((tmp_path / "state" / "state.json").read_text())["last_errors"][0]

@@ -510,7 +510,8 @@ def spawn(cfg, workspace, title, brief):
 
 # ---------- commands ----------
 
-def default_sources(cfg, names=None):
+def default_sources(cfg, names=None, errors=None):
+    """Configured sources; a source whose credentials are missing is reported (and appended to errors), not silent."""
     out = []
     for name in cfg.sources:
         if names is None or name in names:
@@ -518,6 +519,8 @@ def default_sources(cfg, names=None):
                 out.append(SOURCES[name](cfg))
             except SystemExit as exc:   # missing key: report, keep the other sources
                 print(f"ERROR {name}: {exc}", file=sys.stderr)
+                if errors is not None:
+                    errors.append(f"{name}: {exc}")
     return out
 
 
@@ -533,8 +536,9 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
     print(f"=== poll {now.astimezone(TZ):%Y-%m-%d %H:%M} as {cfg.self_id}" + (" (dry run)" if args.dry_run else ""))
     state = load_state()
     since_override = datetime.fromisoformat(args.since).replace(tzinfo=TZ) if args.since else None
-    sources = sources if sources is not None else default_sources(cfg)
-    candidates, listed_by_source, errors = [], {}, []
+    errors = []
+    sources = sources if sources is not None else default_sources(cfg, errors=errors)
+    candidates, listed_by_source = [], {}
     for src in sources:
         wm = state["sources"].get(src.name, {}).get("watermark")
         since = since_override or (parse_ts(wm) if wm else now - timedelta(days=LOOKBACK_DAYS))
