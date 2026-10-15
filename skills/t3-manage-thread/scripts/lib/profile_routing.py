@@ -90,6 +90,7 @@ class Candidate:
     score: float = 0.0     # rate × weight: plan units per hour
     bottleneck: str = ""
     weekly_used: float = 0.0  # highest relevant weekly-class used % (override cap)
+    weekly_window: str = "weekly"  # the window holding weekly_used
     session_room: float | None = None  # weight × tightest session headroom %, None without a session window
     session_tight: bool = False
 
@@ -138,7 +139,8 @@ def assess(account, model, now):
     if rated:
         candidate.rate, candidate.bottleneck = min(rated)
         candidate.score = candidate.rate * candidate.weight
-    candidate.weekly_used = max(r.used_percent for r in weekly)
+    top = max(weekly, key=lambda r: r.used_percent)
+    candidate.weekly_used, candidate.weekly_window = top.used_percent, top.window
     sessions = [100 - r.used_percent for r in rows if (r.length_seconds or 0) < WEEKLY_CLASS_SECONDS]
     if sessions:
         candidate.session_room = candidate.weight * min(sessions)
@@ -203,7 +205,7 @@ def override_pick(candidates, override, now):
         elif c.session_tight:
             why = "session tight"
         elif c.weekly_used >= cap:
-            why = f"weekly {c.weekly_used:.0f}% ≥ cap {cap:.0f}%"
+            why = f"{c.weekly_window} {c.weekly_used:.0f}% ≥ cap {cap:.0f}%"
         else:
             return c, notes
         notes.append(f"{id} {why}")
@@ -225,7 +227,7 @@ def choose(accounts, model, preferred, now, override=None):
             head = f"override until {override['until']:%a %d %b %H:%M}"
             if pick:
                 why = (f"{head}: first preferred account under weekly cap {override['weekly_cap']:.0f}% "
-                       f"(weekly {pick.weekly_used:.0f}%)")
+                       f"({pick.weekly_window} {pick.weekly_used:.0f}%)")
                 return pick.instance_id, why + "".join(f"; skipped {s}" for s in skipped), candidates
             if skipped:
                 note = f"{head}: no preferred account eligible ({'; '.join(skipped)})"
