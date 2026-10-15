@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.4.9 (2026-10-15)
+
+- clickup-core: urllib3 2.8.0 fixes GHSA-8988-9cw3-xx77, GHSA-vxq7-64xx-v4gw and GHSA-gh4c-6fx4-qh6g; root test lock updated too. Source fix prevents consumer refreshes from restoring 2.7.0.
+- Dependencies: weekly Dependabot PRs for Python (including transitive pins) and GitHub Actions; CI validates locks, the skill suite and ClickUp's shipped environment. No automatic merges.
+
 - clickup-core: description readback compares the Quill normal form, so ClickUp's own autolinks on bare URLs and merged code-block newlines no longer report a false `content readback differs`; a real link rewrite still fails.
 
 - whatsapp-bridge: `scripts/install` / `scripts/build-neonize` also build the pinned Neonize on Linux x86_64/arm64 (incl. WSL2 Ubuntu; needs `build-essential libmagic1`), verified in Ubuntu 24.04 containers up to a live login QR. `--window` stays macOS-only; on Linux run `wa login` in a terminal the human sees.

@@ -89,6 +89,13 @@ Updates replace installed files; keep personal customizations outside them. Afte
 t3-schedule run `t3-schedule refresh`; with an enabled top-up daemon rerun `t3-usage-windows topup install`.
 Releases and breaking changes: [CHANGELOG.md](CHANGELOG.md).
 
+Dependabot opens weekly Python (including transitive pins) and GitHub Actions updates.
+WhatsApp's local Neonize source stays on its documented build/update path.
+Minor/patch Python updates are grouped; major updates stay separate. The dependency
+workflow checks committed locks and runs the skill suite plus ClickUp's shipped environment.
+Updates need review and a release; nothing auto-merges. Fix dependencies here before refreshing
+consumer copies, otherwise the next refresh restores the source's older lock.
+
 ## Multiple Claude homes
 
 `skills add -g` writes to the active `CLAUDE_CONFIG_DIR/skills` and `~/.agents/skills` only. With

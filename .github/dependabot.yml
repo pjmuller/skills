@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directories:
+      - /
+      - /skills/clickup-core
+      - /skills/google-workspace-core
+      - /skills/perplexity-core
+      - /skills/yuki-core
+    # whatsapp-bridge uses a pinned local Neonize source; see its build instructions.
+    schedule:
+      interval: weekly
+    # urllib3 and other transitive pins need updates too.
+    allow:
+      - dependency-type: all
+    groups:
+      python:
+        patterns: ['*']
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
