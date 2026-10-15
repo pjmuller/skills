@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- agents-md: chat file paths are always absolute (repo-relative badges broke when the file lived in another repo); a file only on a remote branch gets its web URL.
 - recording-followups: `scripts/recording_owner.py` elects the one teammate machine that processes a shared-recorder call (team from recorder account, first priority person with vendor-verified speech; invitees/display names never count). [owner-election.md](skills/recording-followups/owner-election.md).
 - agents-md: try the account-correct Chrome/CDP session when T3 is unavailable or lacks the needed login; inspect existing signed-in tabs before asking for authentication help.
 
