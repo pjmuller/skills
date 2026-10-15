@@ -9,9 +9,6 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-MIN_SPEAKER_WORDS = 20      # fewer words under a verified identity = diarization noise, not presence
-
-
 @dataclass(frozen=True)
 class Decision:
     action: str                 # "process" | "skip"
@@ -62,7 +59,7 @@ def elect(roster, self_id, provider, recorder, speakers):
     """speakers: iterable of (verified_email_or_empty, words), any order, repeats allowed.
 
     Team = the team whose `recorders` contain this provider account. Owner = first person in the team's
-    priority with >= MIN_SPEAKER_WORDS under a verified identity. Invitees, organizer, display names,
+    priority with any speech under a verified identity. Invitees, organizer, display names,
     token holder and word share never count. No owner -> every machine skips; nobody guesses.
     """
     if self_id not in roster["people"]:
@@ -81,7 +78,7 @@ def elect(roster, self_id, provider, recorder, speakers):
             words[person] = words.get(person, 0) + n
         else:
             unidentified += n
-    present = {p: words[p] for p in spec["priority"] if words.get(p, 0) >= MIN_SPEAKER_WORDS}
+    present = {p: words[p] for p in spec["priority"] if words.get(p, 0) > 0}
     owner = next(iter(present), None)
     if owner is None:
         return Decision("skip", "no-verified-attendee", None, team, present, unidentified)

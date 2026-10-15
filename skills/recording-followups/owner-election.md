@@ -7,17 +7,18 @@ else `skip` with owner, reason and `Decision.evidence()`. Keep local per-recordi
 
 - **Team** = the one roster team whose `recorders` lists this provider account (Fathom `recorded_by.email`,
   Leexi `owner.email`). None → `unknown-team`; several → `ambiguous-team`; `"enabled": false` → `team-disabled`.
-- **Owner** = first person in the team's `priority` who spoke ≥ `MIN_SPEAKER_WORDS` under a **verified
-  identity**: the vendor's speaker-to-email match (Fathom `speaker.matched_calendar_invitee_email`,
-  Leexi `speakers[].email_address`) equal to one of that person's roster identities.
+- **Owner** = first person in the team's `priority` who spoke at all under a **verified identity**:
+  the vendor's speaker-to-email match (Fathom `speaker.matched_calendar_invitee_email`, Leexi `speakers[].email_address`) equal to one of that person's roster identities.
 - Never evidence: calendar invitees/organizer, display-name substrings, who holds the API token,
   most words. Silent attendance is invisible to both vendors, so a silent higher-priority person does not own.
 - No verified team member → `no-verified-attendee`: every machine skips and records it visibly. No guessing.
 - An elected owner whose machine is offline stays owner: no failover, no leases, no distributed lock.
 
-**Same facts, same answer.** Uniqueness holds only when every machine of a team reads the recording
-through the team's recorder account and uses an identical roster. Calls seen through any other
-account fall to `unknown-team`. Missing self identity or roster conflicts raise instead of skipping.
+**Same facts, same answer.** Uniqueness holds only when every machine reads the same finalized
+speaker data with an identical roster. The code checks the recording's recorder, not the reader's
+credentials: before arming a lower-priority machine, give it the recorder account's API access and
+compare its election on a few recordings against the top-priority machine's. Missing self identity
+or roster conflicts raise instead of skipping.
 
 ## Roster (private, outside installed skills)
 

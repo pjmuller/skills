@@ -48,9 +48,9 @@ def test_priority_with_and_without_top_person(roster):
 
 
 def test_presence_needs_verified_speech_not_invites_names_or_share(roster):
-    # invitees and display names are not inputs; a noise fragment is not presence; word share is irrelevant
-    d = alpha(roster, "ben", ("ana@example.com", 5), ("office@alpha.example", 40), ("", 5000))
-    assert (d.owner, d.unidentified_words) == ("ben", 5000)
+    # invitees and display names are not inputs; word share is irrelevant: any verified speech keeps priority
+    d = alpha(roster, "ben", ("ana@example.com", 5), ("office@alpha.example", 4000), ("", 5000))
+    assert (d.owner, d.unidentified_words) == ("ana", 5000)
     assert alpha(roster, "ana", ("", 900), ("x@customer.example", 900)).reason == "no-verified-attendee"
     # the shared recorder identity is scoped to its provider: the same address on Leexi is nobody
     assert ro.person_of(roster, "leexi", "office@alpha.example") is None
