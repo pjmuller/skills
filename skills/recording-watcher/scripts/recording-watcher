@@ -1,0 +1,809 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Poll Fathom / Leexi / Monologue for new calls this machine owns; spawn one T3 follow-up thread per call.
+
+Deterministic: no LLM here. Python lists, elects the owner, routes and writes the transcript; the
+spawned thread does the judgement. Everything personal (self, roster, keys, workspaces, briefs) lives in
+the machine's config (../config.md), never in this replaceable install.
+"""
+import argparse
+import fcntl
+import http.client
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from base64 import b64encode
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from string import Template
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import recording_owner  # noqa: E402
+
+TZ = ZoneInfo("Europe/Brussels")
+SKILL_DIR = Path(__file__).resolve().parent.parent
+CONFIG = Path(os.environ.get("RECORDING_WATCHER_CONFIG", "~/.config/recording-watcher/config.json")).expanduser()
+STATE_DIR = Path(os.environ.get("RECORDING_WATCHER_STATE", "~/.local/state/recording-watcher")).expanduser()
+FATHOM_API = "https://api.fathom.ai/external/v1"
+LEEXI_API = "https://public-api.leexi.ai/v1"
+MONOLOGUE_API = "https://api.monologue.to/v1/public-api"
+MAX_SPAWNS = 6                         # per poll; the rest waits for the next poll
+LOOKBACK_DAYS = 3                      # first run without a watermark
+MIN_WORDS = 150                        # shorter transcripts are false starts (skipped:too-short)
+NO_TRANSCRIPT_GIVE_UP = timedelta(hours=6)
+WORK_DAYS, WORK_HOURS = range(0, 5), range(9, 18)
+FINAL = ("spawned", "skipped:")
+SCREEN_SHARE_MIN_HITS = 2              # lowercase phrase hits over the whole transcript => "likely"
+SCREEN_SHARE_PHRASES = [
+    "scherm delen", "mijn scherm", "ziet ge mijn scherm", "zie je mijn scherm", "zie jij mijn scherm",
+    "ik deel", "hier zie je", "zoals je hier ziet", "hier zie ge",
+    "share my screen", "sharing my screen", "can you see my screen", "let me show you", "as you can see here",
+]
+
+
+@dataclass
+class Config:
+    self_id: str
+    roster: dict
+    sources: dict                     # name -> {"env_file", optional "workspace", "personal"}
+    workspace: str                    # default T3 project
+    routes: list = field(default_factory=list)          # [{"workspace", "names" regex, "emails" suffixes}]
+    model: str | None = None
+    briefs_dir: Path | None = None
+    followups_skill: str = ""
+    speaker_aliases: dict = field(default_factory=dict)
+
+
+def load_config(path=CONFIG):
+    """Read and validate the machine config; problems stop the poll loudly instead of skipping calls."""
+    if not path.exists():
+        raise SystemExit(f"no config at {path}: see {SKILL_DIR / 'config.md'}")
+    raw = json.loads(path.read_text())
+    roster = raw.get("roster")
+    if isinstance(roster, str):
+        roster = json.loads(Path(roster).expanduser().read_text())
+    roster = recording_owner.validate_roster(roster) if roster else None
+    if not roster or raw.get("self") not in roster["people"]:
+        raise SystemExit(f"{path}: `self` must be a person in `roster` (got {raw.get('self')!r})")
+    if not raw.get("workspace"):
+        raise SystemExit(f"{path}: `workspace` (default T3 project for follow-up threads) is required")
+    unknown = set(raw.get("sources") or {}) - set(SOURCES)
+    if unknown or not raw.get("sources"):
+        raise SystemExit(f"{path}: `sources` must name some of {sorted(SOURCES)} (unknown: {sorted(unknown)})")
+    home = lambda p: str(Path(p).expanduser()) if p else p   # noqa: E731
+    sources = {name: {**spec, "workspace": home(spec.get("workspace"))} for name, spec in raw["sources"].items()}
+    return Config(self_id=raw["self"], roster=roster, sources=sources, workspace=home(raw["workspace"]),
+                  routes=[{**r, "workspace": home(r["workspace"])} for r in raw.get("routes") or []], model=raw.get("model"),
+                  briefs_dir=Path(raw["briefs_dir"]).expanduser() if raw.get("briefs_dir") else None,
+                  followups_skill=home(raw.get("followups_skill")) or str(SKILL_DIR.parent / "recording-followups" / "SKILL.md"),
+                  speaker_aliases={k.lower(): v for k, v in (raw.get("speaker_aliases") or {}).items()})
+
+
+@dataclass
+class Call:
+    source: str
+    id: str
+    title: str
+    start: datetime
+    created: datetime
+    duration_s: float
+    url: str
+    invitees: list = field(default_factory=list)       # [(name, email)]
+    recorder: str = ""
+    has_video: bool = True
+    segments: list | None = None                      # [(timestamp, speaker, text, verified email)]
+    decision: recording_owner.Decision | None = None  # set by evaluate
+
+    @property
+    def key(self):
+        return f"{self.source}:{self.id}"
+
+
+# ---------- env + http ----------
+
+def load_env(path, keys):
+    values = {}
+    p = Path(path or "/nonexistent").expanduser()
+    if p.exists():
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.removeprefix("export ").strip()
+            if k in keys:
+                values[k] = v.strip().strip("'\"")
+    values.update({k: os.environ[k] for k in keys if os.environ.get(k)})
+    missing = [k for k in keys if not values.get(k)]
+    if missing:
+        raise SystemExit(f"missing {', '.join(missing)} (env or {path})")
+    return values
+
+
+def http_json(url, headers, attempts=4):
+    for attempt in range(attempts):
+        try:
+            with urlopen(Request(url, headers={"User-Agent": "recording-watcher/1.0", "Accept": "application/json", **headers}),
+                         timeout=60) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
+                raise
+            if exc.code == 429:   # Fathom: 60 requests/minute, Leexi 50
+                time.sleep(min(int(exc.headers.get("Retry-After") or 20), 60))
+                continue
+        except (URLError, http.client.RemoteDisconnected, TimeoutError, ConnectionError):
+            if attempt == attempts - 1:
+                raise
+        time.sleep(2 ** attempt * 2)
+
+
+def parse_ts(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
+def utc(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clock(seconds):
+    total = int(float(seconds or 0))
+    h, rest = divmod(total, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ---------- sources ----------
+
+class Fathom:
+    name = "fathom"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        key = load_env(cfg.sources["fathom"].get("env_file"), ["FATHOM_API_KEY"])["FATHOM_API_KEY"]
+        self.headers = {"X-Api-Key": key}
+
+    def list(self, since):
+        calls, cursor, seen = [], None, set()
+        while True:
+            params = {"created_after": utc(since)}
+            if cursor:
+                params["cursor"] = cursor
+            data = http_json(f"{FATHOM_API}/meetings?{urlencode(params)}", self.headers)
+            for m in data.get("items") or []:
+                start, end = parse_ts(m.get("recording_start_time")), parse_ts(m.get("recording_end_time"))
+                calls.append(Call(
+                    source="fathom", id=str(m["recording_id"]), title=m.get("title") or m.get("meeting_title") or "",
+                    start=start or parse_ts(m["created_at"]), created=parse_ts(m["created_at"]),
+                    duration_s=(end - start).total_seconds() if start and end else 0,
+                    url=m.get("share_url") or m.get("url") or "",
+                    invitees=[(i.get("name") or "", (i.get("email") or "").lower()) for i in m.get("calendar_invitees") or []],
+                    recorder=((m.get("recorded_by") or {}).get("email") or "").lower()))
+            cursor = data.get("next_cursor")
+            if not cursor or cursor in seen:
+                return calls
+            seen.add(cursor)
+
+    def load(self, call):
+        data = http_json(f"{FATHOM_API}/recordings/{call.id}/transcript", self.headers)
+        call.segments = [(s.get("timestamp") or "", speaker_name(self.cfg, (s.get("speaker") or {}).get("display_name")),
+                          s.get("text") or "", ((s.get("speaker") or {}).get("matched_calendar_invitee_email") or "").lower())
+                         for s in data.get("transcript") or []]
+
+
+class Leexi:
+    name = "leexi"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        env = load_env(cfg.sources["leexi"].get("env_file"), ["LEEXI_KEY_ID", "LEEXI_KEY_SECRET"])
+        token = b64encode(f"{env['LEEXI_KEY_ID']}:{env['LEEXI_KEY_SECRET']}".encode()).decode()
+        self.headers = {"Authorization": f"Basic {token}"}
+
+    def list(self, since):
+        calls, page = [], 1
+        while True:
+            params = {"order": "performed_at desc", "items": 100, "page": page,
+                      "from": since.astimezone(timezone.utc).isoformat(), "to": datetime.now(timezone.utc).isoformat()}
+            data = http_json(f"{LEEXI_API}/calls?{urlencode(params)}", self.headers)   # filters on created_at
+            for c in data.get("data") or []:
+                calls.append(Call(
+                    source="leexi", id=c["uuid"], title=c.get("title") or "", start=parse_ts(c["performed_at"]),
+                    created=parse_ts(c["created_at"]), duration_s=float(c.get("duration") or 0), url=c.get("leexi_url") or "",
+                    invitees=[(x.get("name") or "", (x.get("email") or "").lower())
+                              for x in (c.get("customers") or []) + (c.get("participating_users") or []) if isinstance(x, dict)],
+                    recorder=((c.get("owner") or {}).get("email") or "").lower(), has_video=bool(c.get("is_video"))))
+            if page >= int((data.get("pagination") or {}).get("pages") or 1):
+                return calls
+            page += 1
+
+    def load(self, call):
+        data = http_json(f"{LEEXI_API}/calls/{call.id}", self.headers)
+        data = data.get("data", data)
+        speakers = {s.get("index"): s for s in data.get("speakers") or []}
+        call.segments = []
+        for para in data.get("transcript") or []:
+            sp = speakers.get(para.get("speaker_index")) or {}
+            text = " ".join((i.get("content") or "").strip() for i in para.get("items") or []).strip()
+            call.segments.append((clock(para.get("start_time")), speaker_name(self.cfg, sp.get("name")), text,
+                                  (sp.get("email_address") or "").lower()))
+
+
+class Monologue:
+    """The operator's own Monologue account: personal recordings, neutral speaker ids, no identities."""
+    name = "monologue"
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        key = load_env(cfg.sources["monologue"].get("env_file"), ["MONOLOGUE_API_KEY"])["MONOLOGUE_API_KEY"]
+        self.headers = {"Authorization": f"Bearer {key}"}
+
+    def list(self, since):
+        calls, cursor, seen = [], None, set()
+        while True:
+            params = {"limit": 100, "created_after": utc(since)}
+            if cursor:
+                params["cursor"] = cursor
+            data = http_json(f"{MONOLOGUE_API}/notes?{urlencode(params)}", self.headers)
+            for n in data.get("items") or []:
+                created = parse_ts(n["created_at"])
+                calls.append(Call(source="monologue", id=n["note_id"], title=n.get("title") or "",
+                                  start=parse_ts(n.get("recorded_at")) or created, created=created, duration_s=0,
+                                  url=f"monologue note {n['note_id']}", has_video=False))
+            cursor = data.get("next_cursor")
+            if not cursor or cursor in seen:
+                return calls
+            seen.add(cursor)
+
+    def load(self, call):
+        data = http_json(f"{MONOLOGUE_API}/notes/{call.id}", self.headers)
+        segs = data.get("transcript_segments") or []
+        call.segments = [(clock(s.get("start")), s.get("speaker_id") or "Unknown", s.get("text") or "", "") for s in segs]
+        if not segs and data.get("transcript"):
+            call.segments = [("00:00:00", "Unknown", data["transcript"], "")]
+        call.duration_s = float(segs[-1].get("end") or 0) if segs else 0
+
+
+SOURCES = {"fathom": Fathom, "leexi": Leexi, "monologue": Monologue}
+
+
+# ---------- pure logic (tested) ----------
+
+def in_hours(now):
+    local = now.astimezone(TZ)
+    return local.weekday() in WORK_DAYS and local.hour in WORK_HOURS
+
+
+def speaker_name(cfg, display_name):
+    """Vendor display name -> the person (shared recorder accounts resolved via config speaker_aliases)."""
+    name = display_name or "Unknown"
+    return cfg.speaker_aliases.get(name.lower(), name)
+
+
+def is_self(cfg, call, email):
+    return recording_owner.person_of(cfg.roster, call.source, email) == cfg.self_id
+
+
+def speaker_words(segments):
+    """{speaker: [words, email]} in order of first appearance."""
+    out = {}
+    for _, name, text, email in segments:
+        entry = out.setdefault(name, [0, email])
+        entry[0] += len(text.split())
+        entry[1] = entry[1] or email
+    return out
+
+
+def self_share(cfg, call):
+    words = speaker_words(call.segments or [])
+    total = sum(w for w, _ in words.values())
+    return (sum(w for w, e in words.values() if is_self(cfg, call, e)) / total) if total else 0.0
+
+
+def route_of(cfg, name, email):
+    text, email = (name or "").lower(), (email or "").lower()
+    for r in cfg.routes:
+        if (r.get("names") and re.search(r["names"], text, re.I)) or (email and any(email.endswith(s) for s in r.get("emails") or [])):
+            return r["workspace"]
+    return None
+
+
+def route(cfg, call):
+    """Workspace root. A source with its own `workspace` always goes there. Otherwise known non-self speakers
+    vote by word count; no known speaker -> invitees (minus self and the recorder account) vote; tie -> default."""
+    if ws := cfg.sources[call.source].get("workspace"):
+        return ws
+    scores = {}
+    for name, (words, email) in speaker_words(call.segments or []).items():
+        if not is_self(cfg, call, email) and (ws := route_of(cfg, name, email)):
+            scores[ws] = scores.get(ws, 0) + words
+    if not scores:
+        for name, email in call.invitees:
+            if not is_self(cfg, call, email) and email != call.recorder and (ws := route_of(cfg, name, email)):
+                scores[ws] = scores.get(ws, 0) + 1
+    if not scores:
+        return cfg.workspace
+    best = max(scores.values())
+    winners = [ws for ws, s in scores.items() if s == best]
+    return winners[0] if len(winners) == 1 else cfg.workspace
+
+
+def screen_share(segments, has_video=True):
+    text = " ".join(t for _, _, t, _ in segments).lower()
+    hits = sum(text.count(p) for p in SCREEN_SHARE_PHRASES)
+    if not has_video:
+        return hits, "no video (audio-only recording)"
+    return hits, "likely" if hits >= SCREEN_SHARE_MIN_HITS else "unlikely"
+
+
+def evaluate(cfg, call, now):
+    """'qualifies' | 'pending' | 'skipped:<reason>'. Elects the owner before any expensive step."""
+    if not call.segments:
+        return "skipped:no-transcript" if now - call.created > NO_TRANSCRIPT_GIVE_UP else "pending"
+    if sum(len(t.split()) for _, _, t, _ in call.segments) < MIN_WORDS:
+        return "skipped:too-short"
+    if cfg.sources[call.source].get("personal"):
+        call.decision = recording_owner.Decision("process", "personal", cfg.self_id, None)
+    else:
+        call.decision = recording_owner.elect(cfg.roster, cfg.self_id, call.source, call.recorder,
+                                              [(email, len(text.split())) for _, _, text, email in call.segments])
+    return "qualifies" if call.decision.action == "process" else f"skipped:{call.decision.reason}"
+
+
+def others(cfg, call):
+    names = [n for n, (w, e) in sorted(speaker_words(call.segments or []).items(), key=lambda kv: -kv[1][0])
+             if not is_self(cfg, call, e) and not re.fullmatch(r"(speaker[ _]?\d+|unknown)", n, re.I)]
+    return list(dict.fromkeys(names))
+
+
+def thread_title(cfg, call):
+    firsts = []
+    for n in others(cfg, call):
+        first = re.sub(r"[^\w-]", "", n.split()[0]) if n.split() else ""
+        if first and first.lower() not in {f.lower() for f in firsts}:
+            firsts.append(first)
+    words = firsts[:2] or [w for w in re.findall(r"[\w-]+", call.title) if not re.fullmatch(r"pj|and|en|x", w, re.I)][:3]
+    return " ".join(["Call", *words, call.start.astimezone(TZ).strftime("%m-%d")])
+
+
+def election_line(call):
+    return call.decision.evidence() if call.decision else "not run"
+
+
+def render_transcript(cfg, call, hits, verdict):
+    local = call.start.astimezone(TZ)
+    words = speaker_words(call.segments)
+    total = sum(w for w, _ in words.values()) or 1
+    lines = [f"# {call.title or call.key}", "",
+             f"- Source: {call.source} · {call.url}",
+             f"- When: {local:%Y-%m-%d %H:%M} Europe/Brussels · {round(call.duration_s / 60)} min",
+             f"- Owner election: {election_line(call)}",
+             "- Speakers: " + ", ".join(f"{n} {w / total:.0%}" for n, (w, _) in sorted(words.items(), key=lambda kv: -kv[1][0])),
+             f"- Screen share: {verdict} ({hits} phrase hits)",
+             f"- Raw {call.source} ASR, not verified against audio/video.", "", "## Transcript", ""]
+    prev = None
+    for ts, name, text, _ in call.segments:
+        if name == prev:
+            lines[-2] += " " + text
+            continue
+        lines += [f"**[{ts}] {name}:** {text}", ""]
+        prev = name
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_brief(cfg, call, workspace, hits, verdict, transcript_path):
+    local = call.start.astimezone(TZ)
+    participants = ", ".join(others(cfg, call)) or "unnamed speakers"
+    facts = (f"New {call.source.title()} call \"{call.title}\" on {local:%a %Y-%m-%d %H:%M} (Europe/Brussels), "
+             f"{round(call.duration_s / 60)} min. Other speakers: {participants}. "
+             f"Screen share: {verdict} ({hits} phrase hits). Transcript: {transcript_path}. Source: {call.url}. "
+             f"Recording id: {call.source}:{call.id}. Processed on {cfg.self_id}'s machine as elected owner: "
+             f"{election_line(call)}. Routed to {workspace} by recording-watcher (deterministic; "
+             f"if this is the wrong repo, say so first).")
+    if verdict == "likely":
+        media = (f"Screen sharing is likely, so first get a visual narration per "
+                 f"{SKILL_DIR.parent}/video-shrink-for-gemini/SKILL.md "
+                 + ("(Fathom: `download-fathom URL --out <call dir>`, then shrink + native agy Gemini)"
+                    if call.source == "fathom" else "(Leexi: `download-leexi`, then shrink + native agy Gemini)")
+                 + f"; store it beside the transcript in {transcript_path.parent}. Then run the follow-ups on transcript + "
+                 f"narration; every downstream brief points at that verified narration file (it carries a provenance header), "
+                 f"never at the raw transcript.md, so no later thread watches the video again.")
+    else:
+        media = "Screen sharing is unlikely: work from the transcript only, do not download the video."
+    template = SKILL_DIR / "briefs" / "default.md"
+    if cfg.briefs_dir:
+        for candidate in (cfg.briefs_dir / f"{Path(workspace).name}.md", cfg.briefs_dir / "default.md"):
+            if candidate.exists():
+                template = candidate
+                break
+    return Template(template.read_text()).safe_substitute(
+        facts=facts, media=media, transcript=str(transcript_path), workspace=workspace,
+        followups=cfg.followups_skill).strip() + "\n"
+
+
+def transcript_path(key):
+    return STATE_DIR / "calls" / key.replace(":", "-", 1) / "transcript.md"
+
+
+def write_transcript(cfg, call):
+    path = transcript_path(call.key)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    hits, verdict = screen_share(call.segments, call.has_video)
+    path.write_text(render_transcript(cfg, call, hits, verdict))
+    return path
+
+
+# ---------- state ----------
+
+def load_state():
+    path = STATE_DIR / "state.json"
+    return json.loads(path.read_text()) if path.exists() else {"sources": {}, "calls": {}}
+
+
+def save_state(state):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_DIR / "state.json.tmp"
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    tmp.replace(STATE_DIR / "state.json")
+
+
+def is_final(entry):
+    return bool(entry) and entry.get("status", "").startswith(FINAL)
+
+
+def unfinished_keys(state):
+    """Calls whose transcript was written (qualified) but never reached a final status: over-cap or failed spawns."""
+    keys = []
+    for d in sorted((STATE_DIR / "calls").glob("*-*")) if (STATE_DIR / "calls").exists() else []:
+        source, _, id = d.name.partition("-")
+        if not is_final(state["calls"].get(f"{source}:{id}")):
+            keys.append(f"{source}:{id}")
+    return keys
+
+
+def lock_poll(wait_s=0):
+    """Exclusive poll lock; returns the handle or None when another poll holds it past wait_s."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock = open(STATE_DIR / "poll.lock", "w")
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(1)
+
+
+def next_watermark(old, listed, unfinished):
+    """Never pass an unfinished call; otherwise advance to the newest listed creation time."""
+    if unfinished:
+        return min(c.created for c in unfinished) - timedelta(seconds=1)
+    newest = max((c.created for c in listed), default=None)
+    return max(filter(None, [old, newest]), default=old)
+
+
+# ---------- spawn ----------
+
+def spawn(cfg, workspace, title, brief):
+    env = {k: v for k, v in os.environ.items() if k not in ("T3_SOURCE_THREAD_ID", "CODEX_THREAD_ID", "T3_MCP_BEARER_TOKEN")}
+    cmd = ["t3-spawn-thread", "--project", workspace, *(["--model", cfg.model] if cfg.model else []), "--no-open",
+           "--allow-cross-project-source", "--title", title]
+    result = subprocess.run(cmd, input=brief, text=True, capture_output=True, timeout=600, env=env, cwd=workspace)
+    match = re.search(r"^Thread ID: (\S+)", result.stdout, re.M)
+    if result.returncode or not match:
+        raise RuntimeError(f"t3-spawn-thread exit {result.returncode}: {(result.stderr or result.stdout).strip()[-400:]}")
+    return match[1]
+
+
+# ---------- commands ----------
+
+def default_sources(cfg, names=None):
+    out = []
+    for name in cfg.sources:
+        if names is None or name in names:
+            try:
+                out.append(SOURCES[name](cfg))
+            except SystemExit as exc:   # missing key: report, keep the other sources
+                print(f"ERROR {name}: {exc}", file=sys.stderr)
+    return out
+
+
+def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
+    now = now or datetime.now(timezone.utc)
+    if not args.force_hours and not in_hours(now):
+        return 0
+    cfg = cfg or load_config()
+    lock = lock_poll()   # keep the handle: closing it releases the lock
+    if not lock:
+        print("another poll is running; exit")
+        return 0
+    print(f"=== poll {now.astimezone(TZ):%Y-%m-%d %H:%M} as {cfg.self_id}" + (" (dry run)" if args.dry_run else ""))
+    state = load_state()
+    since_override = datetime.fromisoformat(args.since).replace(tzinfo=TZ) if args.since else None
+    sources = sources if sources is not None else default_sources(cfg)
+    candidates, listed_by_source, errors = [], {}, []
+    for src in sources:
+        wm = state["sources"].get(src.name, {}).get("watermark")
+        since = since_override or (parse_ts(wm) if wm else now - timedelta(days=LOOKBACK_DAYS))
+        try:
+            listed = src.list(since)
+        except Exception as exc:  # one source down must not block the other
+            errors.append(f"{src.name}: list failed: {exc}")
+            continue
+        listed_by_source[src.name] = (listed, [])
+        for call in listed:
+            if is_final(state["calls"].get(call.key)):
+                continue
+            try:
+                src.load(call)
+            except Exception as exc:
+                errors.append(f"{call.key}: transcript failed: {exc}")
+                listed_by_source[src.name][1].append(call)
+                continue
+            verdict = evaluate(cfg, call, now)
+            if verdict == "qualifies":
+                candidates.append(call)
+                continue
+            why = f" · {call.decision.evidence()}" if call.decision else ""
+            print(f"{verdict:30} {call.key:48} {call.start.astimezone(TZ):%m-%d %H:%M} {call.title[:50]}{why}")
+            if verdict == "pending":
+                listed_by_source[src.name][1].append(call)
+            elif not args.dry_run:
+                state["calls"][call.key] = {"status": verdict, "title": call.title, "self_share": round(self_share(cfg, call), 2),
+                                            "start": call.start.isoformat(), "at": now.isoformat(),
+                                            **({"owner": call.decision.owner, "election": call.decision.evidence()}
+                                               if call.decision else {})}
+    candidates.sort(key=lambda c: c.start, reverse=True)
+    spawned = 0
+    for call in candidates:
+        workspace = route(cfg, call)
+        hits, verdict = screen_share(call.segments, call.has_video)
+        transcript = write_transcript(cfg, call)
+        title, brief = thread_title(cfg, call), build_brief(cfg, call, workspace, hits, verdict, transcript)
+        over_cap = spawned >= MAX_SPAWNS
+        head = f"{'over-cap' if over_cap else 'spawn'}: {title!r} -> {workspace} · screen={verdict} ({hits})"
+        if args.dry_run:
+            print(f"\n=== {head}\n{brief}")
+            spawned += 1
+            continue
+        if over_cap:
+            print(head + " (next poll)")
+            listed_by_source[call.source][1].append(call)
+            continue
+        try:
+            thread_id = spawner(cfg, workspace, title, brief)
+        except Exception as exc:
+            errors.append(f"{call.key}: spawn failed: {exc}")
+            listed_by_source[call.source][1].append(call)
+            spawned = MAX_SPAWNS   # T3 likely down: defer the rest
+            continue
+        spawned += 1
+        print(f"{head} · thread {thread_id}")
+        state["calls"][call.key] = {"status": "spawned", "title": call.title, "thread_title": title, "thread_id": thread_id,
+                                    "project": workspace, "self_share": round(self_share(cfg, call), 2), "screen_share": verdict,
+                                    "start": call.start.isoformat(), "at": now.isoformat(), "transcript": str(transcript),
+                                    "election": election_line(call)}
+        save_state(state)   # persist each spawn immediately: a crash must never cause a re-spawn
+    for line in errors:
+        print("ERROR " + line, file=sys.stderr)
+    if args.dry_run:
+        print(f"\ndry run: {len(candidates)} qualifying, cap {MAX_SPAWNS}/poll; state untouched")
+        return 1 if errors else 0
+    for name, (listed, unfinished) in listed_by_source.items():
+        if args.since:
+            continue   # an explicit window must not move the watermark backwards or forwards
+        old = parse_ts(state["sources"].get(name, {}).get("watermark")) or now - timedelta(days=LOOKBACK_DAYS)
+        state["sources"][name] = {"watermark": next_watermark(old, listed, unfinished).isoformat()}
+    state["last_poll"] = now.isoformat()
+    state["last_errors"] = errors
+    save_state(state)
+    return 1 if errors else 0
+
+
+def since_of(args, now):
+    """--since YYYY-MM-DD (Brussels), default start of today Brussels."""
+    if getattr(args, "since", None):
+        return datetime.fromisoformat(args.since).replace(tzinfo=TZ)
+    return now.astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def recent(sources, since):
+    """{key: (source, call)} listed since; one source down must not block the other."""
+    found = {}
+    for src in sources:
+        try:
+            found.update({c.key: (src, c) for c in src.list(since)})
+        except Exception as exc:
+            print(f"ERROR {src.name}: list failed: {exc}", file=sys.stderr)
+    return found
+
+
+def list_calls(args, cfg=None, sources=None, now=None):
+    """Read-only: recent calls with their state status, so an agent can find the key to ack."""
+    now = now or datetime.now(timezone.utc)
+    names = {args.source} if getattr(args, "source", None) else None
+    calls = recent(sources if sources is not None else default_sources(cfg or load_config(), names), since_of(args, now))
+    state = load_state()
+    for key, (_, c) in sorted(calls.items(), key=lambda kv: kv[1][1].start, reverse=True):
+        status = (state["calls"].get(key) or {}).get("status", "new")
+        print(f"{key:48} {c.start.astimezone(TZ):%m-%d %H:%M} {round(c.duration_s / 60):>3} min  {status:24} {c.title}")
+    return 0
+
+
+def ack(args, cfg=None, now=None, sources=None):
+    """Mark calls as handled without processing them (status skipped:acknowledged): never spawned later.
+    No keys = every call dir without a final status (over-cap / failed spawns of the last polls).
+    --match resolves one key by title; a missing transcript is fetched so the manual thread has evidence."""
+    now = now or datetime.now(timezone.utc)
+    keys, match, found = list(args.keys), getattr(args, "match", None), {}
+    need = [k for k in keys if not transcript_path(k).exists()]
+    if match or need:
+        cfg = cfg or load_config()
+        names = None if match else {k.partition(":")[0] for k in need}
+        found = recent(sources if sources is not None else default_sources(cfg, names), since_of(args, now))
+    if match:
+        hits = [k for k, (_, c) in found.items() if match.lower() in c.title.lower()]
+        if len(hits) != 1:
+            print(f"--match {match!r}: {len(hits)} calls since {since_of(args, now):%Y-%m-%d}; candidates:", file=sys.stderr)
+            for k in hits or found:
+                print(f"  {k:48} {found[k][1].title}", file=sys.stderr)
+            return 1
+        keys += hits
+    lock = lock_poll(wait_s=120)
+    if not lock:
+        print("another poll is running for >2 min; retry", file=sys.stderr)
+        return 1
+    state = load_state()
+    keys = keys or unfinished_keys(state)
+    if not keys:
+        print("nothing unfinished to acknowledge")
+        return 0
+    backup = STATE_DIR / f"state.json.bak-{now:%Y%m%dT%H%M%SZ}"
+    if (STATE_DIR / "state.json").exists():
+        backup.write_bytes((STATE_DIR / "state.json").read_bytes())
+    for key in keys:
+        entry = state["calls"].get(key) or {}
+        if entry.get("status") == "spawned":
+            print(f"keep     {key:48} already spawned -> {entry.get('thread_id')}")
+            continue
+        transcript = transcript_path(key)
+        src, call = found.get(key, (None, None))
+        if not transcript.exists() and call:
+            try:
+                src.load(call)
+                if call.segments:
+                    write_transcript(cfg, call)
+            except Exception as exc:   # the ack itself must still land
+                print(f"WARN     {key}: transcript fetch failed: {exc}", file=sys.stderr)
+        title = (entry.get("title") or (call.title if call else "")
+                 or (transcript.read_text().splitlines()[0].lstrip("# ").strip() if transcript.exists() else ""))
+        state["calls"][key] = {**entry, "status": "skipped:acknowledged", "title": title, "at": now.isoformat(),
+                               "note": "acknowledged without processing (recording-watcher ack)",
+                               **({"transcript": str(transcript)} if transcript.exists() else {})}
+        print(f"ack      {key:48} {title[:50]}")
+        why = "API has none yet" if call else f"not listed since {since_of(args, now):%Y-%m-%d}; pass --since"
+        print(f"         transcript: {transcript}" if transcript.exists() else f"         no transcript saved ({why})")
+    save_state(state)
+    print(f"snapshot {backup}")
+    return 0
+
+
+def status(_args):
+    state = load_state()
+    counts = {}
+    for entry in state["calls"].values():
+        counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+    print(f"config: {CONFIG}")
+    print(f"state: {STATE_DIR / 'state.json'}")
+    print(f"last poll: {state.get('last_poll', 'never')}")
+    for name, src in state.get("sources", {}).items():
+        print(f"watermark {name}: {src.get('watermark')}")
+    print("counts: " + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none"))
+    for err in state.get("last_errors") or []:
+        print(f"last error: {err}")
+    spawns = sorted((e for e in state["calls"].values() if e["status"] == "spawned"), key=lambda e: e["at"], reverse=True)
+    for e in spawns[:10]:
+        print(f"spawned {e['at'][:16]} {e['thread_id']} {e['thread_title']!r} -> {Path(e['project']).name} screen={e.get('screen_share')}")
+    return 0
+
+
+def forget(args, now=None):
+    """Drop final skip entries so the next `poll --since <day>` re-elects them (e.g. after a roster fix).
+    Spawned calls are never forgotten: that would spawn twice."""
+    now = now or datetime.now(timezone.utc)
+    lock = lock_poll(wait_s=120)
+    if not lock:
+        print("another poll is running for >2 min; retry", file=sys.stderr)
+        return 1
+    state = load_state()
+    backup = STATE_DIR / f"state.json.bak-{now:%Y%m%dT%H%M%SZ}"
+    if (STATE_DIR / "state.json").exists():
+        backup.write_bytes((STATE_DIR / "state.json").read_bytes())
+    rc = 0
+    for key in args.keys:
+        status = (state["calls"].get(key) or {}).get("status", "")
+        if not status.startswith("skipped:"):
+            print(f"keep     {key:48} {status or 'unknown key'}", file=sys.stderr)
+            rc = 1
+            continue
+        del state["calls"][key]
+        print(f"forgot   {key:48} was {status}; next `poll --since <its day>` re-evaluates it")
+    save_state(state)
+    return rc
+
+
+def seed(_args, cfg=None, now=None):
+    """Start from now: every enabled source's watermark := now, so a new machine never backfills old calls."""
+    now = now or datetime.now(timezone.utc)
+    cfg = cfg or load_config()
+    lock = lock_poll(wait_s=120)
+    if not lock:
+        print("another poll is running for >2 min; retry", file=sys.stderr)
+        return 1
+    state = load_state()
+    for name in cfg.sources:
+        if name in state["sources"]:
+            print(f"keep     {name} watermark {state['sources'][name]['watermark']}")
+            continue
+        state["sources"][name] = {"watermark": now.isoformat()}
+        print(f"seeded   {name} watermark {now.isoformat()}")
+    save_state(state)
+    return 0
+
+
+def check(_args):
+    """Config + credentials readiness, values never printed."""
+    cfg = load_config()
+    print(f"ok   config {CONFIG} (self={cfg.self_id}, sources={', '.join(cfg.sources)})")
+    ok = 0
+    for name in cfg.sources:
+        try:
+            SOURCES[name](cfg)
+            print(f"ok   {name} credentials")
+        except SystemExit as exc:
+            print(f"FAIL {name}: {exc}")
+            ok = 1
+    for ws in {cfg.workspace, *(r["workspace"] for r in cfg.routes), *(s.get("workspace") for s in cfg.sources.values())} - {None}:
+        print(f"ok   workspace {ws}" if Path(ws).is_dir() else f"FAIL workspace missing: {ws}")
+        ok = ok or (0 if Path(ws).is_dir() else 1)
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("poll", help="list new calls and spawn follow-up threads for calls this machine owns")
+    p.add_argument("--dry-run", action="store_true", help="print would-be spawns with full brief; no state change, no spawn")
+    p.add_argument("--since", help="override the watermark, e.g. 2026-10-01 (Brussels); watermark is left unchanged")
+    p.add_argument("--force-hours", action="store_true", help="run outside Mon-Fri 09:00-18:00 Brussels")
+    sub.add_parser("status", help="print state summary")
+    sub.add_parser("check", help="validate config, credentials and workspaces (no API calls)")
+    f = sub.add_parser("forget", help="drop final skipped:* entries so `poll --since` re-evaluates them (never spawned ones)")
+    f.add_argument("keys", nargs="+")
+    sub.add_parser("seed", help="new machine: start from now (watermark per source := now); existing watermarks kept")
+    a = sub.add_parser("ack", help="mark calls handled without processing; no keys = all unfinished (over-cap) calls")
+    a.add_argument("keys", nargs="*", help="call keys like fathom:190388183 or leexi:<uuid>")
+    a.add_argument("--match", help="case-insensitive title substring; must resolve to exactly one listed call")
+    a.add_argument("--since", help="listing window for --match / transcript fetch, e.g. 2026-10-01 (default today Brussels)")
+    ls = sub.add_parser("list", help="recent calls with key, start, title, duration, state status (read-only)")
+    ls.add_argument("--since", help="e.g. 2026-10-01 (Brussels); default today")
+    ls.add_argument("--source", choices=sorted(SOURCES))
+    args = parser.parse_args()
+    return {"poll": poll, "status": status, "check": check, "seed": seed, "forget": forget, "ack": ack, "list": list_calls}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,4 +1,4 @@
-"""Run: uv run --with pytest pytest skills/recording-followups -q"""
+"""Run: uv run --with pytest pytest skills/recording-watcher -q"""
 import json
 import sys
 from pathlib import Path
@@ -18,7 +18,7 @@ ROSTER = {
     },
     "teams": {
         "alpha": {"recorders": ["fathom:office@alpha.example"], "priority": ["ana", "ben", "cleo"]},
-        "beta": {"recorders": ["leexi:desk@beta.example"], "priority": ["ana", "dan"]},
+        "beta": {"recorders": ["leexi:desk@beta.example"], "priority": ["ana", "dan"], "fallback": "dan"},
         "gamma": {"recorders": ["fathom:office@gamma.example"], "priority": ["ana", "eve"], "enabled": False},
     },
 }
@@ -82,3 +82,12 @@ def test_config_errors_fail_loudly(roster, tmp_path):
     (tmp_path / "bad.json").write_text(json.dumps(bad))
     with pytest.raises(ValueError, match="unknown people"):
         ro.load_roster(tmp_path / "bad.json")
+
+
+def test_declared_fallback_only_when_nobody_verified(roster):
+    beta = lambda me, *sp: ro.elect(roster, me, "leexi", "desk@beta.example", sp)  # noqa: E731
+    d = beta("dan", ("", 900), ("client@example.com", 300))           # unlabelled speakers only
+    assert (d.action, d.owner, d.reason) == ("process", "dan", "fallback")
+    assert beta("ana", ("", 900)).action == "skip"
+    assert beta("dan", ("desk@beta.example", 10), ("", 900)).owner == "ana"   # verified top priority still wins
+    assert alpha(roster, "ana", ("", 900)).reason == "no-verified-attendee"   # no fallback declared

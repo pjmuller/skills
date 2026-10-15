@@ -12,7 +12,8 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Decision:
     action: str                 # "process" | "skip"
-    reason: str                 # owner | other-owner | no-verified-attendee | unknown-team | ambiguous-team | team-disabled
+    reason: str                 # owner | other-owner | fallback | no-verified-attendee | unknown-team | ambiguous-team
+                                # | team-disabled | personal
     owner: str | None
     team: str | None
     present: dict = field(default_factory=dict)   # verified roster person -> words, roster priority order
@@ -29,7 +30,10 @@ def key(provider, email):
 
 def load_roster(path):
     """Read and validate a roster JSON (schema in owner-election.md). Raises ValueError on conflicts."""
-    roster = json.loads(Path(path).expanduser().read_text())
+    return validate_roster(json.loads(Path(path).expanduser().read_text()))
+
+
+def validate_roster(roster):
     people, teams = roster.get("people") or {}, roster.get("teams") or {}
     owners = {}
     for person, spec in people.items():
@@ -37,7 +41,7 @@ def load_roster(path):
             if owners.setdefault(ident.lower(), person) != person:
                 raise ValueError(f"identity {ident} belongs to both {owners[ident.lower()]} and {person}")
     for team, spec in teams.items():
-        unknown = [p for p in spec.get("priority") or [] if p not in people]
+        unknown = [p for p in [*(spec.get("priority") or []), spec.get("fallback")] if p and p not in people]
         if unknown:
             raise ValueError(f"team {team}: unknown people in priority {unknown}")
     return roster
@@ -60,7 +64,8 @@ def elect(roster, self_id, provider, recorder, speakers):
 
     Team = the team whose `recorders` contain this provider account. Owner = first person in the team's
     priority with any speech under a verified identity. Invitees, organizer, display names,
-    token holder and word share never count. No owner -> every machine skips; nobody guesses.
+    token holder and word share never count. Nobody verified -> the team's declared `fallback`
+    (an operator statement such as "unidentified calls on this account are Thomas's"), else every machine skips.
     """
     if self_id not in roster["people"]:
         raise ValueError(f"self {self_id!r} is not a roster person: configure this machine's identity first")
@@ -79,8 +84,8 @@ def elect(roster, self_id, provider, recorder, speakers):
         else:
             unidentified += n
     present = {p: words[p] for p in spec["priority"] if words.get(p, 0) > 0}
-    owner = next(iter(present), None)
+    owner = next(iter(present), None) or spec.get("fallback")
     if owner is None:
         return Decision("skip", "no-verified-attendee", None, team, present, unidentified)
-    return Decision("process" if owner == self_id else "skip", "owner" if owner == self_id else "other-owner",
-                    owner, team, present, unidentified)
+    reason = "fallback" if not present else "owner" if owner == self_id else "other-owner"
+    return Decision("process" if owner == self_id else "skip", reason, owner, team, present, unidentified)

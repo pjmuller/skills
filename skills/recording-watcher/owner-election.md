@@ -11,7 +11,8 @@ else `skip` with owner, reason and `Decision.evidence()`. Keep local per-recordi
   the vendor's speaker-to-email match (Fathom `speaker.matched_calendar_invitee_email`, Leexi `speakers[].email_address`) equal to one of that person's roster identities.
 - Never evidence: calendar invitees/organizer, display-name substrings, who holds the API token,
   most words. Silent attendance is invisible to both vendors, so a silent higher-priority person does not own.
-- No verified team member → `no-verified-attendee`: every machine skips and records it visibly. No guessing.
+- No verified team member → the team's declared `fallback` person (an operator statement, e.g. a shared
+  account only one other teammate uses unlabelled), else `no-verified-attendee`: every machine skips, visibly.
 - An elected owner whose machine is offline stays owner: no failover, no leases, no distributed lock.
 
 **Same facts, same answer.** Uniqueness holds only when every machine reads the same finalized
@@ -26,12 +27,13 @@ or roster conflicts raise instead of skipping.
 {"people": {"ana": {"identities": ["ana@example.com", "leexi:desk@beta.example"]},
             "ben": {"identities": ["fathom:office@alpha.example"]}},
  "teams":  {"alpha": {"recorders": ["fathom:office@alpha.example"], "priority": ["ana", "ben"]},
-            "beta":  {"recorders": ["leexi:desk@beta.example"], "priority": ["ana"], "enabled": false}}}
+            "beta":  {"recorders": ["leexi:desk@beta.example"], "priority": ["ana", "ben"], "fallback": "ben"},
+            "gamma": {"recorders": [], "priority": ["ana"], "enabled": false}}}
 ```
 
 `provider:email` scopes an identity to one vendor; use it for shared accounts (a recorder login that
 is one person's voice). Bare emails match on every provider. Each identity belongs to one person.
-Self identity is per machine, also outside the skill (e.g. `~/.config/recording-owner/self`).
+Self identity is per machine: `self` in the [machine config](config.md).
 
 ## Processing host ≠ action owner
 

@@ -1,6 +1,6 @@
 ---
 name: recording-followups
-description: Turn a call or meeting transcript (Fathom, Loom, Leexi, ClickUp SyncUp, local recording) into a short debrief note plus standalone, self-contained T3 thread prompts, one temp file per prompt, spawnable by path. Use after any recording is transcribed and the user wants "follow-up prompts", "what should we do about this call", or threads to delegate the agreed work.
+description: Turn a call or meeting transcript (Fathom, Loom, Leexi, ClickUp SyncUp, local recording) into a short debrief note plus standalone, self-contained T3 thread prompts, one temp file per prompt, spawnable by path. Also owns the shared spoken cue ("James, please spawn…", "James, create a ClickUp ticket…"). Use after any recording is transcribed and the user wants "follow-up prompts", "what should we do about this call", or threads to delegate the agreed work.
 ---
 
 # Recording → follow-up prompts
@@ -10,8 +10,9 @@ Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKI
 transcript is on disk. Project skills (rootcause `fathom-interviews`, redcell's Fathom wrapper) own
 where the note lives and its frontmatter; they link here for the prompt step.
 
-Several teammates' machines polling one recorder account: elect a single processor first,
-[owner-election.md](owner-election.md).
+**Spoken cues** ("James, please spawn…" / "James, create a ClickUp ticket…") are commands, not
+proposals: [spoken-cues.md](spoken-cues.md). Automatic per-call entry point (one teammate machine per
+call): [recording-watcher](../recording-watcher/SKILL.md).
 
 ## Deliverables
 
@@ -49,7 +50,7 @@ thread. Never let this step cost more than the prompts themselves.
 
 Default a thread to the thinker model at medium effort. Plain execute tasks with a clear spec
 (add a link, a page, a lookup) go to a coding model (Opus/Sol). Investigations stay on the
-thinker. Spawn only when the user says so; until then the files are the deliverable.
+thinker. Spawn only when the user says so (a valid [spoken cue](spoken-cues.md) counts); until then the files are the deliverable.
 
 ## When the user adds instructions at spawn time
 
