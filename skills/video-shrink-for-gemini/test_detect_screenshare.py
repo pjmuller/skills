@@ -42,10 +42,26 @@ def video(tmp: Path, name: str, timeline: list[tuple[str, int]], gop: int) -> Pa
     return out
 
 
-def run(path: Path) -> dict:
+def run(path: Path, step: float | None = 2.0) -> dict:
     out = path.with_suffix(".json")
-    subprocess.run(["uv", "run", "-q", "--script", str(SCRIPT), str(path), "--out", str(out)], check=True)
+    cmd = ["uv", "run", "-q", "--script", str(SCRIPT), str(path), "--out", str(out)]
+    if step is not None:
+        cmd += ["--step", str(step)]
+    subprocess.run(cmd, check=True)
     return json.loads(out.read_text())
+
+
+@needs_tools
+def test_default_cadence_keeps_short_share_and_skips_gallery(tmp_path):
+    path = video(tmp_path, "short-share", [("meet-gallery", 15), ("meet-share", 15), ("meet-gallery", 30)], gop=2)
+    result = run(path, step=None)
+    assert result["method"] == "meet-layout"
+    assert len(result["ranges"]) == 1
+    r = result["ranges"][0]
+    assert r["start"] == 0.0 and r["end"] == 45.0
+    assert r["crop"] is not None
+    gallery = video(tmp_path, "gallery", [("meet-gallery", 30)], gop=2)
+    assert run(gallery, step=None)["ranges"] == []
 
 
 @needs_tools

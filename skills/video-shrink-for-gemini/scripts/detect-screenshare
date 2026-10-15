@@ -8,7 +8,7 @@
 Google Meet bot recordings (Fathom, Leexi): while someone presents, Meet draws the shared screen as one big
 tile with a filmstrip of webcam tiles on its right, split by a full-height gutter in the dark client
 background at ~73% or ~77% of the width (the position depends on the participant count). Galleries put their
-gutters at 1/2 or 1/3 and 2/3, a spotlight has none. Every --step seconds one frame is sampled; frames that
+gutters at 1/2 or 1/3 and 2/3, a spotlight has none. Every --step seconds (default 15) one frame is sampled; frames that
 clearly show the gutter teach its position(s), every frame with a gutter there counts as shared; runs are
 merged across short gaps and padded.
 
@@ -16,7 +16,7 @@ Each share range carries "crop": the tile's [x, y, w, h] (fractions) for shrink-
 (no dark client margin: Loom, Zoom, Teams, phone video) gets one range over the whole video (method
 "full-fallback"): send all frames.
 
-Measured 2026-10-08 on 10 Meet recordings (7.6 h, 4.3 h shared; ground truth from inspected frames, blind
+Measured 2026-10-08 at the previous 2 s interval on 10 Meet recordings (7.6 h, 4.3 h shared; ground truth from inspected frames, blind
 spot-check 120/120): share-seconds precision 0.99 (padding; a 4-tile gallery's 3/4 gutter still passes),
 recall 1.00; 42% of video seconds skipped;
 ~13 s per hour of 720p source, ~6 s per hour of a shrunk .gemini.mp4. Rejected on the same set: transcript
@@ -29,11 +29,12 @@ import argparse
 import json
 import subprocess
 from itertools import pairwise
+from math import ceil
 from pathlib import Path
 
 W, H = 640, 360            # analysis size; positions below are fractions of the width
 WINDOW = (0.70, 0.82)      # where Meet puts the share/filmstrip gutter
-MIN_SEEDS = 5              # confident frames needed before a gutter position is trusted
+MIN_SEED_SECONDS = 10      # scale evidence with cadence, so sparse sampling still finds short demos
 
 
 def probe(video: Path) -> tuple[float, float]:
@@ -86,7 +87,7 @@ def column_profiles(video: Path, step: float, keyframes_only: bool):
     return np.array(profiles, np.float32).reshape(-1, W), np.array(rows, np.float32).reshape(-1, H), margins
 
 
-def shared_frames(cols) -> tuple[list[bool], list[float], list[int]]:
+def shared_frames(cols, step: float = 2.0) -> tuple[list[bool], list[float], list[int]]:
     """Per frame: Meet share layout? Plus the learned gutter positions (fractions of the width) and the gutter
     column each frame matched (0: none)."""
     import numpy as np
@@ -103,7 +104,7 @@ def shared_frames(cols) -> tuple[list[bool], list[float], list[int]]:
     seeds = np.bincount(peak[(strength >= 0.85) & (right > 0.25) & (left > 0.3)], minlength=W)
     gutters: list[int] = []
     for x in np.argsort(-seeds):
-        if seeds[x] < MIN_SEEDS:
+        if seeds[x] < max(1, ceil(MIN_SEED_SECONDS / step)):
             break
         if all(abs(int(x) - g) > 4 for g in gutters):
             gutters.append(int(x))
@@ -135,11 +136,13 @@ def share_box(cols, rows, matched, start: float, end: float, step: float) -> lis
 
 
 def to_ranges(flags: list[bool], step: float, duration: float, gap: float = 20.0, pad: float = 4.0,
-              min_samples: int = 2) -> list[dict]:
+              min_samples: int | None = None) -> list[dict]:
     """Sampled flags (one per `step` seconds from 0) -> padded share ranges.
 
-    Runs shorter than min_samples are dropped (one odd frame), runs closer than `gap` seconds merge,
+    Runs shorter than min_samples (default: 4 s worth of samples) are dropped, runs closer than `gap` seconds merge,
     confidence is the share of positive samples inside the merged run, edges are padded by `pad`."""
+    if min_samples is None:
+        min_samples = max(1, ceil(4 / step))
     runs, start = [], None
     for i, flag in enumerate(list(flags) + [False]):
         if flag and start is None:
@@ -170,9 +173,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("video", type=Path)
     parser.add_argument("--out", type=Path, help="default <video stem>.screenshare.json beside the video")
-    parser.add_argument("--step", type=float, default=2.0, help="seconds between sampled frames")
+    parser.add_argument("--step", type=float, default=15.0, help="seconds between sampled frames (default: 15)")
     parser.add_argument("--gap", type=float, default=20.0, help="merge share ranges closer than this (s)")
-    parser.add_argument("--pad", type=float, default=4.0, help="seconds added on both sides of every range")
+    parser.add_argument("--pad", type=float, default=4.0, help="minimum padding on both sides (s; at least --step)")
     args = parser.parse_args()
     video = args.video.expanduser().resolve()
     if not video.is_file():
@@ -185,8 +188,9 @@ def main() -> None:
         raise SystemExit("no frames decoded")
     meet = sum(margins) / len(margins) >= 0.6
     if meet:
-        flags, gutters, matched = shared_frames(cols)
-        ranges = to_ranges(flags, args.step, duration, args.gap, args.pad)
+        flags, gutters, matched = shared_frames(cols, args.step)
+        # A full sampling interval of padding covers starts/ends between inspected frames.
+        ranges = to_ranges(flags, args.step, duration, args.gap, max(args.pad, args.step))
         for r in ranges:  # for shrink-video --crop: filmstrip (faces) and dark margins cut off
             r["crop"] = share_box(cols, rows, matched, r["start"], r["end"], args.step)
         result = {"duration": round(duration, 1), "method": "meet-layout", "gutters": gutters, "ranges": ranges}
