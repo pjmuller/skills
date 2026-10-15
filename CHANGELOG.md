@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- recording-followups: `scripts/recording_owner.py` elects the one teammate machine that processes a shared-recorder call (team from recorder account, first priority person with vendor-verified speech; invitees/display names never count). [owner-election.md](skills/recording-followups/owner-election.md).
 - agents-md: try the account-correct Chrome/CDP session when T3 is unavailable or lacks the needed login; inspect existing signed-in tabs before asking for authentication help.
 
 ## v0.4.9 (2026-10-15)
