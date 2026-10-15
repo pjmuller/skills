@@ -125,15 +125,16 @@ automatic routing for a while, e.g. to fill one account before applying a banked
 
 ```json
 {"until": "2026-10-22T18:00:00+02:00", "weekly_cap": 90,
- "prefer": [{"id": "claudeAgent_a"}, {"id": "claudeAgent_b", "from": "2026-10-17T17:00:00+02:00"}]}
+ "prefer": [{"id": "claudeAgent_a", "until": "2026-10-17T17:00:00+02:00"},
+            {"id": "claudeAgent_b", "from": "2026-10-17T17:00:00+02:00"}]}
 ```
 
-The first `prefer` instance that is verified, not session-tight, past its `from`, and whose highest
-relevant weekly-class window (a `<Model> only` cap counts for that model) is under `weekly_cap` wins
-outright; otherwise the score above decides. Exclusion, unknown usage, explicit `--profile NAME`,
+The first `prefer` instance that is verified, not session-tight, inside its optional `from`/`until`, and
+whose highest relevant weekly-class window (a `<Model> only` cap counts for that model) is under `weekly_cap`
+wins outright; otherwise the score above decides. Exclusion, unknown usage, explicit `--profile NAME`,
 `--force-profile` and `T3_SPAWN_PROVIDER` still win; `--profile a,b` applies it among those. The cap is a
 preference cutoff, not a ceiling: running threads keep burning, ordinary routing may still pick the
-account above it. `until` (UTC offset required) is mandatory; expired or invalid → ordinary routing,
+account above it. Top-level `until` (UTC offsets required) is mandatory; expired or invalid → ordinary routing,
 noted in the reason. Dry runs print why each entry was taken or skipped. Disable: delete the file.
 
 Accepted trade-offs: bottleneck ranking ignores a strong second window, and

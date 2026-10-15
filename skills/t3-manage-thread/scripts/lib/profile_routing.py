@@ -163,19 +163,19 @@ def relative_age(account, now):
 
 
 def load_override(now, path=None):
-    """{"until", "weekly_cap", "prefer": [(id, from)]} while the private override
+    """{"until", "weekly_cap", "prefer": [(id, from, until)]} while the private override
     file is valid and unexpired; None when absent; {"note"} when expired/invalid."""
     path = path or OVERRIDE
     try:
         data = json.loads(path.read_text())
         until = datetime.fromisoformat(data["until"])
-        prefer = [(e, None) if isinstance(e, str) else
-                  (e["id"], datetime.fromisoformat(e["from"]) if e.get("from") else None)
+        stamp = lambda e, key: datetime.fromisoformat(e[key]) if e.get(key) else None
+        prefer = [(e, None, None) if isinstance(e, str) else (e["id"], stamp(e, "from"), stamp(e, "until"))
                   for e in data["prefer"]]
         cap = float(data.get("weekly_cap", 90))
-        if until.tzinfo is None or any(start and start.tzinfo is None for _, start in prefer):
+        if until.tzinfo is None or any(t and t.tzinfo is None for _, *times in prefer for t in times):
             raise ValueError("timestamps need a UTC offset")
-        if not isinstance(data["prefer"], list) or not all(isinstance(id, str) and id for id, _ in prefer):
+        if not isinstance(data["prefer"], list) or not all(isinstance(id, str) and id for id, *_ in prefer):
             raise ValueError("prefer must list instance ids")
         if not 0 < cap <= 100:
             raise ValueError("weekly_cap must be in (0, 100]")
@@ -190,13 +190,13 @@ def load_override(now, path=None):
 
 def override_pick(candidates, override, now):
     """(candidate, notes): the first `prefer` account that is verified, not
-    session-tight, past its `from` and under the weekly cap; notes say why each
+    session-tight, inside its `from`/`until` and under the weekly cap; notes say why each
     earlier entry was skipped. Entries of other drivers stay silent."""
     by_id = {c.instance_id: c for c in candidates}
     cap, notes = override["weekly_cap"], []
-    for id, start in override["prefer"]:
+    for id, start, end in override["prefer"]:
         c = by_id.get(id)
-        if c is None:
+        if c is None or (end and now >= end):
             continue
         if c.status != "ok":
             why = f"{c.status} ({c.detail})"
