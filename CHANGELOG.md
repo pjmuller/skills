@@ -4,6 +4,7 @@
 
 - recording-watcher (new): config-driven poller for Fathom, Leexi and Monologue, every 5 min in work hours (launchd on macOS, systemd user timer on Linux/WSL), with deterministic owner election so one teammate machine processes each call; `seed` starts a new machine without backfill. [setup](skills/recording-watcher/setup.md).
 - recording-followups: shared spoken cue "James" with spawn/ticket commands. [spoken-cues.md](skills/recording-followups/spoken-cues.md).
+- agents-md: chat file paths are always absolute (repo-relative badges broke when the file lived in another repo); a file only on a remote branch gets its web URL.
 - agents-md: try the account-correct Chrome/CDP session when T3 is unavailable or lacks the needed login; inspect existing signed-in tabs before asking for authentication help.
 
 ## v0.4.9 (2026-10-15)
