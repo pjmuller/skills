@@ -33,6 +33,16 @@ t3-hide-thread <id> · t3-rename-thread <id> -- "…" · t3-limits · t3-list-pr
 - `--source-thread` when the parent is not auto-detected (a Codex CLI session
   outside T3 has no T3 address).
 
+## Personal config (optional, per user)
+
+Beside T3's `settings.json` in `${T3CODE_HOME:-~/.t3}/userdata/`; absent = defaults. Keep the
+sources in your private setup repo.
+- `t3-manage-thread.json` → `{"instructions": "/abs/path/to/your-t3-notes.md"}`: when present,
+  read that file before routing/spawning work (accounts, plan notes, runbooks). Agents only; the
+  scripts never read it.
+- `t3-plan-multipliers.json` (tiers, [limits.md](limits.md)) and `t3-routing-override.json`
+  (temporary preference, [spawn-thread.md](spawn-thread.md#temporary-override)): read by the scripts.
+
 | Need | Read |
 | --- | --- |
 | Spawn: 🏓/📤/fire-and-forget, titles, models, thinking, images, account routing | [spawn-thread.md](spawn-thread.md) |
