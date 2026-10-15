@@ -48,8 +48,16 @@ pile up (80 = ~5 GB on 2026-10-14). Verified 2026-10-14 on v0.0.45:
   thread) only drops the server session; the guest keeps running.
 - View → Reload hits the *focused webContents*, which may be a guest
   ([t3code #13897](https://github.com/pingdotgg/t3code/issues/13897) root cause), not the window.
-- What works: `kill -SEGV <UI renderer>` (the T3 renderer without
-  `--enable-blink-features`) → crash recovery reloads the window in ~2 s, all guests
-  die. Server (parent of claude/codex CLIs) and composer drafts survive. Never SIGHUP/
-  SIGTERM: "killed" is not recovered and the window stays dead (fix: Window menu →
-  T3 Code, then View → Reload). `t3-preview-gc` (t3-maintenance) automates all of this.
+- `t3-preview-gc --apply` deliberately crashes the UI renderer; not a blank-window
+  repair. Prefer its default dry-run for unattended monitoring.
+
+## Blank T3 window (macOS)
+
+Verified 2026-10-15 on v0.0.45: through native computer use, **File → Close Window,
+then activate T3 again**. This recreates the window without quitting the app; the
+server and all six observed Claude workers kept their PIDs. Never Cmd+Q / Quit.
+Record server/worker PIDs before, then verify the UI and same PIDs afterwards.
+Window → T3 Code → View → Reload / Force Reload may fail when the renderer is gone.
+Recheck macOS window-close behaviour after upgrades; inspect cleanup logs before
+blaming a scheduled job. No verified CLI recovery utility; do not use renderer
+kill signals as a substitute.
