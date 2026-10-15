@@ -1,6 +1,6 @@
 ---
 name: t3-maintenance
-description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for unexpected old or missing sidebar threads, monthly T3 cleanup, thread inventory, orchestrator fleet view of worker threads (stalled/unanswered workers, bulk unsettle or ping), bulk settle/unsettle repair, purging old transcripts, unsent composer drafts, "mine my prompts", or "/t3-maintenance". Do not use for spawning, pinging, reading, or settling one known worker thread; use t3-manage-thread for that lifecycle.
+description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for unexpected old or missing sidebar threads, monthly T3 cleanup, thread inventory, orchestrator fleet view of worker threads (stalled/unanswered workers, bulk unsettle or ping), bulk settle/unsettle repair, purging old transcripts, unsent composer drafts, "mine my prompts", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or "/t3-maintenance". Do not use for spawning, pinging, reading, or settling one known worker thread; use t3-manage-thread for that lifecycle.
 ---
 
 # T3 Maintenance
@@ -18,6 +18,8 @@ Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Fl
 - `t3-purge-threads` — delete old threads + provider transcripts (they hold secrets).
 - `t3-preview-gc` — free browser-preview renderers (macOS desktop): close settled threads' tabs, then
   crash-reload the window when many remain. Mechanism, guards and why: its docstring.
+- `t3-git-leftovers` — repos with uncommitted/unpushed work, one hidden worker per repo
+  ([below](#git-leftovers-t3-git-leftovers)).
 - Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).
 
 Neighbours: rate-limited threads → [t3-usage-windows](../t3-usage-windows/SKILL.md); recurring
@@ -67,6 +69,24 @@ T3 stores no worker topology; `t3-fleet list` infers it:
 - **Stalled** — assistant-last AND session `stopped` AND a resolvable parent never got the ping
   back: provably dead. `unknown-parent` = same state without a resolvable parent, so just as likely
   an ordinary finished thread. `--stalled` matches both; `--stalled=strict` only the provable ones.
+
+## Git leftovers (`t3-git-leftovers`)
+
+Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`. Verdicts
+and flags: `--help`. One orchestrator owns a run dir; the ledger makes reruns adopt, never duplicate.
+
+```bash
+R=~/.local/state/git-leftovers/$(date +%F)
+t3-git-leftovers survey --out $R --apply-ff --ignore-thread <own thread id>
+t3-git-leftovers dispatch $R --model <m> --dry-run       # read the briefs, then without --dry-run
+t3-git-leftovers dispatch $R --model <m> --wait          # background shell; ≤ --max-parallel live
+t3-git-leftovers status $R --markdown                    # landed / protected / blocked / running
+```
+
+Workers spawn `--settle-when-done --hide`, titled `🧹 git leftovers <repo> <date>`, and follow
+[git-leftovers.md](git-leftovers.md). A spawned worker is not a landed repo: `status` re-checks git and
+thread state; only its counts go in the report. `blocked` = the worker unhid itself for the user;
+`unverified` = git could not be re-read (never counted landed).
 
 ## Prompt patterns (`t3-my-prompts`)
 
