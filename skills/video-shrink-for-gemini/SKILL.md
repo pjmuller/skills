@@ -84,9 +84,9 @@ the video tokens of `low`): it decides whether screen text is read or invented (
 videos whose screen content doesn't matter.
 
 Google Meet recordings (Fathom, Leexi): first `detect-screenshare <name>.gemini.mp4` (seconds per
-hour, local) → `<name>.gemini.screenshare.json`, then pass it as `--ranges`: frames only while a
+hour, local; one frame every 15 seconds) → `<name>.gemini.screenshare.json`, then pass it as `--ranges`: frames only while a
 screen is shared, audio throughout; no share → audio only. Not Meet (Loom, Zoom, phone) → the JSON
-says `full-fallback` and the whole video is sent. 10 Meet calls: 42% of video seconds skipped,
+says `full-fallback` and the whole video is sent. Historical benchmark at 2-second sampling, 10 Meet calls: 42% of video seconds skipped,
 recall 1.00; a 29-minute call cost $0.14 instead of ~$0.17 (low resolution). Transcript cues ("share my screen")
 missed most share starts: don't use them. Then `shrink-video --crop <name>.gemini.screenshare.json SOURCE`
 → `<name>.gemini.crop.mp4` (share tile fills the frame, no webcam faces); transcribe that with the same

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- video-shrink-for-gemini: screen-share detection samples every 15 seconds by default; evidence thresholds scale with cadence and range padding covers transitions between samples.
 - recording-watcher (new): config-driven poller for Fathom, Leexi and Monologue, every 5 min in work hours (launchd on macOS, systemd user timer on Linux/WSL), with deterministic owner election so one teammate machine processes each call; `seed` starts a new machine without backfill. [setup](skills/recording-watcher/setup.md).
 - recording-followups: shared spoken cue "James" with spawn/ticket commands. [spoken-cues.md](skills/recording-followups/spoken-cues.md).
 - agents-md: chat file paths are always absolute (repo-relative badges broke when the file lived in another repo); a file only on a remote branch gets its web URL.
