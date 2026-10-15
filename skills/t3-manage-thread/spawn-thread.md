@@ -26,6 +26,11 @@ guarantees the instruction, not compliance: `t3-fleet list --stalled`
 ([t3-maintenance](../t3-maintenance/SKILL.md)) detects workers that never pinged.
 Nothing settles the worker: after its report is verified, `t3-settle-thread --wait ID`.
 
+Multiple models on one topic: spawn one standalone lead (e.g. Fable or Opus),
+which owns hidden 🏓 workers (e.g. Astra or Sol) and the final result. Don't spawn
+standalone peers for the user to combine; separate standalones mean separate topics
+unless explicitly requested.
+
 Return path is decided per spawn from what the user asked: 🏓 when the result
 feeds back into **this thread's deliverable** (review, delegated sub-step,
 anything this thread still has to verify before it can finish); 📤 standalone
