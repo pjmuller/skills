@@ -311,7 +311,7 @@ def test_override_prefers_first_eligible_account_until_its_cap(tmp_path):
         dentai = account("dentai", used, scoped=scoped)
         dentai.rows[0].used_percent = 0
         selected, reason, _ = choose([dentai, probackup], "claude-fable-5", "dentai", NOW, load_override(NOW, path))
-        assert selected == "probackup" and "≥ cap 90%" in reason
+        assert selected == "probackup" and ("Fable only 92%" if scoped else "weekly 90%") + " ≥ cap 90%" in reason
     assert choose([dentai, probackup], "claude-opus-5", "x", NOW, load_override(NOW, path))[0] == "dentai"
 
 
