@@ -1,0 +1,41 @@
+name: Dependencies
+
+on:
+  pull_request:
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+      - '.github/dependabot.yml'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+      - '.github/dependabot.yml'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: '3.13'
+      - name: Shell dependencies
+        run: sudo apt-get update && sudo apt-get install -y zsh jq
+      - name: Check committed locks
+        run: |
+          # WhatsApp's lock needs its locally built Neonize source.
+          for lock in uv.lock skills/{clickup-core,google-workspace-core,yuki-core}/uv.lock; do
+            uv lock --check --project "$(dirname "$lock")"
+          done
+      - name: Test skills
+        run: uv run --locked --with pytest pytest skills -q
+      - name: Test ClickUp with its shipped lock
+        run: uv run --project skills/clickup-core --locked --with pytest pytest skills/clickup-core/scripts -q

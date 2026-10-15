@@ -15,6 +15,9 @@ uv run .agents/skills/clickup-core/scripts/clickup.py whoami   # token identity 
 
 `scripts/install --check` verifies uv and the PEP 723 deps. Offline tests (source repo):
 `uv run --with pytest pytest skills/clickup-core/scripts -q`.
+Dependency updates belong in the public source's `uv.lock`, then refresh consumer copies;
+consumer-only lock edits are overwritten. Verify the shipped environment with
+`uv run --project skills/clickup-core --locked --with pytest pytest skills/clickup-core/scripts -q`.
 
 ## Configuration and auth
 
