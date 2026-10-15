@@ -9,7 +9,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
-from profile_routing import check, choose, explain, relevant, route
+from profile_routing import check, choose, explain, load_override, relevant, route
 from t3_limits import Account, Row, claude_profiles, claude_rows, plan_multiplier, tier_text
 
 NOW = datetime.now(timezone.utc)
@@ -293,3 +293,57 @@ def test_named_accounts_route_among_themselves_and_explicit_one_is_checked(tmp_p
     with pytest.raises(ValueError) as info:
         check("claude-fable-5-1", "kamp", settings, collect)
     assert info.value.alternative is None
+
+
+def write_override(path, **data):
+    path.write_text(json.dumps({"until": (NOW + timedelta(days=3)).isoformat()} | data))
+    return path
+
+
+def test_override_prefers_first_eligible_account_until_its_cap(tmp_path):
+    """PJ 2026-10-15: concentrate on one account before applying its banked reset."""
+    path = write_override(tmp_path / "o.json", weekly_cap=90, prefer=["kamp", {"id": "dentai"}])
+    dentai, probackup = account("dentai", 57), account("probackup", 1)
+    assert choose([dentai, probackup], "claude-opus-5", "probackup", NOW)[0] == "probackup"  # ordinary score
+    selected, reason, _ = choose([dentai, probackup], "claude-opus-5", "probackup", NOW, load_override(NOW, path))
+    assert selected == "dentai" and "weekly 57%" in reason  # absent "kamp" stays silent
+    for used, scoped in ((90, None), (20, ("Fable", 92))):  # cap: all-model weekly, or the Fable cap for Fable
+        dentai = account("dentai", used, scoped=scoped)
+        dentai.rows[0].used_percent = 0
+        selected, reason, _ = choose([dentai, probackup], "claude-fable-5", "dentai", NOW, load_override(NOW, path))
+        assert selected == "probackup" and "≥ cap 90%" in reason
+    assert choose([dentai, probackup], "claude-opus-5", "x", NOW, load_override(NOW, path))[0] == "dentai"
+
+
+def test_override_never_beats_guards_and_ends_by_itself(tmp_path):
+    later = (NOW + timedelta(hours=5)).isoformat()
+    path = write_override(tmp_path / "o.json", prefer=[{"id": "dentai", "from": later}, "kamp", "probackup"])
+    tight = account("kamp", 10)
+    tight.rows[0].used_percent = 95
+    accounts = [account("dentai", 10), tight, account("probackup", 98, scoped=("Fable", 100)), account("x", 5)]
+    selected, reason, _ = choose(accounts, "claude-fable-5", "x", NOW, load_override(NOW, path))
+    assert selected == "x"
+    assert "dentai waits until" in reason and "kamp session tight" in reason and "probackup excluded" in reason
+    started = write_override(tmp_path / "s.json", prefer=[{"id": "dentai", "from": NOW.isoformat()}])
+    assert choose(accounts, "claude-fable-5", "x", NOW, load_override(NOW, started))[0] == "dentai"
+    expired = load_override(NOW + timedelta(days=4), path)
+    selected, reason, _ = choose(accounts, "claude-fable-5", "x", NOW, expired)
+    assert selected == "x" and "override expired" in reason
+    future = (NOW + timedelta(days=1)).isoformat()
+    for bad in ('{"until": "2026-10-22T18:00:00", "prefer": []}', '{"prefer": ["a"]}', "not json",
+                f'{{"until": "{future}", "prefer": [{{"id": ["a"]}}]}}', f'{{"until": "{future}", "prefer": "ab"}}',
+                f'{{"until": "{future}", "prefer": ["a"], "weekly_cap": "NaN"}}'):
+        (tmp_path / "bad.json").write_text(bad)
+        assert "invalid" in load_override(NOW, tmp_path / "bad.json")["note"]
+    assert load_override(NOW, tmp_path / "missing.json") is None
+
+
+def test_override_respects_named_and_explicit_accounts(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"providerInstances": {
+        id: {"driver": "claudeAgent", "enabled": True} for id in ("kamp", "dentai")}}))
+    write_override(tmp_path / "t3-routing-override.json", prefer=["dentai"])
+    collect = Mock(return_value=[account("kamp", 1), account("dentai", 60)])
+    assert route("claude-opus-5", "kamp", settings, collect)[0] == "dentai"
+    assert route("claude-opus-5", "kamp", settings, collect, ["kamp"])[0] == "kamp"
+    assert "capacity ok" in check("claude-opus-5", "kamp", settings, collect)

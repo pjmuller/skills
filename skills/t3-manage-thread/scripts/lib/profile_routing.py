@@ -25,12 +25,18 @@ Three rules (spawn-thread.md §Automatic profile routing):
 3. Ties prefer the inherited account (or its cross-driver sibling), then the
    instance id. Paid overage is never capacity.
 
+A private, expiring override (t3-routing-override.json beside settings.json)
+may put an ordered account preference on top of rule 2 for a while, e.g. to
+concentrate work on one account before applying a banked reset. Rules 1, the
+session guard and every explicit choice still win over it.
+
     profile_routing.py MODEL PREFERRED_INSTANCE SETTINGS_JSON [ALLOWED_IDS_CSV]
         prints the chosen id (only among ALLOWED when given); explanation on stderr
     profile_routing.py --check MODEL INSTANCE SETTINGS_JSON
         explicit single account: exit 0 when usable or unverified (warning on
         stderr), exit 2 printing the best alternative id when it is excluded
 """
+import json
 import math
 import re
 import sys
@@ -47,6 +53,7 @@ WEEKLY_CLASS_SECONDS = 24 * 3600  # windows at least this long carry the urgency
 MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
+OVERRIDE = SETTINGS.parent / "t3-routing-override.json"  # private and temporary, see spawn-thread.md
 
 
 def model_family(model):
@@ -82,6 +89,7 @@ class Candidate:
     rate: float = 0.0      # tightest weekly-class window's headroom % per hour to reset (ok only)
     score: float = 0.0     # rate × weight: plan units per hour
     bottleneck: str = ""
+    weekly_used: float = 0.0  # highest relevant weekly-class used % (override cap)
     session_room: float | None = None  # weight × tightest session headroom %, None without a session window
     session_tight: bool = False
 
@@ -130,6 +138,7 @@ def assess(account, model, now):
     if rated:
         candidate.rate, candidate.bottleneck = min(rated)
         candidate.score = candidate.rate * candidate.weight
+    candidate.weekly_used = max(r.used_percent for r in weekly)
     sessions = [100 - r.used_percent for r in rows if (r.length_seconds or 0) < WEEKLY_CLASS_SECONDS]
     if sessions:
         candidate.session_room = candidate.weight * min(sessions)
@@ -151,15 +160,75 @@ def relative_age(account, now):
     return relative(seconds).removeprefix("in ") if seconds >= 60 else f"{int(seconds)}s"
 
 
-def choose(accounts, model, preferred, now):
+def load_override(now, path=None):
+    """{"until", "weekly_cap", "prefer": [(id, from)]} while the private override
+    file is valid and unexpired; None when absent; {"note"} when expired/invalid."""
+    path = path or OVERRIDE
+    try:
+        data = json.loads(path.read_text())
+        until = datetime.fromisoformat(data["until"])
+        prefer = [(e, None) if isinstance(e, str) else
+                  (e["id"], datetime.fromisoformat(e["from"]) if e.get("from") else None)
+                  for e in data["prefer"]]
+        cap = float(data.get("weekly_cap", 90))
+        if until.tzinfo is None or any(start and start.tzinfo is None for _, start in prefer):
+            raise ValueError("timestamps need a UTC offset")
+        if not isinstance(data["prefer"], list) or not all(isinstance(id, str) and id for id, _ in prefer):
+            raise ValueError("prefer must list instance ids")
+        if not 0 < cap <= 100:
+            raise ValueError("weekly_cap must be in (0, 100]")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return {"note": f"override {path.name} ignored: invalid ({error.__class__.__name__}: {error})"}
+    if now >= until:
+        return {"note": f"override expired {until:%a %d %b %H:%M %z}; ordinary routing"}
+    return {"until": until, "weekly_cap": cap, "prefer": prefer}
+
+
+def override_pick(candidates, override, now):
+    """(candidate, notes): the first `prefer` account that is verified, not
+    session-tight, past its `from` and under the weekly cap; notes say why each
+    earlier entry was skipped. Entries of other drivers stay silent."""
+    by_id = {c.instance_id: c for c in candidates}
+    cap, notes = override["weekly_cap"], []
+    for id, start in override["prefer"]:
+        c = by_id.get(id)
+        if c is None:
+            continue
+        if c.status != "ok":
+            why = f"{c.status} ({c.detail})"
+        elif start and now < start:
+            why = f"waits until {start:%a %d %b %H:%M}"
+        elif c.session_tight:
+            why = "session tight"
+        elif c.weekly_used >= cap:
+            why = f"weekly {c.weekly_used:.0f}% ≥ cap {cap:.0f}%"
+        else:
+            return c, notes
+        notes.append(f"{id} {why}")
+    return None, notes
+
+
+def choose(accounts, model, preferred, now, override=None):
     """(instance_id, reason, candidates) — raises ValueError with the candidates
     attached when every account is exhausted."""
     candidates = [assess(a, model, now) for a in accounts]
     ok = [c for c in candidates if c.status == "ok"]
     unknown = [c for c in candidates if c.status == "unknown"]
     tie = lambda c: (c.instance_id != preferred, c.instance_id)
+    note = (override or {}).get("note", "")
     if ok:
         mark_session_tight(ok)
+        if override and not note:
+            pick, skipped = override_pick(candidates, override, now)
+            head = f"override until {override['until']:%a %d %b %H:%M}"
+            if pick:
+                why = (f"{head}: first preferred account under weekly cap {override['weekly_cap']:.0f}% "
+                       f"(weekly {pick.weekly_used:.0f}%)")
+                return pick.instance_id, why + "".join(f"; skipped {s}" for s in skipped), candidates
+            if skipped:
+                note = f"{head}: no preferred account eligible ({'; '.join(skipped)})"
         best = min(ok, key=lambda c: (c.session_tight, -c.score, *tie(c)))
         why = (f"{best.bottleneck} {best.rate:.1f} %/h × {best.weight}x = {best.score:.1f} — "
                "highest plan-weighted headroom per hour to reset"
@@ -169,7 +238,7 @@ def choose(accounts, model, preferred, now):
         if len(ok) > 1 and best.instance_id == preferred and any(
                 (c.session_tight, c.score) == (best.session_tight, best.score) for c in ok if c is not best):
             why += ", tie → inherited account"
-        return best.instance_id, why, candidates
+        return best.instance_id, why + (f" [{note}]" if note else ""), candidates
     if unknown:
         best = min(unknown, key=tie)
         return best.instance_id, "usage unknown/stale for every candidate; capacity unverified", candidates
@@ -200,7 +269,7 @@ def explain(model, candidates, now, selected=None, reason=""):
     return "\n".join(lines)
 
 
-def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None):
+def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None, override_path=None):
     """(instance_id, reason, explanation). Drivers without per-instance usage keep
     the inherited account (sibling on a driver switch). `allowed` (ids) narrows
     the candidates to the accounts the user named."""
@@ -231,8 +300,9 @@ def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None):
                                          cache_path=settings_path.parent / "t3-limits-cache.json", now=now)
     if allowed:
         accounts = [a for a in accounts if a.instance_id in allowed]
+    override = load_override(now, override_path or settings_path.parent / OVERRIDE.name)
     try:
-        selected, reason, candidates = choose(accounts, model, preferred, now)
+        selected, reason, candidates = choose(accounts, model, preferred, now, override)
     except ValueError as error:
         error.explanation = explain(model, error.candidates, now)
         raise
