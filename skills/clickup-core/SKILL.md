@@ -90,12 +90,17 @@ Defaults; the wrapper may override. Humans reading ClickUp are the bottleneck; e
 attention.
 
 - Two writes per ticket: status at start, one handoff/review at the end. No progress notes.
+- A substantive description append is a new handoff: after verified readback, post one brief native-mention
+  comment to the responsible owner/reviewer pointing to the dated section. Do this even when the task is
+  already `to test` or its status does not change; never silently append. Preserve status/assignees.
+  Check comments before retrying a notification. Explicit no-notification instructions still win.
 - ≤ 5 short lines in the reader's language: what they must do or check, then what changed as they
   see it. No code identifiers for non-engineers.
 - Open with a native `--mention` of the one person who must act; don't ping authors about their own
   ticket unless urgent. `--mention` takes a wrapper alias, a workspace member's name/email, or an id;
   a typed `@Name` in `--text` is plain text that notifies nobody, so `comment` refuses it.
-- Shipped facts only; never post pending decisions or questions. In limbo → write nothing.
+- Notify verified changes only. An authorized requirement/prompt added to the description is a ticket
+  change, not a claim that the product shipped. Ongoing ideation or implementation progress stays silent.
 - Reader acts through a coding agent: one ```md block addressed to their agent, English,
   copy-paste whole. Reverse direction (reporter → developer): symptoms, data, intended outcome.
   Patterns: skill `agents-md` → `handoff.md`.
