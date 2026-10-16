@@ -28,6 +28,7 @@ import uuid
 import os
 import plistlib
 import shlex
+import sqlite3
 import subprocess
 import sys
 from datetime import date, datetime, time, timedelta
@@ -781,6 +782,16 @@ def describe_resume(spec: dict) -> str:
     return f" · resumes {spec['resume_thread']}" if spec.get("resume_thread") else ""
 
 
+def thread_exists(thread_id: str) -> bool:
+    """Read-only lookup in T3's V2 store (ids look like uuid, mcp:…, thread:project:…)."""
+    db = Path.home() / ".t3/userdata/statev2.sqlite"
+    if not db.exists():
+        return False
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10) as con:
+        return con.execute("select 1 from orchestration_v2_projection_threads where thread_id = ? "
+                           "and deleted_at is null", (thread_id,)).fetchone() is not None
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     name = valid_name(args.name)
     p = paths(name)
@@ -795,11 +806,9 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise SystemExit("--profile needs --model (the account is picked per model ecosystem)")
     resume = args.resume_thread
     if resume:
-        try:
-            resume = str(uuid.UUID(resume))
-        except ValueError:
-            raise SystemExit(f"--resume-thread expects a T3 thread id, got {resume!r}; inside T3 pass your own "
-                             "(t3_thread_list → currentThreadId), a launchd job cannot resolve 'self'") from None
+        if not thread_exists(resume):
+            raise SystemExit(f"--resume-thread: no T3 thread {resume!r}; inside T3 pass your own "
+                             "(t3_thread_list → currentThreadId), a launchd job cannot resolve 'self'")
         if args.settle_when_done or args.model or args.thinking or args.title:
             raise SystemExit("--resume-thread sends a turn to an existing thread: drop --settle-when-done/--model/"
                              "--profile/--thinking/--title (say lifecycle wishes in the prompt)")

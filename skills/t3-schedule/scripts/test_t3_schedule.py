@@ -229,6 +229,7 @@ def test_add_continuation_validation(tmp_path, monkeypatch, capsys):
     import argparse
     import pytest
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(mod, "thread_exists", lambda tid: tid == TID)  # V2 store lookup
     add = lambda **kw: mod.cmd_add(argparse.Namespace(**{
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
         "profile": None, "model": None, "thinking": None, "settle_when_done": False,
