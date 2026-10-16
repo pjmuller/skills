@@ -2,7 +2,7 @@
 
 Flags: `t3-limits --help` (`--markdown` for a routing decision, `--json` for
 scripts, `--fresh` skips the cache). Code: `scripts/lib/t3_limits.py`, shared
-with [spawn routing](spawn-thread.md#automatic-profile-routing).
+with [routing](routing.md).
 
 Glossary:
 - Percentages are **used** (CodexBar's menubar shows % left).

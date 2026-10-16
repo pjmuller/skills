@@ -7,7 +7,7 @@ add their sources and policies on top of these rules, not instead of them.
 ## Title
 
 `<emoji> <3–6 words the user recognises>`, in the user's language. The emoji is the only
-routing signal: `🏓` round-trip or `📤` standalone ([spawn-thread.md](spawn-thread.md#-round-trip-workers)).
+routing signal: `🏓` round-trip or `📤` standalone ([workers.md](workers.md#which-one)).
 No ticket IDs, repo names or phase words in the
 title: they mean nothing at sidebar width; the ID belongs in the brief. Good:
 `📤 Annulatiepolicy toepassen`. Bad: `🎫 869f4kx78 annulatiepolicy: numeric fields, conditional
@@ -24,7 +24,7 @@ work is routed per the project's own rules (Redcell: never Fable).
 
 ## Brief
 
-A file on disk, path in the spawn argument (`"Read and execute /abs/path/brief.md"`), never a long
+A file on disk, path in the task/message (`"Read and execute /abs/path/brief.md"`), never a long
 inline string. Shape it to how settled the topic is:
 
 - **brainstorm-only**: the question, the options seen so far, a word cap, "no code, stop and wait";
@@ -41,7 +41,7 @@ it away: a 10–30 KB brief is fine, a one-line "meeting adds" is not.
 
 ## Bookkeeping
 
-`--project` = the primary repo (add `--allow-cross-project-source` when spawning from another
-project). One worker per ticket. Record `item | thread-id | route | spawned-at` in a git-ignored
-run file so a rerun skips already-dispatched items. Standalone threads finish under the project's
-own auto-settle rule if it has one; round-trip threads are verified and settled by the parent.
+`projectId` = the primary repo. One worker per ticket. Record `item | thread-id | route | launched-at`
+in a git-ignored run file so a rerun skips already-dispatched items (`t3_thread_launch` has no retry
+key). Standalone threads finish under the project's own auto-settle rule if it has one; 🏓 results
+come back to the dispatcher.
