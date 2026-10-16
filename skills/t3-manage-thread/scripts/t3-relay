@@ -131,6 +131,8 @@ def main() -> None:
     se.add_argument("message", nargs="+")
     sub.add_parser("check")
     a = ap.parse_args()
+    if a.cmd == "launch" and not a.model and (a.instance or a.effort):
+        die("--instance/--effort need --model (without it T3 uses the project default model and account)", 2)
 
     con = store()
     task_id, token = relay_task(con)
