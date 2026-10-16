@@ -40,7 +40,6 @@ from t3_store import (
 
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 STUCK_AFTER = timedelta(minutes=10)
-DELIVERED = {"acknowledged", "claimed", "disposed"}
 PREVIEW_CHARS = 80
 TITLE_CHARS = 40
 PROJECT_CHARS = 18
@@ -218,7 +217,7 @@ def stall_state(thread: Thread, task) -> str | None:
         return None
     if task["status"] in ("running", "waiting"):
         return "stuck"
-    if task["status"] == "completed" and task["delivery"] not in DELIVERED:
+    if task["status"] == "completed" and task["delivery"] in ("pending", "claimed"):
         return "undelivered"
     return None
 

@@ -127,7 +127,7 @@ class GitLeftoversTest(unittest.TestCase):
         self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
 
         running = {"thread_id": "th-one", "title": ledger[str(one)]["title"], "workspace_root": str(one),
-                   "session_status": "running", "settled": False}
+                   "session_status": "running", "settled": False, "created_at": ledger[str(one)]["launched_at"]}
         self.fleet.write_text(json.dumps([running]))
         self.cli("dispatch", str(self.run_dir), "--max-parallel", "1", code=3)  # slot still taken
         self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
@@ -141,11 +141,13 @@ class GitLeftoversTest(unittest.TestCase):
         self.cli("dispatch", str(self.run_dir), "--max-parallel", "1")  # rerun: nothing new
         self.assertEqual(len(self.spawn_log.read_text().splitlines()), 2)
 
-        second = json.loads((self.run_dir / "ledger.json").read_text())[str(two)]["title"]
+        second_entry = json.loads((self.run_dir / "ledger.json").read_text())[str(two)]
+        second = second_entry["title"]
         self.fleet.write_text(json.dumps([
             {**running, "session_status": "stopped", "settled": True},
             {"thread_id": "th-two", "title": second, "workspace_root": str(two),
-             "session_status": "ready", "settled": False, "last_text": "a.txt — unclear intent"},
+             "session_status": "ready", "settled": False, "last_text": "a.txt — unclear intent",
+             "created_at": second_entry["launched_at"]},
         ]))
         status = json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))
         self.assertEqual({Path(r["repo"]).name: r["outcome"] for r in status["repos"]},
@@ -204,6 +206,21 @@ class GitLeftoversTest(unittest.TestCase):
         ledger = json.loads((self.run_dir / "ledger.json").read_text())
         self.assertEqual(ledger[str(first)]["skipped"], "spawn failed 3x")
         self.assertNotIn(str(second), ledger)
+
+    def test_relay_launch_never_adopts_an_earlier_same_title_worker(self) -> None:
+        (repo,) = self.stale_repos("again")
+        self.survey(repo)
+        title = "🧹 git leftovers again 2026-01-01"
+        (self.run_dir / "ledger.json").write_text(json.dumps(
+            {str(repo): {"relay_id": "r0", "title": title, "launched_at": "2026-01-01T12:00:00+00:00"}}))
+        self.fleet.write_text(json.dumps([
+            {"thread_id": "morning", "title": title, "workspace_root": str(repo), "settled": True,
+             "session_status": "idle", "created_at": "2026-01-01T08:00:00.000Z"},
+            {"thread_id": "noon", "title": title, "workspace_root": str(repo), "settled": False,
+             "session_status": "running", "created_at": "2026-01-01T12:00:20.000Z"},
+        ]))
+        self.cli("dispatch", str(self.run_dir))
+        self.assertEqual(json.loads((self.run_dir / "ledger.json").read_text())[str(repo)]["thread_id"], "noon")
 
     def test_lost_relay_launch_is_retried(self) -> None:
         (repo,) = self.stale_repos("lost")

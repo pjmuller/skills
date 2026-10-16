@@ -17,7 +17,7 @@ provider's own transcript files. T3 has no hard delete, so:
               once; all history now lives in statev2). Dry run unless --yes.
 
 Candidates are top-level threads; their sub-agent and delegated-task
-descendants go with them. Never purged: pinned, running, or awaiting approval,
+descendants (lineage 'subagent' edges only, never forks) go with them. Never purged: pinned, running, or awaiting approval,
 and threads a wake-up still targets (enabled native scheduled task,
 `t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`). A failing
 helper aborts: no protected set, no purge.
@@ -103,7 +103,7 @@ class Thread:
     updated_at: str
     age_seconds: float
     top_level: bool
-    root_id: str
+    parent_id: str | None
     archived: bool
     deleted: bool
     settled: bool
@@ -163,8 +163,9 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
                 title=row["title"],
                 updated_at=iso(moment),
                 age_seconds=(now - moment).total_seconds(),
-                top_level=not lineage.get("parentThreadId"),
-                root_id=lineage.get("rootThreadId") or tid,
+                # Forks also carry a parentThreadId but are independent threads.
+                top_level=lineage.get("relationshipToParent") != "subagent",
+                parent_id=lineage.get("parentThreadId"),
                 archived=row["archived_at"] is not None,
                 deleted=row["deleted_at"] is not None,
                 settled=payload.get("settledOverride") == "settled",
@@ -203,9 +204,17 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
             ):
                 if thread := threads.get(row["thread_id"]):
                     thread.session_ids |= cursor_session_ids(row["resume_cursor_json"], row["thread_id"])
+    children: dict[str, list[str]] = defaultdict(list)
     for thread in threads.values():
-        if not thread.top_level and (root := threads.get(thread.root_id)) and root is not thread:
-            root.descendants.append(thread.thread_id)
+        if not thread.top_level and thread.parent_id in threads:
+            children[thread.parent_id].append(thread.thread_id)
+    for thread in threads.values():
+        if thread.top_level:
+            stack = list(children[thread.thread_id])
+            while stack:
+                child = stack.pop()
+                thread.descendants.append(child)
+                stack += children[child]
     return threads
 
 
@@ -249,24 +258,28 @@ def provider_log(thread_id: str) -> Path:
     return PROVIDER_LOGS / f"events.{re.sub(r'[^a-z0-9-]', '-', thread_id.lower())[:80]}.log"
 
 
-def attach_files(threads: list[Thread]) -> None:
+def thread_files(thread: Thread, homes: list[Path], by_stem: dict[str, list[Path]]) -> list[Path]:
+    files: list[Path] = []
+    for session in sorted(thread.session_ids):
+        files += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session}.jsonl"))
+        for home in homes:
+            files += sorted((home / "projects").glob(f"*/{session}.jsonl"))
+    for attachment in sorted(thread.attachment_ids):
+        files += by_stem.get(attachment, [])
+    files.append(provider_log(thread.thread_id))
+    return [path for path in files if path.is_file()]
+
+
+def attach_files(rows: list[Thread], threads: dict[str, Thread]) -> None:
+    """Files of each root's whole family: descendants have their own sessions and logs."""
     homes = claude_homes()
     by_stem: dict[str, list[Path]] = defaultdict(list)
     if ATTACHMENTS.is_dir():
         for path in ATTACHMENTS.iterdir():
             by_stem[path.stem].append(path)
-    for thread in threads:
-        files: list[Path] = []
-        for session in sorted(thread.session_ids):
-            files += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session}.jsonl"))
-            for home in homes:
-                files += sorted((home / "projects").glob(f"*/{session}.jsonl"))
-        for attachment in sorted(thread.attachment_ids):
-            files += by_stem.get(attachment, [])
-        log = provider_log(thread.thread_id)
-        if log.is_file():
-            files.append(log)
-        thread.files = [path for path in files if path.is_file()]
+    for root in rows:
+        for member in [root, *(threads[tid] for tid in root.descendants)]:
+            root.files += [p for p in thread_files(member, homes, by_stem) if p not in root.files]
 
 
 def pending_wakes(store: Path) -> dict[str, str]:
@@ -564,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_drop_v1(args)
     threads = load_threads(args.store, datetime.now(UTC))
     rows, kept = select(args, threads, pending_wakes(args.store))
-    attach_files(rows)
+    attach_files(rows, threads)
     return (cmd_list if args.command == "list" else cmd_apply)(args, rows, kept)
 
 

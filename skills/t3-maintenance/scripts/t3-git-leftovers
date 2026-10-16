@@ -38,6 +38,7 @@ WALK_CAP = 5000  # files scanned per untracked directory before calling it fresh
 VERDICTS = ["worker", "owned", "fresh", "ff", "local", "clean"]
 DISPATCHABLE = ("worker", "owned")
 RELAY_GRACE_S = 15 * 60  # a relay launch not in the fleet by then failed: retry
+CLOCK_SKEW_S = 120  # ledger launched_at vs T3 created_at
 
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -324,13 +325,18 @@ def spawn(row: dict, args) -> tuple[str | None, str]:
 
 
 def ledger_thread(repo: str, entry: dict, threads: dict) -> dict | None:
-    """The entry's thread: by id, else (relay launch) by its exact title in this checkout."""
+    """The entry's thread: by id, else (relay launch) the first thread with its exact title in
+    this checkout created after the launch: an earlier same-day worker shares the title."""
     if entry.get("thread_id"):
         return threads.get(entry["thread_id"])
     if not entry.get("relay_id"):
         return None
-    return next((t for t in threads.values() if t.get("title") == entry.get("title")
-                 and os.path.realpath(t.get("workspace_root") or "/") == repo), None)
+    since = datetime.fromisoformat(entry["launched_at"]).timestamp() - CLOCK_SKEW_S
+    fresh = [t for t in threads.values() if t.get("title") == entry.get("title")
+             and os.path.realpath(t.get("workspace_root") or "/") == repo
+             and t.get("created_at")
+             and datetime.fromisoformat(t["created_at"].replace("Z", "+00:00")).timestamp() >= since]
+    return min(fresh, key=lambda t: t["created_at"], default=None)
 
 
 def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:

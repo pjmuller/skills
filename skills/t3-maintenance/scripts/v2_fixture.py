@@ -49,14 +49,14 @@ class Store:
         self._n = 0
 
     def thread(self, tid: str, title: str, *, project: str = "p", minutes: float = 0,
-               parent: str | None = None, settled: bool = False, pinned: bool = False,
+               parent: str | None = None, fork: bool = False, settled: bool = False, pinned: bool = False,
                archived: bool = False, deleted: bool = False, run: str | None = None,
                instance: str = "claudeAgent") -> None:
         payload = {
             "settledOverride": "settled" if settled else None,
             "pinnedAt": ago(1) if pinned else None,
             "lineage": {"parentThreadId": parent,
-                        "relationshipToParent": "subagent" if parent else None,
+                        "relationshipToParent": ("fork" if fork else "subagent") if parent else None,
                         "rootThreadId": parent or tid},
         }
         self.db.execute(
