@@ -39,6 +39,8 @@ def store(tmp_path: Path) -> Path:
     s.thread("archold", "archold", archived=True, minutes=10 * DAY)
     s.message("archold", "user", "SECRET", 10 * DAY, attachments=["archold-att"])
     s.thread("archold-task", "child", parent="archold", minutes=10 * DAY)
+    s.thread("archold-grandchild", "grandchild", parent="archold-task", minutes=10 * DAY)
+    s.thread("archold-fork", "fork", parent="archold", fork=True, minutes=10 * DAY)
     s.thread("archnew", "archnew", archived=True, minutes=13 * 60)
     s.thread("settold", "settold", settled=True, minutes=10 * DAY)
     s.thread("delold", "delold", deleted=True, minutes=10 * DAY)
@@ -85,7 +87,8 @@ def test_cohorts_and_exclusions(store: Path) -> None:
 
 def test_family_goes_together(store: Path) -> None:
     threads = cli.load_threads(store, datetime.now(UTC))
-    assert threads["archold"].descendants == ["archold-task"]
+    assert sorted(threads["archold"].descendants) == ["archold-grandchild", "archold-task"]
+    assert threads["archold-fork"].top_level  # a fork is its own thread, never purged with its source
     assert threads["archold"].attachment_ids == {"archold-att"}
 
 
@@ -112,26 +115,38 @@ def test_provider_log_name() -> None:
 
 
 def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:
+    logs = tmp_path / "logs"
+    logs.mkdir(exist_ok=True)
+    monkeypatch.setattr(cli, "PROVIDER_LOGS", logs)
+    monkeypatch.setattr(cli, "ATTACHMENTS", tmp_path / "attachments")
     monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "actions")
     monkeypatch.setattr(cli, "t3_is_running", lambda: None)
     monkeypatch.setattr(cli, "offer_backup_cleanup", lambda current: None)
     args = cli.build_parser().parse_args(["apply", "--yes", "--archived", *extra])
     args.store = store
-    rows, kept = cli.select(args, cli.load_threads(store, datetime.now(UTC)), {})
+    threads = cli.load_threads(store, datetime.now(UTC))
+    rows, kept = cli.select(args, threads, {})
+    cli.attach_files(rows, threads)
     assert cli.cmd_apply(args, rows, kept) == 0
     return next((tmp_path / "backups").iterdir())
 
 
 def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, monkeypatch) -> None:
+    child_log = tmp_path / "logs" / "events.archold-grandchild.log"
+    fork_log = tmp_path / "logs" / "events.archold-fork.log"
+    (tmp_path / "logs").mkdir()
+    child_log.write_text("secret")
+    fork_log.write_text("keep")
     backup = hard_purge(store, tmp_path, monkeypatch)
+    assert not child_log.exists() and fork_log.exists()  # family files go, a fork's stay
     assert backup.name.startswith("purged-threads-")
     with sqlite3.connect(backup) as copy:
         assert copy.execute("SELECT COUNT(*) FROM orchestration_v2_projection_messages").fetchone()[0] == 1
     with sqlite3.connect(store) as live:
         left = {r[0] for r in live.execute("SELECT thread_id FROM orchestration_v2_projection_threads")}
-        assert not left & {"archold", "archold-task", "otherpr"}
-        assert {"settold", "pinned", "livechild"} <= left
+        assert not left & {"archold", "archold-task", "archold-grandchild", "otherpr"}
+        assert {"settold", "pinned", "livechild", "archold-fork"} <= left
         assert live.execute("SELECT COUNT(*) FROM orchestration_events").fetchone()[0] == 0
         assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 1
 

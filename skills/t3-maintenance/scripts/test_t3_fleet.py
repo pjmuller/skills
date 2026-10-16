@@ -18,6 +18,8 @@ LAUNCHED = "mcp:bbbbbbbb-0000-0000-0000-00000000bbbb"
 STUCK = "thread:delegated-task:command%3Amcp%3Ax%3Adelegate-task%3Astuck"
 DONE = "thread:delegated-task:command%3Amcp%3Ax%3Adelegate-task%3Adone"
 SUB = "thread:provider:claudeAgent:native-thread:sub"
+CLAIMED = "thread:delegated-task:command%3Amcp%3Ax%3Adelegate-task%3Aclaimed"
+DELIVERED = "thread:delegated-task:command%3Amcp%3Ax%3Adelegate-task%3Adelivered"
 
 
 @pytest.fixture
@@ -32,6 +34,10 @@ def store(tmp_path: Path) -> Path:
     s.task(PARENT, STUCK, "running")
     s.thread(DONE, "Done review", parent=PARENT, minutes=40, run="completed")
     s.task(PARENT, DONE, "completed", "acknowledged")
+    s.thread(CLAIMED, "Claimed review", parent=PARENT, minutes=40, run="completed")
+    s.task(PARENT, CLAIMED, "completed", "claimed")
+    s.thread(DELIVERED, "Delivered review", parent=PARENT, minutes=40, run="completed")
+    s.task(PARENT, DELIVERED, "completed", "delivered")
     s.thread(SUB, "Explore", parent=PARENT, minutes=5)
     s.task(PARENT, SUB, "running", origin="provider_native")
     s.thread("cccccccc-0000-0000-0000-00000000cccc", "elsewhere", project="q", minutes=90)
@@ -70,14 +76,16 @@ def test_kinds_parent_and_git_leftovers_shape(store: Path) -> None:
         assert key in rows["Orchestrator"]
 
 
-def test_stalled_only_stuck_tasks(store: Path) -> None:
+def test_stalled_stuck_and_claimed_but_never_delivered(store: Path) -> None:
     rows = run(store, "--stalled")
-    assert [(r["title"], r["stall_state"]) for r in rows] == [("Stuck review", "stuck")]
+    assert {(r["title"], r["stall_state"]) for r in rows} == {
+        ("Stuck review", "stuck"), ("Claimed review", "undelivered")
+    }  # acknowledged / delivered are terminal
 
 
 def test_parent_by_short_id(store: Path) -> None:
     assert titles(run(store, "--parent", "aaaaaaaa")) == {
-        "📤 side quest", "Stuck review", "Done review", "Explore"
+        "📤 side quest", "Stuck review", "Done review", "Claimed review", "Delivered review", "Explore"
     }
 
 
