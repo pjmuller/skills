@@ -14,7 +14,10 @@ Catch wrong assumptions, not just broken code. For complex features or changes
 touching data, auth, money or external contracts, use an opposite-family reviewer:
 Claude-built → Sol; OpenAI-built → Opus. Small fixes and doc edits need the
 builder's own verification. Consequential design choices get a second planner's
-opinion (Claude-planned → Astra) before implementation; merge the best of both.
+opinion (Claude-planned → Astra) before implementation. Give both planners the
+same problem, constraints and evidence; withhold each other's proposals until
+both finish, then compare and resolve disagreements. Astra plans; Sol reviews
+Claude-built code.
 
 - **Brief:** goal, chosen approach, rejected alternatives, exact diff/revision,
   deliberate quirks and verification results. The reviewer may challenge the plan.

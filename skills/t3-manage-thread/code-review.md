@@ -3,9 +3,11 @@
 A model reads its own code the way it wrote it and misses the same things, so the
 reviewer is never the builder's model family: built in Claude (Fable/Opus) →
 **Sol** reviews (house effort high); built in Codex (Sol/Astra) → **Opus** reviews.
-Astra is the second *planner* (design trade-offs before building), not the default
-reviewer. The review is a 🏓 round-trip worker: the builder thread spawns it, the
-reviewer pings back, the builder triages.
+Astra handles independent second planning opinions before building; Sol handles
+Claude-built code reviews. Give both planners the same problem, constraints and
+evidence, withholding each other's proposals until both finish; then compare
+and resolve disagreements. The review is a 🏓 round-trip worker: the builder
+thread spawns it, the reviewer pings back, the builder triages.
 
 ## When
 Not every change: small fixes, one-concern edits, config/doc tweaks → trust the
