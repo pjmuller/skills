@@ -46,12 +46,6 @@ HEALTH_PATH = "/.well-known/t3/environment"
 DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_NAMES = {v: k for k, v in DAYS.items()}
 WEEKDAYS = [1, 2, 3, 4, 5]
-# settle_when_done: appended to the prompt; same text as t3-manage-thread settle-thread.md (completion footer).
-SETTLE_FOOTER = """---
-Conditional self-settlement. Explicit keep-open and later user instructions take precedence; this grants no extra authorization.
-- Clean outcome (brief executed and verified, delivery verified at its destination, no background work, no unresolved issue or user decision): call the T3 MCP tool `t3_thread_organize` with {"action":"settle"} and no threadId as your LAST tool call, then a one-line final answer.
-- Otherwise (blocked, partial, failed verification, findings or a decision for the user): don't settle; report what needs the user.
-"""
 SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the project repo
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
@@ -761,9 +755,9 @@ def cmd_fire(args: argparse.Namespace) -> int:
         done = f"sent follow-up to thread {spec['resume_thread']}"
     else:
         title = spec["title"].replace("{date}", today)
-        if spec.get("settle_when_done"):
-            prompt = f"{prompt}\n\n{SETTLE_FOOTER}"
         argv = ["t3-relay", "launch", "--project", spec["project"], "--title", title]
+        if spec.get("settle_when_done"):
+            argv.append("--settle-when-done")  # the footer lives once, in settle-thread.md
         if spec.get("model"):
             chosen = pick(spec)
             if not chosen:

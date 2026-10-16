@@ -201,10 +201,11 @@ def test_fire_launch_maps_job_fields(tmp_path, monkeypatch, capsys):
                                              "settle_when_done": True}, no_capacity=("opus",))
     relay = calls[-1]
     today = mod.date.today().isoformat()
-    assert rc == 0 and relay[:6] == ["t3-relay", "launch", "--project", "/repo", "--title", f"⏰ job {today}"]
-    assert relay[6:12] == ["--model", "fable-id", "--instance", "claudeAgent_dentai", "--effort", "low"]
+    assert rc == 0 and relay[:7] == ["t3-relay", "launch", "--project", "/repo", "--title", f"⏰ job {today}",
+                                     "--settle-when-done"]
+    assert relay[7:13] == ["--model", "fable-id", "--instance", "claudeAgent_dentai", "--effort", "low"]
     assert ["t3-pick-instance", "fable", "claudeAgent_dentai"] in calls  # label narrowed to the Claude account
-    assert relay[-1].startswith("Run the report.\n\n---\nConditional self-settlement") and '"action":"settle"' in relay[-1]
+    assert relay[-1] == "Run the report."  # the footer is appended by t3-relay
     assert capsys.readouterr().out.strip().endswith(f"launched ⏰ job {today}")
 
 

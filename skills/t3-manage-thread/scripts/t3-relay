@@ -7,7 +7,8 @@
 
 Agents inside T3 never need this: they call the T3 MCP tools directly.
 
-    t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E] -- PROMPT
+    t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
+                    [--settle-when-done] -- PROMPT
     t3-relay send   --thread ID [--mode auto|queue|steer] -- MESSAGE
     t3-relay check  # relay task present, server reachable
 
@@ -83,6 +84,16 @@ def project_id(con: sqlite3.Connection, path: str) -> str:
     return row[0]
 
 
+def completion_footer() -> str:
+    """The canonical fire-and-forget footer: the fenced block in settle-thread.md (single source)."""
+    doc = (HERE.parent / "settle-thread.md").read_text()
+    section = doc.split("## Completion footer for `t3_thread_launch`", 1)[-1]
+    try:
+        return section.split("```text\n", 1)[1].split("\n```", 1)[0].strip()
+    except IndexError:
+        die("completion footer not found in settle-thread.md")
+
+
 def pick(model: str) -> tuple[str, str, str]:
     """(instanceId, modelId, house effort or '-') from t3-pick-instance."""
     out = subprocess.run([str(HERE / "t3-pick-instance"), model], capture_output=True, text=True)
@@ -111,6 +122,8 @@ def main() -> None:
     la.add_argument("--model", help="model id or alias (sol, opus, fable, astra, luna, haiku); omit = project default")
     la.add_argument("--instance", help="provider instance id; default: t3-pick-instance MODEL")
     la.add_argument("--effort", help="reasoning effort option value")
+    la.add_argument("--settle-when-done", action="store_true",
+                    help="append the completion footer: the thread settles itself after a clean delivery")
     la.add_argument("prompt", nargs="+")
     se = sub.add_parser("send")
     se.add_argument("--thread", required=True)
@@ -127,7 +140,8 @@ def main() -> None:
         print(f"ok: relay task {task_id} on {base}")
         return
     if a.cmd == "launch":
-        args = {"projectId": project_id(con, a.project), "title": a.title, "message": " ".join(a.prompt)}
+        message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
+        args = {"projectId": project_id(con, a.project), "title": a.title, "message": message}
         if a.model:
             instance, model, effort = pick(a.model)
             sel = {"instanceId": a.instance or instance, "model": model}
