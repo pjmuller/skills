@@ -3,7 +3,7 @@
 Copy the section below into a supporting file in your personal setup repo.
 In your global prompt, keep only a trigger: “Complex changes or consequential
 design decisions → read `{/absolute/path/to/code-review.md}` first.”
-Use your available opposite-family thinker models; omit T3 mechanics without T3.
+Use your available opposite-family models; omit T3 mechanics without T3.
 The full T3 procedure lives in [code-review.md](../t3-manage-thread/code-review.md).
 
 ---
@@ -12,7 +12,7 @@ The full T3 procedure lives in [code-review.md](../t3-manage-thread/code-review.
 
 Catch wrong assumptions, not just broken code. For complex features or changes
 touching data, auth, money or external contracts, use an opposite-family reviewer:
-Claude-built → Sol; OpenAI-built → Fable. Small fixes and doc edits need the
+Claude-built → Sol; OpenAI-built → Opus. Small fixes and doc edits need the
 builder's own verification. Consequential design choices get a second planner's
 opinion (Claude-planned → Astra) before implementation; merge the best of both.
 

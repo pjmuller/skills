@@ -47,12 +47,12 @@ AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by 
 Same for my numbers/mechanisms and other models' reviews: proxies for an intent, not orders. Restate the intent, pick the better mechanism, push back when I'm wrong. Not up for reinterpretation: safety limits and account/token routing.
 
 ## Coding: implementing complex specs (>100 loc)
-- Bigger features only: code review by the **other ecosystem** (Claude-built → Sol reviews; Codex-built → Fable reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: `~/.agents/skills/t3-manage-thread/code-review.md`.
+- Bigger features only: code review by the **other ecosystem** (Claude-built → Sol reviews; Codex-built → Opus reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: `~/.agents/skills/t3-manage-thread/code-review.md`.
 - 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
 ## Delegation
-- Default split: **plan** in a thinker (Fable; Astra as 🏓 second planner on consequential designs, merge the best of both) · **build** with Opus in-harness sub-agents (Sonnet/Haiku for small chores; Sol/Terra/Luna from Codex CLI) · **verify/review** with a Sol 🏓 worker (Codex-built → Fable). The thinker orchestrates, thinks critically and does the final verification itself; never a same-model sub-agent as the review.
+- Default: **Opus plans, orchestrates and builds; Fable only for very complex planning** (Astra as 🏓 second planner on consequential designs). Use in-harness sub-agents for independent work (Sonnet/Haiku for small chores; Sol/Terra/Luna via Codex CLI). **Review** with a Sol 🏓 worker (Codex-built → Opus). The lead verifies workers and the final result; never a same-model-family reviewer.
 - A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; native-app/GUI computer use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value; several named → `--profile a,b` (routes among those by capacity). Explicit profiles are capacity-checked (model-only caps count); `--force-profile` only on purpose.
 
