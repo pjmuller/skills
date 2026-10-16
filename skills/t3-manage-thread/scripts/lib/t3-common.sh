@@ -42,7 +42,7 @@ normalize_model() {
       ;;
     astra) printf '%s' "gpt-6-astra" ;;
     luna) printf '%s' "gpt-6-luna" ;;
-    haiku) printf '%s' "claude-haiku-4-5" ;;
+    haiku) printf '%s' "claude-haiku-5-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
     gemini) printf '%s' "gemini-3.8-flash-high" ;;
     *) printf '%s' "$1" ;;
