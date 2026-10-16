@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
-# t3-pick-instance MODEL [PREFERRED_INSTANCE] [ALLOWED_IDS_CSV]
-# Print the T3 provider instance id with the most capacity for MODEL (aliases as in
-# t3-spawn-thread: sol, astra, opus, fable, ...), using the same policy as spawn
-# routing (lib/profile_routing.py). Feed it to delegate_task target.providerInstanceId
-# or t3_thread_launch modelSelection.instanceId. Explanation goes to stderr.
+# t3-pick-instance MODEL [ALLOWED_IDS_CSV]
+# Prints "<instanceId> <modelId> <effort>" for MODEL (alias sol/opus/fable/astra/luna/haiku/gemini
+# or a full id): the account with the most capacity (lib/profile_routing.py, one policy for
+# Claude and Codex; ALLOWED_IDS_CSV limits the choice), the resolved model id, and its house
+# effort ("-" when none). Feed them to delegate_task target {providerInstanceId, model,
+# options} or t3_thread_launch modelSelection. Refuses models below the floor (exit 2).
+# Routing reasons go to stderr. `--resolve MODEL` prints only the model id.
 set -euo pipefail
 here="$(dirname "$(readlink -f "$0")")"
 source "$here/lib/t3-common.sh"
 if [[ $# -lt 1 || "$1" == -h || "$1" == --help ]]; then
-  sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 fi
 t3_base_dir="${T3CODE_HOME:-$HOME/.t3}"
+if [[ "$1" == --resolve ]]; then
+  normalize_model "${2:?--resolve MODEL}"
+  exit 0
+fi
 model="$(normalize_model "$1")"
-preferred="${2:-claudeAgent}"
-settings="$t3_base_dir/userdata/settings.json"
-printf '%s\n' "$model" >&2
-exec uv run -q --script "$here/lib/profile_routing.py" "$model" "$preferred" "$settings" "${3:-}"
+if below_model_floor "$model"; then
+  echo "t3-pick-instance: $model is below the model floor (OpenAI >= gpt-6, Sol >= 6.1)" >&2
+  exit 2
+fi
+instance="$(uv run -q --script "$here/lib/profile_routing.py" \
+  "$model" claudeAgent "$t3_base_dir/userdata/settings.json" "${2:-}" | tail -1)"
+effort="$(house_thinking "$model")"
+printf '%s %s %s\n' "$instance" "$model" "${effort:--}"

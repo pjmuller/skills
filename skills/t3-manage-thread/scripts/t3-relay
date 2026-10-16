@@ -1,0 +1,148 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""t3-relay: let a script OUTSIDE T3 (launchd job, poller) start or message a T3 thread.
+
+Agents inside T3 never need this: they call the T3 MCP tools directly.
+
+    t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E] -- PROMPT
+    t3-relay send   --thread ID [--mode auto|queue|steer] -- MESSAGE
+    t3-relay check  # relay task present, server reachable
+
+How: POSTs {id, instruction} to the local webhook of one native scheduled task titled
+RELAY_TITLE. Each request runs a cheap fresh thread that performs exactly that MCP call
+(t3_thread_launch / t3_thread_send) and settles itself. Create the relay task once from any
+T3 thread (relay.md). The internal contract lives only here: the local route
+/api/hooks/<taskId>/<token> and the read-only token lookup in statev2.sqlite.
+Exit: 0 accepted (202; delivery is async), 1 T3/relay problem, 2 usage.
+"""
+import argparse
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+RELAY_TITLE = "⚙️ T3 relay"
+HOME = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata"
+HERE = Path(__file__).resolve().parent
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"t3-relay: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def store() -> sqlite3.Connection:
+    db = HOME / "statev2.sqlite"
+    if not db.exists():
+        die(f"{db} not found: T3 Code >= 0.1 must have run on this machine")
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    cols = {r[1] for r in con.execute("pragma table_info(scheduled_tasks)")}
+    if not {"task_id", "title", "enabled", "schedule_json", "webhook_token"} <= cols:
+        die("unexpected statev2 schema (scheduled_tasks); T3 changed its store, update t3-relay")
+    return con
+
+
+def relay_task(con: sqlite3.Connection) -> tuple[str, str]:
+    rows = con.execute(
+        "select task_id, webhook_token from scheduled_tasks where title = ? and enabled = 1 "
+        "and json_extract(schedule_json, '$.type') = 'webhook' and webhook_token is not null",
+        (RELAY_TITLE,),
+    ).fetchall()
+    if len(rows) != 1:
+        die(f"need exactly one enabled webhook task titled {RELAY_TITLE!r}, found {len(rows)}; see relay.md")
+    return rows[0]
+
+
+def origin() -> str:
+    for f in (HOME / "server-runtime.json", HOME / "last-server-origin"):
+        if f.exists():
+            text = f.read_text().strip()
+            url = json.loads(text)["origin"] if f.suffix == ".json" else text
+            host = urllib.parse.urlparse(url).hostname
+            if host not in ("127.0.0.1", "localhost", "::1"):
+                die(f"refusing non-loopback T3 origin {url}")
+            return url
+    die("T3 Code is not running (no server-runtime.json)")
+
+
+def project_id(con: sqlite3.Connection, path: str) -> str:
+    root = str(Path(path).expanduser().resolve())
+    row = con.execute(
+        "select project_id from projection_projects where workspace_root = ? and deleted_at is null", (root,)
+    ).fetchone()
+    if not row:
+        die(f"no T3 project for {root}; add it in T3 first")
+    return row[0]
+
+
+def pick(model: str) -> tuple[str, str, str]:
+    """(instanceId, modelId, house effort or '-') from t3-pick-instance."""
+    out = subprocess.run([str(HERE / "t3-pick-instance"), model], capture_output=True, text=True)
+    fields = out.stdout.split()
+    if out.returncode != 0 or len(fields) != 3:
+        die(f"t3-pick-instance {model} failed: {out.stderr.strip()[-300:]}", 2)
+    return fields[0], fields[1], fields[2]
+
+
+def post(base: str, task_id: str, token: str, body: dict) -> str:
+    url = f"{base}/api/hooks/{urllib.parse.quote(task_id, safe='')}/{token}"
+    req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read() or b"{}").get("deliveryId", "?")
+    except Exception as exc:  # never echo the URL: it carries the token
+        die(f"relay POST failed: {type(exc).__name__}: {getattr(exc, 'code', '') or exc.__class__.__name__}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="t3-relay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    la = sub.add_parser("launch")
+    la.add_argument("--project", required=True)
+    la.add_argument("--title", required=True)
+    la.add_argument("--model", help="model id or alias (sol, opus, fable, astra, luna, haiku); omit = project default")
+    la.add_argument("--instance", help="provider instance id; default: t3-pick-instance MODEL")
+    la.add_argument("--effort", help="reasoning effort option value")
+    la.add_argument("prompt", nargs="+")
+    se = sub.add_parser("send")
+    se.add_argument("--thread", required=True)
+    se.add_argument("--mode", default="auto", choices=["auto", "queue", "steer"])
+    se.add_argument("message", nargs="+")
+    sub.add_parser("check")
+    a = ap.parse_args()
+
+    con = store()
+    task_id, token = relay_task(con)
+    base = origin()
+    rid = uuid.uuid4().hex[:12]
+    if a.cmd == "check":
+        print(f"ok: relay task {task_id} on {base}")
+        return
+    if a.cmd == "launch":
+        args = {"projectId": project_id(con, a.project), "title": a.title, "message": " ".join(a.prompt)}
+        if a.model:
+            instance, model, effort = pick(a.model)
+            sel = {"instanceId": a.instance or instance, "model": model}
+            effort = a.effort or (effort if effort != "-" else None)
+            if effort:
+                key = "reasoningEffort" if model.startswith("gpt-") else "effort"
+                sel["options"] = [{"id": key, "value": effort}]
+            args["modelSelection"] = sel
+        instruction = "Call t3_thread_launch once with exactly these arguments:\n" + json.dumps(args, ensure_ascii=False)
+    else:
+        args = {"threadId": a.thread, "message": " ".join(a.message), "mode": a.mode, "clientRequestId": f"relay-{rid}"}
+        instruction = "Call t3_thread_send once with exactly these arguments:\n" + json.dumps(args, ensure_ascii=False)
+    delivery = post(base, task_id, token, {"id": rid, "instruction": instruction})
+    print(f"accepted: relay {rid} ({delivery})")
+
+
+if __name__ == "__main__":
+    main()
