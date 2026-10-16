@@ -51,7 +51,8 @@ def test_precedence(tmp_path, settings, choice, flag_env, expected):
 
 
 @pytest.mark.parametrize("args,env", [(["--permissions", "yolo"], {}), ([], {"T3_SPAWN_PERMISSIONS": "yolo"})])
-def test_invalid_choice_refused(args, env):
+def test_invalid_choice_refused(tmp_path, args, env):
+    # Isolated T3 home: argument validation must not depend on the host's T3 version.
     out = subprocess.run([str(SCRIPT), *args, "--dry-run", "--", "brief"], capture_output=True, text=True,
-                         env={**os.environ, **env})
+                         env={**os.environ, "T3CODE_HOME": str(tmp_path), **env})
     assert out.returncode == 2 and "full-access or approval-required" in out.stderr

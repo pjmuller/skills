@@ -10,6 +10,7 @@ set -euo pipefail
 
 # shellcheck source=lib/t3-common.sh
 source "$(dirname "$(readlink -f "$0")")/lib/t3-common.sh"
+t3_v2_guard "$(basename "$0")"
 
 usage() {
   cat >&2 <<'EOF'

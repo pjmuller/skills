@@ -5,7 +5,8 @@
 #   t3_require jq curl uuidgen        # hard dependency check
 #   t3_bootstrap                      # base dir, origin, server version, pinned t3 CLI
 #   t3_issue_session LABEL [TTL]      # scoped bearer token + auto-revoke trap
-#   t3_dispatch PAYLOAD [OUTFILE]     # POST to /api/orchestration/dispatch (T3 0.0.x only; exits 3 on V2)
+#   t3_v2_guard NAME                  # writing helpers: exit 3 + native tool names on T3 >= 0.1.0
+#   t3_dispatch PAYLOAD [OUTFILE]     # POST to /api/orchestration/dispatch (T3 0.0.x only)
 #   t3_shell_snapshot                 # GET  /api/orchestration/shell
 #   t3_open_url URL                   # best-effort focus (macOS / Linux / WSL)
 #   t3_thread_snapshot ID             # one thread out of the shell snapshot
@@ -262,24 +263,33 @@ t3_shell_snapshot() {
   return 1
 }
 
-# t3_dispatch PAYLOAD [RESPONSE_FILE]
-# T3 >= 0.1.0 (Orchestrator V2) removed this endpoint; writes travel over the WS
-# RPC or the agent-facing T3 MCP tools. Fail fast and name the native tool
-# instead of a confusing 404 (research: macbook_setup decissions/t3_native_workers.md).
-t3_dispatch() {
-  local payload="$1"
-  local response_file="${2:-/dev/null}"
-  if [[ "${t3_version:-0.0.0}" != 0.0.* ]]; then
-    cat >&2 <<EOF
-T3 Code $t3_version (Orchestrator V2) has no /api/orchestration/dispatch; this helper cannot write.
+# T3 >= 0.1.0 (Orchestrator V2) removed /api/orchestration/dispatch; writes travel over the WS RPC
+# or the agent-facing T3 MCP tools, and V2 threads (ids like mcp:...) are not in the frozen V1
+# state.sqlite. Writing helpers call t3_v2_guard first: fail fast and name the native tool
+# (research: macbook_setup decissions/t3_native_workers.md). statev2.sqlite exists only on V2.
+t3_v2_refuse() {
+  cat >&2 <<EOF
+T3 Code ${t3_version:-0.1+} (Orchestrator V2) has no /api/orchestration/dispatch; $1 cannot write.
 Inside a T3 thread use the native T3 MCP tools instead:
   round-trip worker -> delegate_task (hidden child; its result wakes you; target.providerInstanceId
                        from: t3-pick-instance MODEL)
   standalone thread -> t3_thread_launch   ping -> t3_thread_send   read -> t3_thread_read
-  rename -> t3_thread_update   settle/snooze/pin -> t3_thread_organize (omit threadId = this thread)
+  rename -> t3_thread_update   settle/snooze/pin -> t3_thread_organize (omit threadId = this thread,
+                       settles when your turn ends)
 EOF
-    exit 3
-  fi
+  exit 3
+}
+
+t3_v2_guard() {
+  [[ -e "${T3CODE_HOME:-$HOME/.t3}/userdata/statev2.sqlite" ]] && t3_v2_refuse "${1:-this helper}"
+  return 0
+}
+
+# t3_dispatch PAYLOAD [RESPONSE_FILE]  (T3 0.0.x only)
+t3_dispatch() {
+  local payload="$1"
+  local response_file="${2:-/dev/null}"
+  [[ "${t3_version:-0.0.0}" == 0.0.* ]] || t3_v2_refuse "t3_dispatch"
   printf '%s' "$payload" | curl --fail-with-body -sS \
     --connect-timeout 3 --max-time 20 \
     -H "@$t3_auth_header_file" -H 'Content-Type: application/json' \
