@@ -22,9 +22,9 @@ call): [recording-watcher](../recording-watcher/SKILL.md).
 2. **`~/Downloads/<date>-<who>-followup-prompts.md`**: the overview the user reads. Top: a spawn
    recipe (below). Then one `## N. <title>` section per delegable item.
 3. **One temp file per prompt** beside it: `~/Downloads/<date>-<who>-prompt-N.md` (title line +
-   body). Spawn by path so extra instructions are a quick edit, not a retype:
-   `t3-spawn-thread --model fable --thinking medium --title "<title>" < ~/Downloads/<date>-<who>-prompt-N.md`
-   (no brief argument = stdin). Keep the section in the overview identical to the file.
+   body). Launch by path so extra instructions are a quick edit, not a retype: `t3_thread_launch`
+   with `message: "Read and execute ~/Downloads/<date>-<who>-prompt-N.md"` (absolute path) and
+   `modelSelection.instanceId` from `t3-pick-instance fable`. Keep the overview section identical to the file.
 
 ## Prompt shape (each one stands alone)
 

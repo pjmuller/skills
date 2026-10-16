@@ -23,8 +23,8 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - ✅ done/verified
 - 👀 needs review/course-change
 - 🚫 blocked
-- 🏓 awaiting a ping-back from a **separate T3 thread**: keep this thread open, nothing to do yet
-- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread self`, give the date). A resume works on a settled thread too, so ⏰ never keeps a thread open.
+- 🏓 awaiting a `delegate_task` worker (its result wakes this thread): keep it open, nothing to do yet
+- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread <your id>`; own id = `currentThreadId` from `t3_thread_list`; give the date). A resume works on a settled thread too, so ⏰ never keeps a thread open.
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
@@ -54,13 +54,13 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 ## Delegation
 - Default: **Opus plans, orchestrates and builds; Fable only for very complex planning** (Astra as independent second planner on consequential designs). Use in-harness sub-agents for independent work (Sonnet/Haiku for small chores; Sol/Terra/Luna via Codex CLI). **Review** with a Sol 🏓 worker (Codex-built → Opus). The lead verifies workers and the final result; never a same-model-family reviewer.
 - Second planning opinion: give both planners the same problem, constraints and evidence; withhold each other's proposals until both finish, then compare and resolve disagreements.
-- Other-ecosystem work (opposite-model review) on T3 ≥ 0.1: `delegate_task` (no sidebar row, result wakes you; account from `t3-pick-instance MODEL`), verify its result here. Native recipe: `~/.agents/skills/t3-manage-thread/native-workers.md`.
-  - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value; several named → `--profile a,b` (routes among those by capacity). Explicit profiles are capacity-checked (model-only caps count); `--force-profile` only on purpose.
+- Other-ecosystem work (opposite-model review) on T3 ≥ 0.1: `delegate_task` (no sidebar row, result wakes you; account from `t3-pick-instance MODEL`), verify its result here. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
+  - No explicit account/effort: `t3-pick-instance MODEL` picks the account by capacity and the model's house effort. Only when I name an account → `t3-list-profiles` for the exact instance id; several named → `t3-pick-instance MODEL a,b` (routes among those by capacity).
 
 ### T3 threads (helpers `t3-*` on PATH)
-- Spawning/pinging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md` first (🏓 title mechanics, ping-back needs a real parent ID).
+- Delegating/launching/messaging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md` first.
 - **Settling autonomy** → read `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle when dispatching; personal policy/iteration notes → `{absolute settling-policy path}`. Standalone self-settlement requires my request or an authorized routing policy; a verified result alone is not pending user review. Explicit keep-open instructions win. **Settle = kill**: finish background work first; settle another thread after verifying it: `t3_thread_organize settle threadId`; authorized self-settle = `t3_thread_organize settle` without threadId as the LAST tool call (applies when the turn ends), then the final answer.
-- Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread self`, skill `t3-schedule`) and report ⏰ with the date.
+- Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread <your id>`, skill `t3-schedule`) and report ⏰ with the date.
 
 ## Git
 - Pull safely before starting and again before pushing; commit and push completed work without reminders. One commit per coherent task. Leave other agents' changes alone.

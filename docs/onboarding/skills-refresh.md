@@ -17,10 +17,10 @@ skills-refresh                                                     # exit 10 = a
 skills-refresh schedule --project <my personal setup repo path>
 t3-schedule list                                                   # must show skills-refresh at 06:30
 t3-schedule run-now skills-refresh                                 # one real run; expect "up to date" and a thread that settles itself
-t3-spawn-thread --version                                          # must print v0.4.0 or higher
+skills-refresh --version                                           # prints the applied release tag
 ```
 
-- Both platforms: T3 Code must be running; the job is a hidden T3 thread on a cheap model.
+- Both platforms: T3 Code ≥ 0.1 must be running; the job is a T3 thread on a cheap model that settles itself.
 - macOS uses launchd; Linux/WSL uses persistent systemd user timers. Run the installer check
   to verify the service manager and runner PATH. Windows execution stays inside WSL.
 - Keep the computer awake and WSL running (T3 connected to its WSL backend). A systemd
@@ -35,5 +35,5 @@ t3-spawn-thread --version                                          # must print 
 - Something failed: the same thread with the error; old helpers keep working. Run `skills-refresh` by hand to retry.
 
 Don't run `pnpm dlx skills update` or `skills check` on these two skills: they re-fetch `main` and bypass the release gate.
-Bug report? Include the output of `t3-spawn-thread --version`.
+Bug report? Include the output of `skills-refresh --version`.
 How the job works (staging, rollback, lock, env overrides): [skills-refresh](../../skills/t3-manage-thread/skills-refresh.md).

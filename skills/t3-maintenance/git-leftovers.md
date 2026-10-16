@@ -12,7 +12,7 @@ left exactly as you found it, with a reason. Nobody watches: decide with evidenc
 - **Fresh = protected.** A path modified < 30 min ago (survey says `fresh`, or `stat` now says so) is
   another agent's live work: don't stage, edit or judge it.
 - **Old ≠ finished.** Age only makes a path eligible. Ownership: `t3-fleet list --status running`
-  threads in this checkout are live; read their recent turns (`t3-read-thread`) and protect every path
+  threads in this checkout are live; read their recent turns (`t3_thread_read`) and protect every path
   they touch or plan to. `t3-find-thread grep <path>` finds the thread that wrote an older path.
 - Secrets/private data never enter git (`.env*`, tokens, credentials, customer exports): gitignore
   with a one-line comment instead.
@@ -70,6 +70,6 @@ git status --short; git rev-list --left-right --count @{u}...HEAD   # only prote
 
 ## 4. Finish
 
-Clean outcome (all eligible work landed; only fresh/live-owned paths remain) → self-settle per the
-spawn footer. Otherwise end with one line per item left: `path — why — what the user decides`.
+Clean outcome (all eligible work landed; only fresh/live-owned paths remain, no background work) →
+settle yourself: `t3_thread_organize {"action":"settle"}` without threadId as your last tool call. Otherwise end with one line per item left: `path — why — what the user decides`.
 No recap of what landed; the parent re-checks git itself (`t3-git-leftovers status`).

@@ -37,6 +37,7 @@ FETCH_TIMEOUT = 60
 WALK_CAP = 5000  # files scanned per untracked directory before calling it fresh (unknown = protect)
 VERDICTS = ["worker", "owned", "fresh", "ff", "local", "clean"]
 DISPATCHABLE = ("worker", "owned")
+RELAY_GRACE_S = 15 * 60  # a relay launch not in the fleet by then failed: retry
 
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -304,23 +305,32 @@ def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
 
 
 def spawn(row: dict, args) -> tuple[str | None, str]:
+    """Launch via t3-relay (async): (relay id, title) or (None, error). The thread id comes later from the fleet."""
     title = f"{worker_title(Path(row['repo']))} {datetime.now().strftime('%Y-%m-%d')}"
-    cmd = ["t3-spawn-thread", "--settle-when-done", "--no-open", "--project", row["repo"],
-           "--allow-cross-project-source", "--title", title]
+    cmd = ["t3-relay", "launch", "--project", row["repo"], "--title", title]
     if args.model:
         cmd += ["--model", args.model]
     if args.thinking:
-        cmd += ["--thinking", args.thinking]
+        cmd += ["--effort", args.thinking]
     brief = worker_brief(row, args.run_dir, args.extra)
     if args.dry_run:
-        cmd.append("--dry-run")
-        print(f"--- {title}\n{brief}")
-    cmd += ["--", brief]
-    p = run(cmd, timeout=300)
-    m = re.search(r"^Thread ID: (\S+)", p.stdout, re.M)
-    if p.returncode == 0 and (m or args.dry_run):
-        return (m.group(1) if m else "dry-run"), title
+        print(f"--- {' '.join(cmd)}\n{brief}")
+        return "dry-run", title
+    p = run([*cmd, "--", brief], timeout=120)
+    m = re.search(r"^accepted: relay (\S+)", p.stdout, re.M)
+    if p.returncode == 0 and m:
+        return m.group(1), title
     return None, ((p.stderr or p.stdout).strip().splitlines() or ["spawn failed"])[-1]
+
+
+def ledger_thread(repo: str, entry: dict, threads: dict) -> dict | None:
+    """The entry's thread: by id, else (relay launch) by its exact title in this checkout."""
+    if entry.get("thread_id"):
+        return threads.get(entry["thread_id"])
+    if not entry.get("relay_id"):
+        return None
+    return next((t for t in threads.values() if t.get("title") == entry.get("title")
+                 and os.path.realpath(t.get("workspace_root") or "/") == repo), None)
 
 
 def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
@@ -331,11 +341,25 @@ def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
         if not t.get("settled") and not t.get("deleted") and not t.get("archived"):
             ws = os.path.realpath(t.get("workspace_root") or "/")
             by_title.setdefault((ws, (t.get("title") or "").rsplit(" ", 1)[0]), t)
-    active = sum(1 for e in ledger.values() if e.get("thread_id") in threads
-                 and threads[e["thread_id"]].get("session_status") == "running")
+    active = 0
+    for repo, e in ledger.items():
+        if e.get("relay_id") and not e.get("thread_id"):
+            t = ledger_thread(repo, e, threads)
+            if t:
+                e["thread_id"] = t["thread_id"]
+            elif time.time() - datetime.fromisoformat(e["launched_at"]).timestamp() > RELAY_GRACE_S:
+                e["errors"] = e.get("errors", []) + [f"relay {e.pop('relay_id')} launch never appeared"]
+                if len(e["errors"]) >= 3:
+                    e["skipped"] = "spawn failed 3x"
+                continue
+            else:
+                active += 1  # launch in flight: holds its slot
+                continue
+        active += threads.get(e.get("thread_id") or "", {}).get("session_status") == "running"
     for row in survey["repos"]:
         repo = row["repo"]
-        if row["verdict"] not in DISPATCHABLE or ledger.get(repo, {}).get("thread_id") or ledger.get(repo, {}).get("skipped"):
+        entry = ledger.get(repo, {})
+        if row["verdict"] not in DISPATCHABLE or entry.get("thread_id") or entry.get("relay_id") or entry.get("skipped"):
             continue
         twin = by_title.get((repo, worker_title(Path(repo))))
         if twin:  # another run (or a resumed one) already owns this repo: adopt, never duplicate
@@ -347,10 +371,10 @@ def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
         if not still_needs_worker(row, survey["fresh_minutes"]):
             ledger[repo] = {"skipped": "nothing stale left at dispatch time", "at": now_iso()}
             continue
-        tid, detail = spawn(row, args)
+        rid, detail = spawn(row, args)
         entry = ledger.setdefault(repo, {})
-        if tid:
-            entry.update(thread_id=tid, title=detail, spawned_at=now_iso())
+        if rid:
+            entry.update(relay_id=rid, title=detail, launched_at=now_iso())
             active += not args.dry_run
         else:
             entry["errors"] = entry.get("errors", []) + [detail]
@@ -359,7 +383,7 @@ def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
                 entry["skipped"] = "spawn failed 3x"
             break  # capacity refusals hit every repo alike; retry next pass
     pending = sum(1 for row in survey["repos"] if row["verdict"] in DISPATCHABLE
-                  and not ledger.get(row["repo"], {}).get("thread_id") and not ledger.get(row["repo"], {}).get("skipped"))
+                  and not any(ledger.get(row["repo"], {}).get(k) for k in ("thread_id", "relay_id", "skipped")))
     return active, pending
 
 
@@ -420,13 +444,14 @@ def cmd_status(args) -> int:
         if row["verdict"] not in DISPATCHABLE and not entry:
             continue
         dirty, ahead, error = verify(Path(repo), row["upstream"], survey["fresh_minutes"], now, not args.no_fetch)
-        t = threads.get(entry.get("thread_id") or "")
+        t = ledger_thread(repo, entry, threads)
         if error:
             outcome = "unverified"  # git could not be read: never count it landed
         elif entry.get("skipped"):
             outcome = "skipped"
         elif not t:
-            outcome = "pending" if not entry.get("thread_id") else "unknown-thread"
+            outcome = ("launching" if entry.get("relay_id") else
+                       "pending" if not entry.get("thread_id") else "unknown-thread")
         elif t.get("session_status") == "running":
             outcome = "running"
         elif not t.get("settled"):
@@ -437,10 +462,10 @@ def cmd_status(args) -> int:
             outcome = "protected"
         else:
             outcome = "landed"
-        rows.append({"repo": repo, "outcome": outcome, "thread_id": entry.get("thread_id"),
+        rows.append({"repo": repo, "outcome": outcome, "thread_id": (t or {}).get("thread_id") or entry.get("thread_id"),
                      "ahead": ahead, "dirty": [f"{d['xy'].strip()} {d['path']}" for d in dirty][:10],
                      "last_text": (t or {}).get("last_text", "")[:200], "skipped": error or entry.get("skipped")})
-    order = ["blocked", "unverified", "unknown-thread", "running", "pending", "protected", "skipped", "landed"]
+    order = ["blocked", "unverified", "unknown-thread", "running", "launching", "pending", "protected", "skipped", "landed"]
     rows.sort(key=lambda r: (order.index(r["outcome"]), r["repo"]))
     counts = {o: sum(r["outcome"] == o for r in rows) for o in order}
     report = {"at": now_iso(), "counts": counts, "survey_counts": survey.get("counts"), "repos": rows}
@@ -476,14 +501,14 @@ def main() -> int:
     d = sub.add_parser("dispatch", help="spawn one worker per `worker` repo; resumable via ledger.json")
     d.add_argument("run_dir", type=Path)
     d.add_argument("--model")
-    d.add_argument("--thinking")
+    d.add_argument("--thinking", help="effort override (default: the model's house effort)")
     d.add_argument("--max-parallel", type=int, default=4)
     d.add_argument("--extra", default="", help="extra line appended to every worker brief")
     d.add_argument("--wait", action="store_true", help="keep filling slots until every repo is dispatched")
     d.add_argument("--poll", type=int, default=60)
     d.add_argument("--max-hours", type=float, default=3)
     d.add_argument("--days", type=int, default=3, help="fleet window for adopting existing workers")
-    d.add_argument("--dry-run", action="store_true", help="spawn --dry-run, ledger.dry-run.json")
+    d.add_argument("--dry-run", action="store_true", help="print the briefs, launch nothing, ledger.dry-run.json")
     d.set_defaults(fn=cmd_dispatch)
 
     st = sub.add_parser("status", help="outcome per dispatched repo; writes status.json + status.md")

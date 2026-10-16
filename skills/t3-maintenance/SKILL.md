@@ -84,8 +84,9 @@ t3-git-leftovers dispatch $R --model <m> --wait          # background shell; ≤
 t3-git-leftovers status $R --markdown                    # landed / protected / blocked / running
 ```
 
-Workers spawn `--settle-when-done`, titled `🧹 git leftovers <repo> <date>`, and follow
-[git-leftovers.md](git-leftovers.md). A spawned worker is not a landed repo: `status` re-checks git and
+Workers launch via `t3-relay launch` ([relay.md](../t3-manage-thread/relay.md); async, the ledger
+holds the relay id until the titled thread shows in the fleet, retried after 15 min), titled
+`🧹 git leftovers <repo> <date>`, and follow [git-leftovers.md](git-leftovers.md). A launched worker is not a landed repo: `status` re-checks git and
 thread state; only its counts go in the report. `blocked` = the worker stayed open for the user;
 `unverified` = git could not be re-read (never counted landed).
 

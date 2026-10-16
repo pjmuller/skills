@@ -108,7 +108,7 @@ Keychain item after the exact `CLAUDE_CONFIG_DIR` string
 or `$HOME/.claude` on the default account, looks up an item never written → "Not logged
 in · Please run /login". Isolated homes use the same string as at `claude auth login`.
 Start T3, verify with `t3-limits` (instance listed with its plan) and
-`t3-spawn-thread --profile <slug> --dry-run`. Codex present → verify its provider too;
+`t3-pick-instance opus <slug>` (prints that instance). Codex present → verify its provider too;
 never add Codex when absent. Verify the Codex login in the shell T3 uses (`codex login status`
 inside WSL): the Windows desktop app and WSL keep separate logins, a signed-in desktop proves
 nothing for the WSL backend. CodexBar requested →
@@ -122,9 +122,8 @@ Antigravity requested: `brew install --cask antigravity-cli`, run `agy` to sign 
 (check account/quota). T3: Providers → Antigravity → Enable → Install → Sign in with Google
 (separate ACP runtime and login; leave binary path automatic). Expired localhost callback →
 fresh T3 sign-in, paste the final redirect URL into T3's fallback field while that attempt
-is active. Verify `t3-spawn-thread --model gemini`
-([spawn guide](../../skills/t3-manage-thread/spawn-thread.md#profiles-models-briefs))
-with a real file write. Video goes through native `agy`, not T3:
+is active. Verify `t3-pick-instance gemini`, then a `t3_thread_launch` with that
+instance and a real file write. Video goes through native `agy`, not T3:
 [video-shrink-for-gemini](../../skills/video-shrink-for-gemini/SKILL.md#execute-and-verify).
 
 ## Browser sessions (optional)
@@ -165,8 +164,9 @@ one canonical tree.
 ## Verify live and record
 
 - Both `scripts/install --check` (scheduler checks the native service manager and runner
-  PATH). `t3-spawn-thread --project <setup-repo> --profile <name> --dry-run -- "Reply ok"`
-  for **each** provider, Codex included. `t3-limits`.
+  PATH). `t3-pick-instance <model> <instance>` resolves **each** provider instance,
+  Codex included. `t3-limits`. `t3-relay check` once the relay task exists
+  ([relay.md](../../skills/t3-manage-thread/relay.md); launchd jobs and pollers need it).
 - Native scheduler smoke job (free name, e.g. `t3-setup-smoke`, suffix if taken; `--at` = now + 2 min):
   `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,
   then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered and
