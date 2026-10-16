@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-manage-thread (T3 ≥ 0.1.0): snoozing removed everywhere. `t3-hide-thread` keeper, `t3-rename-thread` and the launchd/systemd supervisor are deleted; `--hide`/`--no-hide` are gone from `t3-spawn-thread`, `t3-ping-thread`, `t3-schedule` and `t3-git-leftovers`. `t3-settle-thread` is a pointer to the native `t3_thread_organize` (exit 3). The spawn completion footer and `skills-refresh --job` settle through the native tool. SKILL.md is native-first; [settle-thread.md](skills/t3-manage-thread/settle-thread.md) carries the completion footer for `t3_thread_launch`.
+
 - agents-md / t3-manage-thread: independent planning opinions start from the same brief without the other planner's proposal; compare afterward. Astra plans; Sol reviews Claude-built code.
 
 - agents-md / t3-manage-thread: Opus defaults to planning, orchestration, implementation and Claude-side review; reserve Fable for very complex planning.

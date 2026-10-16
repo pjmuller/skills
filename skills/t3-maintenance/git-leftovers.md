@@ -71,5 +71,5 @@ git status --short; git rev-list --left-right --count @{u}...HEAD   # only prote
 ## 4. Finish
 
 Clean outcome (all eligible work landed; only fresh/live-owned paths remain) → self-settle per the
-spawn footer. Otherwise unhide, end with one line per item left: `path — why — what the user decides`.
+spawn footer. Otherwise end with one line per item left: `path — why — what the user decides`.
 No recap of what landed; the parent re-checks git itself (`t3-git-leftovers status`).

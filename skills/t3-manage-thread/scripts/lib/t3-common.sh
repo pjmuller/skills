@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared plumbing for the t3-manage-thread helpers (spawn / ping / settle / hide).
+# Shared plumbing for the t3-manage-thread helpers (spawn / ping / delete / mail-link).
 # Sourced, never executed. Bash 3.2+ (macOS) and Bash 5 (Linux/WSL) compatible.
 #
 #   t3_require jq curl uuidgen        # hard dependency check
@@ -11,13 +11,11 @@
 #   t3_open_url URL                   # best-effort focus (macOS / Linux / WSL)
 #   t3_thread_snapshot ID             # one thread out of the shell snapshot
 #   t3_dispatch_command TYPE ID ...   # thread.* command + server-side refusal reason
-#   t3_supervise LABEL LOG ARGV...    # detached worker under launchd / systemd --user
 #   normalize_model / model_family / provider_family / normalize_thinking /
 #   house_thinking / below_model_floor  # model selection shared by spawn + ping
 #
 # Define a `t3_extra_cleanup` function before calling t3_issue_session to hook
-# extra teardown into the EXIT trap (t3-settle-thread uses it to drop its
-# detached worker job).
+# extra teardown into the EXIT trap.
 
 # --- dependencies ------------------------------------------------------------
 t3_require() {
@@ -274,7 +272,7 @@ Inside a T3 thread use the native T3 MCP tools instead:
   round-trip worker -> delegate_task (hidden child; its result wakes you; target.providerInstanceId
                        from: t3-pick-instance MODEL)
   standalone thread -> t3_thread_launch   ping -> t3_thread_send   read -> t3_thread_read
-  rename -> t3_thread_update   settle/snooze/pin -> t3_thread_organize (omit threadId = this thread,
+  rename -> t3_thread_update   settle/pin -> t3_thread_organize (omit threadId = this thread,
                        settles when your turn ends)
 EOF
   exit 3
@@ -332,16 +330,15 @@ t3_thread_snapshot() {
   t3_shell_snapshot | jq -c --arg id "$1" '.threads[] | select(.id == $id)'
 }
 
-# t3_dispatch_command TYPE THREAD_ID [EXTRA_JQ_FILTER] [SNOOZED_UNTIL]
+# t3_dispatch_command TYPE THREAD_ID [EXTRA_JQ_FILTER]
 # Dispatch errors only carry a traceId, so on refusal this digs the
 # human-readable invariant out of the server trace log.
 t3_dispatch_command() {
-  local type="$1" thread_id="$2" extra="${3:-.}" snoozed_until="${4-}"
+  local type="$1" thread_id="$2" extra="${3:-.}"
   local payload response_file trace_id trace_log detail attempt
   payload="$(jq -n --arg type "$type" \
     --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
     --arg threadId "$thread_id" \
-    --arg snoozedUntil "$snoozed_until" \
     "{type:\$type,commandId:\$commandId,threadId:\$threadId} | $extra")"
   response_file="$t3_credential_dir/dispatch-response"
   t3_dispatch "$payload" "$response_file" && return 0
@@ -365,76 +362,3 @@ t3_dispatch_command() {
   return 1
 }
 
-# t3_print_thread_state THREAD_ID — settle/snooze state after a mutation.
-t3_print_thread_state() {
-  printf '%s' "$(t3_thread_snapshot "$1")" | jq -r \
-    '"Thread: \(.id)\nTitle: \(.title)\nSettled override: \(.settledOverride // "none")\nSettled at: \(.settledAt // "-")\nSnoozed until: \(.snoozedUntil // "-")"'
-}
-
-# --- detached workers --------------------------------------------------------
-# t3_supervise LABEL LOG_FILE ARGV... — run ARGV under the OS supervisor and
-# print which one was used. A calling harness reaps nohup/disown descendants
-# when a tool call completes (verified 2026-08-28), so launchd / systemd --user
-# must own the detached process.
-# Check the actual login/user-manager domain, not just installed binaries.
-t3_supervisor() {
-  case "$(uname -s)" in
-    Darwin)
-      command -v launchctl >/dev/null &&
-        launchctl print "gui/$(id -u)" >/dev/null 2>&1 || return 1
-      printf '%s' launchd ;;
-    Linux)
-      command -v systemd-run >/dev/null && command -v systemctl >/dev/null &&
-        systemctl --user show-environment >/dev/null 2>&1 || return 1
-      printf '%s' systemd ;;
-    *) return 1 ;;
-  esac
-}
-
-t3_supervise() {
-  local label="$1" log_file="$2" supervisor
-  shift 2
-  supervisor="$(t3_supervisor)" || {
-    echo "No usable worker supervisor: macOS needs a launchd GUI login; Linux/WSL needs a running systemd user manager (systemctl --user show-environment)." >&2
-    return 1
-  }
-  if [[ "$supervisor" == launchd ]]; then
-    # Not `launchctl submit`: that runs the job at Background QoS, where every
-    # step crawls (t3 --version 26s instead of 0.9s, keeper start 40-50s late;
-    # measured 2026-09-09). A bootstrapped plist with ProcessType=Interactive
-    # runs at normal speed. `launchctl remove LABEL` still stops it.
-    local plist
-    plist="$(mktemp "${TMPDIR:-/tmp}/$label.XXXXXX.plist")"
-    {
-      printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n'
-      printf '<key>Label</key><string>%s</string>\n' "$label"
-      printf '<key>ProcessType</key><string>Interactive</string>\n<key>RunAtLoad</key><true/>\n'
-      printf '<key>StandardOutPath</key><string>%s</string>\n' "$log_file"
-      printf '<key>StandardErrorPath</key><string>%s</string>\n' "$log_file"
-      printf '<key>ProgramArguments</key><array>\n'
-      printf '%s\n' "$@" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/^/<string>/' -e 's/$/<\/string>/'
-      printf '</array></dict></plist>\n'
-    } >"$plist"
-    if ! launchctl bootstrap "gui/$(id -u)" "$plist"; then
-      rm -f -- "$plist"
-      return 1
-    fi
-    rm -f -- "$plist"
-    printf '%s' "launchd"
-  else
-    # --collect reaps the transient unit itself, so the worker needs no self-cleanup.
-    systemd-run --user --collect --quiet --unit "$label" \
-      --property="StandardOutput=append:$log_file" \
-      --property="StandardError=append:$log_file" \
-      -- "$@" || return 1
-    printf '%s' "systemd"
-
-  fi
-}
-
-# t3_iso_in SECONDS — ISO-8601 UTC timestamp N seconds from now.
-t3_iso_in() {
-  local epoch=$(( $(date -u +%s) + $1 ))
-  date -u -r "$epoch" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null ||
-    date -u -d "@$epoch" '+%Y-%m-%dT%H:%M:%SZ'
-}

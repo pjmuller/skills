@@ -18,16 +18,18 @@ Opus 5.5). Deliberately older, e.g. a cyber task the current model refuses: `--a
 
 ## 🏓 round-trip workers
 
-A `🏓` title appends a ping-back footer with the resolved parent id and hides
-the thread while it runs ([hide-thread.md](hide-thread.md); `--hide` /
-`--no-hide` override, a failed arm only warns). Workers whose brief merely said
+On T3 ≥ 0.1.0 a 🏓 worker is a `delegate_task` child: no sidebar row, its result
+wakes the parent, nothing to settle ([native-workers.md](native-workers.md)).
+The rest of this section is the 0.0.x helper path.
+
+A `🏓` title appends a ping-back footer with the resolved parent id. Workers whose brief merely said
 "ping back" silently ended in their own thread, hence the mechanical footer. It
 guarantees the instruction, not compliance: `t3-fleet list --stalled`
 ([t3-maintenance](../t3-maintenance/SKILL.md)) detects workers that never pinged.
-Nothing settles the worker: after its report is verified, `t3-settle-thread --wait ID`.
+After its report is verified, the parent settles it (`t3_thread_organize` with its threadId).
 
 Multiple models on one topic: spawn one standalone lead (e.g. Fable or Opus),
-which owns hidden 🏓 workers (e.g. Astra or Sol) and the final result. Don't spawn
+which owns its 🏓 workers (e.g. Astra or Sol) and the final result. Don't spawn
 standalone peers for the user to combine; separate standalones mean separate topics
 unless explicitly requested.
 
@@ -42,21 +44,18 @@ anything this thread still has to verify before it can finish); 📤 standalone
   thread built. Test: would this thread's answer change when the result lands?
   No → 📤.
 Unclear *sub-step* of the current task → **🏓**; the user can promote it.
-Misfired? Convert in place, don't respawn: `t3-hide-thread --unhide`, rename to
-`📤 …`, ping the thread that it is standalone and must ignore its ping-back footer. A thread's own mode never propagates to what it
-spawns. Hidden ≠ stopped; settle and archive both stop a session, so only snooze
-hides a live worker.
+Misfired? Convert in place, don't respawn: rename to `📤 …`, ping the thread that
+it is standalone and must ignore its ping-back footer. A thread's own mode never
+propagates to what it spawns. Settle and archive both stop a session.
 
 ## Fire-and-forget: `--settle-when-done`
 
 Conditional self-settlement for standalone work: use an explicit user request or
 an authorized routing policy recorded in the brief, never standalone status alone.
 The helper appends the canonical completion footer in `scripts/t3-spawn-thread`;
-that footer defines clean completion and exceptions. Default visibility is hidden;
-`--settle-when-done --no-hide` keeps the thread visible while running. On clean
-delivery the worker runs `t3-settle-thread --self` as its last tool call
-([settle-thread.md](settle-thread.md#settle-yourself-then-settle-this-thread));
-otherwise it stays open and unhides if needed. Explicit keep-open or later user
+that footer defines clean completion and exceptions. On clean delivery the worker
+settles itself natively as its last tool call ([settle-thread.md](settle-thread.md#settle-yourself));
+otherwise it stays open for the user. Explicit keep-open or later user
 instructions win. Refused with a 🏓 title: the parent settles those after verification.
 
 ## Titles, models, briefs

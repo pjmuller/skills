@@ -204,15 +204,15 @@ def test_valid_models():
             mod.valid_models(bad)
 
 
-def test_hide_and_no_notify(tmp_path, monkeypatch):
+def test_no_notify(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     p = mod.paths("job")
     base = {"name": "job", "project": "/r", "profile": None, "model": "haiku", "thinking": None, "title": "t", "wait_max": 1}
-    body = mod.runner_script({**base, "hide": True, "notify": False}, p)
-    assert "--no-open --hide" in body and "--settle-when-done" not in body
+    body = mod.runner_script({**base, "hide": True, "notify": False}, p)  # legacy "hide" key is ignored
+    assert "--hide" not in body and "--settle-when-done" not in body
     assert body.count("display notification") == 2 and '\n    : osascript' in body  # success notification disabled, fail() kept
     default = mod.runner_script(base, p)
-    assert "--hide" not in default and ": osascript" not in default
+    assert ": osascript" not in default
 
 
 # --- continuation (--resume-thread) -------------------------------------------------
@@ -249,10 +249,10 @@ def resume_job(tmp_path, monkeypatch, data, instances=frozenset({"claudeAgent"})
 
 
 def test_resume_healthy_pings(tmp_path, monkeypatch, capsys):
-    rc, calls, p = resume_job(tmp_path, monkeypatch, thread_data(settled_at="2026-09-27"), hide=True)
+    rc, calls, p = resume_job(tmp_path, monkeypatch, thread_data(settled_at="2026-09-27"))
     assert rc == 0 and not p["fallback"].exists()
     argv = calls[0]
-    assert argv[:4] == ["t3-ping-thread", "--thread", TID, "--allow-cross-project"] and "--hide" in argv
+    assert argv[:4] == ["t3-ping-thread", "--thread", TID, "--allow-cross-project"] and "--hide" not in argv
     assert argv[-1].startswith("Scheduled follow-up (") and "as agreed earlier in this thread:\n\nCheck the deploy." in argv[-1]
     assert f"resumed Outage ({TID})" in capsys.readouterr().out
 
@@ -315,7 +315,7 @@ def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, "read_thread", lambda tid: (thread_data(workspace_root=str(tmp_path)), ""))
     add = lambda **kw: mod.cmd_add(argparse.Namespace(**{
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
-        "profile": None, "model": None, "thinking": None, "settle_when_done": False, "hide": False,
+        "profile": None, "model": None, "thinking": None, "settle_when_done": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
         "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
     assert add() == 0 and "t3-schedule resume-thread fu" in capsys.readouterr().out  # project from the thread
@@ -344,7 +344,7 @@ def add_args(**kw):
     import argparse
     return argparse.Namespace(**{
         "name": "nightly", "at": "07:30", "once": None, "weekdays": True, "days": None, "project": None,
-        "profile": "work", "model": "fable", "thinking": None, "settle_when_done": True, "hide": False,
+        "profile": "work", "model": "fable", "thinking": None, "settle_when_done": True,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["Run the report."], "wait_max": 10,
         "force": False, "dry_run": False, "resume_thread": None, "many_machines": False, "takeover": False, **kw})
 
@@ -360,7 +360,7 @@ def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
     me = mod.machine_identity()
     assert stored.pop("adopted_by") == [{"machine": me["label"], "user": None, "since": mod.date.today().isoformat(), "id": me["id"]}]
     assert stored == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable", "thinking": None,
-                      "settle_when_done": True, "hide": False, "notify": True, "wait_max": 10, "machines": "one",
+                      "settle_when_done": True, "notify": True, "wait_max": 10, "machines": "one",
                       "paused": False, "pause_until": None}
     assert prompt.read_text() == "Run the report.\n"
     p = mod.paths("nightly")
@@ -526,9 +526,9 @@ def test_migrate_moves_local_recurring_only(tmp_path, monkeypatch):
     src, prompt = mod.repo_files(repo, "legacy")
     assert json.loads(p["spec"].read_text()) == {"name": "legacy", "source": str(src), "profile": "work"}
     assert prompt.read_text() == "legacy prompt\n" and not p["prompt"].exists()
-    repo_spec = json.loads(src.read_text())  # pre-versioning specs lack hide/notify/wait_max: defaults, never null
+    repo_spec = json.loads(src.read_text())  # pre-versioning specs lack notify/wait_max: defaults, never null
     assert "profile" not in repo_spec and repo_spec["wait_max"] == mod.DEFAULT_WAIT_MAX
-    assert repo_spec["notify"] is True and repo_spec["hide"] is False and repo_spec["settle_when_done"] is False
+    assert repo_spec["notify"] is True and "hide" not in repo_spec and repo_spec["settle_when_done"] is False
     assert not mod.repo_files(repo, "oneoff")[0].exists()  # one-shots stay machine-local
 
 

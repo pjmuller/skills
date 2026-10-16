@@ -59,7 +59,7 @@ SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the pr
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
 REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
-             "settle_when_done": False, "hide": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
+             "settle_when_done": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
              "machines": "one", "adopted_by": None, "paused": False, "pause_until": None}  # [] = nobody (skips)
 MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
 OWNER_SKIP_EXIT = 5                    # `t3-schedule owner-check` → runner: another machine owns this job, skip
@@ -128,7 +128,7 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
         for key in ("title", "thinking"):
             if repo.get(key) is not None and not isinstance(repo[key], str):
                 raise SystemExit(f"{key} must be a string, got {repo[key]!r}")
-        for key in ("settle_when_done", "hide", "notify"):
+        for key in ("settle_when_done", "notify"):
             if repo.get(key) is not None and not isinstance(repo[key], bool):
                 raise SystemExit(f"{key} must be true/false, got {repo[key]!r}")
         if repo.get("paused") is not None and not isinstance(repo["paused"], bool):
@@ -497,8 +497,6 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     spawn = ["t3-spawn-thread", "--project", spec["project"], "--no-open"]
     if spec.get("settle_when_done"):
         spawn.append("--settle-when-done")
-    if spec.get("hide"):
-        spawn.append("--hide")
     if spec.get("thinking"):
         spawn += ["--thinking", spec["thinking"]]
     spawn_quoted = " ".join(shlex.quote(part) for part in spawn)
@@ -875,7 +873,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         # Busy thread: T3 queues the turn; the ping helper retries a refused dispatch itself.
         day = date.today().isoformat()
         ping = subprocess.run(
-            ["t3-ping-thread", "--thread", thread_id, "--allow-cross-project", *(["--hide"] if spec.get("hide") else []),
+            ["t3-ping-thread", "--thread", thread_id, "--allow-cross-project",
              "--", resume_message(prompt, spec["name"], day)],
             capture_output=True, text=True, cwd=home(),
         )
@@ -934,7 +932,6 @@ def cmd_add(args: argparse.Namespace) -> int:
         "model": valid_models(args.model),
         "thinking": args.thinking,
         "settle_when_done": args.settle_when_done,
-        "hide": args.hide,
         "notify": not args.no_notify,
         "title": args.title or f"⏰ {name} {{date}}",
         "at": f"{hour:02d}:{minute:02d}",
@@ -1583,12 +1580,11 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--project", help="repo path the thread runs in (with --resume-thread: the fallback's; default = that thread's project)")
     add.add_argument("--resume-thread", metavar="THREAD_ID|self", help="continuation (self = the calling thread): wake this thread with the prompt instead of spawning; "
                      "--project/--profile/--model/--thinking/--title then shape only the fallback thread spawned when it "
-                     "cannot be resumed; --hide applies to both")
+                     "cannot be resumed")
     add.add_argument("--profile", help="T3 provider instance (machine-local, not versioned); omit → t3-spawn-thread routes by capacity at fire time")
     add.add_argument("--model", help=f"ordered comma list, first installed with capacity wins: opus,sol · fable · MODEL (default {DEFAULT_MODELS})")
     add.add_argument("--thinking", help="low|medium|high (omit → model's house default)")
-    add.add_argument("--settle-when-done", action="store_true", help="hide the thread while running and instruct it to settle itself when done")
-    add.add_argument("--hide", action="store_true", help="hide the thread while running (snooze keeper), no self-settle footer: the prompt owns the lifecycle")
+    add.add_argument("--settle-when-done", action="store_true", help="instruct the thread to settle itself when done (clean outcome only)")
     add.add_argument("--no-notify", action="store_true", help="no macOS notification on spawn (failures still notify once per day)")
     add.add_argument("--title", help="thread title; {date} → YYYY-MM-DD. Default: '⏰ <name> {date}'")
     add.add_argument("--prompt-file", help="read the prompt from a file instead of the argument")
