@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# t3-pick-instance MODEL [PREFERRED_INSTANCE] [ALLOWED_IDS_CSV]
+# Print the T3 provider instance id with the most capacity for MODEL (aliases as in
+# t3-spawn-thread: sol, astra, opus, fable, ...), using the same policy as spawn
+# routing (lib/profile_routing.py). Feed it to delegate_task target.providerInstanceId
+# or t3_thread_launch modelSelection.instanceId. Explanation goes to stderr.
+set -euo pipefail
+here="$(dirname "$(readlink -f "$0")")"
+source "$here/lib/t3-common.sh"
+if [[ $# -lt 1 || "$1" == -h || "$1" == --help ]]; then
+  sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+t3_base_dir="${T3CODE_HOME:-$HOME/.t3}"
+model="$(normalize_model "$1")"
+preferred="${2:-claudeAgent}"
+settings="$t3_base_dir/userdata/settings.json"
+printf '%s\n' "$model" >&2
+exec uv run -q --script "$here/lib/profile_routing.py" "$model" "$preferred" "$settings" "${3:-}"

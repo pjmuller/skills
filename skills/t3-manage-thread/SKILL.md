@@ -5,6 +5,13 @@ description: Spawn, ping, read, hide, rename, or settle a separate T3 Code threa
 
 # T3 Manage Thread
 
+> [!IMPORTANT]
+> **T3 ≥ 0.1.0 (Orchestrator V2):** the writing helpers (spawn, ping, hide, settle,
+> rename, delete, mail-link) exit 3, because their dispatch API is gone. Use the native T3 MCP tools
+> ([native-workers.md](native-workers.md)): 🏓 worker = `delegate_task` (no sidebar row; the result
+> wakes you), standalone = `t3_thread_launch`, ping = `t3_thread_send`, settle/snooze = `t3_thread_organize`.
+> Account for any of them: `t3-pick-instance MODEL`. Below is the 0.0.x path.
+
 Helpers in `scripts/`, on PATH after install; use them instead of T3's raw API,
 cookies or SQLite. Every flag: `<helper> --help`. Spawn prints project + thread
 IDs — report those.
@@ -60,6 +67,7 @@ sources in your private setup repo.
 | Rate-limit windows per Claude + Codex profile (the numbers routing uses) | [limits.md](limits.md) |
 | Fleet view of workers, bulk repair, hard purge | [t3-maintenance](../t3-maintenance/SKILL.md) |
 | Stay on the newest release (`skills-refresh`) | [skills-refresh.md](skills-refresh.md) |
+| T3 ≥ 0.1.0: native workers (`delegate_task`) and tool map | [native-workers.md](native-workers.md) |
 | Native upstream tools (when to retire these helpers) | [upstream-checkpoint.md](upstream-checkpoint.md) |
 | Browser / computer use: T3 preview, logged-in Chrome over CDP, native apps | [browser.md](browser.md) |
 

@@ -5,7 +5,7 @@
 #   t3_require jq curl uuidgen        # hard dependency check
 #   t3_bootstrap                      # base dir, origin, server version, pinned t3 CLI
 #   t3_issue_session LABEL [TTL]      # scoped bearer token + auto-revoke trap
-#   t3_dispatch PAYLOAD [OUTFILE]     # POST to /api/orchestration/dispatch
+#   t3_dispatch PAYLOAD [OUTFILE]     # POST to /api/orchestration/dispatch (T3 0.0.x only; exits 3 on V2)
 #   t3_shell_snapshot                 # GET  /api/orchestration/shell
 #   t3_open_url URL                   # best-effort focus (macOS / Linux / WSL)
 #   t3_thread_snapshot ID             # one thread out of the shell snapshot
@@ -154,7 +154,11 @@ t3_local_version() {
 # stale install via pnpm add -g, and only fall back to the slower pnpm dlx.
 t3_select_cli() {
   t3_cli=()
-  if command -v t3 >/dev/null && [[ "$(t3_local_version)" == "$t3_version" ]]; then
+  # T3 >= 0.1.0 writes a launcher for the app's bundled CLI; it always matches the server.
+  local bundled="${T3CODE_CLI_PATH:-$t3_base_dir/bin/t3}"
+  if [[ -x "$bundled" ]] && [[ "$("$bundled" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" == "$t3_version" ]]; then
+    t3_cli=("$bundled")
+  elif command -v t3 >/dev/null && [[ "$(t3_local_version)" == "$t3_version" ]]; then
     t3_cli=(t3)
   elif command -v pnpm >/dev/null; then
     local install_log
@@ -259,9 +263,23 @@ t3_shell_snapshot() {
 }
 
 # t3_dispatch PAYLOAD [RESPONSE_FILE]
+# T3 >= 0.1.0 (Orchestrator V2) removed this endpoint; writes travel over the WS
+# RPC or the agent-facing T3 MCP tools. Fail fast and name the native tool
+# instead of a confusing 404 (research: macbook_setup decissions/t3_native_workers.md).
 t3_dispatch() {
   local payload="$1"
   local response_file="${2:-/dev/null}"
+  if [[ "${t3_version:-0.0.0}" != 0.0.* ]]; then
+    cat >&2 <<EOF
+T3 Code $t3_version (Orchestrator V2) has no /api/orchestration/dispatch; this helper cannot write.
+Inside a T3 thread use the native T3 MCP tools instead:
+  round-trip worker -> delegate_task (hidden child; its result wakes you; target.providerInstanceId
+                       from: t3-pick-instance MODEL)
+  standalone thread -> t3_thread_launch   ping -> t3_thread_send   read -> t3_thread_read
+  rename -> t3_thread_update   settle/snooze/pin -> t3_thread_organize (omit threadId = this thread)
+EOF
+    exit 3
+  fi
   printf '%s' "$payload" | curl --fail-with-body -sS \
     --connect-timeout 3 --max-time 20 \
     -H "@$t3_auth_header_file" -H 'Content-Type: application/json' \
