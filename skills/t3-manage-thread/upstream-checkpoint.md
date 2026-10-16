@@ -1,5 +1,9 @@
 # Upstream replacement checkpoint
 
+**2026-10-16: Orchestrator V2 is stable (v0.1.0, 2026-10-15).** The dispatch API is gone, so the writing
+helpers exit 3 there; the native path and its verified parity are in [native-workers.md](native-workers.md).
+What follows is the 0.0.x history.
+
 Before extending these helpers, check upstream native orchestration. Last
 checked 2026-10-07, T3 stable v0.0.45: nothing native on stable (no `t3 thread`
 CLI, no thread MCP tools); the internal dispatch contract is unchanged since
