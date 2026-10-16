@@ -1,12 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["pytest"]
-# ///
-"""Cohort selection + --older-than parsing for t3-purge-threads.
-
-Runs the real CLI against a tiny on-disk fixture store, so the SQL in
-`load_threads` is exercised too (the read-only connection needs a real file).
+"""t3-purge-threads against a synthetic statev2 store: cohorts, families, wakes, hard purge.
 
   uv run --with pytest pytest test_t3_purge_threads.py
 """
@@ -16,26 +8,24 @@ from __future__ import annotations
 import argparse
 import importlib.machinery
 import importlib.util
-import json
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from v2_fixture import Store
 
 SCRIPT = Path(__file__).with_name("t3-purge-threads")
+DAY = 24 * 60
 
 
 def load_cli():
-    spec = importlib.util.spec_from_loader(
-        "t3_purge_threads",
-        importlib.machinery.SourceFileLoader("t3_purge_threads", str(SCRIPT)),
-    )
+    loader = importlib.machinery.SourceFileLoader("t3_purge_threads", str(SCRIPT))
+    spec = importlib.util.spec_from_loader("t3_purge_threads", loader)
     module = importlib.util.module_from_spec(spec)
-    # dataclasses resolves __module__ through sys.modules; register before exec.
-    sys.modules["t3_purge_threads"] = module
+    sys.modules["t3_purge_threads"] = module  # dataclasses resolve __module__ here
     spec.loader.exec_module(module)
     return module
 
@@ -43,267 +33,124 @@ def load_cli():
 cli = load_cli()
 
 
-def stamp(moment: datetime) -> str:
-    return moment.isoformat().replace("+00:00", "Z")
-
-
 @pytest.fixture
 def store(tmp_path: Path) -> Path:
-    path = tmp_path / "state.sqlite"
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        CREATE TABLE projection_projects (
-          project_id TEXT PRIMARY KEY, title TEXT, workspace_root TEXT);
-        CREATE TABLE projection_threads (
-          thread_id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
-          created_at TEXT, updated_at TEXT, archived_at TEXT, deleted_at TEXT,
-          settled_override TEXT, pinned_at TEXT,
-          pending_approval_count INTEGER DEFAULT 0,
-          pending_user_input_count INTEGER DEFAULT 0, model_selection_json TEXT);
-        CREATE TABLE projection_thread_messages (
-          message_id TEXT PRIMARY KEY, thread_id TEXT);
-        CREATE TABLE projection_thread_sessions (
-          thread_id TEXT PRIMARY KEY, status TEXT, provider_name TEXT,
-          provider_instance_id TEXT);
-        CREATE TABLE provider_session_runtime (
-          thread_id TEXT PRIMARY KEY, provider_instance_id TEXT,
-          runtime_payload_json TEXT, resume_cursor_json TEXT);
-        CREATE TABLE orchestration_events (
-          aggregate_kind TEXT, stream_id TEXT, payload_json TEXT);
-        CREATE TABLE orchestration_command_receipts (
-          command_id TEXT PRIMARY KEY, aggregate_kind TEXT, aggregate_id TEXT);
-        CREATE TABLE projection_thread_activities (
-          activity_id TEXT PRIMARY KEY, thread_id TEXT, payload_json TEXT);
-        CREATE TABLE projection_turns (row_id INTEGER PRIMARY KEY, thread_id TEXT);
-        CREATE TABLE projection_pending_approvals (
-          request_id TEXT PRIMARY KEY, thread_id TEXT);
-        CREATE TABLE projection_thread_proposed_plans (
-          plan_id TEXT PRIMARY KEY, thread_id TEXT);
-        CREATE TABLE checkpoint_diff_blobs (thread_id TEXT, diff TEXT);
-        INSERT INTO projection_projects VALUES ('p','fixture','/tmp/fixture');
-        INSERT INTO projection_projects VALUES ('q','other','/tmp/other');
-    """)
-    now = datetime.now(timezone.utc)
-
-    def thread(name: str, days: float, **overrides: object) -> None:
-        thread_id = f"{name:>08.8}-0000-0000-0000-000000000000".replace(" ", "0")
-        when = stamp(now - timedelta(days=days))
-        row = {
-            "project_id": "p",
-            "archived_at": None,
-            "deleted_at": None,
-            "settled_override": None,
-            "pinned_at": None,
-            "pending_approval_count": 0,
-            "pending_user_input_count": 0,
-            "status": "stopped",
-        } | overrides
-        connection.execute(
-            "INSERT INTO projection_threads VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                thread_id, row["project_id"], name, when, when,
-                row["archived_at"], row["deleted_at"], row["settled_override"],
-                row["pinned_at"], row["pending_approval_count"],
-                row["pending_user_input_count"], '{"instanceId":"claudeAgent"}',
-            ),
-        )
-        connection.execute(
-            "INSERT INTO projection_thread_sessions VALUES (?,?,?,?)",
-            (thread_id, row["status"], "claudeAgent", "claudeAgent"),
-        )
-        connection.execute(
-            "INSERT INTO orchestration_events VALUES ('thread',?,?)",
-            (thread_id, "x" * 1024),
-        )
-
-    old = stamp(now - timedelta(days=30))
-    thread("archold", 10, archived_at=old)
-    thread("archnew", 1, archived_at=old)
-    thread("settold", 10, settled_override="settled")
-    thread("delold", 10, deleted_at=old)
-    thread("activold", 10)
-    thread("pinned", 10, archived_at=old, pinned_at=old)
-    thread("running", 10, archived_at=old, status="running")
-    thread("blocked", 10, archived_at=old, pending_approval_count=1)
-    thread("otherpr", 10, archived_at=old, project_id="q")
-    connection.commit()
-    connection.close()
-    return path
+    s = Store(tmp_path / "statev2.sqlite")
+    s.thread("archold", "archold", archived=True, minutes=10 * DAY)
+    s.message("archold", "user", "SECRET", 10 * DAY, attachments=["archold-att"])
+    s.thread("archold-task", "child", parent="archold", minutes=10 * DAY)
+    s.thread("archnew", "archnew", archived=True, minutes=13 * 60)
+    s.thread("settold", "settold", settled=True, minutes=10 * DAY)
+    s.thread("delold", "delold", deleted=True, minutes=10 * DAY)
+    s.thread("otherpr", "otherpr", archived=True, project="q", minutes=10 * DAY)
+    s.thread("pinned", "pinned", archived=True, pinned=True, minutes=10 * DAY)
+    s.thread("running", "running", archived=True, run="running", minutes=10 * DAY)
+    s.thread("livechild", "livechild-parent", archived=True, minutes=10 * DAY)
+    s.thread("livechild-sub", "sub", parent="livechild", run="waiting", minutes=10 * DAY)
+    s.thread("active", "active", minutes=10 * DAY)
+    s.thread("sched", "sched", settled=True, minutes=10 * DAY)
+    s.db.execute("INSERT INTO scheduled_tasks VALUES ('t1', 'nightly', 1, 'sched')")
+    s.db.execute("INSERT INTO orchestration_events VALUES (1, 'archold', '{}')")
+    return s.close()
 
 
-def selected(store: Path, *argv: str) -> set[str]:
-    args = cli.build_parser().parse_args(["list", *argv])
-    args.store = store
-    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=True)
-    return {item.title for item in cli.select(args, threads)}
+def selected(store: Path, *args: str, wakes=None) -> set[str]:
+    parsed = cli.build_parser().parse_args(["list", *args])
+    threads = cli.load_threads(store, datetime.now(UTC))
+    rows, _kept = cli.select(parsed, threads, wakes or {})
+    return {row.thread_id for row in rows}
 
 
-@pytest.mark.parametrize(
-    "value,expected",
-    [("3d", timedelta(days=3)), ("12h", timedelta(hours=12)), ("0d", timedelta(0))],
-)
+@pytest.mark.parametrize("value,expected", [("3d", timedelta(days=3)), ("12h", timedelta(hours=12))])
 def test_parse_duration(value: str, expected: timedelta) -> None:
     assert cli.parse_duration(value) == expected
 
 
-@pytest.mark.parametrize("value", ["3", "3w", "3m", "three days", ""])
+@pytest.mark.parametrize("value", ["3", "3w", "three days", ""])
 def test_parse_duration_rejects(value: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         cli.parse_duration(value)
 
 
-def test_cohorts_are_ored_and_never_touch_active(store: Path) -> None:
+def test_cohorts_and_exclusions(store: Path) -> None:
+    # pinned, running and a family with a live sub-agent are never candidates
     assert selected(store, "--archived") == {"archold", "otherpr"}
-    assert selected(store, "--settled") == {"settold"}
+    assert selected(store, "--settled") == {"settold", "sched"}
     assert selected(store, "--deleted") == {"delold"}
-    assert selected(store, "--archived", "--settled", "--deleted") == {
-        "archold", "otherpr", "settold", "delold"
-    }
-
-
-def test_requires_a_cohort(store: Path) -> None:
+    assert "archnew" in selected(store, "--archived", "--older-than", "12h")
+    assert selected(store, "--archived", "--project", "other") == {"otherpr"}
     with pytest.raises(SystemExit):
         selected(store)
 
 
-def test_older_than_excludes_recent(store: Path) -> None:
-    assert "archnew" not in selected(store, "--archived", "--older-than", "3d")
-    assert "archnew" in selected(store, "--archived", "--older-than", "12h")
+def test_family_goes_together(store: Path) -> None:
+    threads = cli.load_threads(store, datetime.now(UTC))
+    assert threads["archold"].descendants == ["archold-task"]
+    assert threads["archold"].attachment_ids == {"archold-att"}
 
 
-def test_hard_exclusions(store: Path) -> None:
-    picked = selected(store, "--archived", "--older-than", "1h")
-    assert "pinned" not in picked
-    assert "running" not in picked
-    assert "blocked" not in picked
-
-
-def test_project_filter(store: Path) -> None:
-    assert selected(store, "--archived", "--project", "other") == {"otherpr"}
-    assert "otherpr" not in selected(store, "--archived", "--project", "fixture")
-
-
-def test_sizes_and_row_counts(store: Path) -> None:
-    args = cli.build_parser().parse_args(["list", "--archived"])
-    args.store = store
-    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=True)
-    rows = cli.select(args, threads)
-    assert cli.summary(rows)["rows"]["orchestration_events"] == len(rows)
-    assert rows[0].payload_bytes == 1024
-
-
-def test_list_defaults_to_dry_run_json(store: Path) -> None:
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), "list", "--store", str(store),
-         "--archived", "--json"],
-        capture_output=True, text=True, check=True,
-        env={"PATH": "/usr/bin:/bin"},  # no wake helpers: hermetic
-    )
-    payload = json.loads(result.stdout)
-    assert sorted(item["title"] for item in payload["threads"]) == ["archold", "otherpr"]
-    assert payload["threads"][0]["state"] == "archived"
-    assert payload["kept_pending_wake"] == []
-
-
-def tid(name: str) -> str:
-    return f"{name:>08.8}-0000-0000-0000-000000000000".replace(" ", "0")
-
-
-def test_pending_wake_excluded_from_every_cohort(store: Path) -> None:
-    args = cli.build_parser().parse_args(
-        ["list", "--archived", "--settled", "--deleted"]
-    )
-    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=False)
-    protected = frozenset({tid("archold"), tid("settold"), tid("delold")})
-    assert {item.title for item in cli.select(args, threads, protected)} == {"otherpr"}
-
-
-def fake_helpers(monkeypatch, schedule_rc: int = 0) -> None:
-    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/bin/{name}")
-
-    def run(argv, **_kwargs):
-        if argv[0].endswith("t3-schedule"):
-            out = f"{tid('archold')}\tkk-check\tonce 2026-10-27 (tue) 10:00\n"
-            return subprocess.CompletedProcess(argv, schedule_rc, out, "boom")
-        return subprocess.CompletedProcess(argv, 0, f"{tid('archold')}\n{tid('delold')}\n", "")
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
-
-
-def test_pending_wakes_merges_both_helpers(monkeypatch) -> None:
-    fake_helpers(monkeypatch)
-    assert cli.pending_wakes() == {
-        tid("archold"): "scheduled resume kk-check (once 2026-10-27 (tue) 10:00); mail link",
-        tid("delold"): "mail link",
-    }
-
-
-def test_pending_wakes_fails_closed(monkeypatch) -> None:
-    fake_helpers(monkeypatch, schedule_rc=1)
-    with pytest.raises(SystemExit, match="refusing"):
-        cli.pending_wakes()
-
-
-def test_pending_wakes_absent_helpers(monkeypatch) -> None:
+def test_wakes_keep_threads(store: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
-    assert cli.pending_wakes() == {}
+    wakes = cli.pending_wakes(store)
+    assert wakes == {"sched": "scheduled task nightly"}
+    assert selected(store, "--settled", wakes=wakes) == {"settold"}
 
 
-def test_list_reports_kept(store: Path, monkeypatch, capsys) -> None:
-    monkeypatch.setattr(cli, "pending_wakes", lambda: {tid("archold"): "mail link"})
-    assert cli.main(["list", "--store", str(store), "--archived"]) == 0
-    out = capsys.readouterr().out
-    assert "archold  " not in out and "kept 0archold archold: mail link" in out
+def test_pending_wakes_fails_closed(store: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        cli.subprocess, "run",
+        lambda argv, **_: subprocess.CompletedProcess(argv, 1, "", "boom"),
+    )
+    with pytest.raises(SystemExit, match="refusing"):
+        cli.pending_wakes(store)
+
+
+def test_provider_log_name() -> None:
+    name = cli.provider_log("thread:delegated-task:command%3Amcp%3Ab6678c96-9ecb").name
+    assert name == "events.thread-delegated-task-command-3amcp-3ab6678c96-9ecb.log"
 
 
 def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:
     monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
-    monkeypatch.setattr(cli, "DEFAULT_LOG_DIR", tmp_path / "actions")
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "actions")
     monkeypatch.setattr(cli, "t3_is_running", lambda: None)
     monkeypatch.setattr(cli, "offer_backup_cleanup", lambda current: None)
-    args = cli.build_parser().parse_args(
-        ["apply", "--mode", "hard", "--yes", "--archived", *extra]
-    )
+    args = cli.build_parser().parse_args(["apply", "--yes", "--archived", *extra])
     args.store = store
-    threads = cli.load_threads(store, datetime.now(timezone.utc), with_sizes=False)
-    rows = cli.select(args, threads)
-    cli.attach_files(rows)
-    assert cli.cmd_apply(args, rows) == 0
+    rows, kept = cli.select(args, cli.load_threads(store, datetime.now(UTC)), {})
+    assert cli.cmd_apply(args, rows, kept) == 0
     return next((tmp_path / "backups").iterdir())
 
 
-def test_hard_purge_slim_backup_keeps_messages_only(
-    store: Path, tmp_path: Path, monkeypatch
-) -> None:
-    with sqlite3.connect(store) as connection:
-        connection.execute(
-            "INSERT INTO projection_thread_messages VALUES ('m1', "
-            "'0archold-0000-0000-0000-000000000000')"
-        )
+def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, monkeypatch) -> None:
     backup = hard_purge(store, tmp_path, monkeypatch)
     assert backup.name.startswith("purged-threads-")
     with sqlite3.connect(backup) as copy:
-        titles = {row[0] for row in copy.execute("SELECT title FROM projection_threads")}
-        assert titles == {"archold", "otherpr"}
-        assert copy.execute("SELECT COUNT(*) FROM projection_thread_messages").fetchone()[0] == 1
-        tables = {row[0] for row in copy.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "orchestration_events" not in tables
+        assert copy.execute("SELECT COUNT(*) FROM orchestration_v2_projection_messages").fetchone()[0] == 1
     with sqlite3.connect(store) as live:
-        remaining = {row[0] for row in live.execute("SELECT title FROM projection_threads")}
-        assert not remaining & {"archold", "otherpr"}
-        assert "settold" in remaining
-        assert live.execute(
-            "SELECT COUNT(*) FROM orchestration_events WHERE stream_id LIKE '0archold%'"
-        ).fetchone()[0] == 0
+        left = {r[0] for r in live.execute("SELECT thread_id FROM orchestration_v2_projection_threads")}
+        assert not left & {"archold", "archold-task", "otherpr"}
+        assert {"settold", "pinned", "livechild"} <= left
+        assert live.execute("SELECT COUNT(*) FROM orchestration_events").fetchone()[0] == 0
+        assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 1
 
 
-def test_hard_purge_full_backup_is_a_store_copy(
-    store: Path, tmp_path: Path, monkeypatch
-) -> None:
-    backup = hard_purge(store, tmp_path, monkeypatch, "--full-backup")
-    assert backup.name.startswith("state-before-purge-")
-    with sqlite3.connect(backup) as copy:
-        assert copy.execute("SELECT COUNT(*) FROM orchestration_events").fetchone()[0] == 9
+def test_hard_purge_refuses_while_running(store: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "t3_is_running", lambda: "T3 server is reachable")
+    with pytest.raises(SystemExit, match="Refusing"):
+        cli.main(["apply", "--store", str(store), "--yes", "--archived"])
+
+
+def test_drop_v1_dry_run_by_default(tmp_path: Path, store: Path, monkeypatch, capsys) -> None:
+    v1 = tmp_path / "state.sqlite"
+    v1.write_bytes(b"x" * 10)
+    monkeypatch.setattr(cli, "V1_STORE", v1)
+    assert cli.main(["drop-v1", "--store", str(store)]) == 0
+    assert v1.exists() and "Dry run" in capsys.readouterr().out
+    monkeypatch.setattr(cli, "t3_is_running", lambda: None)
+    assert cli.main(["drop-v1", "--store", str(store), "--yes"]) == 0
+    assert not v1.exists()
 
 
 @pytest.mark.parametrize("answer,kept", [("", 0), ("y", 0), ("n", 2)])
@@ -313,18 +160,8 @@ def test_offer_backup_cleanup(tmp_path: Path, monkeypatch, answer: str, kept: in
     monkeypatch.setattr(cli, "BACKUP_DIR", backups)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     current = backups / "purged-threads-new.sqlite"
-    for name in ("state-before-purge-old.sqlite", "purged-threads-older.sqlite", current.name):
+    for name in ("statev2-before-purge-old.sqlite", "purged-threads-older.sqlite", current.name):
         (backups / name).write_bytes(b"x")
     cli.offer_backup_cleanup(current, ask=lambda prompt: answer)
     assert current.exists()
     assert len(list(backups.iterdir())) == 1 + kept
-
-
-def test_offer_backup_cleanup_skips_without_tty(tmp_path: Path, monkeypatch) -> None:
-    backups = tmp_path / "backups"
-    backups.mkdir()
-    monkeypatch.setattr(cli, "BACKUP_DIR", backups)
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    (backups / "old.sqlite").write_bytes(b"x")
-    cli.offer_backup_cleanup(backups / "new.sqlite", ask=lambda prompt: pytest.fail("asked"))
-    assert (backups / "old.sqlite").exists()

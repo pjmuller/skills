@@ -6,10 +6,10 @@
 """Free the RAM held by T3 Code browser-preview tabs (macOS desktop app).
 
 Every preview tab is a <webview> guest of the T3 window's UI renderer, one
-`T3 Code Helper (Renderer)` process each, and nothing closes them: agents have no
-preview_close and tabs of settled threads stay mounted. Verified on v0.0.45:
-killing a guest makes T3 respawn it; the server RPC `preview.close` only drops the
-server session; View -> Reload may hit a guest instead of the window. What works:
+`T3 Code Helper (Renderer)` process each, and tabs of settled threads stay mounted
+(agents rarely call t3_preview_close). Verified on v0.0.45: killing a guest makes T3
+respawn it; the server RPC `preview.close` only drops the server session; View ->
+Reload may hit a guest instead of the window. What works:
 
 1. `preview.close` every tab of a settled/archived thread idle past --idle-hours,
    so the window does not remount it.
@@ -38,13 +38,15 @@ import signal
 import subprocess
 import sys
 import time
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import websockets
 
-APP_BINARY = "/Applications/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import DEFAULT_STORE, LIVE_RUN, connect_readonly
+
+APP_BINARY = re.compile(r"/Applications/(T3 Code[^/]*)\.app/Contents/MacOS/\1")
 RENDERER_MARK = "Helper (Renderer)"
 GUEST_FLAG = "--enable-blink-features"  # webview guests carry it, the UI renderer does not
 LOG = Path.home() / ".local/state/t3-maintenance/preview-gc.log"
@@ -80,7 +82,7 @@ def renderers() -> tuple[int | None, list[int]]:
     table = subprocess.run(["ps", "-ax", "-ww", "-o", "pid=,ppid=,etime=,args="],
                            capture_output=True, text=True, check=True).stdout
     rows = [re.match(r"\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)", line).groups() for line in table.splitlines() if line.strip()]
-    app = [int(pid) for pid, _ppid, _etime, args in rows if args == APP_BINARY]
+    app = [int(pid) for pid, _ppid, _etime, args in rows if APP_BINARY.fullmatch(args)]
     if len(app) != 1:
         return None, []
     ui, guests = [], []
@@ -117,10 +119,10 @@ def user_idle_seconds() -> int:
 
 # --- T3 server ---------------------------------------------------------------
 def t3_connection() -> tuple[str, str, list[str]]:
-    """origin, base dir and version-matched t3 CLI, via the t3-manage-thread bootstrap."""
-    helper = shutil.which("t3-spawn-thread")
+    """origin, base dir and bundled t3 CLI, via the t3-manage-thread bootstrap."""
+    helper = shutil.which("t3-pick-instance")
     if not helper:
-        sys.exit("t3-spawn-thread not on PATH; install the t3-manage-thread helpers")
+        sys.exit("t3-pick-instance not on PATH; install the t3-manage-thread helpers")
     common = Path(helper).resolve().parent / "lib/t3-common.sh"
     script = f'source "{common}"; t3_bootstrap >&2; printf "%s\\0%s\\0" "$t3_origin" "$t3_base_dir"; printf "%s\\0" "${{t3_cli[@]}}"'
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
@@ -141,18 +143,12 @@ class Session:
         subprocess.run([*self.cli, "auth", "session", "revoke", "--base-dir", self.base_dir, self.session_id],
                        capture_output=True, timeout=15, check=False)
 
-    def threads(self) -> list[dict]:
-        request = urllib.request.Request(f"{self.origin}/api/orchestration/shell",
-                                         headers={"Authorization": f"Bearer {self.token}"})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.load(response)["threads"]
-
     def rpc(self, method: str, payloads: list[dict]) -> list[dict]:
         """Batch one Effect-RPC method over /ws; returns the Exit per payload, in order."""
         return asyncio.run(self._rpc(method, payloads)) if payloads else []
 
     async def _rpc(self, method: str, payloads: list[dict]) -> list[dict]:
-        url = self.origin.replace("http", "ws", 1) + "/ws"
+        url = self.origin.replace("http", "ws", 1) + "/ws?orchestrationProtocol=2"
         exits: dict[str, dict] = {}
         async with websockets.connect(url, additional_headers={"Authorization": f"Bearer {self.token}"},
                                       max_size=None) as socket:
@@ -175,8 +171,25 @@ def age_hours(stamp: str) -> float:
 
 
 # --- main --------------------------------------------------------------------
-def finished(thread: dict) -> bool:
-    return bool(thread.get("settledAt") or thread.get("archivedAt"))
+def load_threads() -> dict[str, dict]:
+    """thread id -> {finished: settled/archived, running: latest run still live}."""
+    with connect_readonly(DEFAULT_STORE) as db:
+        rows = db.execute("""
+            SELECT t.thread_id,
+                   json_extract(t.payload_json, '$.settledOverride') = 'settled'
+                     OR t.archived_at IS NOT NULL AS finished,
+                   (SELECT r.status FROM orchestration_v2_projection_runs r
+                    WHERE r.thread_id = t.thread_id ORDER BY r.ordinal DESC LIMIT 1) AS run
+            FROM orchestration_v2_projection_threads t WHERE t.deleted_at IS NULL
+        """).fetchall()
+    return {row["thread_id"]: {"finished": bool(row["finished"]), "running": row["run"] in LIVE_RUN}
+            for row in rows}
+
+
+def app_name() -> str:
+    table = subprocess.run(["ps", "-ax", "-ww", "-o", "args="], capture_output=True, text=True).stdout
+    return next((m.group(1) for line in table.splitlines() if (m := APP_BINARY.fullmatch(line.strip()))),
+                "T3 Code (Beta)")
 
 
 def survey(session: Session, idle_hours: float) -> tuple[list[dict], list[dict], list[dict]]:
@@ -184,14 +197,13 @@ def survey(session: Session, idle_hours: float) -> tuple[list[dict], list[dict],
 
     A tab's updatedAt moves on open/navigate/resize only, not on clicks, typing or
     snapshots, so every tab of a running thread counts as busy, whatever its age."""
-    threads = {thread["id"]: thread for thread in session.threads()}
+    threads = load_threads()
     tabs = [tab for exit_ in session.rpc("preview.list", [{"threadId": tid} for tid in threads])
             if exit_.get("_tag") == "Success" for tab in exit_["value"]["sessions"]]
     stale = [tab for tab in tabs
-             if finished(threads[tab["threadId"]]) and age_hours(tab["updatedAt"]) >= idle_hours]
+             if threads[tab["threadId"]]["finished"] and age_hours(tab["updatedAt"]) >= idle_hours]
     busy = [tab for tab in tabs
-            if not finished(threads[tab["threadId"]])
-            and (threads[tab["threadId"]].get("session") or {}).get("status") == "running"]
+            if not threads[tab["threadId"]]["finished"] and threads[tab["threadId"]]["running"]]
     return tabs, stale, busy
 
 
@@ -206,7 +218,7 @@ def busy_now(idle_hours: float) -> list[dict]:
 def click_menu(menu: str, item: str) -> None:
     try:
         subprocess.run(["osascript", "-e", f'tell application "System Events" to click menu item "{item}" '
-                        f'of menu "{menu}" of menu bar 1 of process "T3 Code (Alpha)"'],
+                        f'of menu "{menu}" of menu bar 1 of process "{app_name()}"'],
                        capture_output=True, timeout=30, check=False)
     except (subprocess.TimeoutExpired, OSError) as error:
         log(f"apply menu {menu} > {item} failed: {error}")
@@ -271,7 +283,7 @@ def main() -> int:
         return 0
     for attempt in ("crash recovery", "menu reload"):
         if attempt == "menu reload":  # View -> Reload acts on the focused window: focus it first
-            click_menu("Window", "T3 Code (Alpha)")
+            click_menu("Window", app_name())
             click_menu("View", "Reload")
         for _ in range(30):
             time.sleep(1)
@@ -283,7 +295,7 @@ def main() -> int:
                     log(f"apply RELOADED window via {attempt}: renderers {len(guests) + 1}->{len(new_guests) + 1}, "
                         f"footprint {before_mb}->{footprint_mb([new_ui, *new_guests])} MB")
                     return 0
-    log("apply ERROR window did not come back; Window menu -> T3 Code (Alpha), then View -> Reload")
+    log("apply ERROR window did not come back; Window menu -> T3 Code, then View -> Reload")
     notify("T3 window did not reload: Window menu > T3 Code, then View > Reload")
     return 1
 

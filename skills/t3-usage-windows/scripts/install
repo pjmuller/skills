@@ -5,11 +5,11 @@ install_dir="${HOME}/.local/bin"
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
 [[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == "--check" ]]; then
-  for dependency in uv jq codex t3-spawn-thread t3-settle-thread t3-ping-thread t3-limits t3-thread-maintenance t3-drafts; do
+  for dependency in uv jq codex t3-relay t3-pick-instance t3-limits; do
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (thread helpers: skills add pjmuller/skills -s t3-manage-thread -g && ~/.agents/skills/t3-manage-thread/scripts/install)" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done
-  for helper in t3-usage-windows t3-limited; do
+  for helper in t3-usage-windows; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -23,7 +23,7 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/t3-usage-windows" ]] || warn_project=true
-for command_name in t3-usage-windows t3-limited; do
+for command_name in t3-usage-windows; do
   existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
@@ -38,14 +38,14 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$install_dir"
-for helper in t3-usage-windows t3-limited; do
+for helper in t3-usage-windows; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
 done
 # Retire only our obsolete command symlinks; never replace unrelated user binaries.
-for helper in t3-hello-world t3-hello-world-topup; do
+for helper in t3-hello-world t3-hello-world-topup t3-limited; do
   target="$install_dir/$helper"
-  if [[ -L "$target" && "$(readlink "$target")" == */t3-hello-world/scripts/"$helper" ]]; then
+  if [[ -L "$target" && "$(readlink "$target")" == */t3-*/scripts/"$helper" ]]; then
     rm "$target"
     echo "removed obsolete alias $target"
   fi

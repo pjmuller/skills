@@ -1,9 +1,3 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
-
 from __future__ import annotations
 
 import base64
@@ -11,15 +5,13 @@ import contextlib
 import importlib.util
 import io
 import json
-import os
-import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest.mock import patch
+
+from v2_fixture import Store
 
 SCRIPT = Path(__file__).with_name("t3-drafts")
 
@@ -34,16 +26,12 @@ def load_cli():
     return module
 
 
-def stamp(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 ENV = "env0"
 IDS = {
     "recent": "aaaaaaaa-0000-0000-0000-000000000001",
     "old": "bbbbbbbb-0000-0000-0000-000000000002",
     "archived": "cccccccc-0000-0000-0000-000000000003",
-    "limited": "dddddddd-0000-0000-0000-000000000004",
+    "mcp": "mcp:dddddddd-0000-0000-0000-000000000004",  # V2 ids contain ':'
     "empty": "eeeeeeee-0000-0000-0000-000000000005",
     "gone": "ffffffff-0000-0000-0000-000000000006",
     "twin_a": "12345678-0000-0000-0000-00000000000a",
@@ -57,60 +45,18 @@ class DraftsTest(unittest.TestCase):
         self.module = load_cli()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.store = Path(self.temp.name) / "state.sqlite"
-        # Stub the detector so the test never runs whatever t3-usage-windows is
-        # installed; it answers only the exact argv t3-drafts must send.
-        bin_dir = Path(self.temp.name) / "bin"
-        bin_dir.mkdir()
-        detector = bin_dir / "t3-usage-windows"
-        detector.write_text(
-            "#!/bin/sh\n"
-            f'[ "$*" = "limited --store {self.store} list --since 1970-01-01 --json" ] || exit 3\n'
-            f"echo '[{{\"thread_id\": \"{IDS['limited']}\"}}]'\n"
-        )
-        detector.chmod(0o755)
-        env = patch.dict(os.environ, PATH=f"{bin_dir}:" + os.environ["PATH"])
-        env.start()
-        self.addCleanup(env.stop)
-        now = datetime.now(timezone.utc)
-        self.now = now
-        connection = sqlite3.connect(self.store)
-        connection.executescript("""
-            CREATE TABLE projection_projects (
-              project_id TEXT PRIMARY KEY, title TEXT
-            );
-            CREATE TABLE projection_threads (
-              thread_id TEXT PRIMARY KEY, project_id TEXT, title TEXT,
-              created_at TEXT, updated_at TEXT, deleted_at TEXT, archived_at TEXT,
-              model_selection_json TEXT
-            );
-            INSERT INTO projection_projects VALUES ('p','fixture');
-        """)
-
-        def thread(key, title, *, profile, hours, archived=False):
-            connection.execute(
-                "INSERT INTO projection_threads VALUES (?,?,?,?,?,?,?,?)",
-                (
-                    IDS[key],
-                    "p",
-                    title,
-                    stamp(now - timedelta(days=30)),
-                    stamp(now - timedelta(hours=hours)),
-                    None,
-                    stamp(now) if archived else None,
-                    json.dumps({"instanceId": profile}),
-                ),
-            )
-
-        thread("recent", "recent work", profile="claudeAgent_work", hours=1)
-        thread("old", "old work", profile="claudeAgent_personal", hours=24 * 20)
-        thread("archived", "archived work", profile="codex", hours=2, archived=True)
-        thread("limited", "blocked work", profile="claudeAgent_work", hours=3)
-        thread("empty", "no draft", profile="codex", hours=1)
-        thread("twin_a", "twin a", profile="codex", hours=4)
-        thread("twin_b", "twin b", profile="codex", hours=5)
-        connection.commit()
-        connection.close()
+        store = Store(Path(self.temp.name) / "statev2.sqlite")
+        for key, title, profile, hours, archived in (
+            ("recent", "recent work", "claudeAgent_work", 1, False),
+            ("old", "old work", "claudeAgent_personal", 24 * 20, False),
+            ("archived", "archived work", "codex", 2, True),
+            ("mcp", "launched work", "claudeAgent_work", 3, False),
+            ("empty", "no draft", "codex", 1, False),
+            ("twin_a", "twin a", "codex", 4, False),
+            ("twin_b", "twin b", "codex", 5, False),
+        ):
+            store.thread(IDS[key], title, minutes=hours * 60, archived=archived, instance=profile)
+        self.store = store.close()
 
         self.state = {
             "draftsByThreadKey": {
@@ -128,7 +74,7 @@ class DraftsTest(unittest.TestCase):
                 },
                 f"{ENV}:{IDS['old']}": {"prompt": "DONE", "attachments": []},
                 f"{ENV}:{IDS['archived']}": {"prompt": "stale", "attachments": []},
-                f"{ENV}:{IDS['limited']}": {
+                f"{ENV}:{IDS['mcp']}": {
                     "prompt": "then continue",
                     "attachments": [],
                 },
@@ -145,7 +91,6 @@ class DraftsTest(unittest.TestCase):
         return module.enrich(
             module.extract_drafts(self.state),
             module.load_threads(self.store),
-            module.load_limited_ids(self.store),
         )
 
     def run_cli(self, *args: str, expect: int = 0):
@@ -174,14 +119,6 @@ class DraftsTest(unittest.TestCase):
         stdout, _ = self.run_cli("list", "--json", *args)
         return json.loads(stdout)
 
-    def test_missing_detector_keeps_plain_listing_but_fails_closed_for_limited(self):
-        with patch.object(self.module, 'load_limited_ids', side_effect=FileNotFoundError):
-            stdout, stderr = self.run_cli('list', '--json')
-            self.assertTrue(json.loads(stdout))
-            self.assertIn('limit detection unavailable', stderr)
-            stdout, stderr = self.run_cli('list', '--limited', '--json', expect=1)
-            self.assertEqual(stdout, '')
-
     def test_empty_and_orphan_drafts_are_dropped(self) -> None:
         drafts, orphans = self.build()
         self.assertEqual(orphans, 1)  # IDS['gone'] is not in the store
@@ -208,9 +145,6 @@ class DraftsTest(unittest.TestCase):
         )
         self.assertNotIn(
             "bbbbbbbb", [row["short_id"] for row in self.rows("--since", "7d")]
-        )
-        self.assertEqual(
-            [row["short_id"] for row in self.rows("--limited")], ["dddddddd"]
         )
 
     def test_orphan_note_on_stderr_and_first_line_only(self) -> None:

@@ -35,14 +35,13 @@ from local_timezone import system_timezone
 
 TZ = system_timezone()
 LABEL = "com.t3-skills.t3-usage-windows.topup"
-LEGACY_LABEL = "com.t3-skills.t3-hello-world-topup"
 PATH_ENV = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HERE = Path(__file__).resolve()
 PLIST = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
 LOG = Path.home() / ".t3/userdata/logs/t3-usage-windows-topup.log"
 STATE = LOG.with_name("t3-usage-windows-topup.state.json")  # {instance: last morning-start date}
 RUNTIME = Path.home() / ".t3/userdata/server-runtime.json"
-HELLO_WORLD = HERE.with_name("t3-usage-windows")
+CLI = HERE.with_name("t3-usage-windows")
 START_HOUR, END_HOUR = 5, 21
 GRACE = 60  # seconds after expiry before a window counts as stale
 DEFAULT_INTERVAL = 600
@@ -134,8 +133,8 @@ def clean_env() -> dict:
 
 
 def t3_up() -> bool:
-    """server-runtime.json, else the last origin t3-common.sh saw (the file can vanish while
-    the server keeps running — see t3_bootstrap in lib/t3-common.sh)."""
+    """server-runtime.json, else last-server-origin (the runtime file can vanish while the
+    server keeps running)."""
     try:
         if RUNTIME.exists():
             origin = json.loads(RUNTIME.read_text()).get("origin")
@@ -223,7 +222,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     batches = [(label, ids) for label, ids in (("stale", stale), ("morning", due)) if ids]
     code = 0
     for label, ids in batches:
-        command = [str(HELLO_WORLD), "start", "--profile", ",".join(ids)]
+        command = [str(CLI), "start", "--profile", ",".join(ids)]
         if args.dry_run:
             log(f"dry-run: {label} {','.join(ids)}{note} → {' '.join(command)}")
             continue
@@ -240,19 +239,14 @@ def cmd_install(args: argparse.Namespace) -> int:
     if args.interval <= 0:
         raise SystemExit("--interval must be positive")
     if args.dry_run:
-        print(f"would migrate {LEGACY_LABEL} to {LABEL}, every {args.interval}s")
+        print(f"would arm {LABEL}, every {args.interval}s")
         return 0
-    legacy = LEGACY_LABEL
-    launchctl("bootout", f"gui/{os.getuid()}/{legacy}")
-    if launchctl("print", f"gui/{os.getuid()}/{legacy}").returncode == 0:
-        raise SystemExit(f"cannot unload legacy job: {legacy}; retry install")
-    PLIST.with_name(f"{legacy}.plist").unlink(missing_ok=True)
     PLIST.parent.mkdir(parents=True, exist_ok=True)
     PLIST.write_bytes(
         plistlib.dumps(
             {
                 "Label": LABEL,
-                "ProgramArguments": ["/bin/zsh", "-lc", shlex.quote(str(HELLO_WORLD)) + " topup run"],
+                "ProgramArguments": ["/bin/zsh", "-lc", shlex.quote(str(CLI)) + " topup run"],
                 "StartInterval": args.interval,
                 "RunAtLoad": False,
                 "ProcessType": "Interactive",  # Standard still gets a utility clamp: t3 CLI 15-25s per call vs <1s (A/B 2026-09-09)
@@ -283,8 +277,7 @@ def cmd_uninstall(_args: argparse.Namespace) -> int:
 
 def cmd_status(_args: argparse.Namespace) -> int:
     if getattr(_args, "json", False):
-        print(json.dumps({"label": LABEL, "loaded": loaded(), "interval": installed_interval(),
-                          "legacy_loaded": launchctl("print", f"gui/{os.getuid()}/{LEGACY_LABEL}").returncode == 0}))
+        print(json.dumps({"label": LABEL, "loaded": loaded(), "interval": installed_interval()}))
         return 0
     print(f"{LABEL}: {'loaded' if loaded() else 'NOT loaded'} · every {installed_interval()}s")
     lines = LOG.read_text().splitlines()[-5:] if LOG.exists() else []

@@ -5,7 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 mod = SourceFileLoader(
-    "t3_hello_world_topup", str(Path(__file__).with_name("topup.py"))
+    "t3_usage_windows_topup", str(Path(__file__).with_name("topup.py"))
 ).load_module()
 
 TZ = ZoneInfo("Europe/Brussels")
@@ -73,29 +73,26 @@ def test_wait_seconds():
     assert mod.wait_seconds([], 600) is None
 
 
-def test_hello_from_launchd_root_global_install(tmp_path):
+def test_start_from_launchd_root_global_install(tmp_path):
     import json
     import os
     import shutil
     import subprocess
     scripts = tmp_path / 'installed'
     scripts.mkdir()
-    hello = scripts / 'start.sh'
-    shutil.copyfile(Path(__file__).with_name('start.sh'), hello)
+    start = scripts / 'start.sh'
+    shutil.copyfile(Path(__file__).with_name('start.sh'), start)
     settings = tmp_path / '.t3/userdata/settings.json'
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({'providers': {'claudeAgent': {'enabled': False}}}))
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    spawn = bin_dir / 't3-spawn-thread'
-    spawn.write_text('#!/bin/sh\nprintf "project args: %s\\n" "$*"\necho "Provider: codex · Model: gpt-5.6-luna · Thinking: low"\n')
-    spawn.chmod(0o755)
-    settle = bin_dir / 't3-settle-thread'
-    settle.write_text('#!/bin/sh\nexit 0\n')
-    settle.chmod(0o755)
+    relay = bin_dir / 't3-relay'
+    relay.write_text('#!/bin/sh\nexit 0\n')
+    relay.chmod(0o755)
     env = dict(os.environ, HOME=str(tmp_path), T3CODE_HOME=str(tmp_path / '.t3'),
                PATH=str(bin_dir) + ':' + os.environ['PATH'])
-    result = subprocess.run(['bash', str(hello), '--dry-run', '--only', 'codex'],
+    result = subprocess.run(['bash', str(start), '--dry-run', '--only', 'codex'],
                             cwd='/', env=env, text=True, check=False, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert '--project ' + str(tmp_path) in result.stdout
+    assert '--project ' + str(tmp_path) + ' ' in result.stdout

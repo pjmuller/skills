@@ -1,42 +1,30 @@
 ---
 name: t3-usage-windows
-description: Start provider usage windows with cheap turns, chain them through the day, and resume or schedule recovery of rate-limited T3 Code threads. Use for warming accounts, daytime top-ups, window status, banked Codex resets, or unblocking threads after a usage reset. Ordinary stalled workers belong to t3-maintenance.
+description: Start provider usage windows with cheap turns and chain them through the day. Use for warming accounts, daytime top-ups, window status, or banked Codex resets. Rate-limited threads need nothing: T3 0.1 marks them Limited and auto-resumes at reset.
 ---
 
 # T3 usage windows
 
-A usage window is a provider's rolling quota period (commonly five hours) opened by a model turn.
-Starting one early makes its reset arrive earlier; a turn inside an active window does not restart
-the clock.
+A usage window is a provider's rolling quota period (commonly five hours), opened by a model turn.
+Opening one early makes its reset come earlier; a turn inside an active window doesn't restart it.
 
-`t3-usage-windows <verb>`; flags, defaults and signal detection: `--help` on each subcommand.
+`t3-usage-windows <verb>`; flags: `--help` per subcommand.
 
-- `start` — one cheap turn per enabled Codex/Claude profile (models: `scripts/start.sh`), verifies
-  the selection, settles every child; the calling thread keeps running.
-- `topup install|status|remove|run` — the one automatic flow: launchd tick every 10 min, daily
-  05:00–21:00 (`scripts/topup.py`). Expired session windows get `start`; accounts without a session
-  window (Codex: weekly only, start unknown) get one turn per local day on the first tick from
-  05:00 (state: `t3-usage-windows-topup.state.json` beside the log). Needs T3 running; never wakes
-  the Mac. Preview: `topup run --dry-run [--ignore-hours]`.
-- `status` — quota windows + blocked-thread count.
-- `limited list|resume|schedule` — rate-limited thread recovery (`scripts/limited.py`). `resume`
-  posts `continue`; it skips monthly caps and pending resets unless `--force` — never `--force` a
-  monthly cap without the user. Run `t3-drafts list --limited` first and pass `--protect-drafts` so
-  threads holding an unsent draft are not buried under a blind `continue`. Re-list right after
-  resuming and report the current inventory. Timed recovery: [scheduled-resume.md](scheduled-resume.md).
+- `start` — one `t3-relay launch` per enabled Codex/Claude profile (Luna/Haiku, low effort,
+  `scripts/start.sh`); each warm-up thread settles itself. `--dry-run` prints the commands.
+- `topup install|status|remove|run` — launchd tick every 10 min, 05:00–21:00 (`scripts/topup.py`).
+  Expired session windows get `start`; accounts without a session window (Codex: weekly only) get
+  one turn per local day from 05:00 (state file beside the log). Needs T3 running; never wakes the
+  Mac. Preview: `topup run --dry-run [--ignore-hours]`.
+- `status` — quota windows (`t3-limits`).
 - `reset` — banked reset credits of the logged-in Codex account (`scripts/reset_credit.py`).
-  **Hard rule:** `--apply` spends a scarce credit (resets both the five-hour and weekly window) —
-  only with explicit user authorization. Unrelated to Luna Reserve or API credits.
+  **Hard rule:** `--apply` spends a scarce credit (resets five-hour + weekly window), only with
+  explicit user authorization. Unrelated to Luna Reserve or API credits.
 
-Ordinary stalled (not limited) workers: [t3-maintenance](../t3-maintenance/SKILL.md) `t3-fleet`.
+Rate-limited threads: T3 0.1 shows them as Limited and resumes them at reset; no helper needed.
 
 ## Install
 
-Needs [thread helpers](../t3-manage-thread/SKILL.md) (`t3-limits`, ping/settle/spawn) and
-[t3-maintenance](../t3-maintenance/SKILL.md) (store access, `t3-drafts`) on PATH, then
-`scripts/install` and `--check`. `t3-limited` is a legacy alias for `t3-usage-windows limited`.
-`topup install` migrates the legacy `com.t3-skills.t3-hello-world-topup` LaunchAgent
-(`topup status --json` shows both). Let pending one-shot resumes
-(`com.t3-skills.t3-usage-windows.limited.*`) finish before updating.
-
-Provider quirks, why launchd over in-thread timers, logs: [notes.md](notes.md).
+Needs `t3-relay` (with the relay task, [relay.md](../t3-manage-thread/relay.md)),
+`t3-pick-instance`, `t3-limits` ([t3-manage-thread](../t3-manage-thread/SKILL.md)) on PATH, then
+`scripts/install` and `--check`. Quirks, logs: [notes.md](notes.md).

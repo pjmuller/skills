@@ -1,80 +1,41 @@
 ---
 name: t3-maintenance
-description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for unexpected old or missing sidebar threads, monthly T3 cleanup, thread inventory, orchestrator fleet view of worker threads (stalled/unanswered workers, bulk unsettle or ping), bulk settle/unsettle repair, purging old transcripts, unsent composer drafts, "mine my prompts", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or "/t3-maintenance". Do not use for spawning, pinging, reading, or settling one known worker thread; use t3-manage-thread for that lifecycle.
+description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for thread inventory across projects, monthly T3 cleanup, orchestrator fleet view (stuck or undelivered delegated tasks), purging old transcripts, unsent composer drafts, "mine my prompts", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or "/t3-maintenance". Not for launching, messaging, reading or settling one thread: use the native T3 tools (t3-manage-thread).
 ---
 
 # T3 Maintenance
 
-Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Flags and defaults:
-`--help` on each command and subcommand.
+T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`). Flags: `--help`.
 
-- `t3-thread-maintenance` — audit/repair settlement state.
-- `t3-fleet` — orchestrator view of worker threads; bulk unsettle/ping.
-- `t3-drafts` — unsent composer text per thread, read-only. The user keeps per-thread sticky notes
-  there ("DONE", "TODO read") as well as half-written prompts, so listing across threads is the
-  point. The rate-limited marker and `--limited` come from `t3-usage-windows` on PATH; without it
-  listing still works and `--limited` fails closed.
-- `t3-my-prompts` — compact the user's own prompts for recurring-instruction mining.
-- `t3-purge-threads` — delete old threads + provider transcripts (they hold secrets).
-- `t3-preview-gc` — free browser-preview renderers (macOS desktop): close settled threads' tabs, then
-  crash-reload the window when many remain. Default dry-run is suitable for monitoring;
-  `--apply` deliberately crashes the UI, not a blank-window repair. Recovery: native
-  File → Close Window, reactivate T3 (macOS); verify server/worker PIDs survive.
-- `t3-git-leftovers` — repos with uncommitted/unpushed work, one worker per repo
-  ([below](#git-leftovers-t3-git-leftovers)).
-- Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).
+- `t3-fleet` — one line per thread across projects; kinds `top` / `launched` / `task` /
+  `subagent` from V2 lineage; `--stalled` = delegated tasks stuck or never delivered.
+- `t3-drafts` — unsent composer text per thread (the user's sticky notes: "DONE", "TODO read").
+- `t3-my-prompts` — the user's own prompts, compacted for recurring-instruction mining.
+- `t3-purge-threads` — hard-delete old threads + transcripts (secrets); `drop-v1` frees the frozen
+  0.0.x `state.sqlite`.
+- `t3-preview-gc` — free browser-preview renderers (macOS): close settled threads' tabs, then
+  crash-reload the window when many remain. `--apply` deliberately crashes the UI; recovery:
+  File → Close Window, reactivate T3.
+- `t3-git-leftovers` — repos with uncommitted/unpushed work, one worker per repo ([below](#git-leftovers-t3-git-leftovers)).
+- `scripts/t3_store.py` — shared read-only store access, schema notes, short ids.
 
-Neighbours: rate-limited threads → [t3-usage-windows](../t3-usage-windows/SKILL.md); recurring
-jobs → [t3-schedule](../t3-schedule/SKILL.md); finding one past thread →
-[t3-find-thread](../t3-find-thread/SKILL.md). Settle = kill the session and its sub-agents
-([settle-thread.md](../t3-manage-thread/settle-thread.md)). These helpers patch gaps in T3 itself; retire
-each once upstream covers it (maintainer's inventory lives in the personal setup repository,
-`decissions/t3_monkey_patches.md`).
+Settling, unsettling, pinging: native `t3_thread_organize` / `t3_thread_send` / `task_status`
+([t3-manage-thread](../t3-manage-thread/SKILL.md)); there is no bulk wrapper. Neighbours:
+[t3-find-thread](../t3-find-thread/SKILL.md), [t3-schedule](../t3-schedule/SKILL.md).
 
-## Hard rule — how these tools touch T3
+## Hard rule
 
-T3's live database is never written. Reads use a read-only SQLite snapshot of the WAL projection
-store; every mutation shells out to the `t3-manage-thread` helpers (`t3-ping-thread`,
-`t3-delete-thread`; settling goes through the native `t3_thread_organize`). Writing directly corrupts a running app's event-sourced store.
-Only exception: `t3-purge-threads apply --mode hard`, which refuses unless T3 Code is fully closed.
+T3's store (`~/.t3/userdata/statev2.sqlite`) is read through a read-only WAL snapshot, never
+written while T3 runs. Only exception: `t3-purge-threads apply --yes` / `drop-v1 --yes`, which
+refuse unless T3 Code is fully closed.
 
-Mutating subcommands are dry-run by default, capped by `--max`, re-read each candidate right before
-dispatch, verify the fresh projection afterwards, and log every attempt to
-`~/.local/state/t3-maintenance/actions/`. Keep all five when changing them — they make a bulk repair
-recoverable.
-
-## Thread fleet repair (`t3-thread-maintenance`)
-
-Audit first; repair only a cohort the audit justifies: preview, read the exact IDs, repeat with
-`--apply`. Cohorts are deliberately narrow and never touch deleted, archived, busy/error,
-approval-pending or user-blocked threads:
-
-- `settle-old` — threads with no explicit settle state (legacy `NULL` override), idle and unpinned
-  past `--older-than`. Never overrides a deliberate keep-active.
-- `revive-auto` — only threads whose *latest* settle event came from T3's own `server:auto-settle`,
-  i.e. hidden by the app, not by the user.
-
-The audit's "recent auto-settled" section is evidence, not an instruction to revive everything. It
-also reports T3's inactivity window (three days when no `sidebarAutoSettleAfterDays` is stored); if
-that is wrong, fix it in Settings → General, not by mass-reviving.
-
-## Fleet view (`t3-fleet`) glossary
-
-T3 stores no worker topology; `t3-fleet list` infers it:
-
-- **Child of P** — the thread's *first* user message (its brief) contains
-  `t3-ping-thread --thread P`; a `--from LABEL` in that brief becomes the thread's label.
-- **Pinged back** — P has a user message containing `[ping from LABEL]` (any `[ping from` if the
-  brief named no label) at/after the child's brief. Per-label matching keeps siblings from masking
-  each other.
-- **Stalled** — assistant-last AND session `stopped` AND a resolvable parent never got the ping
-  back: provably dead. `unknown-parent` = same state without a resolvable parent, so just as likely
-  an ordinary finished thread. `--stalled` matches both; `--stalled=strict` only the provable ones.
+Short ids: a thread's own UUID prefix (`c811b689`), else 8 hex of a sha1 of the opaque id;
+every helper accepts the full id or ≥ 8 chars of that key.
 
 ## Git leftovers (`t3-git-leftovers`)
 
-Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`. Verdicts
-and flags: `--help`. One orchestrator owns a run dir; the ledger makes reruns adopt, never duplicate.
+Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`. One
+orchestrator owns a run dir; the ledger makes reruns adopt, never duplicate.
 
 ```bash
 R=~/.local/state/git-leftovers/$(date +%F)
@@ -85,34 +46,30 @@ t3-git-leftovers status $R --markdown                    # landed / protected / 
 ```
 
 Workers launch via `t3-relay launch` ([relay.md](../t3-manage-thread/relay.md); async, the ledger
-holds the relay id until the titled thread shows in the fleet, retried after 15 min), titled
-`🧹 git leftovers <repo> <date>`, and follow [git-leftovers.md](git-leftovers.md). A launched worker is not a landed repo: `status` re-checks git and
-thread state; only its counts go in the report. `blocked` = the worker stayed open for the user;
-`unverified` = git could not be re-read (never counted landed).
+holds the relay id until the titled thread shows in `t3-fleet`, retried after 15 min), titled
+`🧹 git leftovers <repo> <date>`, and follow [git-leftovers.md](git-leftovers.md). `status`
+re-checks git and thread state; report its counts only. `blocked` = the worker stayed open for the
+user; `unverified` = git could not be re-read (never counted landed).
 
 ## Prompt patterns (`t3-my-prompts`)
 
-Start with `--stats`. If the projected input fits the budget, dump once with `--out`; otherwise
-`--outline` to find heavy projects and run separate `--project` chunks rather than raising the
-budget. Judge against [rubric.md](rubric.md), the global instruction file and relevant repo
-AGENTS.md files (a deduplication check, not evidence). Propose changes; edit only when asked.
+Start with `--stats`. Fits the budget → dump once with `--out`; else `--outline`, then separate
+`--project` chunks. Authorship: T3's `createdBy` (agent briefs, cross-thread sends, sub-agents
+dropped); 0.0.x history falls back to title/opener heuristics. Judge against [rubric.md](rubric.md),
+the global instruction file and repo AGENTS.md files. Propose; edit only when asked.
 
 ## Purge (`t3-purge-threads`)
 
-Manual request only. Gotchas the code can't show:
+Manual request only.
 
-- `--mode soft` (T3's own `thread.delete` + transcript/log unlink) keeps **every row in SQLite**,
-  secrets included; only `--mode hard` (T3 closed) removes them.
-- Hard mode first writes a **slim backup** to `~/.t3/backups/purged-threads-<stamp>.sqlite`: only
-  `projection_threads` + `projection_thread_messages` of the purged cohort (MBs, seconds) — enough to
-  re-read a conversation, not to resurrect it live. `--full-backup` = the old `VACUUM INTO` copy of
-  the whole store (GBs, ~10 min on an 8 GB store). After a purge it lists older backups and asks
-  `Delete them? [Y/n]` (skipped without a tty): the newest backup supersedes the rest.
-
-- Transcripts are resolved by provider session UUID (`provider_session_runtime.resume_cursor_json`)
-  across every Claude home and `~/.codex/sessions` — never by cwd slug, never guessed. `unresolved`
-  usually means the thread predates resume cursors or Claude's 30-day `cleanupPeriodDays` already
-  removed the file.
-- `--older-than` uses `updated_at`, which a bulk settle bumps: conservative (threads look younger).
-- Never purges a thread with a pending `t3-schedule --resume-thread` job or a `t3-mail-link` link
-  (`list` shows it as `kept`); to purge it, remove the job/link first. A failing helper = refuse.
+- Cohorts `--archived` / `--settled` / `--deleted`, top-level threads; sub-agent and delegated-task
+  descendants go with their root. Never: pinned, live run, pending approval, or a thread a wake-up
+  targets (enabled native scheduled task, `t3-schedule pending-resumes`, `t3-mail-link`); `list`
+  shows those as `kept`. A failing helper = refuse.
+- `apply` deletes from every thread-keyed table (V2 and the copied 0.0.x tables) after a slim backup
+  (`~/.t3/backups/purged-threads-<stamp>.sqlite`: threads + messages); `--full-backup` = `VACUUM INTO`
+  (GBs). Then offers to delete superseded backups.
+- Transcripts resolve by provider session id (V2 `nativeThreadRef`, imported resume cursors) across
+  every Claude home and `~/.codex/sessions`, never by cwd slug. Attachments by id, provider log by
+  T3's sanitized file name.
+- `--older-than` uses `updated_at`, which settling bumps: conservative.
