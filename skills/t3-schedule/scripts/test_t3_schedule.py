@@ -32,30 +32,15 @@ def test_parse_days_and_describe():
     assert mod.describe_days(None) == "daily"
 
 
-def test_runner_script_is_root_spawn(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    p = mod.paths("job")
-    s = {"name": "job", "project": "/repo", "profile": "work", "model": "fable", "thinking": None,
-         "title": "⏰ job {date}", "wait_max": 5}
-    body = mod.runner_script(s, p)
-    assert "unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID" in body
-    assert "for candidate in fable; do" in body and "profile=work" in body
-    assert 't3-spawn-thread --project /repo --no-open --model "$candidate" "${profile_flag[@]}" --dry-run -- probe' in body
-    assert 't3-spawn-thread --project /repo --no-open --model "$chosen" "${profile_flag[@]}" --title' in body
-    assert "--thinking" not in body
-    assert str(p["prompt"]) in body and str(p["log"]) in body
-    assert "--settle-when-done" not in body
-    s["settle_when_done"] = True
-    assert '--no-open --settle-when-done --model "$chosen"' in mod.runner_script(s, p)
-
-
-def test_runner_guard_and_auto_profile(tmp_path, monkeypatch):
+def test_runner_fires_through_relay_step(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     p = mod.paths("job")
     body = mod.runner_script({"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None,
-                              "title": "t", "wait_max": 1}, p)
-    assert "already spawned today" in body and "pick-profile" not in body and "--profile" in body
-    assert str(p["last"]) in body
+                              "title": "t", "wait_max": 10}, p)
+    assert "out=$(t3-schedule fire job 2>&1)" in body and "t3-spawn-thread" not in body and "unset " not in body
+    assert "already fired today" in body and str(p["last"]) in body and str(p["log"]) in body
+    assert str(p["failed"]) in body and 'fail "job: fire FAILED' in body
+    assert body.count("display notification") == 2  # once in fail(), once on success
 
 
 def test_last_run(tmp_path):
@@ -77,57 +62,35 @@ def test_due_now_window_and_days():
     assert mod.due_now({"at": "15:00", "days": None}, datetime(2026, 9, 9, 23, 30), None)  # clipped to same day
 
 
-def test_runner_fails_once_per_day(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    p = mod.paths("job")
-    body = mod.runner_script({"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None,
-                              "title": "t", "wait_max": 10}, p)
-    assert str(p["failed"]) in body and 'fail "job: spawn FAILED' in body
-    assert body.count("display notification") == 2  # once in fail(), once on success
-
-
-def test_refresh_retires_legacy_and_preserves_job_data(tmp_path, monkeypatch):
+def test_refresh_preserves_job_data(tmp_path, monkeypatch):
     import argparse
     import json
-    import subprocess
     monkeypatch.setenv('HOME', str(tmp_path))
     p = mod.paths('smoke')
     for path in p.values():
         path.parent.mkdir(parents=True, exist_ok=True)
-    spec = dict(name='smoke', project='/repo', at='07:30', days=None,
-                title='smoke', wait_max=10)
+    spec = dict(name='smoke', project='/repo', at='07:30', days=None, title='smoke', wait_max=10)
     p['spec'].write_text(json.dumps(spec))
     p['prompt'].write_text('keep prompt')
     p['last'].write_text('2026-09-09')
-    legacy = 'com.pjmuller.t3-schedule.smoke'
-    old = p['plist'].with_name(legacy + '.plist')
-    old.write_bytes(plistlib.dumps({'Label': legacy}))
-    active = {legacy}
-    def ctl(*args):
-        if args[0] == 'list':
-            return subprocess.CompletedProcess(args, 0, '\n'.join('- 0 ' + x for x in active), '')
-        label = args[1].split('/', 2)[-1]
-        if args[0] == 'bootout': active.discard(label)
-        return subprocess.CompletedProcess(args, 0 if label in active else 1, '', '')
-    monkeypatch.setattr(mod, 'launchctl', ctl)
+    active = set()
+    monkeypatch.setattr(mod, 'loaded', lambda name: mod.label_for(name) in active)
+    monkeypatch.setattr(mod, 'bootout', lambda name: active.discard(mod.label_for(name)))
     monkeypatch.setattr(mod, 'bootstrap', lambda path: active.add(plistlib.loads(path.read_bytes())['Label']))
     monkeypatch.setattr(mod, 'running', lambda name: True)
     mod.cmd_refresh(argparse.Namespace())
     assert mod.label_for('smoke') not in active  # a running job is left alone
     monkeypatch.setattr(mod, 'running', lambda name: False)
     mod.cmd_refresh(argparse.Namespace())
-    mod.cmd_refresh(argparse.Namespace())
-    assert legacy not in active and not old.exists()
     assert active == {mod.label_for('smoke'), mod.label_for(mod.CATCH_UP)}
     assert p['prompt'].read_text() == 'keep prompt'
     assert p['last'].read_text() == '2026-09-09'
     assert json.loads(p['spec'].read_text()) == spec
+    assert "t3-schedule fire smoke" in p['sh'].read_text()
 
 
-def test_runner_path_has_pnpm_and_mise():
-    # launchd gets no login shell PATH: without pnpm's global bin the runner falls back to `pnpm dlx`
-    assert mod.PNPM_BIN in mod.SCHEDULE_PATH
-    assert "$HOME/.local/share/mise/shims" in mod.SCHEDULE_PATH
+def test_runner_path_has_mise():
+    assert "$HOME/.local/share/mise/shims" in mod.SCHEDULE_PATH and "$HOME/.local/bin" in mod.SCHEDULE_PATH
 
 
 def test_once_plist_and_runner_guard(tmp_path, monkeypatch):
@@ -139,7 +102,7 @@ def test_once_plist_and_runner_guard(tmp_path, monkeypatch):
          "title": "t", "wait_max": 1, "once": "2026-09-26"}
     once = mod.runner_script(s, p)
     assert "already fired once" in once and '!= "2026-09-26" && "$T3_SCHEDULE_FORCE" != 1' in once
-    assert "already spawned today" not in once
+    assert "already fired today" not in once
     s["once"] = None
     assert "already fired once" not in mod.runner_script(s, p) and "T3_SCHEDULE_FORCE" not in mod.runner_script(s, p)
     assert mod.describe_when({"once": "2026-09-26", "days": None}) == "once 2026-09-26 (sat)"
@@ -180,21 +143,6 @@ def test_once_catch_up_until_23h():
     assert mod.retire_status(spec, datetime(2026, 9, 26, 23, 5), None) == "expired (never fired)"
 
 
-def test_runner_model_candidates(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    p = mod.paths("job")
-    s = {"name": "job", "project": "/r", "profile": None, "model": "haiku,luna", "thinking": "high",
-         "title": "t", "wait_max": 1}
-    body = mod.runner_script(s, p)
-    assert "for candidate in haiku luna; do" in body
-    assert 'fail "job: no model candidate available (haiku,luna)"' in body
-    assert body.index("--dry-run -- probe") < body.index('--model "$chosen"')
-    assert '--thinking high --model "$candidate"' in body
-    s["model"] = None
-    assert f"for candidate in {mod.DEFAULT_MODELS.replace(',', ' ')}; do" in mod.runner_script(s, p)
-    assert mod.describe_models(s) == "opus,sol (default)" and mod.describe_models({"model": "fable"}) == "fable"
-
-
 def test_valid_models():
     import pytest
     assert mod.valid_models("opus,sol") == "opus,sol" and mod.valid_models(None) is None
@@ -209,123 +157,88 @@ def test_no_notify(tmp_path, monkeypatch):
     p = mod.paths("job")
     base = {"name": "job", "project": "/r", "profile": None, "model": "haiku", "thinking": None, "title": "t", "wait_max": 1}
     body = mod.runner_script({**base, "hide": True, "notify": False}, p)  # legacy "hide" key is ignored
-    assert "--hide" not in body and "--settle-when-done" not in body
     assert body.count("display notification") == 2 and '\n    : osascript' in body  # success notification disabled, fail() kept
     default = mod.runner_script(base, p)
     assert ": osascript" not in default
 
 
-# --- continuation (--resume-thread) -------------------------------------------------
+# --- fire: the runner's relay step ------------------------------------------------
 TID = "11111111-2222-3333-4444-555555555555"
+PROFILES = [{"instance_id": "claudeAgent_dentai", "profile": "dentai", "ecosystem": "Claude"},
+            {"instance_id": "codex_dentai", "profile": "dentai", "ecosystem": "OpenAI"}]
 
 
-def thread_data(**thread):
-    msgs = [{"role": "user", "created_at": "2026-09-27T10:00:00", "text": "BRIEF investigate the outage"}]
-    msgs += [{"role": r, "created_at": f"2026-09-27T11:{i:02d}:00", "text": f"msg{i} " + "x" * 50}
-             for i, r in enumerate(["assistant", "user"] * 5)]
-    return {"thread": {"thread_id": TID, "title": "Outage", "workspace_root": "/repo", "project_title": "repo",
-                       "archived_at": None, "deleted_at": None,
-                       "model_selection": {"instanceId": "claudeAgent", "model": "m"}, **thread},
-            "messages": msgs}
-
-
-def resume_job(tmp_path, monkeypatch, data, instances=frozenset({"claudeAgent"}), ping_rc=0, **spec):
+def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=()):
+    """Run cmd_fire on a machine-local job with faked helpers; returns (rc, argv list)."""
+    import argparse
     import json
     import subprocess
     monkeypatch.setenv("HOME", str(tmp_path))
-    p = mod.paths("fu")
-    p["spec"].parent.mkdir(parents=True)
-    p["spec"].write_text(json.dumps({"name": "fu", "resume_thread": TID, **spec}))
-    p["prompt"].write_text("Check the deploy.\n")
-    monkeypatch.setattr(mod, "read_thread", lambda tid: (data, "" if data else f"No T3 thread matches {tid}"))
-    monkeypatch.setattr(mod, "registered_instances", lambda: set(instances))
+    p = mod.paths("job")
+    p["spec"].parent.mkdir(parents=True, exist_ok=True)
+    p["spec"].write_text(json.dumps({"name": "job", "project": "/repo", "title": "⏰ job {date}", **spec}))
+    p["prompt"].write_text("Run the report.\n")
     calls = []
     def run(argv, **kw):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, ping_rc, "Pinged\n" if ping_rc == 0 else "", "")
+        ok = lambda out: subprocess.CompletedProcess(argv, 0, out, "")
+        if argv[0] == "t3-list-profiles":
+            return ok(json.dumps(PROFILES))
+        if argv[:2] == ["t3-pick-instance", "--resolve"]:
+            return ok({"fable": "claude-fable-5", "sol": "gpt-6-sol"}.get(argv[2], argv[2]))
+        if argv[0] == "t3-pick-instance":
+            if argv[1] in no_capacity:
+                return subprocess.CompletedProcess(argv, 2, "", "exhausted")
+            inst = argv[2].split(",")[0] if len(argv) > 2 else "claudeAgent"
+            return ok(f"{inst} {argv[1]}-id high\n")
+        return subprocess.CompletedProcess(argv, relay_rc, "accepted: relay x (d)\n", "")
     monkeypatch.setattr(mod.subprocess, "run", run)
-    import argparse
-    return mod.cmd_resume(argparse.Namespace(name="fu")), calls, p
+    return mod.cmd_fire(argparse.Namespace(name="job")), calls
 
 
-def test_resume_healthy_pings(tmp_path, monkeypatch, capsys):
-    rc, calls, p = resume_job(tmp_path, monkeypatch, thread_data(settled_at="2026-09-27"))
-    assert rc == 0 and not p["fallback"].exists()
-    argv = calls[0]
-    assert argv[:4] == ["t3-ping-thread", "--thread", TID, "--allow-cross-project"] and "--hide" not in argv
-    assert argv[-1].startswith("Scheduled follow-up (") and "as agreed earlier in this thread:\n\nCheck the deploy." in argv[-1]
-    assert f"resumed Outage ({TID})" in capsys.readouterr().out
+def test_fire_launch_maps_job_fields(tmp_path, monkeypatch, capsys):
+    rc, calls = fire(tmp_path, monkeypatch, {"model": "opus,fable", "profile": "dentai", "thinking": "low",
+                                             "settle_when_done": True}, no_capacity=("opus",))
+    relay = calls[-1]
+    today = mod.date.today().isoformat()
+    assert rc == 0 and relay[:6] == ["t3-relay", "launch", "--project", "/repo", "--title", f"⏰ job {today}"]
+    assert relay[6:12] == ["--model", "fable-id", "--instance", "claudeAgent_dentai", "--effort", "low"]
+    assert ["t3-pick-instance", "fable", "claudeAgent_dentai"] in calls  # label narrowed to the Claude account
+    assert relay[-1].startswith("Run the report.\n\n---\nConditional self-settlement") and '"action":"settle"' in relay[-1]
+    assert capsys.readouterr().out.strip().endswith(f"launched ⏰ job {today}")
 
 
-def test_resume_unhealthy_falls_back_with_context(tmp_path, monkeypatch, capsys):
-    cases = [
-        (None, {"claudeAgent"}, 0, "thread not found"),
-        (thread_data(deleted_at="2026-09-28"), {"claudeAgent"}, 0, "thread deleted"),
-        (thread_data(), {"codex"}, 0, "profile claudeAgent no longer registered"),
-        (thread_data(), {"claudeAgent"}, 1, "ping failed (exit 1)"),
-    ]
-    for data, instances, ping_rc, reason in cases:
-        rc, calls, p = resume_job(tmp_path, monkeypatch, data, instances, ping_rc)
-        assert rc == mod.FALLBACK_EXIT and f"fallback: {reason}" in capsys.readouterr().out
-        assert bool(calls) == (ping_rc != 0)  # unhealthy → no ping attempted
-        pack = p["fallback"].read_text()
-        assert pack.startswith("Check the deploy.\n\n---\nContext:") and TID in pack and reason in pack
-        if data:
-            assert "## Original brief\nBRIEF investigate" in pack and "msg9" in pack and "msg3" not in pack
-        import shutil
-        shutil.rmtree(tmp_path / ".t3")
+def test_fire_defaults_and_failures(tmp_path, monkeypatch, capsys):
+    rc, calls = fire(tmp_path, monkeypatch, {})
+    assert rc == 0 and calls == [["t3-relay", "launch", "--project", "/repo", "--title", calls[0][5], "--", "Run the report."]]
+    rc, calls = fire(tmp_path, monkeypatch, {"model": "opus"}, no_capacity=("opus",))
+    assert rc == 1 and calls[-1][0] == "t3-pick-instance"  # nothing routable: no relay call, catch-up retries
+    rc, _ = fire(tmp_path, monkeypatch, {}, relay_rc=1)
+    assert rc == 1 and "t3-relay FAILED (exit 1)" in capsys.readouterr().out
 
 
-def test_resume_failed_ping_that_landed_does_not_double_fire(tmp_path, monkeypatch, capsys):
-    from datetime import date
-    data = thread_data()
-    marker = mod.resume_marker("fu", date.today().isoformat())
-    data["messages"].append({"role": "user", "created_at": "2026-09-28T10:00:00", "text": marker + ", as agreed…"})
-    rc, _, p = resume_job(tmp_path, monkeypatch, data, ping_rc=1)  # ack lost, turn delivered
-    assert rc == 0 and not p["fallback"].exists() and "resumed Outage" in capsys.readouterr().out
+def test_fire_continuation_sends(tmp_path, monkeypatch, capsys):
+    rc, calls = fire(tmp_path, monkeypatch, {"resume_thread": TID, "project": None})
+    assert rc == 0 and calls[0][:5] == ["t3-relay", "send", "--thread", TID, "--"]
+    assert calls[0][-1].startswith("Scheduled follow-up (") and calls[0][-1].endswith("thread:\n\nRun the report.")
+    assert f"sent follow-up to thread {TID}" in capsys.readouterr().out
 
 
-def test_resume_accepts_legacy_provider_selection():
-    data = thread_data(model_selection={"provider": "claudeAgent", "model": "m"})
-    assert mod.resume_blocker(data, "", {"claudeAgent"}) is None
-
-
-def test_context_pack_is_bounded():
-    data = thread_data()
-    for m in data["messages"]:
-        m["text"] = "y" * 50000
-    pack = mod.context_pack(TID, data, "thread deleted")
-    assert len(pack) <= mod.PACK_MAX_CHARS + 500 and "## Original brief" in pack and "more chars]" in pack
-
-
-def test_resume_runner_and_add_validation(tmp_path, monkeypatch, capsys):
+def test_add_continuation_validation(tmp_path, monkeypatch, capsys):
     import argparse
     import pytest
     monkeypatch.setenv("HOME", str(tmp_path))
-    p = mod.paths("fu")
-    base = {"name": "fu", "project": "/r", "profile": None, "model": None, "thinking": None, "title": "t", "wait_max": 1}
-    plain = mod.runner_script(base, p)
-    assert "t3-schedule resume-thread" not in plain and '-- "$(cat "$prompt_file")"' in plain
-    body = mod.runner_script({**base, "resume_thread": TID}, p)
-    assert body.index("t3-schedule resume-thread fu") < body.index("for candidate in")  # resume before any spawn
-    assert f"(( rc == {mod.FALLBACK_EXIT} )) || fail" in body and f"prompt_file={p['fallback']}" in body
-    assert body.count(str(p["last"])) == 3  # daily guard + resume success + spawn success
-
-    monkeypatch.setattr(mod, "registered_instances", lambda: {"claudeAgent"})
-    monkeypatch.setattr(mod, "read_thread", lambda tid: (thread_data(workspace_root=str(tmp_path)), ""))
     add = lambda **kw: mod.cmd_add(argparse.Namespace(**{
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
         "profile": None, "model": None, "thinking": None, "settle_when_done": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
         "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
-    assert add() == 0 and "t3-schedule resume-thread fu" in capsys.readouterr().out  # project from the thread
-    with pytest.raises(SystemExit, match="settle-when-done"):
-        add(settle_when_done=True)
-    with pytest.raises(SystemExit, match="--project is required"):
-        add(resume_thread=None)
-    monkeypatch.setattr(mod, "read_thread", lambda tid: (None, "No T3 thread matches x"))
-    with pytest.raises(SystemExit, match="thread not found"):
-        add()
+    assert add() == 0 and "t3-schedule fire fu" in capsys.readouterr().out  # no project needed
+    for kw, msg in (({"resume_thread": "self"}, "currentThreadId"), ({"settle_when_done": True}, "settle-when-done"),
+                    ({"model": "opus"}, "drop"), ({"resume_thread": None}, "--project is required"),
+                    ({"resume_thread": None, "project": str(tmp_path), "profile": "dentai"}, "--profile needs --model")):
+        with pytest.raises(SystemExit, match=msg):
+            add(**kw)
 
 
 # --- versioned job definitions (<project>/.agents/schedules) -------------------------
@@ -365,7 +278,7 @@ def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
     assert prompt.read_text() == "Run the report.\n"
     p = mod.paths("nightly")
     assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
-    assert not p["prompt"].exists() and f"prompt_file={prompt}" in p["sh"].read_text()
+    assert not p["prompt"].exists() and "t3-schedule fire nightly" in p["sh"].read_text()
     spec = mod.load_spec(p["spec"])
     assert spec["project"] == str(repo) and spec["profile"] == "work" and mod.artefacts(spec)[0] == p["sh"].read_text()
 
@@ -417,7 +330,6 @@ def test_pause_resume_keeps_registration_and_skips_catch_up(tmp_path, monkeypatc
     assert not mod.due_now(spec, datetime(2026, 9, 29, 7), None)
     assert mod.due_now(spec, datetime(2099, 1, 1, 7), None)
     assert mod.cmd_pause_check(argparse.Namespace(name="nightly")) == mod.PAUSED_SKIP_EXIT
-    assert mod.cmd_owner_check(argparse.Namespace(name="nightly")) == mod.OWNER_SKIP_EXIT  # old runner
     class FixedDateTime(datetime):
         @classmethod
         def now(cls):
@@ -435,7 +347,7 @@ def test_pause_resume_keeps_registration_and_skips_catch_up(tmp_path, monkeypatc
     assert mod.cmd_pause_check(argparse.Namespace(name="nightly")) == 0
 
 
-def test_pause_validation_and_old_continuation_resume(tmp_path, monkeypatch):
+def test_pause_validation(tmp_path, monkeypatch):
     import argparse
     import json
     import pytest
@@ -450,10 +362,6 @@ def test_pause_validation_and_old_continuation_resume(tmp_path, monkeypatch):
     for bad in ({"paused": "yes"}, {"paused": True, "pause_until": "2026-02-30"},
                 {"paused": False, "pause_until": "2099-01-01"}):
         assert mod.repo_spec_problem({**json.loads(src.read_text()), **bad}, mod.repo_files(repo, "nightly")[1])
-    local = mod.paths("fu")["spec"]
-    local.write_text(json.dumps({"name": "fu", "resume_thread": "thread-id"}))
-    monkeypatch.setattr(mod, "cmd_resume", lambda args: 77)
-    assert mod.main(["resume", "fu"]) == 77  # existing generated runner compatibility
 
 
 def test_adopt_is_explicit_and_refuses_foreign_name(tmp_path, monkeypatch):
@@ -467,7 +375,7 @@ def test_adopt_is_explicit_and_refuses_foreign_name(tmp_path, monkeypatch):
     adopt(repo, profile="work")
     p = mod.paths("nightly")
     assert json.loads(p["spec"].read_text()) == {"name": "nightly", "source": str(src), "profile": "work"}
-    assert "--project " + str(repo) in p["sh"].read_text() and p["plist"].exists()
+    assert "t3-schedule fire nightly" in p["sh"].read_text() and p["plist"].exists()
     adopt(src)  # re-adopt keeps the machine-local profile
     assert json.loads(p["spec"].read_text())["profile"] == "work"
     other = tmp_path / "other"
@@ -507,29 +415,6 @@ def test_list_flags_git_state(tmp_path, monkeypatch):
     src.unlink()
     spec = mod.load_spec(p["spec"])
     assert spec["missing"] and mod.job_flag(spec).startswith("MISSING") and not mod.due_now(spec, None, None)
-
-
-def test_migrate_moves_local_recurring_only(tmp_path, monkeypatch):
-    import json
-    no_launchd(monkeypatch, tmp_path)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    mod.cmd_add(add_args(project=str(repo), weekdays=False))
-    mod.cmd_add(add_args(name="oneoff", project=str(repo), weekdays=False, once="2099-01-01"))
-    # simulate a pre-versioning job: full spec + prompt in the runtime dir
-    p = mod.paths("legacy")
-    p["spec"].write_text(json.dumps({"name": "legacy", "project": str(repo), "profile": "work", "model": "fable",
-                                     "thinking": None, "title": "t", "at": "05:00", "days": None, "created": "x"}))
-    p["prompt"].write_text("legacy prompt\n")
-    assert mod.job_flag(mod.load_spec(p["spec"])).startswith("local-only")
-    mod.cmd_migrate(type("A", (), {"names": [], "force": False, "takeover": False}))
-    src, prompt = mod.repo_files(repo, "legacy")
-    assert json.loads(p["spec"].read_text()) == {"name": "legacy", "source": str(src), "profile": "work"}
-    assert prompt.read_text() == "legacy prompt\n" and not p["prompt"].exists()
-    repo_spec = json.loads(src.read_text())  # pre-versioning specs lack notify/wait_max: defaults, never null
-    assert "profile" not in repo_spec and repo_spec["wait_max"] == mod.DEFAULT_WAIT_MAX
-    assert repo_spec["notify"] is True and "hide" not in repo_spec and repo_spec["settle_when_done"] is False
-    assert not mod.repo_files(repo, "oneoff")[0].exists()  # one-shots stay machine-local
 
 
 def test_broken_repo_spec_is_isolated(tmp_path, monkeypatch):
@@ -729,7 +614,7 @@ def test_add_force_needs_takeover_and_remove_unregisters(tmp_path, monkeypatch, 
     assert not mod.paths("nightly")["spec"].exists() and "registry NOT updated" in capsys.readouterr().out
 
 
-def test_runner_checks_owner_before_wait_and_spawn(tmp_path, monkeypatch):
+def test_runner_checks_owner_before_wait_and_fire(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     p = mod.paths("job")
     base = {"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None, "title": "t", "wait_max": 1}

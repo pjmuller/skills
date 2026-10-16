@@ -5,149 +5,67 @@ description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every
 
 # t3-schedule
 
-One helper, `scripts/t3-schedule` (tests: `scripts/test_t3_schedule.py`); subcommands and flags:
-`t3-schedule --help` / `t3-schedule add --help`. Install: `scripts/install` (needs the
-[t3-manage-thread](../t3-manage-thread/SKILL.md) helpers on PATH).
+`scripts/t3-schedule` (flags: `--help`, `add --help`; tests `scripts/test_*.py`). Install
+`scripts/install`; `install --check` also verifies the
+[t3-relay](../t3-manage-thread/relay.md) dependency (`t3-relay check`).
+
+```mermaid
+flowchart LR
+  L[launchd / systemd timer] --> R[runner .sh] -- T3 up? --> F[t3-schedule fire] --> X[t3-relay launch / send]
+  C[catch-up poller, 15 min] -- missed or failed slot --> R
+```
+
+Why launchd/systemd and not T3's native `fixed_time` tasks: those skip a run >10 min late
+(sleeping Mac); launchd replays the missed slot at wake, the catch-up poller covers the rest.
 
 ```bash
-t3-schedule add --name nightly-report --at 07:30 --weekdays \
-  --project ~/code/example/example-app -- "Run the nightly report skill for yesterday."
+t3-schedule add --name nightly --at 07:30 --weekdays --project ~/code/x/app -- "Run the nightly report."
+t3-schedule add --name check-deploy --once 2026-10-20 --at 10:00 --resume-thread <threadId> \
+  --prompt-file ~/notes/what-to-check.md
 t3-schedule list --markdown   # answer "what's scheduled?" with this
 ```
 
-- Unattended jobs: `add --settle-when-done` forwards the spawn helper's
-  [fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done)
-  (no 🏓 title). Without it the prompt or a helper it runs (e.g. `skills-refresh --job`) owns the
-  lifecycle; `--no-notify` drops the launch notification.
-- A specific effort needs `--profile <account> --model sol --thinking high`: a root thread has no
-  parent to inherit from.
-- Never edit a runner by hand: `add --force` (one job) or `refresh` (all) regenerates it.
+## Jobs
 
-## Versioned definitions
+- **Recurring** (`--weekdays`, `--days mon,thu`, default daily): definition versioned in the repo,
+  machine opts in with `adopt`; pause/resume, one-or-many machines → [repo-jobs.md](repo-jobs.md).
+- **One-shot** (`--once YYYY-MM-DD`): machine-local, retried until 23:00 that day, then retired
+  (`list` shows `fired <date>` / `expired (never fired)`).
+- **Continuation** (`--resume-thread ID`): sends the prompt as a turn to that thread ("Scheduled
+  follow-up (<date>), as agreed earlier in this thread: …"); settled threads wake. Machine-local,
+  usually `--once`. Inside T3 pass **your own id** (`t3_thread_list` → `currentThreadId`); a
+  launchd job cannot resolve "self". Arm one whenever the next step needs time to pass (logs,
+  cache expiry, deploy soak, a reply). Keep data the prompt needs outside `/tmp`.
+  `pending-resumes` lists them; `t3-purge-threads` spares those threads.
 
-A recurring job's definition lives in its project repo so it survives a machine reset and gets
-reviewed: `<project>/.agents/schedules/<name>.json` (portable fields only: no path, no profile) +
-`<name>.prompt.md`. `add` writes both; **the caller commits them** (the helper never commits).
-The runtime dir keeps a machine-local pointer (`source`, `profile`), runner, native scheduler units and state.
+## Fire = `t3-relay` (exit 0 = accepted, async, no thread id back)
 
-- Prompt edits apply at the next fire (the runner reads the repo file); time/model/flag edits need
-  `refresh`. `list` flags `untracked`/`uncommitted`/`MISSING` specs, stale runners and
-  `local-only` jobs.
-- Cloning a repo arms nothing: `t3-schedule adopt <repo | spec.json> [--profile X]` opts a machine in
-  (colleagues never inherit jobs by accident).
-- `remove` disarms this machine only; `git rm` the two files to drop the job for everyone.
-- `pause <name> [--until YYYY-MM-DD]` marks the repo spec paused on every machine after pull;
-  `resume <name>` clears it. Commit + push the spec. `--until` resumes at local midnight at the
-  start of that date on each machine; the spec remains paused until `resume` clears it. Scheduler registrations
-  and `adopted_by` stay intact. Run `refresh` once after upgrading old runners; subsequent
-  pause/resume changes need no refresh. Runners and catch-up read the spec at fire time.
-  `list` and `show` display effective status. Existing spawned threads are untouched.
-- `--once` and `--resume-thread` jobs stay machine-local (ephemeral).
+| job field | relay |
+|---|---|
+| `project`, `title` (`{date}` → today) | `launch --project --title` |
+| `model` (ordered list, e.g. `opus,sol`) | first candidate `t3-pick-instance` can route → `--model`, `--instance`; none → run fails, catch-up retries. Omitted → project default |
+| `profile` (label or instance id, machine-local, needs `--model`) | narrows the account choice → `--instance` |
+| `thinking` | `--effort` (omitted → house effort) |
+| `settle_when_done` | appends the [completion footer](../t3-manage-thread/settle-thread.md) to the prompt (no 🏓 title) |
+| `resume_thread` | `send --thread` (model/profile/title/settle refused) |
 
-### One machine or many
-
-The repo spec records `machines` (`one` default; `add --many-machines` → `many`) and `adopted_by`
-(`machine` label, repo `git user.name`, `since`, random `id` from `~/.t3/userdata/scheduled/t3-schedule/meta/machine.json`;
-no hostname/serial; `t3-schedule machine --label X` sets a readable label). `add`/`adopt`/`remove` update it; commit + push.
-
-- **one**: adopting a job registered to another machine asks "confirm it no longer runs there" at a terminal;
-  unattended it fails unless `--takeover`. `--force` never implies takeover (also on `add`/`migrate --force`).
-- **many**: every adopter is appended; no prompt.
-- **Displaced**: a one-machine job whose `adopted_by` no longer lists this machine skips (runner checks before
-  waiting for T3 and right before the spawn; catch-up ignores it; `list` flags it). Lost identity file = skip too;
-  recover with `adopt --takeover`. `adopted_by: []` (last machine removed it) skips everywhere until someone adopts;
-  specs without the key (pre-registration) run as before.
-- **Limits**: registration is intent in the local checkout, not a lock. The old machine stops only after it pulls
-  the takeover; an offline/stale checkout or two machines adopting at once can still double-fire until then.
-  Threads already running are untouched.
-- Pre-versioning jobs: `t3-schedule migrate [name…]` writes their repo files, then commit.
-
-## Continuation (`--resume-thread ID`)
-
-Wakes an existing thread with the prompt as a user turn (`t3-ping-thread`, framed "Scheduled
-follow-up (<date>), as agreed earlier in this thread: …") instead of spawning; `--project`
-defaults to that thread's. Choose it when the follow-up needs this thread's context
-(investigation state, decisions, evidence); standalone when the prompt is self-contained or
-recurring. Usually `--once`; recurring works too (pings the same thread daily).
-`--resume-thread self` = the calling thread. Arm one yourself whenever the next step needs time to pass
-(logs to accumulate, caches to expire, a deploy to soak, a customer to reply): `t3-schedule add --name <x>
---once <date> --at 10:00 --resume-thread self --prompt-file <what to check, where the data lives>`.
-Keep data the prompt needs outside `/tmp` (reboots). A pending continuation (`t3-schedule pending-resumes`)
-protects its thread from [`t3-purge-threads`](../t3-maintenance/SKILL.md).
-
-- **Resumable** = `t3-read-thread` finds it, not deleted/archived, its provider instance is in
-  `t3-list-profiles`, and the ping lands (settled is fine: the turn wakes it; busy is fine: T3
-  queues, the ping helper retries a refused dispatch). Checked at `add` and again at fire time. A failed ping first re-reads the thread for its dated marker turn (lost ack ≠ not delivered), so a job never both resumes and spawns.
-- **Otherwise fallback**: a normal spawn (`--model/--profile/--thinking/--title/--project`
-  shape only this thread) whose prompt = the scheduled prompt + a bounded context pack (original
-  brief, latest messages, original id). `--settle-when-done` is
-  refused (the thread owns its lifecycle, say it in the prompt).
-- Log/notification: `resumed <title> (<id>)` vs `fallback (<reason>): spawned …`. `.last` and
-  catch-up behave as for spawns.
-
-Pipeline on macOS: LaunchAgent `com.t3-skills.t3-schedule.<name>` → runner
-`~/.t3/userdata/scheduled/t3-schedule/<name>.sh` (prompt: repo file, or `<name>.prompt.md` there for
-local jobs) → waits for T3 Code
-→ `t3-spawn-thread --no-open` → macOS notification. Log: `~/.t3/userdata/logs/t3-schedule.<name>.log`.
-`ProcessType=Interactive` because `Standard` clamps each t3 CLI call to 15–25 s (2026-09-09).
+Without `--settle-when-done` the prompt (or the helper it runs) owns the lifecycle.
+`--no-notify` drops the success notification. `run-now <name>` fires through the service
+manager and tails the log.
 
 ## Contract
 
-- **Root thread.** The runner unsets inherited thread env and `run-now` goes through the native service manager, so no
-  parent is inherited even when fired from inside a T3 agent.
-- **Model + profile at fire time.** `--model a,b` = ordered candidates; the first whose ecosystem is
-  installed *and* has capacity wins (default `opus,sol`). Without `--profile`, `t3-spawn-thread`
-  picks the account with most room ([one policy](../t3-manage-thread/spawn-thread.md#automatic-profile-routing)).
-  The log shows each `-- probe model X` with the spawn helper's `--dry-run` routing decision.
-  No candidate → the run fails and catch-up retries, so the job lands once a window resets instead
-  of sitting as a blocked thread. No spreading across near-equal profiles: usage is re-read between
-  jobs and real consumption ranks them.
-- **Spacing (convention, not enforced).** Keep slots ≥15 min apart. The catch-up poller kicks one
-  job per tick, earliest first, never while another runner is spawning, so limits are re-read
-  between jobs even after a long power-off.
-- **Missed or failed slot ⇒ catch-up, not tomorrow.** LaunchAgent `com.t3-skills.t3-schedule.catch-up`
-  (armed by `add`/`refresh`; interval and grace are constants in `scripts/t3-schedule`) re-kicks any
-  job whose slot passed today without a spawn, until the grace ends the same calendar day. Covers
-  lid-closed wakes, reboots (launchd never replays after power-off), T3 down/updating, a broken
-  spawn. At most one spawn per day (`<name>.last`, written on success only). Failures notify once
-  per day (`<name>.failed`).
-- **Provider limits / auth** are the thread's problem, same as a manual spawn: the banner shows and
-  [t3-usage-windows](../t3-usage-windows/SKILL.md) recovers it. The notification + sidebar thread
-  `⏰ <name> <date>` is the ack; nothing else pings the user.
-- **One-shot (`--once`).** Same guarantees, one spawn; catch-up retries until 23:00 that day.
-  Jobs at/after 23:00 retry until midnight. On macOS launchd has no Year, so the runner skips other dates and any run after `<name>.last` exists; the
-  poller then retires the job (scheduler units + runner deleted, spec kept; `list` shows `fired <date>` or
-  `expired (never fired)`).
+- **Once per day**: `<name>.last` written only on relay acceptance; failures notify once per day
+  (`<name>.failed`).
+- **Catch-up**: LaunchAgent `com.t3-skills.t3-schedule.catch-up` re-kicks a job whose slot passed
+  today without a fire, until slot+10h (same day). One job per tick, earliest first, never while
+  another runner is active, so capacity is re-read between jobs. Keep slots ≥15 min apart.
+- **Waits for T3** up to `--wait-max` min (health endpoint), then fails → catch-up.
+- **Provider limits/auth** are the thread's problem, as for any launch
+  ([t3-usage-windows](../t3-usage-windows/SKILL.md)).
+- Never edit a runner: `add --force` (one) or `refresh` (all; `skills-refresh` runs it).
+  `list` flags stale runners.
+- Files: runner + state `~/.t3/userdata/scheduled/t3-schedule/<name>.*`, log
+  `~/.t3/userdata/logs/t3-schedule.<name>.log`. `ProcessType=Interactive` (Standard clamps CLI calls).
 
-## Linux / Windows through WSL
-
-Run all helpers inside Linux. Windows uses the same systemd backend through WSL; there is no
-PowerShell scheduler or Windows Task Scheduler bridge. macOS keeps its existing launchd backend.
-`install --check` verifies the actual user service manager and the unattended runner's tools;
-`t3-schedule check` isolates scheduler readiness. Linux needs systemd, its running **user** manager,
-and zsh (`/bin/zsh`). No cron fallback: an unavailable manager fails with its error.
-
-- Each job installs `~/.config/systemd/user/com.t3-skills.t3-schedule.<name>.timer` and `.service`.
-  Timers use `OnCalendar` (including the year for one-shots), `Persistent=true`, and `AccuracySec=1s`.
-  Enablement survives WSL restarts. The same prompt/spec, pause, ownership, daily success marker,
-  continuation and catch-up rules apply on both platforms.
-- The catch-up timer runs one minute after the user manager starts, then every 15 minutes. Failed
-  launches retry within the documented window; missed days are not replayed. Persistent timer
-  wake-ups outside that window skip. A Linux file lock also prevents simultaneous manual/timed runs.
-- Keep the computer awake, WSL running and T3's WSL backend available. **Systemd does not keep WSL
-  alive or wake a suspended Windows computer.** An overdue one-shot can catch up within its window;
-  otherwise it expires visibly in `list`. System clock/timezone controls all schedules: check `date`.
-- User lingering (`loginctl enable-linger "$USER"`) can keep the user manager available without a
-  Linux login while WSL is running; it does not keep the WSL VM or Windows awake. Only enable it
-  when unattended operation requires it.
-- Linux completion/failure evidence is the T3 thread, `t3-schedule list`, and the existing log path;
-  macOS notifications remain macOS-only. Inspect native units with `systemctl --user list-timers`
-  and `journalctl --user -u com.t3-skills.t3-schedule.<name>.service`.
-
-Verification: `scripts/smoke-native-scheduler` loads a unique marker-only native timer/LaunchAgent,
-waits for execution, and removes only its own artifacts. It needs no T3 credentials. Unit tests cover
-both backends; a live scheduled T3 ping verifies the separate T3/auth leg.
-
-References: [WSL systemd lifecycle](https://learn.microsoft.com/en-us/windows/wsl/systemd),
-[systemd timer guarantees](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html),
-[user lingering](https://www.freedesktop.org/software/systemd/man/latest/loginctl.html).
+Linux / Windows (WSL, systemd user timers): [linux-wsl.md](linux-wsl.md).

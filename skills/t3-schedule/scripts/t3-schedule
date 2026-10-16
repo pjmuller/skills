@@ -6,9 +6,9 @@
 """Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS launchd or Linux/WSL systemd user timers.
 
 Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
-T3 Code, then calls `t3-spawn-thread --project ... -- "<prompt>"`, or, for a continuation job
-(`--resume-thread`), wakes that thread via `t3-ping-thread` and only spawns when it cannot.
-Nothing here touches T3's store; the only T3 contact is the t3-manage-thread helpers.
+T3 Code, then `t3-schedule fire <name>`: `t3-relay launch` (new thread) or, for a continuation
+job (`--resume-thread ID`), `t3-relay send` (a turn in that thread). Nothing here touches T3's
+store; the only T3 contact is t3-relay / t3-pick-instance / t3-list-profiles (t3-manage-thread).
 
 A recurring job's definition is versioned in its project repo (`<project>/.agents/schedules/<name>.json`
 + `<name>.prompt.md`); the runtime dir holds a machine-local pointer (`source`, `profile`), generated
@@ -39,22 +39,19 @@ CATCH_UP_INTERVAL = 900               # seconds between catch-up ticks
 CATCH_UP_GRACE_HOURS = 10             # a missed/failed slot is retried until slot+10h (same day)
 ONCE_DEADLINE = (23, 0)               # once-jobs have no tomorrow: retried until 23:00 that day
 DEFAULT_WAIT_MAX = 10                 # minutes the runner waits for T3 Code; catch-up retries later
-# pnpm's global bin is not on launchd's PATH; without it the runner falls back to the slow
-# `pnpm dlx`. Resolved when the plist is written, so a custom PNPM_HOME is honoured.
-PNPM_BIN = os.environ.get("PNPM_HOME") or ("$HOME/Library/pnpm" if sys.platform == "darwin" else "$HOME/.local/share/pnpm")
-SCHEDULE_PATH = f"$HOME/.local/bin:$HOME/.local/share/mise/shims:{PNPM_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+SCHEDULE_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 RUNTIME_JSON = ".t3/userdata/server-runtime.json"
-LAST_ORIGIN = ".t3/userdata/last-server-origin"   # written by lib/t3-common.sh t3_bootstrap
+LAST_ORIGIN = ".t3/userdata/last-server-origin"
 HEALTH_PATH = "/.well-known/t3/environment"
 DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_NAMES = {v: k for k, v in DAYS.items()}
 WEEKDAYS = [1, 2, 3, 4, 5]
-DEFAULT_MODELS = "opus,sol"            # no --model: Claude when installed with capacity, else Codex
-FALLBACK_EXIT = 3                      # `t3-schedule resume-thread` → runner: thread not resumable, spawn instead
-PACK_BRIEF_CHARS = 3000                # context pack for a fallback spawn: first user message …
-PACK_LAST_MSGS = 6                     # … plus the latest messages,
-PACK_MSG_CHARS = 2000                  # each capped,
-PACK_MAX_CHARS = 12000                 # whole pack capped (oldest of the latest dropped first)
+# settle_when_done: appended to the prompt; same text as t3-manage-thread settle-thread.md (completion footer).
+SETTLE_FOOTER = """---
+Conditional self-settlement. Explicit keep-open and later user instructions take precedence; this grants no extra authorization.
+- Clean outcome (brief executed and verified, delivery verified at its destination, no background work, no unresolved issue or user decision): call the T3 MCP tool `t3_thread_organize` with {"action":"settle"} and no threadId as your LAST tool call, then a one-line final answer.
+- Otherwise (blocked, partial, failed verification, findings or a decision for the user): don't settle; report what needs the user.
+"""
 SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the project repo
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
@@ -90,7 +87,6 @@ def paths(name: str) -> dict[str, Path]:
         "sh": base / f"{name}.sh",
         "last": base / f"{name}.last",
         "failed": base / f"{name}.failed",
-        "fallback": base / f"{name}.fallback.md",
         "log": home() / ".t3/userdata/logs" / f"t3-schedule.{name}.log",
     }
 
@@ -191,7 +187,7 @@ def prompt_path(spec: dict) -> Path:
 
 
 def versionable(spec: dict) -> bool:
-    """Recurring spawns are versioned; one-shots and continuations are ephemeral."""
+    """Recurring launches are versioned; one-shots and continuations are ephemeral."""
     return not spec.get("once") and not spec.get("resume_thread")
 
 
@@ -231,7 +227,7 @@ def machine_identity() -> dict | None:
 
 
 def ensure_identity() -> dict:
-    """Identity for an explicit add/adopt/migrate: created when absent (saved by `save_identity` once
+    """Identity for an explicit add/adopt: created when absent (saved by `save_identity` once
     the caller mutates), never silently replaced when unreadable (that would displace this machine everywhere)."""
     if me := machine_identity():
         return me
@@ -319,7 +315,7 @@ def write_registration(src: Path, machines: str, owners: list) -> bool:
 
 
 def existing_owners(src: Path) -> list:
-    """Registration of a repo spec about to be overwritten (add/migrate --force); unreadable → none."""
+    """Registration of a repo spec about to be overwritten (add --force); unreadable → none."""
     try:
         owners = json.loads(src.read_text()).get("adopted_by")
     except (OSError, ValueError, AttributeError):
@@ -357,15 +353,12 @@ def artefacts(spec: dict) -> tuple[str, bytes]:
 
 
 def job_flag(spec: dict) -> str | None:
-    """What `list` warns about: unversioned/dirty repo spec, stale runner, local recurring job."""
+    """What `list` warns about: unversioned/dirty repo spec, stale runner."""
     if spec.get("retired"):
         return None
-    if spec.get("source"):
-        state = git_state(spec)
-        if spec.get("missing"):
-            return state
-    else:
-        state = "local-only (t3-schedule migrate)" if versionable(spec) else None
+    state = git_state(spec) if spec.get("source") else None
+    if spec.get("missing"):
+        return state
     p = paths(spec["name"])
     try:
         sh, plist = artefacts({"wait_max": DEFAULT_WAIT_MAX, **spec})
@@ -430,7 +423,7 @@ def describe_when(spec: dict) -> str:
 
 
 def valid_models(value: str | None) -> str | None:
-    """Ordered comma list; the runner spawns the first candidate the spawn helper can route."""
+    """Ordered comma list; `fire` launches the first candidate t3-pick-instance can route."""
     if value is None:
         return None
     tokens = value.split(",")
@@ -440,7 +433,7 @@ def valid_models(value: str | None) -> str | None:
 
 
 def describe_models(spec: dict) -> str:
-    return spec.get("model") or f"{DEFAULT_MODELS} (default)"
+    return spec.get("model") or "project default"
 
 
 def valid_name(name: str) -> str:
@@ -471,36 +464,9 @@ def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Pa
     )
 
 
-def resume_block(spec: dict, p: dict[str, Path]) -> str:
-    """Continuation job: `t3-schedule resume` pings the thread (exit 0 → done) or writes a
-    fallback prompt with a context pack (exit FALLBACK_EXIT → fall through to the spawn)."""
-    if not spec.get("resume_thread"):
-        return ""
-    name = spec["name"]
-    return f"""  resumed=$(t3-schedule resume-thread {shlex.quote(name)} 2>&1)
-  rc=$?
-  echo "$resumed" | sed 's/^/   /'
-  if (( rc == 0 )); then
-    echo "$today" > {shlex.quote(str(p["last"]))}
-    rm -f {shlex.quote(str(p["failed"]))}
-    notify "{name}: $(echo "$resumed" | grep '^resumed ' | tail -1)"
-    exit 0
-  fi
-  (( rc == {FALLBACK_EXIT} )) || fail "{name}: resume FAILED (exit $rc) - see log"
-  prompt_file={shlex.quote(str(p["fallback"]))}
-  outcome="fallback ($(echo "$resumed" | sed -n 's/^fallback: //p' | tail -1)): spawned"
-"""
-
-
 def runner_script(spec: dict, p: dict[str, Path]) -> str:
     name = spec["name"]
-    spawn = ["t3-spawn-thread", "--project", spec["project"], "--no-open"]
-    if spec.get("settle_when_done"):
-        spawn.append("--settle-when-done")
-    if spec.get("thinking"):
-        spawn += ["--thinking", spec["thinking"]]
-    spawn_quoted = " ".join(shlex.quote(part) for part in spawn)
-    candidates = " ".join(shlex.quote(m) for m in (spec.get("model") or DEFAULT_MODELS).split(","))
+    qname = shlex.quote(name)
     last = shlex.quote(str(p["last"]))
     if spec.get("once"):
         guard = f"""  today=$(date +%F)
@@ -514,30 +480,27 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     exit 0
   fi"""
     else:
-        guard = f"""  # At most one spawn per calendar day: launchd replays a missed StartCalendarInterval once at
+        guard = f"""  # At most one fire per calendar day: launchd replays a missed StartCalendarInterval once at
   # wake, and a wake just before the slot would otherwise fire twice within minutes.
   today=$(date +%F)
   if [[ "$(cat {last} 2>/dev/null)" == "$today" ]]; then
-    echo "-- already spawned today ($today), skipping"
+    echo "-- already fired today ($today), skipping"
     exit 0
   fi"""
     if spec.get("source"):
-        pause_def = f"""  # Read the repo spec each time: pause/resume needs no runner refresh.
+        checks = f"""  # Read the repo spec each time: pause/resume needs no runner refresh. Registration (repo spec
+  # `adopted_by`): a one-machine job registered to another machine skips. Checked before the T3
+  # wait and again right before the fire (a pull may land in between).
   pause_check() {{
-    reason=$(t3-schedule pause-check {shlex.quote(name)} 2>&1)
+    reason=$(t3-schedule pause-check {qname} 2>&1)
     rc=$?
     (( rc == 0 )) && return 0
     (( rc == {PAUSED_SKIP_EXIT} )) || fail "{name}: pause-check FAILED (exit $rc) - see log"
     echo "-- {name}: skipping, $reason"
     exit 0
   }}
-  pause_check
-"""
-        pause_again = "  pause_check\n"
-        owner_def = f"""  # Registration (repo spec `adopted_by`): a one-machine job registered to another machine skips here,
-  # checked before the T3 wait and again right before the spawn (a pull may land in between).
   owner_check() {{
-    reason=$(t3-schedule owner-check {shlex.quote(name)} 2>&1)
+    reason=$(t3-schedule owner-check {qname} 2>&1)
     rc=$?
     (( rc == 0 )) && return 0
     (( rc == {OWNER_SKIP_EXIT} )) || fail "{name}: owner-check FAILED (exit $rc) - see log"
@@ -545,11 +508,12 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
     osascript -e "display notification \\"{name} skipped: registered to another machine (t3-schedule list)\\" with title \\"t3-schedule\\"" || true
     exit 0
   }}
+  pause_check
   owner_check
 """
-        owner_again = "  owner_check\n"
+        checks_again = "  pause_check\n  owner_check\n"
     else:
-        pause_def = pause_again = owner_def = owner_again = ""
+        checks = checks_again = ""
     linux_preamble = f"""# Linux notifications are optional; the durable log and T3 thread are the acknowledgement.
 if [[ "$(uname -s)" == Linux ]]; then
   osascript() {{ return 0; }}
@@ -558,20 +522,18 @@ if [[ "$(uname -s)" == Linux ]]; then
 fi
 # Persistent timers must respect the same bounded catch-up window as the poller.
 if [[ "$T3_SCHEDULE_AUTOMATIC" == 1 && "$T3_SCHEDULE_FORCE" != 1 ]]; then
-  t3-schedule due-check {shlex.quote(name)} || exit 0
+  t3-schedule due-check {qname} || exit 0
 fi
 """ if systemd() else ""
     return f"""#!/bin/zsh
-# {'one-shot' if spec.get('once') else 'recurring'} T3 thread armed by `t3-schedule add {shlex.quote(name)}`; edit via t3-schedule, not here
+# {'one-shot' if spec.get('once') else 'recurring'} T3 job armed by `t3-schedule add {qname}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
-{linux_preamble}# never inherit a parent thread: a scheduled thread is a root, whatever spawned the runner
-unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID T3_MCP_BEARER_TOKEN
-mkdir -p {shlex.quote(str(p["log"].parent))}
+{linux_preamble}mkdir -p {shlex.quote(str(p["log"].parent))}
 {{
   echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z')  {label_for(name)}"
 {guard}
-  # T3 Code must be up to accept the spawn; the Mac may have just woken (launchd runs missed
-  # StartCalendarInterval jobs at the next wake), so wait for it.
+  # T3 Code must be up to accept the relay request; the Mac may have just woken (launchd runs
+  # missed StartCalendarInterval jobs at the next wake), so wait for it.
   t3_up() {{
     origin=$(jq -r ' .origin // empty' "$HOME/{RUNTIME_JSON}" 2>/dev/null)
     [[ -n "$origin" ]] || origin=$(cat "$HOME/{LAST_ORIGIN}" 2>/dev/null)  # file vanished, server alive
@@ -591,44 +553,22 @@ mkdir -p {shlex.quote(str(p["log"].parent))}
     echo "-- $1"
     {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n    : '}osascript -e "display notification \\"$1\\" with title \\"t3-schedule\\"" || true
   }}
-{pause_def}{owner_def}  waited=0
+{checks}  waited=0
   until t3_up; do
     if (( waited >= {spec["wait_max"]} )); then
-      fail "{name}: T3 Code unreachable for ${{waited}}m, thread NOT spawned"
+      fail "{name}: T3 Code unreachable for ${{waited}}m, NOT fired"
     fi
     echo "-- waiting for T3 Code (${{waited}}m)"
     sleep 60
     waited=$((waited+1))
   done
-  title={shlex.quote(spec["title"])}
-  # No --profile → t3-spawn-thread routes by capacity and prints the decision into this log.
-  profile={shlex.quote(spec.get("profile") or "")}
-  profile_flag=()
-  [[ -n "$profile" ]] && profile_flag=(--profile "$profile")
-  title="${{title//\\{{date\\}}/$(date +%F)}}"
-  prompt_file={shlex.quote(str(prompt_path(spec)))}
-  [[ -r "$prompt_file" ]] || fail "{name}: prompt missing ($prompt_file) - repo moved? t3-schedule list"
-  outcome=spawned
-{pause_again}{resume_block(spec, p)}  # Model: first candidate whose ecosystem is installed and has capacity. The spawn helper's
-  # own dry-run decides (same routing as the real spawn); its decision block lands here.
-  chosen=
-  for candidate in {candidates}; do
-    echo "-- probe model $candidate"
-    if probe=$({spawn_quoted} --model "$candidate" "${{profile_flag[@]}}" --dry-run -- probe 2>&1); then
-      chosen=$candidate
-    fi
-    echo "$probe" | sed 's/^/   /'
-    [[ -n "$chosen" ]] && break
-  done
-  [[ -n "$chosen" ]] || fail "{name}: no model candidate available ({spec.get("model") or DEFAULT_MODELS})"
-{pause_again}{owner_again}  out=$({spawn_quoted} --model "$chosen" "${{profile_flag[@]}}" --title "$title" -- "$(cat "$prompt_file")" 2>&1)
+{checks_again}  out=$(t3-schedule fire {qname} 2>&1)
   rc=$?
-  echo "$out"
-  (( rc == 0 )) || fail "{name}: spawn FAILED (exit $rc) - see log"
-  echo "$today" > {shlex.quote(str(p["last"]))}
+  echo "$out" | sed 's/^/   /'
+  (( rc == 0 )) || fail "{name}: fire FAILED (exit $rc) - see log"
+  echo "$today" > {last}
   rm -f {shlex.quote(str(p["failed"]))}
-  thread=$(echo "$out" | sed -n 's/^Thread ID: *//p' | head -1)
-  notify "{name}: $outcome $title ${{thread:+($thread)}}"
+  notify "{name}: $(echo "$out" | tail -1)"
 }} >> {shlex.quote(str(p["log"]))} 2>&1
 """
 
@@ -768,123 +708,79 @@ def read_prompt(args: argparse.Namespace) -> str:
     raise SystemExit("prompt required: `-- \"<prompt>\"`, --prompt-file, or stdin")
 
 
-# --- continuation (--resume-thread) ------------------------------------------------
-def calling_thread_id() -> str:
-    """`--resume-thread self`: the T3 thread running this command. Codex exports its provider thread
-    id, Claude its session id; T3 maps both in provider_session_runtime (as t3-settle-thread --self)."""
-    own = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    db = Path(os.environ.get("T3CODE_HOME", str(Path.home() / ".t3"))) / "userdata" / "state.sqlite"
-    if not own or not db.exists():
-        raise SystemExit("--resume-thread self: not running inside a T3 thread (no CODEX_THREAD_ID/CLAUDE_CODE_SESSION_ID)")
-    import sqlite3
-    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
-        row = conn.execute(
-            "SELECT thread_id FROM provider_session_runtime WHERE json_valid(resume_cursor_json)"
-            " AND (json_extract(resume_cursor_json, '$.threadId') = ? OR json_extract(resume_cursor_json, '$.resume') = ?)"
-            " ORDER BY last_seen_at DESC LIMIT 1", (own, own)).fetchone()
-    if not row:
-        raise SystemExit(f"--resume-thread self: no T3 thread owns session {own}")
-    return row[0]
-
-def read_thread(thread_id: str) -> tuple[dict | None, str]:
-    """`t3-read-thread --json`: thread row (archived/deleted, model_selection, project) + messages."""
-    result = subprocess.run(["t3-read-thread", thread_id, "--json"], capture_output=True, text=True)
-    if result.returncode:
-        return None, (result.stderr or result.stdout).strip() or f"t3-read-thread exit {result.returncode}"
-    return json.loads(result.stdout), ""
+# --- fire: the runner's single T3 step, through t3-relay ------------------------
+def resume_message(prompt: str, name: str, day: str) -> str:
+    return f"Scheduled follow-up ({day}, t3-schedule job {name}), as agreed earlier in this thread:\n\n{prompt}"
 
 
-def registered_instances() -> set[str] | None:
-    """Enabled provider instance ids; None when unknown (then the ping decides)."""
-    result = subprocess.run(["t3-list-profiles", "--json"], capture_output=True, text=True)
-    if result.returncode:
-        return None
-    return {row["instance_id"] for row in json.loads(result.stdout)}
+def helper(*argv: str) -> subprocess.CompletedProcess:
+    """t3-manage-thread helper; its stderr (routing decisions) lands in the job log."""
+    result = subprocess.run(list(argv), capture_output=True, text=True)
+    if result.stderr.strip():
+        print(result.stderr.strip())
+    return result
 
 
-def resume_blocker(data: dict | None, err: str, instances: set[str] | None) -> str | None:
-    """Why the thread cannot take a new turn, or None. A settled thread is fine: a turn wakes it.
-    Every thread is bound to one provider instance; a removed/disabled one cannot run it."""
-    if data is None:
-        return "thread not found" if "No T3 thread matches" in err else f"thread not readable ({err[:200]})"
-    thread = data["thread"]
-    if thread.get("deleted_at"):
-        return "thread deleted"
-    if thread.get("archived_at"):
-        return "thread archived"
-    selection = thread.get("model_selection") or {}
-    instance = selection.get("instanceId") or selection.get("provider")  # legacy rows: provider only, as ping/spawn accept
-    if not instance:
-        return "thread has no model selection"
-    if instances is not None and instance not in instances:
-        return f"profile {instance} no longer registered"
+def profile_instances(profile: str, model_id: str) -> list[str]:
+    """`profile` = an instance id or a t3-list-profiles label (e.g. dentai), narrowed to the model's ecosystem."""
+    rows = json.loads(helper("t3-list-profiles", "--json").stdout or "[]")
+    eco = "Claude" if model_id.startswith("claude-") else "OpenAI" if model_id.startswith("gpt-") else None
+    return [r["instance_id"] for r in rows
+            if profile in (r["instance_id"], r.get("profile")) and (eco is None or r.get("ecosystem") == eco)]
+
+
+def pick(spec: dict) -> tuple[str, str] | None:
+    """(instanceId, modelId) of the first model candidate with a routable account; None = none has capacity."""
+    for candidate in spec["model"].split(","):
+        print(f"probe model {candidate}")
+        allowed = ""
+        if spec.get("profile"):
+            model_id = helper("t3-pick-instance", "--resolve", candidate).stdout.strip() or candidate
+            allowed = ",".join(profile_instances(spec["profile"], model_id))
+            if not allowed:
+                print(f"profile {spec['profile']} has no account for {model_id}")
+                continue
+        out = helper("t3-pick-instance", candidate, *([allowed] if allowed else []))
+        fields = out.stdout.split()
+        if out.returncode == 0 and len(fields) == 3:
+            return fields[0], fields[1]
     return None
 
 
-def resume_marker(name: str, day: str) -> str:
-    return f"Scheduled follow-up ({day}, t3-schedule job {name})"
-
-
-def resume_message(prompt: str, name: str, day: str) -> str:
-    return f"{resume_marker(name, day)}, as agreed earlier in this thread:\n\n{prompt}"
-
-
-def turn_landed(thread_id: str, marker: str) -> bool:
-    """A failed ping may still have delivered (lost/late HTTP ack): look for this job's turn before a fallback."""
-    data, _ = read_thread(thread_id)
-    return any(m["role"] == "user" and marker in (m.get("text") or "") for m in (data or {}).get("messages") or [])
-
-
-def clip(text: str, limit: int) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[:limit] + f"\n…[{len(text) - limit} more chars]"
-
-
-def context_pack(thread_id: str, data: dict | None, reason: str) -> str:
-    """Bounded handoff from the original thread: its brief + latest messages + how to read more."""
-    head = (f"---\nContext: scheduled as a follow-up of T3 thread {thread_id}, which could not be resumed "
-            f"({reason}). ")
-    if data is None:
-        return head + "Its transcript is not readable; work from the prompt above.\n"
-    thread, messages = data["thread"], data.get("messages") or []
-    head += (f"Handoff from it ('{thread.get('title') or 'untitled'}', project "
-             f"{thread.get('project_title') or thread.get('workspace_root')}); read more with "
-             f"t3-read-thread {thread_id} --outline / --msg N.\n")
-    brief = next((m for m in messages if m["role"] == "user"), None)
-    parts = [f"\n## Original brief\n{clip(brief['text'], PACK_BRIEF_CHARS)}\n"] if brief else []
-    latest = [m for m in messages[-PACK_LAST_MSGS:] if m is not brief]
-    blocks = [f"### {m['role']} · {m['created_at'][:16]}\n{clip(m['text'], PACK_MSG_CHARS)}\n" for m in latest]
-    while blocks and len(head) + sum(map(len, parts + blocks)) > PACK_MAX_CHARS:
-        blocks.pop(0)
-    if blocks:
-        parts.append(f"\n## Latest {len(blocks)} of {len(messages)} messages\n" + "\n".join(blocks))
-    return head + "".join(parts)
-
-
-def cmd_resume(args: argparse.Namespace) -> int:
-    """Runner step of a continuation job. Exit 0 = pinged; FALLBACK_EXIT = fallback prompt written."""
-    p = require_spec(args.name)
-    spec = load_spec(p["spec"])
-    thread_id = spec["resume_thread"]
-    prompt = p["prompt"].read_text().strip()
-    data, err = read_thread(thread_id)
-    reason = resume_blocker(data, err, registered_instances())
-    if not reason:
-        # Busy thread: T3 queues the turn; the ping helper retries a refused dispatch itself.
-        day = date.today().isoformat()
-        ping = subprocess.run(
-            ["t3-ping-thread", "--thread", thread_id, "--allow-cross-project",
-             "--", resume_message(prompt, spec["name"], day)],
-            capture_output=True, text=True, cwd=home(),
-        )
-        print((ping.stdout + ping.stderr).strip())
-        if ping.returncode == 0 or turn_landed(thread_id, resume_marker(spec["name"], day)):
-            print(f"resumed {data['thread'].get('title') or 'untitled'} ({thread_id})")
-            return 0
-        reason = f"ping failed (exit {ping.returncode})"
-    p["fallback"].write_text(f"{prompt}\n\n{context_pack(thread_id, data, reason)}")
-    print(f"fallback: {reason}")
-    return FALLBACK_EXIT
+def cmd_fire(args: argparse.Namespace) -> int:
+    """Runner step: hand the job to t3-relay. Exit 0 = relay accepted (delivery is async)."""
+    spec = load_spec(require_spec(args.name)["spec"])
+    if spec.get("missing"):
+        print(f"MISSING {spec['source']}: {spec['missing']}")
+        return 1
+    prompt = prompt_path(spec).read_text().strip()
+    today = date.today().isoformat()
+    if spec.get("resume_thread"):
+        argv = ["t3-relay", "send", "--thread", spec["resume_thread"], "--",
+                resume_message(prompt, spec["name"], today)]
+        done = f"sent follow-up to thread {spec['resume_thread']}"
+    else:
+        title = spec["title"].replace("{date}", today)
+        if spec.get("settle_when_done"):
+            prompt = f"{prompt}\n\n{SETTLE_FOOTER}"
+        argv = ["t3-relay", "launch", "--project", spec["project"], "--title", title]
+        if spec.get("model"):
+            chosen = pick(spec)
+            if not chosen:
+                print(f"no model candidate available ({spec['model']})")
+                return 1
+            argv += ["--model", chosen[1], "--instance", chosen[0]]
+        if spec.get("thinking"):
+            argv += ["--effort", spec["thinking"]]
+        argv += ["--", prompt]
+        done = f"launched {title}"
+    relay = helper(*argv)
+    print(relay.stdout.strip())
+    if relay.returncode:
+        print(f"t3-relay FAILED (exit {relay.returncode})")
+        return 1
+    print(done)
+    return 0
 
 
 def describe_resume(spec: dict) -> str:
@@ -901,25 +797,25 @@ def cmd_add(args: argparse.Namespace) -> int:
     days = None if once else parse_days(args)
     if args.settle_when_done and (args.title or "").startswith("🏓"):
         raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
-    resume = None
-    if args.resume_thread == "self":
-        args.resume_thread = calling_thread_id()
-    if args.resume_thread:
-        if args.settle_when_done:
-            raise SystemExit("--resume-thread keeps the thread's own lifecycle; drop --settle-when-done (say it in the prompt)")
-        data, err = read_thread(args.resume_thread)
-        blocker = resume_blocker(data, err, registered_instances())
-        if blocker:
-            raise SystemExit(f"--resume-thread {args.resume_thread}: {blocker}")
-        resume = data["thread"]
-        args.project = args.project or resume.get("workspace_root")
-    if not args.project:
-        raise SystemExit("--project is required (optional with --resume-thread: defaults to the thread's project)")
-    project = Path(args.project).expanduser().resolve()
-    if not project.is_dir():
+    if args.profile and not args.model:
+        raise SystemExit("--profile needs --model (the account is picked per model ecosystem)")
+    resume = args.resume_thread
+    if resume:
+        try:
+            resume = str(uuid.UUID(resume))
+        except ValueError:
+            raise SystemExit(f"--resume-thread expects a T3 thread id, got {resume!r}; inside T3 pass your own "
+                             "(t3_thread_list → currentThreadId), a launchd job cannot resolve 'self'") from None
+        if args.settle_when_done or args.model or args.thinking or args.title:
+            raise SystemExit("--resume-thread sends a turn to an existing thread: drop --settle-when-done/--model/"
+                             "--profile/--thinking/--title (say lifecycle wishes in the prompt)")
+    elif not args.project:
+        raise SystemExit("--project is required (except with --resume-thread)")
+    project = Path(args.project).expanduser().resolve() if args.project else None
+    if project and not project.is_dir():
         raise SystemExit(f"--project is not a directory: {project}")
-    existing = [f for f in repo_files(project, name) if f.exists()]
-    if existing and not once and not args.resume_thread and not args.force:
+    existing = [f for f in repo_files(project, name) if f.exists()] if project else []
+    if existing and not once and not resume and not args.force:
         raise SystemExit(f"{existing[0]} already defines {name} (committed or someone's WIP): "
                          f"`t3-schedule adopt {existing[0].with_name(name + '.json')}` to arm it, or add --force to overwrite")
     prompt = read_prompt(args).strip() + "\n"
@@ -927,7 +823,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise SystemExit("empty prompt")
     spec = {
         "name": name,
-        "project": str(project),
+        "project": str(project) if project else None,
         "profile": args.profile,
         "model": valid_models(args.model),
         "thinking": args.thinking,
@@ -938,8 +834,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         "days": days,
         "once": once,
         "wait_max": args.wait_max,
-        "resume_thread": resume["thread_id"] if resume else None,
-        "resume_title": resume.get("title") if resume else None,
+        "resume_thread": resume,
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
     versioned = versionable(spec)
@@ -995,8 +890,9 @@ def cmd_add(args: argparse.Namespace) -> int:
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
     if resume:
-        print(f"resumes  {resume['thread_id']} ({resume.get('title') or 'untitled'}); if not resumable, a fallback thread:")
-    print(f"spawns   {project} · profile={args.profile or 'auto (most room, capacity rule)'} model={describe_models(spec)}")
+        print(f"resumes  {resume} (t3-relay send)")
+    else:
+        print(f"launches {project} · profile={args.profile or 'auto (capacity routing)'} model={describe_models(spec)}")
     print(f"log      {p['log']}\nrun now  t3-schedule run-now {name}")
     if versioned:
         print(registry_note(source, spec["machines"], spec["adopted_by"]))
@@ -1043,11 +939,11 @@ def cmd_list(args: argparse.Namespace) -> int:
         for spec in rows:
             name = spec["name"]
             if spec.get("missing"):
-                print(f"| {name} | | {Path(spec['project']).name} | | | | | | {job_flag(spec)} | |")
+                print(f"| {name} | | {Path(spec.get('project') or '').name} | | | | | | {job_flag(spec)} | |")
                 continue
             prompt = prompt_path(spec).read_text().strip().replace("\n", " ").replace("|", "\\|")
             print(
-                f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec['project']).name}{describe_resume(spec)} "
+                f"| {name} | {describe_when(spec)} {spec['at']} | {Path(spec.get('project') or '').name}{describe_resume(spec)} "
                 f"| {spec.get('profile') or 'auto'} / {describe_models(spec)} "
                 f"| {describe_registration(spec) if spec.get('source') else 'this machine (local)'} "
                 f"| {pause_label(spec) or 'active'} | {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
@@ -1062,7 +958,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         state = pause_label(spec) or spec.get("retired") or ("loaded" if loaded(name) else "NOT loaded")
         print(
             f"{name:<28} {describe_when(spec):<9} {spec['at']}  {state:<10} "
-            f"{spec.get('profile') or '-'}/{describe_models(spec)}  {spec['project']}"
+            f"{spec.get('profile') or '-'}/{describe_models(spec)}  {spec.get('project') or '-'}"
         )
         if spec.get("resume_thread"):
             print(f"{'':<28}{describe_resume(spec)}")
@@ -1085,7 +981,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
     bootout(args.name)
-    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed", "fallback"):
+    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed"):
         p[key].unlink(missing_ok=True)
     if systemd():
         checked_systemctl("daemon-reload")
@@ -1108,11 +1004,9 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 
 def cmd_run_now(args: argparse.Namespace) -> int:
-    """Default: launchctl kickstart (same env as the scheduled run — no parent thread
-    inherited from the caller's process ancestry), then tail the log until the runner
-    reports. Once-jobs need T3_SCHEDULE_FORCE, which kickstart cannot pass: they run
-    orphaned (reparented to launchd), so t3-spawn-thread's ancestry walk finds no parent
-    agent either. --foreground runs the script directly (inherits the caller's parent)."""
+    """Default: launchctl kickstart / systemd-run (same env as the scheduled run), then tail the
+    log until the runner reports. Once-jobs need T3_SCHEDULE_FORCE, which kickstart cannot pass:
+    they run the script directly, as --foreground does."""
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
     if spec.get("retired"):
@@ -1120,7 +1014,7 @@ def cmd_run_now(args: argparse.Namespace) -> int:
     before = p["log"].stat().st_size if p["log"].exists() else 0
     env = {**os.environ, "T3_SCHEDULE_FORCE": "1"} if spec.get("once") else None
     finished = False
-    if args.foreground:
+    if args.foreground or (spec.get("once") and not systemd()):
         status = subprocess.run(["/bin/zsh", "-lc", str(p["sh"])], env=env).returncode
         finished = True
     elif systemd():
@@ -1131,9 +1025,6 @@ def cmd_run_now(args: argparse.Namespace) -> int:
                                  "/bin/zsh", str(p["sh"])], capture_output=True, text=True)
         if result.returncode:
             raise SystemExit(f"run-now failed: {result.stderr.strip()}")
-        status = 0
-    elif spec.get("once"):
-        subprocess.run(["/bin/zsh", "-c", f"{shlex.quote(str(p['sh']))} >/dev/null 2>&1 &"], env=env)
         status = 0
     else:
         result = kickstart(args.name)
@@ -1152,10 +1043,10 @@ def cmd_run_now(args: argparse.Namespace) -> int:
             printed += len(chunk.encode())
             print(chunk, end="")
             done = any(
-                l.startswith("-- ") and any(k in l for k in ("spawned", "resumed", "FAILED", "no model candidate", "skipping"))
+                l.startswith("-- ") and any(k in l for k in ("launched", "sent follow-up", "FAILED", "NOT fired", "skipping"))
                 for l in chunk.splitlines()
             )
-            if "FAILED" in chunk or "NOT spawned" in chunk or "no model candidate" in chunk:
+            if "FAILED" in chunk or "NOT fired" in chunk:
                 status = 1
         done = done or finished
         if not done:
@@ -1169,7 +1060,7 @@ def cmd_run_now(args: argparse.Namespace) -> int:
 # --- catch-up poller ----------------------------------------------------------
 # launchd only replays a missed StartCalendarInterval once at wake (never after a reboot), and a
 # runner that failed (T3 down, auth 401, provider hiccup) would otherwise wait for tomorrow. One
-# poller every CATCH_UP_INTERVAL re-kicks any job whose slot passed today without a spawn.
+# poller every CATCH_UP_INTERVAL re-kicks any job whose slot passed today without a fire.
 def write_artefacts(spec: dict) -> None:
     p = paths(spec["name"])
     sh, plist = artefacts(spec)
@@ -1184,7 +1075,7 @@ def write_artefacts(spec: dict) -> None:
 
 def rearm(spec: dict) -> bool:
     """Regenerate runner + plist and reload the LaunchAgent; False (untouched) while a runner is active:
-    bootout would kill a spawn in flight, and zsh reads its script lazily."""
+    bootout would kill a fire in flight, and zsh reads its script lazily."""
     name = spec["name"]
     if running(name):
         print(f"skipped   {label_for(name)} (runner active; rerun refresh later)")
@@ -1210,7 +1101,7 @@ def window(at: str, day: datetime, once: bool = False) -> tuple[datetime, dateti
 
 
 def due_now(spec: dict, now: datetime, last: str | None) -> bool:
-    """Slot passed today, still inside the grace window, and nothing spawned today
+    """Slot passed today, still inside the grace window, and nothing fired today
     (once-jobs: today is their date and they never fired)."""
     if spec.get("retired") or spec.get("missing") or spec.get("displaced") or pause_label(spec, now.date()):
         return False
@@ -1238,7 +1129,7 @@ def retire_status(spec: dict, now: datetime, last: str | None) -> str | None:
     return None
 
 
-def last_spawn(name: str) -> str | None:
+def last_fire(name: str) -> str | None:
     p = paths(name)["last"]
     return p.read_text().strip() if p.exists() else None
 
@@ -1249,7 +1140,7 @@ def pending_resumes(now: datetime) -> list[dict]:
     return [
         spec for spec in specs()
         if spec.get("resume_thread") and not spec.get("missing")
-        and not (spec.get("once") and (spec.get("retired") or retire_status(spec, now, last_spawn(spec["name"]))))
+        and not (spec.get("once") and (spec.get("retired") or retire_status(spec, now, last_fire(spec["name"]))))
     ]
 
 
@@ -1298,7 +1189,7 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
     kicked = []
     for spec in specs():
         name = spec["name"]
-        status = retire_status(spec, now, last_spawn(name))
+        status = retire_status(spec, now, last_fire(name))
         if not status or running(name):
             continue
         kicked.append(f"retire {name} ({status})")
@@ -1316,14 +1207,14 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
             msg = f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired"
             subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
     # One job per tick, earliest slot first: after a long power-off several slots are due at
-    # once, and firing them together would make every spawn route to the same profile from
+    # once, and firing them together would make every launch route to the same profile from
     # the same limits snapshot. Spacing them by one tick re-reads the limits between jobs.
     due = sorted(
-        (spec for spec in specs() if due_now(spec, now, last_spawn(spec["name"]))),
+        (spec for spec in specs() if due_now(spec, now, last_fire(spec["name"]))),
         key=lambda spec: spec["at"],
     )
     if any(running(spec["name"]) for spec in specs()):
-        due = []  # a runner is still spawning; let it finish before adding load
+        due = []  # a runner is still firing; let it finish before adding load
     for spec in due[:1]:
         name = spec["name"]
         if args.dry_run:
@@ -1346,18 +1237,6 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
 def cmd_refresh(args: argparse.Namespace) -> int:
     """Regenerate every runner + plist from its spec (after a template change) and re-arm catch-up."""
     scheduler_check()
-    # Retire old labels before arming replacements; preserve specs/prompts/run markers.
-    legacy_prefix = "com.pjmuller.t3-schedule"
-    old_plists = [] if systemd() else list((home() / "Library/LaunchAgents").glob(f"{legacy_prefix}.*.plist"))
-    old_labels = {p.stem for p in old_plists}
-    old_labels.update(line.split()[-1] for line in ("" if systemd() else launchctl("list").stdout).splitlines()
-                      if line.split() and line.split()[-1].startswith(legacy_prefix + "."))
-    for label in sorted(old_labels):
-        launchctl("bootout", f"{domain()}/{label}")
-        if launchctl("print", f"{domain()}/{label}").returncode == 0:
-            raise SystemExit(f"cannot unload legacy job: {label}; retry refresh")
-    for plist in old_plists:
-        plist.unlink()
     for spec in specs():
         name = spec["name"]
         if spec.get("retired"):
@@ -1446,42 +1325,12 @@ def cmd_adopt(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_migrate(args: argparse.Namespace) -> int:
-    """Move machine-local recurring jobs into their project repos (writes files, never commits)."""
-    names = args.names or [s["name"] for s in specs() if not s.get("source") and versionable(s)]
-    for name in names:
-        p = require_spec(name)
-        spec = json.loads(p["spec"].read_text())
-        if spec.get("source") or not versionable(spec):
-            print(f"skipped  {name} ({'already versioned' if spec.get('source') else 'one-shot/continuation stays local'})")
-            continue
-        project = Path(spec["project"])
-        src = repo_files(project, name)[0]
-        if src.exists() and not args.force:
-            raise SystemExit(f"{src} exists; `t3-schedule adopt {src}` or migrate --force to overwrite it")
-        me = ensure_identity()
-        owners, others = registration(existing_owners(src), "one", me, git_user(project))
-        confirm_takeover(name, others, args.takeover)
-        save_identity(me)
-        spec.update(machines="one", adopted_by=owners)
-        write_repo_job(project, name, spec, p["prompt"].read_text())
-        local = pointer(name, src, spec.get("profile"))
-        p["spec"].write_text(json.dumps(local, indent=2) + "\n")
-        rearm(merge_pointer(local))
-        print(f"migrated {name} → {src} (commit it)")
-    return 0
-
-
 def cmd_owner_check(args: argparse.Namespace) -> int:
     """Runner step of a repo job: 0 = fire, OWNER_SKIP_EXIT = registered to another machine (reason printed)."""
     spec = load_spec(require_spec(args.name)["spec"])
     if spec.get("missing"):
         print(f"MISSING {spec['source']}: {spec['missing']}")
         return 1
-    # Older installed runners only call owner-check. Keep pauses effective until refresh replaces them.
-    if label := pause_label(spec):
-        print(label)
-        return OWNER_SKIP_EXIT
     if spec.get("displaced"):
         print(spec["displaced"])
         return OWNER_SKIP_EXIT
@@ -1537,12 +1386,6 @@ def cmd_unpause(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_resume_public(args: argparse.Namespace) -> int:
-    # Compatibility: old generated continuation runners invoke `resume NAME`.
-    spec = load_spec(require_spec(args.name)["spec"])
-    return cmd_resume(args) if spec.get("resume_thread") else cmd_unpause(args)
-
-
 def cmd_machine(args: argparse.Namespace) -> int:
     """Show (or label) the identity add/adopt record in `adopted_by`. A new label reaches a repo at its next adopt."""
     me = machine_identity()
@@ -1577,15 +1420,14 @@ def build_parser() -> argparse.ArgumentParser:
     when.add_argument("--weekdays", action="store_true", help="Mon-Fri")
     when.add_argument("--days", help="comma list mon,tue,... (default: every day)")
     when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
-    add.add_argument("--project", help="repo path the thread runs in (with --resume-thread: the fallback's; default = that thread's project)")
-    add.add_argument("--resume-thread", metavar="THREAD_ID|self", help="continuation (self = the calling thread): wake this thread with the prompt instead of spawning; "
-                     "--project/--profile/--model/--thinking/--title then shape only the fallback thread spawned when it "
-                     "cannot be resumed")
-    add.add_argument("--profile", help="T3 provider instance (machine-local, not versioned); omit → t3-spawn-thread routes by capacity at fire time")
-    add.add_argument("--model", help=f"ordered comma list, first installed with capacity wins: opus,sol · fable · MODEL (default {DEFAULT_MODELS})")
-    add.add_argument("--thinking", help="low|medium|high (omit → model's house default)")
-    add.add_argument("--settle-when-done", action="store_true", help="instruct the thread to settle itself when done (clean outcome only)")
-    add.add_argument("--no-notify", action="store_true", help="no macOS notification on spawn (failures still notify once per day)")
+    add.add_argument("--project", help="repo path the new thread runs in (not needed with --resume-thread)")
+    add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: send the prompt as a turn to this thread "
+                     "(inside T3: your own t3_thread_list currentThreadId) instead of launching a new one")
+    add.add_argument("--profile", help="account label or instance id (t3-list-profiles; machine-local, needs --model); omit → capacity routing at fire time")
+    add.add_argument("--model", help="ordered comma list, first with a routable account wins: opus,sol · fable · MODEL (omit → project default)")
+    add.add_argument("--thinking", help="effort, e.g. low|medium|high (omit → model's house default)")
+    add.add_argument("--settle-when-done", action="store_true", help="append the self-settle footer (clean outcome only)")
+    add.add_argument("--no-notify", action="store_true", help="no macOS notification on launch (failures still notify once per day)")
     add.add_argument("--title", help="thread title; {date} → YYYY-MM-DD. Default: '⏰ <name> {date}'")
     add.add_argument("--prompt-file", help="read the prompt from a file instead of the argument")
     add.add_argument("--wait-max", type=int, default=DEFAULT_WAIT_MAX, help=f"minutes to wait for T3 Code before giving up (default {DEFAULT_WAIT_MAX}; catch-up retries)")
@@ -1614,7 +1456,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run_now)
 
 
-    catch = sub.add_parser(CATCH_UP, help="re-kick jobs whose slot passed today without a spawn (the poller's tick)")
+    catch = sub.add_parser(CATCH_UP, help="re-kick jobs whose slot passed today without a fire (the poller's tick)")
     catch.add_argument("--dry-run", action="store_true", help="print what would be kicked")
     catch.set_defaults(func=cmd_catch_up)
 
@@ -1633,11 +1475,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume = sub.add_parser("resume", help="resume a paused recurring repo job")
     resume.add_argument("name")
-    resume.set_defaults(func=cmd_resume_public)
-
-    continuation = sub.add_parser("resume-thread", help="(runner-internal) wake a --resume-thread job or prepare fallback")
-    continuation.add_argument("name")
-    continuation.set_defaults(func=cmd_resume)
+    resume.set_defaults(func=cmd_unpause)
 
     adopt = sub.add_parser("adopt", help=f"arm the jobs committed to a repo on this machine (<repo>, <repo>/{SCHEDULES_DIR} or one <name>.json)")
     adopt.add_argument("path")
@@ -1647,11 +1485,9 @@ def build_parser() -> argparse.ArgumentParser:
                        "no longer runs there; this machine becomes its only one (required when not at a terminal)")
     adopt.set_defaults(func=cmd_adopt)
 
-    migrate = sub.add_parser("migrate", help=f"move machine-local recurring jobs into <project>/{SCHEDULES_DIR} (you commit)")
-    migrate.add_argument("names", nargs="*", help="default: every machine-local recurring job")
-    migrate.add_argument("--force", action="store_true", help="overwrite an existing repo spec")
-    migrate.add_argument("--takeover", action="store_true", help="with --force over a spec registered to another machine")
-    migrate.set_defaults(func=cmd_migrate)
+    fire = sub.add_parser("fire", help="(runner-internal) hand the job to t3-relay now; use run-now instead")
+    fire.add_argument("name")
+    fire.set_defaults(func=cmd_fire)
 
     owner = sub.add_parser("owner-check", help=f"(runner-internal) exit {OWNER_SKIP_EXIT} when a one-machine job is registered elsewhere")
     owner.add_argument("name")
@@ -1692,7 +1528,7 @@ def cmd_check(_args) -> int:
 
 def cmd_due_check(args) -> int:
     spec = load_spec(require_spec(args.name)["spec"])
-    return 0 if due_now(spec, datetime.now(), last_spawn(args.name)) else 1
+    return 0 if due_now(spec, datetime.now(), last_fire(args.name)) else 1
 
 
 def cmd_runner_path(_args) -> int:
