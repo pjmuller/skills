@@ -6,8 +6,8 @@ reviewer is never the builder's model family: built in Claude (Fable/Opus) →
 Astra handles independent second planning opinions before building; Sol handles
 Claude-built code reviews. Give both planners the same problem, constraints and
 evidence, withholding each other's proposals until both finish; then compare
-and resolve disagreements. The review is a 🏓 round-trip worker: the builder
-thread spawns it, the reviewer pings back, the builder triages.
+and resolve disagreements. The review is a 🏓 worker: the builder delegates it,
+the reviewer's final answer wakes the builder, the builder triages.
 
 ## When
 Not every change: small fixes, one-concern edits, config/doc tweaks → trust the
@@ -15,30 +15,22 @@ builder's own verification. Review a feature (> ~100 LOC, multi-file, touches
 data/auth/money/external contracts) or when unsure. Review per landed task, not
 once per long session; a diff > ~1000 LOC is too big → split it.
 
-## Spawn the reviewer
-```bash
-# builder runs in Claude → OpenAI reviews
-t3-spawn-thread --model sol --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
-# builder runs in Codex → Claude reviews
-t3-spawn-thread --model opus --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
-```
-No `--profile`/`--thinking`: the reviewer gets its house effort and an account
-by [capacity](spawn-thread.md#automatic-profile-routing) (`t3-list-profiles`
-only when the user names an account). Always this spawn flow, never a vendor hand-off plugin
-(codex-delegate / claude-delegate) and never an in-harness same-model sub-agent
-(Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass, does not count as
-the review. The reviewer is read-only on the shared checkout;
-another revision needed → `/tmp` worktree.
+## Delegate the reviewer
+T3 ≥ 0.1: `delegate_task` with `task: "Read and execute /abs/path/review-brief.md"`, `role: "review"`,
+`target.providerInstanceId` from `t3-pick-instance sol` (builder in Claude) or `t3-pick-instance opus`
+(builder in Codex) and that model's house effort (Sol/Opus high). No sidebar row; its final answer
+wakes you; nothing to settle. Each re-review after fixes = a new `delegate_task` whose brief carries
+the original brief, prior findings, your responses and open objections (distinct `clientRequestId`).
 
-**Reuse a live opposite-model thread.** If this builder thread already used an
-opposite-model worker for planning or a second opinion (not yet settled, e.g. the
-Astra planner), ping *that* thread for the review instead of spawning a new one:
-it already holds the intent and the rejected alternatives. Switch it to the
-reviewer model on its own account: `t3-ping-thread --thread <id> --model sol -- "<brief path>"`
-([model switch](cross-thread-ping.md#reuse-a-thread-on-another-model)).
-Same for re-reviews after fixes. Settle it once, after the final review.
+Account by [capacity](spawn-thread.md#automatic-profile-routing); a named account only when the user
+names one. Never a vendor hand-off plugin (codex-delegate / claude-delegate) and never an in-harness
+same-model sub-agent (Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass, does not count as
+the review. The reviewer is read-only on the shared checkout; another revision needed → `/tmp`
+worktree (or `isolation: "worktree"`).
 
-## Brief the reviewer (file on disk, path in the spawn argument)
+0.0.x only: `t3-spawn-thread --model sol --source-thread <parent-id> --title "🏓 review: <task>" -- "<brief path>"`.
+
+## Brief the reviewer (file on disk, path in the task)
 - **Macro before micro:** top-level goal, approach chosen, alternatives rejected —
   the reviewer may fault the plan, not only the code.
 - **Git range** (`BASE..HEAD`) + spec, never session history.
@@ -46,13 +38,12 @@ Same for re-reviews after fixes. Settle it once, after the final review.
   reason (lib workaround, perf trade-off, spec said so, out of scope). Without
   this the reviewer "fixes" intentional choices.
 - **What was verified and how** (tests run, curl, browser).
-- **Heartbeat:** ask the reviewer to post a one-line progress message in its own thread after each
-  reproduction or every ~5 min. A worker running testcontainer loops shows no activity in T3 for 10+
-  min and gets mistaken for blocked and settled mid-review (2026-10-14: three reviewers, six real
-  findings, all cut off). Before settling a silent worker: `t3-read-thread <id> --outline`.
+- **Silent ≠ stuck:** a reviewer running testcontainer loops shows no activity for 10+ min
+  (2026-10-14: three reviewers cut off mid-review, six real findings lost). Check
+  `task_status` (`workState`) or `t3_thread_read` on its childThreadId before cancelling.
 - Quoting rule for inline text: [cross-thread-ping.md](cross-thread-ping.md).
 
-## Reviewer output (the ping-back)
+## Reviewer output (its final answer)
 - Read repo conventions first (nearest AGENTS.md/CLAUDE.md, neighbouring code);
   judge against *those*, not generic best practice. Cite the rule when flagging.
 - Every finding = `file:line` + concrete failure scenario (inputs/state → wrong
@@ -63,7 +54,7 @@ Same for re-reviews after fixes. Settle it once, after the final review.
   Tests are reviewed as code: would they fail if the logic broke?
 - May patch clear, contained bugs directly; anything larger → finding + rationale.
 - Verdict = "improves code health", not perfection. "Ship with minors" is valid. One line.
-- Report via the 🏓 footer's `t3-ping-thread` command.
+- Report as the final answer (≤ 400 words); it is what wakes the builder.
 
 ## Builder answers back — reviewer isn't god
 - Triage each finding: **fix**, or **push back with a reason**. Disagreement is
@@ -73,4 +64,4 @@ Same for re-reviews after fixes. Settle it once, after the final review.
 - "Implement this properly" → YAGNI check first: grep for callers; unused → propose deletion.
 - Order: clarify unclear findings, then blocking → trivial → complex, re-verify each.
 - Unresolved disagreement with real impact → one line each side to the user.
-  Then finish: fix, re-verify, commit, nothing to settle for a `delegate_task` reviewer; a top-level one: `t3_thread_organize` settle with its threadId.
+  Then finish: fix, re-verify, commit. A `delegate_task` reviewer needs no settle.
