@@ -23,10 +23,6 @@ Options:
   --retries N          Dispatch retries if the target is busy (default 3, 20s apart).
   --allow-cross-project
                        Confirm a deliberate current-project -> target-project ping.
-  --hide / --no-hide   Keep (or stop keeping) the target out of the sidebar with a detached
-                       snooze keeper; the agent keeps running. Default: preserve the target's
-                       current state — re-arm iff it is snoozed right now (T3 clears a snooze
-                       on every incoming turn), never hide a visible thread.
   --model sol|astra|luna|opus|fable|haiku|MODEL
                        Resume on another model of the target's OWN provider account
                        (e.g. fable -> opus, astra -> sol); persisted as the thread's model,
@@ -50,7 +46,6 @@ from_label=""
 retries=3
 dry_run=0
 allow_cross_project=0
-hide_choice=auto
 model_choice=""
 thinking_choice=""
 no_turn=0
@@ -61,8 +56,6 @@ while (($#)); do
     --from)   [[ $# -ge 2 ]] || usage; from_label="$2"; shift 2 ;;
     --retries) [[ $# -ge 2 ]] || usage; retries="$2"; shift 2 ;;
     --allow-cross-project) allow_cross_project=1; shift ;;
-    --hide) hide_choice=on; shift ;;
-    --no-hide) hide_choice=off; shift ;;
     --model) [[ $# -ge 2 ]] || usage; model_choice="$2"; shift 2 ;;
     --thinking|--effort) [[ $# -ge 2 ]] || usage; thinking_choice="$2"; shift 2 ;;
     --no-turn) no_turn=1; shift ;;
@@ -191,18 +184,6 @@ model_switched=0
 # The server drives provider sessions from the thread's runtimeMode; keep it.
 runtime_mode="$(printf '%s' "$target_thread_json" | jq -r '.runtimeMode // "full-access"')"
 
-# Preserve the target's visibility: T3 clears a snooze on every incoming turn, so a
-# thread that is snoozed NOW (raw snoozedUntil — even if a completed turn popped it,
-# the intent was "hidden") gets its keeper re-armed after the ping; a visible thread
-# (orchestrator, standalone) is never hidden by a ping. State comes from T3's own
-# shell API, not from the title and not from anything the caller remembers.
-target_snoozed="$(printf '%s' "$target_thread_json" | jq -r 'if .snoozedUntil != null then "yes" else "no" end')"
-case "$hide_choice" in
-  on) hide=1 ;;
-  off) hide=0 ;;
-  *) hide=0; [[ "$target_snoozed" == "yes" ]] && hide=1 ;;
-esac
-
 if ((dry_run)); then
   printf 'Dry run — nothing sent.\n'
   printf 'Target thread: %s (%s) · Project: %s\n' "$target_thread_id" "$target_title" "$target_project_title"
@@ -214,11 +195,6 @@ if ((dry_run)); then
   fi
   ((no_turn)) && printf 'Turn: none (--no-turn)\n'
   printf 'permissions: %s\n' "$runtime_mode"
-  if ((hide)); then
-    printf 'Hide: would arm keeper (t3-hide-thread --hide %s)\n' "$target_thread_id"
-  else
-    printf 'Hide: off\n'
-  fi
   exit 0
 fi
 
@@ -234,23 +210,6 @@ fi
 if ((no_turn)); then
   printf 'No turn sent (--no-turn); the next turn uses the new model.\n'
   exit 0
-fi
-
-# Arm the keeper BEFORE the turn.start: its startup (supervisor + auth session,
-# ~10-30s) then overlaps the ping instead of following it, and it is already
-# polling when T3's queued-turn-start window closes (see hide-thread.md). Arming
-# is idempotent, and an early arm on a failed ping is harmless: the thread is
-# snoozed already, the keeper just idles on it.
-if ((hide)); then
-  hide_helper="$(dirname "$(readlink -f "$0")")/t3-hide-thread"
-  if armed_output="$("$hide_helper" --hide "$target_thread_id" 2>&1)"; then
-    printf '%s\n' "$(printf '%s' "$armed_output" | tr '\n' ' ')"
-  else
-    printf 'Hide: FAILED to arm keeper (the thread will stay visible after the ping)\n' >&2
-    printf '%s\n' "$armed_output" | sed 's/^/  /' >&2
-  fi
-else
-  printf 'Hide: off\n'
 fi
 
 turn_payload="$(jq -n \

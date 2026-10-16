@@ -37,13 +37,8 @@ Options:
   --allow-cross-project-source                      Confirm a deliberate source-project -> target-project spawn
   --allow-old-model REASON                          Permit a model below the floor (OpenAI < gpt-6, Sol < 6.1),
                                                     e.g. a cyber task the current model refuses
-  --hide / --no-hide                                Keep the new thread out of the sidebar with a
-                                                    detached snooze keeper (the agent keeps running).
-                                                    Default: on only when --title starts with 🏓
-                                                    or with --settle-when-done.
   --settle-when-done                                Conditional self-settle after clean verified delivery;
                                                     append the canonical completion footer.
-                                                    Hidden by default; --no-hide keeps it visible.
                                                     Not for 🏓 workers (the orchestrator settles those).
   --no-open                                         Do not focus the new T3 thread
   --dry-run                                         Resolve everything, create nothing
@@ -70,7 +65,6 @@ open_thread=1
 dry_run=0
 allow_cross_project_source=0
 allow_old_model_reason=""
-hide_choice=auto
 settle_when_done=0
 
 while (($#)); do
@@ -124,14 +118,6 @@ while (($#)); do
       [[ $# -ge 2 && -n "$2" ]] || usage
       allow_old_model_reason="$2"
       shift 2
-      ;;
-    --hide)
-      hide_choice=on
-      shift
-      ;;
-    --no-hide)
-      hide_choice=off
-      shift
       ;;
     --settle-when-done)
       settle_when_done=1
@@ -548,8 +534,7 @@ fi
 }
 
 # Round-trip workers are titled "🏓 ..." by convention: they report back to their
-# parent, so they are hidden (snoozed, still running) instead of cluttering the
-# sidebar. A standalone thread stays visible.
+# parent, which verifies and settles them.
 title_is_roundtrip() {
   local trimmed="${1#"${1%%[![:space:]]*}"}"
   [[ "$trimmed" == 🏓* ]]
@@ -559,17 +544,6 @@ if ((settle_when_done)) && title_is_roundtrip "$thread_title"; then
   echo "--settle-when-done is for standalone threads; 🏓 workers are settled by their orchestrator after verification." >&2
   exit 2
 fi
-
-case "$hide_choice" in
-  on) hide=1 ;;
-  off) hide=0 ;;
-  *)
-    hide=0
-    if ((settle_when_done)) || { ((title_is_explicit)) && title_is_roundtrip "$thread_title"; }; then
-      hide=1
-    fi
-    ;;
-esac
 
 # A worker can only report back if its brief carries the parent thread id and the
 # literal ping command; briefs that merely said "ping back" produced workers that
@@ -591,7 +565,7 @@ fi
 thread_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 settle_footer=""
 if ((settle_when_done)); then
-  settle_footer="$(printf '\n---\nConditional self-settlement completion footer. Explicit keep-open instructions and later user instructions take precedence; this footer grants no additional task authorization.\n- Clean outcome: brief fully executed and verified, requested delivery verified at its destination, no background work (sub-agents, background shells, monitors), and no unresolved issue or user decision. Run `t3-settle-thread --self` as your LAST tool call, then end with a one-line final answer. Routine corrections or caveats resolved within the requested outcome count as clean. Do nothing after that call.\n- Material findings beyond the requested outcome are not clean merely because they were recorded in an artifact. Blocked or partial work, failed verification, incomplete delivery, unresolved findings or user review/dialogue stay open. Continue useful authorized work where possible; at a genuine stopping point, if hidden run `t3-hide-thread --unhide %s` (idempotent), then report what needs the user.' "$thread_id")"
+  settle_footer="$(printf '\n---\nConditional self-settlement completion footer. Explicit keep-open instructions and later user instructions take precedence; this footer grants no additional task authorization.\n- Clean outcome: brief fully executed and verified, requested delivery verified at its destination, no background work (sub-agents, background shells, monitors), and no unresolved issue or user decision. Call the T3 MCP tool `t3_thread_organize` with `{"action":"settle"}` and no threadId as your LAST tool call (it settles this thread when the turn ends), then end with a one-line final answer. Routine corrections or caveats resolved within the requested outcome count as clean. Do nothing after that call.\n- Material findings beyond the requested outcome are not clean merely because they were recorded in an artifact. Blocked or partial work, failed verification, incomplete delivery, unresolved findings or user review/dialogue stay open. Continue useful authorized work where possible; at a genuine stopping point, report what needs the user.')"
   prompt_text="$prompt_text
 $settle_footer"
 fi
@@ -670,11 +644,6 @@ printf 'permissions: %s (source: %s)\n' "$runtime_mode" "$runtime_mode_source"
   if [[ -n "$settle_footer" ]]; then
     printf 'Self-settle footer appended to the brief:\n%s\n' "$settle_footer"
   fi
-  if ((hide)); then
-    printf 'Hide: would arm keeper (t3-hide-thread --hide <new thread id>)\n'
-  else
-    printf 'Hide: off\n'
-  fi
   exit 0
 fi
 
@@ -720,28 +689,6 @@ if [[ -n "$source_thread_id" ]]; then
   printf '  t3-ping-thread --thread %s --from <label> -- "<terse report>"\n' "$source_thread_id"
 fi
 
-# Hiding is cosmetic: the thread exists and works either way, so a failed arm is
-# a warning, never a failed spawn.
-if ((hide)); then
-  hide_helper="$(dirname "$(readlink -f "$0")")/t3-hide-thread"
-  if armed_output="$("$hide_helper" --hide "$thread_id" 2>&1)"; then
-    printf '%s\n' "$(printf '%s' "$armed_output" | tr '\n' ' ')"
-  else
-    printf 'Hide: FAILED to arm keeper (the thread is fine, it just stays visible)\n' >&2
-    printf '%s\n' "$armed_output" | sed 's/^/  /' >&2
-  fi
-  # A hidden worker that wakes from its snooze counts as inactive and would be
-  # auto-settled (= killed) after the project's window (upstream #11788). Opt the
-  # thread out (T3 >= 0.0.43, #11846); older servers reject the command, harmless.
-  auto_settle_payload="$(jq -n --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
-    --arg threadId "$thread_id" \
-    '{type:"thread.auto-settle.set",commandId:$commandId,threadId:$threadId,enabled:false}')"
-  if t3_dispatch "$auto_settle_payload" 2>/dev/null; then
-    printf 'Auto-settle: off for this thread (its orchestrator settles it)\n'
-  fi
-else
-  printf 'Hide: off\n'
-fi
 if ((settle_when_done)); then
-  printf 'Settle when done: on (worker runs t3-settle-thread --self as its last tool call)\n'
+  printf 'Settle when done: on (worker settles itself via t3_thread_organize as its last tool call)\n'
 fi

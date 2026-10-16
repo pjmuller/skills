@@ -17,8 +17,8 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
 
 - Unattended jobs: `add --settle-when-done` forwards the spawn helper's
   [fire-and-forget flow](../t3-manage-thread/spawn-thread.md#fire-and-forget---settle-when-done)
-  (no 🏓 title). `--hide --no-notify` = hidden, no self-settle footer, no launch notification: the
-  prompt or a helper it runs (e.g. `skills-refresh --job`) owns settle/unhide.
+  (no 🏓 title). Without it the prompt or a helper it runs (e.g. `skills-refresh --job`) owns the
+  lifecycle; `--no-notify` drops the launch notification.
 - A specific effort needs `--profile <account> --model sol --thinking high`: a root thread has no
   parent to inherit from.
 - Never edit a runner by hand: `add --force` (one job) or `refresh` (all) regenerates it.
@@ -80,7 +80,7 @@ protects its thread from [`t3-purge-threads`](../t3-maintenance/SKILL.md).
   queues, the ping helper retries a refused dispatch). Checked at `add` and again at fire time. A failed ping first re-reads the thread for its dated marker turn (lost ack ≠ not delivered), so a job never both resumes and spawns.
 - **Otherwise fallback**: a normal spawn (`--model/--profile/--thinking/--title/--project`
   shape only this thread) whose prompt = the scheduled prompt + a bounded context pack (original
-  brief, latest messages, original id). `--hide` applies to both paths; `--settle-when-done` is
+  brief, latest messages, original id). `--settle-when-done` is
   refused (the thread owns its lifecycle, say it in the prompt).
 - Log/notification: `resumed <title> (<id>)` vs `fallback (<reason>): spawned …`. `.last` and
   catch-up behave as for spawns.

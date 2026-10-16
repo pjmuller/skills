@@ -20,23 +20,22 @@ Helpers in `scripts/`, put on PATH by `scripts/install` (`--check` verifies). Fl
   crash-reload the window when many remain. Default dry-run is suitable for monitoring;
   `--apply` deliberately crashes the UI, not a blank-window repair. Recovery: native
   File → Close Window, reactivate T3 (macOS); verify server/worker PIDs survive.
-- `t3-git-leftovers` — repos with uncommitted/unpushed work, one hidden worker per repo
+- `t3-git-leftovers` — repos with uncommitted/unpushed work, one worker per repo
   ([below](#git-leftovers-t3-git-leftovers)).
 - Shared store access: `scripts/t3_store.py` (also imported by `t3-usage-windows`).
 
 Neighbours: rate-limited threads → [t3-usage-windows](../t3-usage-windows/SKILL.md); recurring
 jobs → [t3-schedule](../t3-schedule/SKILL.md); finding one past thread →
 [t3-find-thread](../t3-find-thread/SKILL.md). Settle = kill the session and its sub-agents
-([settle-thread.md](../t3-manage-thread/settle-thread.md)); hiding a live worker is
-[t3-hide-thread](../t3-manage-thread/hide-thread.md). These helpers patch gaps in T3 itself; retire
+([settle-thread.md](../t3-manage-thread/settle-thread.md)). These helpers patch gaps in T3 itself; retire
 each once upstream covers it (maintainer's inventory lives in the personal setup repository,
 `decissions/t3_monkey_patches.md`).
 
 ## Hard rule — how these tools touch T3
 
 T3's live database is never written. Reads use a read-only SQLite snapshot of the WAL projection
-store; every mutation shells out to the `t3-manage-thread` helpers (`t3-settle-thread`,
-`t3-ping-thread`, `t3-delete-thread`). Writing directly corrupts a running app's event-sourced store.
+store; every mutation shells out to the `t3-manage-thread` helpers (`t3-ping-thread`,
+`t3-delete-thread`; settling goes through the native `t3_thread_organize`). Writing directly corrupts a running app's event-sourced store.
 Only exception: `t3-purge-threads apply --mode hard`, which refuses unless T3 Code is fully closed.
 
 Mutating subcommands are dry-run by default, capped by `--max`, re-read each candidate right before
@@ -85,9 +84,9 @@ t3-git-leftovers dispatch $R --model <m> --wait          # background shell; ≤
 t3-git-leftovers status $R --markdown                    # landed / protected / blocked / running
 ```
 
-Workers spawn `--settle-when-done --hide`, titled `🧹 git leftovers <repo> <date>`, and follow
+Workers spawn `--settle-when-done`, titled `🧹 git leftovers <repo> <date>`, and follow
 [git-leftovers.md](git-leftovers.md). A spawned worker is not a landed repo: `status` re-checks git and
-thread state; only its counts go in the report. `blocked` = the worker unhid itself for the user;
+thread state; only its counts go in the report. `blocked` = the worker stayed open for the user;
 `unverified` = git could not be re-read (never counted landed).
 
 ## Prompt patterns (`t3-my-prompts`)

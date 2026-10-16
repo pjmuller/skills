@@ -102,7 +102,7 @@ Before update: installed public core revision `fixture-core-a`; separate private
 
 Evaluate dispatch flags and later completion behavior separately. No live tools.
 The synthetic wrapper adopts the core's conditional lifecycle policy, except video
-ingestion uses its established hidden `--settle-when-done` playbook. Each case is independent.
+ingestion uses its established `--settle-when-done` playbook. Each case is independent.
 
 ### a. Specific bug, production delivery
 

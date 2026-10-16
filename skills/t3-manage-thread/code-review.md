@@ -73,4 +73,4 @@ Same for re-reviews after fixes. Settle it once, after the final review.
 - "Implement this properly" → YAGNI check first: grep for callers; unused → propose deletion.
 - Order: clarify unclear findings, then blocking → trivial → complex, re-verify each.
 - Unresolved disagreement with real impact → one line each side to the user.
-  Then finish: fix, re-verify, commit, `t3-settle-thread --wait <reviewer-id>`.
+  Then finish: fix, re-verify, commit, nothing to settle for a `delegate_task` reviewer; a top-level one: `t3_thread_organize` settle with its threadId.

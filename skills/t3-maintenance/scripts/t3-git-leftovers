@@ -305,7 +305,7 @@ def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
 
 def spawn(row: dict, args) -> tuple[str | None, str]:
     title = f"{worker_title(Path(row['repo']))} {datetime.now().strftime('%Y-%m-%d')}"
-    cmd = ["t3-spawn-thread", "--settle-when-done", "--no-open", "--hide", "--project", row["repo"],
+    cmd = ["t3-spawn-thread", "--settle-when-done", "--no-open", "--project", row["repo"],
            "--allow-cross-project-source", "--title", title]
     if args.model:
         cmd += ["--model", args.model]

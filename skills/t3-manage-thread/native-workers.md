@@ -37,9 +37,9 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>",
 | `t3-spawn-thread` 📤 | `t3_thread_launch` | visible top-level thread; `modelSelection.instanceId` from `t3-pick-instance` |
 | `t3-ping-thread` | `t3_thread_send` | `mode: auto/queue/steer`; `clientRequestId` makes retries idempotent |
 | `t3-read-thread` | `t3_thread_read` | `view: "activity"`, paginate with `afterPosition` |
-| `t3-rename-thread` | `t3_thread_update action:"rename"` | |
-| `t3-settle-thread --self` | `t3_thread_organize action:"settle"` (no threadId) | settles when your turn ends |
-| `t3-hide-thread` | none needed for 🏓 | native snooze still clears on **every** new run, including a background wake |
+| `t3-rename-thread` (deleted) | `t3_thread_update action:"rename"` | |
+| `t3-settle-thread` (pointer, exit 3) | `t3_thread_organize action:"settle"` (no threadId = self) | self-settle applies when your turn ends |
+| `t3-hide-thread` (deleted) | none: 🏓 = `delegate_task` (no row); Working section folds busy threads | native snooze clears on every new run, so it can't hide a live thread |
 | `t3-schedule` | `schedule_task` | `fixed_time {timeOfDay, weekdays}`; no one-shot: the run deletes itself |
 
 Shell scripts outside a thread (launchd jobs) have no native write path yet: `/mcp` refuses a plain

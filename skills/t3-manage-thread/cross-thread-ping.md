@@ -11,11 +11,7 @@ that agent on the target's own model. No provider-facing send tool exists yet
 - **Cross-project pings are refused** unless `--allow-cross-project`: a ping is
   indistinguishable from a typed message, so a wrong target silently derails
   someone else's work. Resolve one exact id; never ping guesses.
-- **Visibility is preserved** from T3's live state: a snoozed target gets its
-  keeper re-armed (T3 clears the snooze on every incoming turn), a visible one
-  stays visible. A ping to a busy worker can still expose it for up to 120 s
-  ([hide-thread.md](hide-thread.md)); send urgent corrections anyway. A ping
-  never settles anything.
+- A ping never settles or hides anything. On T3 ≥ 0.1.0 use `t3_thread_send`.
 - Batch routine updates; prefer worker milestone reports over status-check pings.
   After verifying a report, settle the worker rather than pinging "thanks".
 - **Ping-back address**: the 🏓 spawn footer already carries the parent's T3 id

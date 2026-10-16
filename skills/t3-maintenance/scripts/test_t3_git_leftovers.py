@@ -121,7 +121,7 @@ class GitLeftoversTest(unittest.TestCase):
         first = ledger[str(one)]["thread_id"]
         spawn_args = self.spawn_log.read_text()
         self.assertIn("--model sol", spawn_args)
-        self.assertIn("--settle-when-done --no-open --hide", spawn_args)
+        self.assertIn("--settle-when-done --no-open --project", spawn_args)
         self.assertIn("git-leftovers.md", spawn_args)
 
         running = {"thread_id": first, "title": f"🧹 git leftovers one", "workspace_root": str(one),

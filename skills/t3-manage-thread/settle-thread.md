@@ -1,40 +1,47 @@
-# Settle a thread (t3-settle-thread)
+# Settle a thread
 
-Flags: `t3-settle-thread --help` (`--wait`, `--self`, `--unsettle`,
-`--only-settled-at`, `--detach`, `--dry-run`). Every mode prints the resulting
-`settledOverride` / `settledAt` / `snoozedUntil`, and the server's reason on
-refusal. Hiding a *live* worker is [hide-thread.md](hide-thread.md); the old
-`--hide` / `--snooze` flags here exit non-zero pointing there.
+T3 ≥ 0.1.0 settles natively through the T3 MCP tool `t3_thread_organize`
+(Claude: `mcp__t3-code__t3_thread_organize`, Codex: `t3_code.t3_thread_organize`).
+`t3-settle-thread` is retired: it only prints this call and exits 3.
 
-## Hard rule: settle = stop (data loss)
+| Need | Call |
+|---|---|
+| Settle yourself ("…then settle this thread") | `{"action":"settle"}`, no threadId, as the **LAST** tool call |
+| Settle another thread after verifying it | `{"action":"settle","threadId":"<id>"}` |
+| Bring a thread back | `{"action":"unsettle","threadId":"<id>"}` |
 
-`thread.settle` always chains `thread.session.stop` for any session not already
-stopped, including `ready`. That kills the `claude`/`codex` process **and every
-background sub-agent inside it**, so settling a working thread destroys
-unreported work. Settle only after a worker's final report is in and verified.
-The server refuses while the session is starting/running, an approval or user
-input is open, or a turn start is queued — hence `--wait`. Not archive; idempotent.
+## Settle = stop
 
-A normal turn end is *not* a stop: the session stays `ready` and background
-sub-agents survive and re-wake the thread. That is why 🏓 workers are hidden,
-not settled, while they run.
+Settling stops the thread's provider session, including background shells and
+sub-agents inside it. Settle only after the final result is in and verified.
+A `delegate_task` child needs no settle: it has no sidebar row and its result
+wakes the parent ([native-workers.md](native-workers.md)).
 
-## Settle yourself ("…then settle this thread")
+## Settle yourself
 
-`--self` resolves the calling thread from `CODEX_THREAD_ID` /
-`CLAUDE_CODE_SESSION_ID` and arms a detached worker (`t3_supervise`) bound to
-the current turn; it settles seconds after the turn ends. Same kill semantics,
-so only on the user's explicit request or an authorized routing policy recorded
-in the brief (see the [canonical completion footer](spawn-thread.md#fire-and-forget---settle-when-done)):
+Self-settle takes effect when your turn ends; a failed or interrupted turn or a
+queued message keeps the thread open. Only on the user's explicit request or an
+authorized routing policy in the brief (the
+[completion footer](spawn-thread.md#fire-and-forget---settle-when-done)):
 
-1. Finish all work. No background shells, sub-agents or monitors alive (`--self`
-   warns on open tasks): settle kills them, and a later task notification would
-   re-wake and unsettle the thread.
-2. `t3-settle-thread --self` is the **LAST** tool call (foreground).
-3. End the turn with the final answer. Nothing after, not even reading
-   `/tmp/t3-settle-<THREAD_ID>.log`.
+1. Finish all work. No background shells, sub-agents or monitors left: their
+   completion would wake the thread again.
+2. Call `t3_thread_organize {"action":"settle"}` as the last tool call.
+3. End the turn with the final answer.
 
-`--wait <own id>` is refused: your own turn *is* the running session.
+A thread that needs the user simply stays open: unsettled threads with a finished
+turn are the inbox. With **Settings → General → Working section** on, busy threads
+stay folded until they finish or need input, so nothing needs hiding.
 
-Fleet-wide settle/unsettle repair: [t3-maintenance](../t3-maintenance/SKILL.md).
-Native settle tool status: [upstream-checkpoint.md](upstream-checkpoint.md).
+## Completion footer for `t3_thread_launch`
+
+`--settle-when-done` appends this mechanically; a native launch pastes it at the end of `message`:
+
+```text
+---
+Conditional self-settlement. Explicit keep-open and later user instructions take precedence; this grants no extra authorization.
+- Clean outcome (brief executed and verified, delivery verified at its destination, no background work, no unresolved issue or user decision): call the T3 MCP tool `t3_thread_organize` with {"action":"settle"} and no threadId as your LAST tool call, then a one-line final answer.
+- Otherwise (blocked, partial, failed verification, findings or a decision for the user): don't settle; report what needs the user.
+```
+
+Fleet-wide settle/unsettle audit: [t3-maintenance](../t3-maintenance/SKILL.md).

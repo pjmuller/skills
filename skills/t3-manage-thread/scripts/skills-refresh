@@ -145,27 +145,16 @@ refresh() {
   return 10
 }
 
-# T3 thread owning this process (same lookup as t3-settle-thread --self); empty outside T3.
-own_thread() {
-  local own="${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-}}" db="${T3CODE_HOME:-$HOME/.t3}/userdata/state.sqlite"
-  [[ -n "$own" && -f "$db" ]] && command -v sqlite3 >/dev/null || return 0
-  sqlite3 "$db" "SELECT thread_id FROM provider_session_runtime WHERE json_valid(resume_cursor_json)
-    AND (json_extract(resume_cursor_json,'\$.threadId')='$own' OR json_extract(resume_cursor_json,'\$.resume')='$own')
-    ORDER BY last_seen_at DESC LIMIT 1;" 2>/dev/null || true
-}
-
 # The scheduled thread's lifecycle is decided here, not by the (cheap) model reading a prompt:
 # nothing new → settle silently; applied (unless --quiet) or failed → surface the thread once.
 job() {
-  local quiet=0 rc=0 thread
+  local quiet=0 rc=0
   [[ "${1:-}" == --quiet ]] && quiet=1
   refresh || rc=$?
-  thread="$(own_thread)"
-  [[ -n "$thread" ]] || { echo "thread: not inside a T3 thread, nothing to settle"; exit "$rc"; }
   if [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
-    t3-settle-thread --self >/dev/null 2>&1 && echo "thread: settles when this turn ends" || echo "thread: settle failed (leave visible)"
+    echo "thread: SETTLE (nothing for the user)"
   else
-    t3-hide-thread --unhide "$thread" >/dev/null 2>&1 && echo "thread: surfaced for the user" || echo "thread: unhide failed"
+    echo "thread: KEEP OPEN (the user should see this)"
   fi
   exit "$rc"
 }
@@ -186,10 +175,10 @@ schedule() {
   mkdir -p "$STATE"
   cat > "$STATE/job-prompt.md" <<PROMPT
 Run exactly one command: \`skills-refresh --job$quiet\`. Then end the turn with its complete output as your answer, nothing else.
-The command itself settles or surfaces this thread: never run t3-settle-thread or t3-hide-thread, never retry, never fix anything.
+Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer. Never retry, never fix anything.
 PROMPT
   t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna \
-    --hide --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
+    --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
   # Retire only our legacy Linux entry, and only once its replacement is armed.
   local old_cron
   if command -v crontab >/dev/null && old_cron="$(crontab -l 2>/dev/null)" &&

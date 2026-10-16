@@ -324,9 +324,9 @@ def t3_db() -> sqlite3.Connection:
 
 def t3_thread(thread_id: str) -> dict | None:
     with t3_db() as db:
-        row = db.execute("SELECT title, settled_override, snoozed_until, deleted_at, archived_at "
+        row = db.execute("SELECT title, settled_override, deleted_at, archived_at "
                          "FROM projection_threads WHERE thread_id = ?", (thread_id,)).fetchone()
-    return dict(zip(("title", "settled", "snoozed", "deleted", "archived"), row)) if row else None
+    return dict(zip(("title", "settled", "deleted", "archived"), row)) if row else None
 
 
 def own_thread() -> str:
@@ -482,16 +482,15 @@ def poll_link(link: dict, dry_run: bool) -> str | None:
     if not t3 or t3["deleted"] or t3["archived"]:
         print(f"{tag}: T3 thread gone; t3-mail-link unlink {link['t3_thread']}", file=sys.stderr)
         return "t3"
-    hide = "--hide" if t3["settled"] == "settled" or t3["snoozed"] else "--no-hide"
     if dry_run:
-        print(f"{tag}: would save {len(inbound)} inbound message(s) and ping ({hide})")
+        print(f"{tag}: would save {len(inbound)} inbound message(s) and ping")
         return None
     try:
         saved = save_messages(ws, link, inbound, f"{datetime.now():%Y%m%d-%H%M}-{inbound[-1]}", trim=False)
     except Exception as exc:
         print(f"gmail error saving {tag}: {exc}", file=sys.stderr)
         return "gmail"
-    result = subprocess.run(["t3-ping-thread", "--thread", link["t3_thread"], "--from", "mail-link", hide,
+    result = subprocess.run(["t3-ping-thread", "--thread", link["t3_thread"], "--from", "mail-link",
                              "--allow-cross-project", "--", ping_text(link, saved, inbound)],
                             capture_output=True, text=True, cwd=Path.home())
     if result.returncode:  # T3 down or busy: next tick retries

@@ -82,7 +82,8 @@ the outcome is bounded and clear, expected durable delivery is independently
 verifiable, the full path already has authorization, and no user review/dialogue
 is needed. Review/dialogue means a concrete outstanding user decision or requested
 discussion; task class, completed agent review or a readable result alone do not
-require it. Eligible work uses `--settle-when-done --no-hide`: visible while running.
+require it. Eligible work uses `--settle-when-done` (native launch: append the
+[completion footer](../t3-manage-thread/settle-thread.md#completion-footer-for-t3_thread_launch) to `message`).
 Known outstanding approval prevents arming; conditional project gates stay in force
 and unmet gates prevent settling. Result verification belongs to execution.
 Wrappers may tailor defaults/playbooks, never explicit keep-open instructions or

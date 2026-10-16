@@ -141,11 +141,11 @@ def test_failed_activation_rolls_back(env):
     assert stamp(env) == "v0.2.0"
 
 
-def test_job_outside_t3_passes_exit_code_through(env):
-    e = {k: v for k, v in env["env"].items() if k not in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID")}
-    result = subprocess.run(["bash", str(SCRIPT), "--job"], env=e, text=True, capture_output=True)
-    assert result.returncode == 10 and "not inside a T3 thread" in result.stdout
-    assert subprocess.run(["bash", str(SCRIPT), "--job", "--quiet"], env=e, text=True, capture_output=True).returncode == 0
+def test_job_passes_exit_code_through_and_states_lifecycle(env):
+    result = subprocess.run(["bash", str(SCRIPT), "--job"], env=env["env"], text=True, capture_output=True)
+    assert result.returncode == 10 and result.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
+    quiet = subprocess.run(["bash", str(SCRIPT), "--job", "--quiet"], env=env["env"], text=True, capture_output=True)
+    assert quiet.returncode == 0 and quiet.stdout.rstrip().endswith("thread: SETTLE (nothing for the user)")
 
 
 def test_version_source_checkout_vs_copy_inside_other_repo(env, tmp_path):
