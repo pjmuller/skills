@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md / t3-manage-thread: independent planning opinions start from the same brief without the other planner's proposal; compare afterward. Astra plans; Sol reviews Claude-built code.
+
 - agents-md / t3-manage-thread: Opus defaults to planning, orchestration, implementation and Claude-side review; reserve Fable for very complex planning.
 
 - t3-maintenance: `t3-git-leftovers` finds uncommitted/unpushed work in recently active repos (T3 threads + recent commits), protects paths edited < 30 min ago, spawns one hidden self-settling worker per repo (capped, resumable ledger, never duplicates), and re-checks git for landed/protected/blocked counts. Worker playbook: [git-leftovers.md](skills/t3-maintenance/git-leftovers.md).

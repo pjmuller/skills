@@ -52,7 +52,8 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
 
 ## Delegation
-- Default: **Opus plans, orchestrates and builds; Fable only for very complex planning** (Astra as 🏓 second planner on consequential designs). Use in-harness sub-agents for independent work (Sonnet/Haiku for small chores; Sol/Terra/Luna via Codex CLI). **Review** with a Sol 🏓 worker (Codex-built → Opus). The lead verifies workers and the final result; never a same-model-family reviewer.
+- Default: **Opus plans, orchestrates and builds; Fable only for very complex planning** (Astra as independent second planner on consequential designs). Use in-harness sub-agents for independent work (Sonnet/Haiku for small chores; Sol/Terra/Luna via Codex CLI). **Review** with a Sol 🏓 worker (Codex-built → Opus). The lead verifies workers and the final result; never a same-model-family reviewer.
+- Second planning opinion: give both planners the same problem, constraints and evidence; withhold each other's proposals until both finish, then compare and resolve disagreements.
 - A separate 🏓 worker thread only when the work needs the *other ecosystem* (opposite-model review; native-app/GUI computer use); verify its ping-back here, then `t3-settle-thread --wait <id>`.
   - No `--profile`/`--thinking`: the spawn helper picks the account by capacity (ties keep the parent's); `--model` gets that model's house effort. Only when I name an account/profile → `t3-list-profiles` for the exact value; several named → `--profile a,b` (routes among those by capacity). Explicit profiles are capacity-checked (model-only caps count); `--force-profile` only on purpose.
 
