@@ -115,7 +115,7 @@ def resolver(tmp_path, monkeypatch):
     monkeypatch.setenv("GWS_CONFIG", str(tmp_path / "workspace.json"))
     monkeypatch.setattr(ml, "workspace", lambda config: ws)
     monkeypatch.setitem(sys.modules, "gws_core", SimpleNamespace(ApiError=RuntimeError))
-    for name in ("locked_state", "save_messages", "store", "t3_thread", "own_thread", "cmd_draft"):
+    for name in ("locked_state", "save_messages", "store", "t3_thread", "cmd_draft"):
         monkeypatch.setattr(ml, name, lambda *a, **kw: pytest.fail("resolve must not mutate or access T3"))
     monkeypatch.setattr(ml.subprocess, "run", lambda *a, **kw: pytest.fail("no subprocess in offline resolve"))
     state = tmp_path / "userdata/mail-links.json"

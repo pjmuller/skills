@@ -16,19 +16,17 @@ data/auth/money/external contracts) or when unsure. Review per landed task, not
 once per long session; a diff > ~1000 LOC is too big → split it.
 
 ## Delegate the reviewer
-T3 ≥ 0.1: `delegate_task` with `task: "Read and execute /abs/path/review-brief.md"`, `role: "review"`,
+`delegate_task` with `task: "Read and execute /abs/path/review-brief.md"`, `role: "review"`,
 `target.providerInstanceId` from `t3-pick-instance sol` (builder in Claude) or `t3-pick-instance opus`
 (builder in Codex) and that model's house effort (Sol/Opus high). No sidebar row; its final answer
 wakes you; nothing to settle. Each re-review after fixes = a new `delegate_task` whose brief carries
 the original brief, prior findings, your responses and open objections (distinct `clientRequestId`).
 
-Account by [capacity](spawn-thread.md#automatic-profile-routing); a named account only when the user
+Account by [capacity](routing.md); a named account only when the user
 names one. Never a vendor hand-off plugin (codex-delegate / claude-delegate) and never an in-harness
 same-model sub-agent (Opus reviewing Opus, Luna reviewing Sol): fine as a pre-pass, does not count as
 the review. The reviewer is read-only on the shared checkout; another revision needed → `/tmp`
 worktree (or `isolation: "worktree"`).
-
-0.0.x only: `t3-spawn-thread --model sol --source-thread <parent-id> --title "🏓 review: <task>" -- "<brief path>"`.
 
 ## Brief the reviewer (file on disk, path in the task)
 - **Macro before micro:** top-level goal, approach chosen, alternatives rejected —
@@ -41,7 +39,6 @@ worktree (or `isolation: "worktree"`).
 - **Silent ≠ stuck:** a reviewer running testcontainer loops shows no activity for 10+ min
   (2026-10-14: three reviewers cut off mid-review, six real findings lost). Check
   `task_status` (`workState`) or `t3_thread_read` on its childThreadId before cancelling.
-- Quoting rule for inline text: [cross-thread-ping.md](cross-thread-ping.md).
 
 ## Reviewer output (its final answer)
 - Read repo conventions first (nearest AGENTS.md/CLAUDE.md, neighbouring code);

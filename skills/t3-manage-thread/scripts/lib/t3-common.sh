@@ -1,32 +1,13 @@
 #!/usr/bin/env bash
-# Shared plumbing for the t3-manage-thread helpers (spawn / ping / delete / mail-link).
-# Sourced, never executed. Bash 3.2+ (macOS) and Bash 5 (Linux/WSL) compatible.
+# Shared plumbing for the t3-manage-thread scripts (T3 Code >= 0.1 only). Sourced, never executed.
+# Bash 3.2+ (macOS) and Bash 5 (Linux/WSL) compatible.
 #
-#   t3_require jq curl uuidgen        # hard dependency check
-#   t3_bootstrap                      # base dir, origin, server version, pinned t3 CLI
-#   t3_issue_session LABEL [TTL]      # scoped bearer token + auto-revoke trap
-#   t3_v2_guard NAME                  # writing helpers: exit 3 + native tool names on T3 >= 0.1.0
-#   t3_dispatch PAYLOAD [OUTFILE]     # POST to /api/orchestration/dispatch (T3 0.0.x only)
-#   t3_shell_snapshot                 # GET  /api/orchestration/shell
-#   t3_open_url URL                   # best-effort focus (macOS / Linux / WSL)
-#   t3_thread_snapshot ID             # one thread out of the shell snapshot
-#   t3_dispatch_command TYPE ID ...   # thread.* command + server-side refusal reason
-#   normalize_model / model_family / provider_family / normalize_thinking /
-#   house_thinking / below_model_floor  # model selection shared by spawn + ping
+#   normalize_model ALIAS [INSTANCE]   # sol/opus/fable/astra/luna/haiku/gemini → model id
+#   house_thinking MODEL               # house effort: sol/opus high, fable/astra medium, haiku low
+#   below_model_floor MODEL            # true below OpenAI gpt-6 / Sol 6.1
+#   t3_bootstrap                       # t3_base_dir, t3_origin, t3_version, t3_cli (t3-preview-gc)
 #
-# Define a `t3_extra_cleanup` function before calling t3_issue_session to hook
-# extra teardown into the EXIT trap.
-
-# --- dependencies ------------------------------------------------------------
-t3_require() {
-  local dependency
-  for dependency in "$@"; do
-    command -v "$dependency" >/dev/null || {
-      echo "Missing dependency: $dependency" >&2
-      exit 1
-    }
-  done
-}
+# Threads are started and messaged through T3's MCP tools (agents) or t3-relay (scripts).
 
 t3_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
@@ -46,30 +27,6 @@ normalize_model() {
     fable) printf '%s' "claude-fable-5-1" ;;
     gemini) printf '%s' "gemini-3.8-flash-high" ;;
     *) printf '%s' "$1" ;;
-  esac
-}
-
-model_family() {
-  case "$1" in
-    gpt-*|codex-*) printf '%s' "codex" ;;
-    claude-*) printf '%s' "claude" ;;
-    gemini-*) printf '%s' "antigravity" ;;
-    *) printf '%s' "unknown" ;;
-  esac
-}
-
-provider_family() {
-  uv run --script "$t3_lib_dir/profile_registry.py" \
-    family "$t3_base_dir/userdata/settings.json" "$1"
-}
-
-# normalize_thinking LEVEL — low|med|medium|high → T3 effort value; non-zero if invalid.
-normalize_thinking() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    low) printf 'low' ;;
-    med|medium) printf 'medium' ;;
-    high) printf 'high' ;;
-    *) echo "Invalid thinking level: $1 (use low, med, medium, or high)" >&2; return 1 ;;
   esac
 }
 
@@ -95,8 +52,8 @@ below_model_floor() {
   return 1
 }
 
-# --- server discovery + pinned CLI -------------------------------------------
-# Sets: t3_base_dir, t3_origin, t3_version, t3_cli (array).
+# --- server discovery ---------------------------------------------------------
+# Sets: t3_base_dir, t3_origin, t3_version, t3_cli (array: the app's bundled CLI).
 t3_bootstrap() {
   t3_base_dir="${T3CODE_HOME:-$HOME/.t3}"
   local runtime_file="$t3_base_dir/userdata/server-runtime.json"
@@ -121,244 +78,6 @@ t3_bootstrap() {
     exit 1
   fi
   t3_version="$(printf '%s' "$descriptor" | jq -er '.serverVersion')"
-  t3_setup_pnpm_path
-  t3_select_cli
+  t3_cli=("${T3CODE_CLI_PATH:-$t3_base_dir/bin/t3}")
+  [[ -x "${t3_cli[0]}" ]] || { echo "T3's bundled CLI is missing at ${t3_cli[0]}: open T3 Code once." >&2; exit 1; }
 }
-
-# pnpm's global bin dir is not on PATH in mise-managed shells, so add it here.
-# pnpm >= 11 links global bins into $PNPM_HOME/bin and refuses `pnpm add -g`
-# unless that exact dir is on PATH; pre-11 linked them into $PNPM_HOME itself.
-# $PNPM_HOME/bin is prepended so a fresh global bin always beats a stale pre-11
-# shim; the pnpm binary itself is not in either dir, so mise's pnpm stays first.
-t3_setup_pnpm_path() {
-  if [[ -z "${PNPM_HOME:-}" ]]; then
-    case "$(uname -s)" in
-      Darwin) PNPM_HOME="$HOME/Library/pnpm" ;;
-      *) PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm" ;;
-    esac
-  fi
-  export PNPM_HOME
-  case ":$PATH:" in
-    *":$PNPM_HOME/bin:"*) ;;
-    *) export PATH="$PNPM_HOME/bin:$PATH" ;;
-  esac
-}
-
-t3_local_version() {
-  # "t3 v0.0.33" → "0.0.33"
-  t3 --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
-}
-
-# Prefer a local t3 binary pinned to the server version; self-heal a missing or
-# stale install via pnpm add -g, and only fall back to the slower pnpm dlx.
-t3_select_cli() {
-  t3_cli=()
-  # T3 >= 0.1.0 writes a launcher for the app's bundled CLI; it always matches the server.
-  local bundled="${T3CODE_CLI_PATH:-$t3_base_dir/bin/t3}"
-  if [[ -x "$bundled" ]] && [[ "$("$bundled" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" == "$t3_version" ]]; then
-    t3_cli=("$bundled")
-  elif command -v t3 >/dev/null && [[ "$(t3_local_version)" == "$t3_version" ]]; then
-    t3_cli=(t3)
-  elif command -v pnpm >/dev/null; then
-    local install_log
-    install_log="$(mktemp "${TMPDIR:-/tmp}/t3-install.XXXXXX")"
-    if pnpm add -g "t3@$t3_version" >"$install_log" 2>&1; then
-      hash -r
-      if [[ "$(t3_local_version)" == "$t3_version" ]]; then
-        echo "note: installed global t3@$t3_version to match the T3 server" >&2
-        t3_cli=(t3)
-      else
-        echo "note: installed t3@$t3_version but PATH still resolves t3 to $(command -v t3 || echo '<none>') ($(t3_local_version || true))" >&2
-      fi
-    else
-      echo "note: pnpm add -g t3@$t3_version failed:" >&2
-      sed 's/^/  /' "$install_log" >&2
-    fi
-    rm -f -- "$install_log"
-    if [[ ${#t3_cli[@]} -eq 0 ]]; then
-      echo "note: falling back to pnpm dlx t3@$t3_version" >&2
-      t3_cli=(pnpm --silent dlx "t3@$t3_version")
-    fi
-  else
-    echo "Missing dependency: t3 CLI v$t3_version (or pnpm to fetch it via dlx)" >&2
-    exit 1
-  fi
-}
-
-# --- scoped auth session -----------------------------------------------------
-# t3_issue_session LABEL [TTL]  (TTL as accepted by the CLI, default 2m)
-# Sets: t3_auth_session_id, t3_credential_dir, t3_auth_header_file; installs the
-# revoke/cleanup EXIT trap. `desktop-managed-local` auth is not a blocker: the
-# matching CLI mints and revokes its own short-lived scoped bearer session.
-t3_issue_session() {
-  local label="$1"
-  local ttl="${2:-2m}"
-  local issue_stderr_file issued_json="" attempt
-  issue_stderr_file="$(mktemp "${TMPDIR:-/tmp}/$label-issue.XXXXXX")"
-  for attempt in 1 2; do
-    issued_json="$("${t3_cli[@]}" auth session issue --base-dir "$t3_base_dir" \
-      --ttl "$ttl" --label "$label" --subject local-skill --json 2>>"$issue_stderr_file")" || issued_json=""
-    [[ -z "$issued_json" ]] || break
-    echo "attempt $attempt: auth session issue produced no stdout, retrying" >>"$issue_stderr_file"
-  done
-  if ! t3_auth_session_id="$(printf '%s' "$issued_json" | jq -er '.sessionId' 2>/dev/null)"; then
-    echo "Could not issue a T3 auth session via: ${t3_cli[*]}" >&2
-    echo "stdout was: ${issued_json:-<empty>}" >&2
-    sed 's/^/stderr: /' "$issue_stderr_file" >&2
-    rm -f -- "$issue_stderr_file"
-    exit 1
-  fi
-  rm -f -- "$issue_stderr_file"
-  t3_credential_dir="$(mktemp -d "${TMPDIR:-/tmp}/$label.XXXXXX")"
-  chmod 700 "$t3_credential_dir"
-  trap t3_cleanup EXIT
-  t3_auth_header_file="$t3_credential_dir/authorization-header"
-  printf 'Authorization: Bearer %s\n' "$(printf '%s' "$issued_json" | jq -er '.token')" \
-    > "$t3_auth_header_file"
-  chmod 600 "$t3_auth_header_file"
-}
-
-t3_cleanup() {
-  if [[ -n "${t3_auth_session_id:-}" ]]; then
-    # Revocation is hygiene, not part of the user operation. The T3 CLI has
-    # occasionally wedged here after a successful dispatch, leaving scheduled
-    # jobs stuck forever even though their ping already landed. Tokens are
-    # short-lived, so bound cleanup and let expiry be the final backstop.
-    "${t3_cli[@]}" auth session revoke --base-dir "$t3_base_dir" \
-      "$t3_auth_session_id" >/dev/null 2>&1 &
-    local revoke_pid=$! watchdog_pid
-    (
-      sleep 5
-      kill "$revoke_pid" 2>/dev/null || true
-      sleep 1
-      kill -KILL "$revoke_pid" 2>/dev/null || true
-    ) </dev/null >/dev/null 2>&1 &
-    watchdog_pid=$!
-    wait "$revoke_pid" 2>/dev/null || true
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
-  fi
-  [[ -z "${t3_credential_dir:-}" ]] || rm -rf -- "$t3_credential_dir"
-  if declare -F t3_extra_cleanup >/dev/null; then
-    t3_extra_cleanup
-  fi
-}
-
-# --- API calls ---------------------------------------------------------------
-# On failure the response body goes to stderr: a bare `curl: (22) ... 401` (seen 2026-09-09,
-# every scheduled spawn failed for 90 min) hides whether T3 rejected the signature, the
-# session id or the scope.
-t3_shell_snapshot() {
-  local body
-  body="$(mktemp "${TMPDIR:-/tmp}/t3-shell.XXXXXX")"
-  if curl -sS --fail-with-body --connect-timeout 3 --max-time 20 \
-    -H "@$t3_auth_header_file" "$t3_origin/api/orchestration/shell" -o "$body"; then
-    cat "$body"; rm -f -- "$body"
-    return 0
-  fi
-  echo "T3 shell snapshot failed (session $t3_auth_session_id): $(head -c 400 "$body" | tr -d '\n')" >&2
-  rm -f -- "$body"
-  return 1
-}
-
-# T3 >= 0.1.0 (Orchestrator V2) removed /api/orchestration/dispatch; writes travel over the WS RPC
-# or the agent-facing T3 MCP tools, and V2 threads (ids like mcp:...) are not in the frozen V1
-# state.sqlite. Writing helpers call t3_v2_guard first: fail fast and name the native tool
-# (research: macbook_setup decissions/t3_native_workers.md). statev2.sqlite exists only on V2.
-t3_v2_refuse() {
-  cat >&2 <<EOF
-T3 Code ${t3_version:-0.1+} (Orchestrator V2) has no /api/orchestration/dispatch; $1 cannot write.
-Inside a T3 thread use the native T3 MCP tools instead:
-  round-trip worker -> delegate_task (hidden child; its result wakes you; target.providerInstanceId
-                       from: t3-pick-instance MODEL)
-  standalone thread -> t3_thread_launch   ping -> t3_thread_send   read -> t3_thread_read
-  rename -> t3_thread_update   settle/pin -> t3_thread_organize (omit threadId = this thread,
-                       settles when your turn ends)
-EOF
-  exit 3
-}
-
-t3_v2_guard() {
-  [[ -e "${T3CODE_HOME:-$HOME/.t3}/userdata/statev2.sqlite" ]] && t3_v2_refuse "${1:-this helper}"
-  return 0
-}
-
-# t3_dispatch PAYLOAD [RESPONSE_FILE]  (T3 0.0.x only)
-t3_dispatch() {
-  local payload="$1"
-  local response_file="${2:-/dev/null}"
-  [[ "${t3_version:-0.0.0}" == 0.0.* ]] || t3_v2_refuse "t3_dispatch"
-  printf '%s' "$payload" | curl --fail-with-body -sS \
-    --connect-timeout 3 --max-time 20 \
-    -H "@$t3_auth_header_file" -H 'Content-Type: application/json' \
-    --data-binary @- "$t3_origin/api/orchestration/dispatch" > "$response_file"
-}
-
-# --- portability -------------------------------------------------------------
-t3_is_wsl() {
-  [[ -n "${WSL_DISTRO_NAME:-}" ]] && return 0
-  [[ -r /proc/version ]] && grep -qi microsoft /proc/version
-}
-
-# Best-effort: focusing the app must never fail the caller.
-t3_open_url() {
-  local url="$1"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    open "$url" >/dev/null 2>&1 || true
-    return 0
-  fi
-  if t3_is_wsl; then
-    if command -v wslview >/dev/null; then
-      wslview "$url" >/dev/null 2>&1 && return 0
-    fi
-    local cmd_exe
-    cmd_exe="$(command -v cmd.exe || true)"
-    [[ -n "$cmd_exe" ]] || cmd_exe=/mnt/c/Windows/System32/cmd.exe
-    if [[ -x "$cmd_exe" ]]; then
-      "$cmd_exe" /c start "" "$url" >/dev/null 2>&1 || true
-    fi
-    return 0
-  fi
-  command -v xdg-open >/dev/null && { xdg-open "$url" >/dev/null 2>&1 || true; }
-  return 0
-}
-
-# --- thread commands ---------------------------------------------------------
-# t3_thread_snapshot THREAD_ID — the thread's entry in the shell snapshot (JSON,
-# empty when T3 does not know the thread).
-t3_thread_snapshot() {
-  t3_shell_snapshot | jq -c --arg id "$1" '.threads[] | select(.id == $id)'
-}
-
-# t3_dispatch_command TYPE THREAD_ID [EXTRA_JQ_FILTER]
-# Dispatch errors only carry a traceId, so on refusal this digs the
-# human-readable invariant out of the server trace log.
-t3_dispatch_command() {
-  local type="$1" thread_id="$2" extra="${3:-.}"
-  local payload response_file trace_id trace_log detail attempt
-  payload="$(jq -n --arg type "$type" \
-    --arg commandId "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
-    --arg threadId "$thread_id" \
-    "{type:\$type,commandId:\$commandId,threadId:\$threadId} | $extra")"
-  response_file="$t3_credential_dir/dispatch-response"
-  t3_dispatch "$payload" "$response_file" && return 0
-  trace_id="$(jq -r '.traceId // empty' "$response_file" 2>/dev/null || true)"
-  echo "T3 rejected $type for thread $thread_id." >&2
-  if [[ -n "$trace_id" ]]; then
-    trace_log="$t3_base_dir/userdata/logs/server.trace.ndjson"
-    detail=""
-    for attempt in 1 2 3; do
-      detail="$( (grep -hF "$trace_id" "$trace_log" "$trace_log.1" 2>/dev/null || true) |
-        grep -oE '\\"detail\\": \\"[^\\]*' | head -1 | sed 's/^.*\\"detail\\": \\"//' || true)"
-      [[ -z "$detail" ]] || break
-      sleep 1
-    done
-    if [[ -n "$detail" ]]; then
-      echo "Reason: $detail" >&2
-    else
-      echo "traceId: $trace_id (see $trace_log)" >&2
-    fi
-  fi
-  return 1
-}
-
