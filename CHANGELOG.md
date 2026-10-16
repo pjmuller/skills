@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 (2026-10-16)
 
 - **T3 Code ≥ 0.1.0 (Orchestrator V2) only.** Agents use T3's MCP tools: 🏓 worker = `delegate_task` (no sidebar row, its result wakes the parent), standalone = `t3_thread_launch`, plus `t3_thread_send/read/organize` ([workers.md](skills/t3-manage-thread/workers.md)). New `t3-pick-instance MODEL` → `<instanceId> <modelId> <effort>` (capacity routing, model floor). New `t3-relay launch|send` lets scripts outside T3 start or message threads through one native webhook task ([relay.md](skills/t3-manage-thread/relay.md)); t3-schedule, recording-watcher, t3-mail-link, t3-git-leftovers and usage-window warm-ups use it. Readers (t3-fleet, t3-find-thread, t3-purge-threads, t3-my-prompts, t3-preview-gc, t3-drafts) read `statev2.sqlite`. Deleted: t3-spawn/ping/read/settle/delete/hide/rename-thread, t3-thread-maintenance, `t3-usage-windows limited` (T3 auto-resumes), T3 Open.app, all snoozing.
   **Upgrade (once per machine):** update the T3 app to ≥ 0.1.0 first (`skills-refresh` refuses this release on 0.0.x). If you use t3-schedule, recording-watcher or t3-mail-link, ask any T3 agent: "create the T3 relay per t3-manage-thread relay.md", then check with `t3-relay check`. `skills-refresh` reinstalls, drops the dead helper links and runs `t3-schedule refresh`.
