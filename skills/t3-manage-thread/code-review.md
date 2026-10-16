@@ -2,7 +2,7 @@
 
 A model reads its own code the way it wrote it and misses the same things, so the
 reviewer is never the builder's model family: built in Claude (Fable/Opus) →
-**Sol** reviews (house effort high); built in Codex (Sol/Astra) → **Fable** reviews.
+**Sol** reviews (house effort high); built in Codex (Sol/Astra) → **Opus** reviews.
 Astra is the second *planner* (design trade-offs before building), not the default
 reviewer. The review is a 🏓 round-trip worker: the builder thread spawns it, the
 reviewer pings back, the builder triages.
@@ -18,7 +18,7 @@ once per long session; a diff > ~1000 LOC is too big → split it.
 # builder runs in Claude → OpenAI reviews
 t3-spawn-thread --model sol --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 # builder runs in Codex → Claude reviews
-t3-spawn-thread --model fable --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
+t3-spawn-thread --model opus --source-thread <parent-id> --title "🏓 review: <task>" -- "Read and execute /abs/path/review-brief.md"
 ```
 No `--profile`/`--thinking`: the reviewer gets its house effort and an account
 by [capacity](spawn-thread.md#automatic-profile-routing) (`t3-list-profiles`

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md / t3-manage-thread: Opus defaults to planning, orchestration, implementation and Claude-side review; reserve Fable for very complex planning.
+
 - t3-maintenance: `t3-git-leftovers` finds uncommitted/unpushed work in recently active repos (T3 threads + recent commits), protects paths edited < 30 min ago, spawns one hidden self-settling worker per repo (capped, resumable ledger, never duplicates), and re-checks git for landed/protected/blocked counts. Worker playbook: [git-leftovers.md](skills/t3-maintenance/git-leftovers.md).
 - video-shrink-for-gemini: screen-share detection samples every 15 seconds by default; evidence thresholds scale with cadence and range padding covers transitions between samples.
 - recording-watcher (new): config-driven poller for Fathom, Leexi and Monologue, every 5 min in work hours (launchd on macOS, systemd user timer on Linux/WSL), with deterministic owner election so one teammate machine processes each call; `seed` starts a new machine without backfill. [setup](skills/recording-watcher/setup.md).
