@@ -3,29 +3,24 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Bulk-purge old T3 threads from this machine — transcripts hold secrets.
+"""Purge old T3 threads from this machine: transcripts hold secrets.
 
-Threads keep every env var, token and pasted secret that ever crossed a turn, in
-SQLite *and* in the provider's own transcript files. `list` (default, always a
-dry run) shows which threads and files a purge would take (`--size` adds bytes). `apply` has
-two modes:
+Every env var, token and pasted secret that crossed a turn sits in T3's store
+(`statev2.sqlite`, including the 0.0.x tables it copied on upgrade) and in the
+provider's own transcript files. T3 has no hard delete, so:
 
-  --mode soft   shells out to `t3-delete-thread` per thread (T3's own
-                thread.delete): sets deleted_at, stops the session, drops
-                attachments; we then unlink the resolved Claude/Codex .jsonl
-                transcripts + provider log — but every row stays in SQLite.
-  --mode hard   deletes the rows and files for real, with T3 closed.
+  list        dry run (default): cohort, rows, files that would go
+  apply --yes delete the rows (every thread-keyed table) + transcripts,
+              provider logs and attachments. Refuses unless T3 Code is
+              fully closed: a live server keeps writing the same streams.
+  drop-v1     the frozen 0.0.x `state.sqlite` (T3 0.1 only seeds from it
+              once; all history now lives in statev2). Dry run unless --yes.
 
-Hard purge is unsupported by T3: the store is event-sourced, and deleting whole
-event streams is only safe with the app closed (T3 rebuilds no aggregate from
-events on boot beyond the projections that already exist, and a live server
-would keep writing to the streams we are deleting). `apply --mode hard`
-therefore refuses unless the server is unreachable, no `T3 Code` process is
-running, and `--yes` is given. It backs up via `VACUUM INTO` first.
-
-Never purged: pinned, running/starting or blocked threads, and threads with a
-pending wake-up (`t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`);
-`list` reports the latter as kept. A failing helper aborts: no protected set, no purge.
+Candidates are top-level threads; their sub-agent and delegated-task
+descendants go with them. Never purged: pinned, running, or awaiting approval,
+and threads a wake-up still targets (enabled native scheduled task,
+`t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`). A failing
+helper aborts: no protected set, no purge.
 """
 
 from __future__ import annotations
@@ -41,54 +36,52 @@ import sys
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time
+from t3_store import (
+    DEFAULT_STORE,
+    LIVE_RUN,
+    USERDATA,
+    connect_readonly,
+    iso,
+    maybe_time,
+    short_id,
+)
 
-T3_HOME = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3"))
-USERDATA = T3_HOME / "userdata"
 SETTINGS = USERDATA / "settings.json"
 ATTACHMENTS = USERDATA / "attachments"
 PROVIDER_LOGS = USERDATA / "logs" / "provider"
 SERVER_RUNTIME = USERDATA / "server-runtime.json"
-BACKUP_DIR = T3_HOME / "backups"
+V1_STORE = USERDATA / "state.sqlite"
+BACKUP_DIR = USERDATA.parent / "backups"
 CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
-DEFAULT_LOG_DIR = Path(
+LOG_DIR = Path(
     os.environ.get(
         "T3_MAINTENANCE_STATE_DIR",
         Path.home() / ".local" / "state" / "t3-maintenance" / "actions",
     )
 )
-
 DURATION_UNITS = {"h": 3600, "d": 86400}
-BUSY_STATUSES = {"running", "starting"}
-SESSION_ID = re.compile(r'"session_id"\s*:\s*"([0-9a-fA-F-]{36})"')
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# Columns besides `thread_id` that name a thread; scheduled tasks are T3's config, kept.
+EXTRA_THREAD_COLUMNS = {
+    "orchestration_events": ("stream_id",),
+    "orchestration_command_receipts": ("aggregate_id",),
+    "orchestration_v2_projection_context_transfers": ("source_thread_id", "target_thread_id"),
+    "orchestration_v2_projection_subagents": ("child_thread_id",),
+}
+KEEP_TABLES = {"scheduled_tasks"}
+BACKUP_TABLES = ("orchestration_v2_projection_threads", "orchestration_v2_projection_messages")
 TITLE_CHARS = 44
 PROJECT_CHARS = 16
-PROFILE_CHARS = 22
-
-# thread_id-keyed tables the native soft delete leaves behind. Order matters
-# only for readability; all of it happens in one transaction.
-THREAD_KEYED_TABLES = (
-    "projection_thread_messages",
-    "projection_thread_activities",
-    "projection_turns",
-    "projection_thread_sessions",
-    "provider_session_runtime",
-    "projection_pending_approvals",
-    "projection_thread_proposed_plans",
-    "checkpoint_diff_blobs",
-)
 
 
 def parse_duration(value: str) -> timedelta:
     match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([hd])", value.strip().lower())
     if not match:
-        raise argparse.ArgumentTypeError(
-            f"expected a duration like 12h or 3d; got {value!r}"
-        )
+        raise argparse.ArgumentTypeError(f"expected a duration like 12h or 3d; got {value!r}")
     return timedelta(seconds=float(match.group(1)) * DURATION_UNITS[match.group(2)])
 
 
@@ -105,497 +98,276 @@ def mb(byte_count: int) -> float:
 class Thread:
     thread_id: str
     project: str
-    project_id: str
     workspace_root: str
     title: str
     updated_at: str
     age_seconds: float
+    top_level: bool
+    root_id: str
     archived: bool
     deleted: bool
     settled: bool
     pinned: bool
-    session_status: str | None
-    provider_name: str | None
+    busy: bool
     instance_id: str | None
-    blocked: bool
-    cwd: str | None
-    session_ids: list[str] = field(default_factory=list)
     messages: int = 0
-    events: int = 0
-    rows: dict[str, int] = field(default_factory=dict)
-    payload_bytes: int = 0
-    attachments: list[Path] = field(default_factory=list)
-    provider_log: Path | None = None
-    transcripts: list[Path] = field(default_factory=list)
-    transcript_resolved: bool = False
+    descendants: list[str] = field(default_factory=list)
+    session_ids: set[str] = field(default_factory=set)
+    attachment_ids: set[str] = field(default_factory=set)
+    files: list[Path] = field(default_factory=list)
 
     @property
     def state(self) -> str:
-        if self.deleted:
-            return "deleted"
-        if self.archived:
-            return "archived"
-        if self.settled:
-            return "settled"
+        for name in ("deleted", "archived", "settled"):
+            if getattr(self, name):
+                return name
         return "active"
 
     def as_dict(self) -> dict[str, object]:
         return {
             "thread_id": self.thread_id,
-            "short_id": self.thread_id[:8],
+            "short_id": short_id(self.thread_id),
             "project": self.project,
             "title": self.title,
             "updated_at": self.updated_at,
             "age_days": round(self.age_seconds / 86400, 1),
             "state": self.state,
             "profile": self.instance_id,
-            "provider": self.provider_name,
             "messages": self.messages,
-            "events": self.events,
-            "rows": self.rows,
-            "payload_mb": mb(self.payload_bytes),
-            "attachments": [str(path) for path in self.attachments],
-            "provider_log": str(self.provider_log) if self.provider_log else None,
-            "transcripts": [str(path) for path in self.transcripts],
-            "transcript_resolved": self.transcript_resolved,
+            "descendants": self.descendants,
+            "files": [str(path) for path in self.files],
+            "transcript_resolved": bool(self.session_ids),
         }
 
 
 # --- loading -----------------------------------------------------------------
 
 
-def load_threads(store: Path, now: datetime, with_sizes: bool) -> list[Thread]:
-    """One pass per table, grouped by thread_id. The read-only connection is
-    `query_only`, so no temp table can hold the candidate ids — every aggregate
-    is computed for all threads and filtered in Python."""
+def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
     threads: dict[str, Thread] = {}
-    with connect_readonly(store) as connection:
-        for row in connection.execute("""
-            SELECT t.thread_id, t.title, t.updated_at, t.created_at,
-                   t.archived_at, t.deleted_at, t.settled_override, t.pinned_at,
-                   t.pending_approval_count, t.pending_user_input_count,
-                   t.model_selection_json,
-                   p.project_id, p.title AS project, p.workspace_root,
-                   s.status AS session_status, s.provider_name,
-                   s.provider_instance_id AS session_instance,
-                   r.provider_instance_id AS runtime_instance,
-                   r.runtime_payload_json, r.resume_cursor_json
-            FROM projection_threads t
-            JOIN projection_projects p ON p.project_id = t.project_id
-            LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
-            LEFT JOIN provider_session_runtime r ON r.thread_id = t.thread_id
+    with connect_readonly(store) as db:
+        for row in db.execute("""
+            SELECT t.thread_id, t.title, t.updated_at, t.created_at, t.archived_at, t.deleted_at,
+                   t.provider_instance_id, t.payload_json, p.title AS project, p.workspace_root
+            FROM orchestration_v2_projection_threads t
+            LEFT JOIN projection_projects p ON p.project_id = t.project_id
         """):
-            thread_id = row["thread_id"]
-            moment = maybe_time(row["updated_at"]) or maybe_time(row["created_at"])
-            threads[thread_id] = Thread(
-                thread_id=thread_id,
-                project=row["project"],
-                project_id=row["project_id"],
+            payload = json.loads(row["payload_json"] or "{}")
+            lineage = payload.get("lineage") or {}
+            moment = maybe_time(row["updated_at"]) or maybe_time(row["created_at"]) or now
+            tid = row["thread_id"]
+            threads[tid] = Thread(
+                thread_id=tid,
+                project=row["project"] or "?",
                 workspace_root=row["workspace_root"] or "",
                 title=row["title"],
-                updated_at=iso(moment) if moment else "",
-                age_seconds=(now - moment).total_seconds() if moment else 0.0,
+                updated_at=iso(moment),
+                age_seconds=(now - moment).total_seconds(),
+                top_level=not lineage.get("parentThreadId"),
+                root_id=lineage.get("rootThreadId") or tid,
                 archived=row["archived_at"] is not None,
                 deleted=row["deleted_at"] is not None,
-                settled=row["settled_override"] == "settled",
-                pinned=row["pinned_at"] is not None,
-                session_status=row["session_status"],
-                provider_name=row["provider_name"],
-                instance_id=(
-                    row["session_instance"]
-                    or row["runtime_instance"]
-                    or json_get(row["model_selection_json"], "instanceId")
-                ),
-                blocked=bool(row["pending_approval_count"])
-                or bool(row["pending_user_input_count"]),
-                cwd=json_get(row["runtime_payload_json"], "cwd"),
-                session_ids=cursor_session_ids(
-                    row["resume_cursor_json"], row["thread_id"]
-                ),
+                settled=payload.get("settledOverride") == "settled",
+                pinned=payload.get("pinnedAt") is not None,
+                busy=False,
+                instance_id=row["provider_instance_id"],
             )
-
-        for row in connection.execute("""
-            SELECT thread_id, COUNT(*) AS n FROM projection_thread_messages
-            GROUP BY thread_id
-        """):
+        for row in db.execute("""
+            SELECT thread_id FROM orchestration_v2_projection_runs WHERE status IN ({})
+            UNION SELECT thread_id FROM orchestration_v2_projection_runtime_requests
+                  WHERE status = 'pending'
+        """.format(",".join("?" * len(LIVE_RUN))), tuple(LIVE_RUN)):
             if row["thread_id"] in threads:
-                threads[row["thread_id"]].messages = row["n"]
-                threads[row["thread_id"]].rows["projection_thread_messages"] = row["n"]
-
-        events_size = "SUM(LENGTH(payload_json))" if with_sizes else "0"
-        for row in connection.execute(f"""
-            SELECT stream_id, COUNT(*) AS n, {events_size} AS bytes
-            FROM orchestration_events WHERE aggregate_kind = 'thread'
-            GROUP BY stream_id
+                threads[row["thread_id"]].busy = True
+        for row in db.execute("""
+            SELECT m.thread_id, COUNT(*) AS n,
+                   group_concat(a.value ->> '$.id', ' ') AS attachments
+            FROM orchestration_v2_projection_messages m
+            LEFT JOIN json_each(m.payload_json, '$.attachments') a
+            GROUP BY m.thread_id
         """):
-            thread = threads.get(row["stream_id"])
-            if thread:
-                thread.events = row["n"]
-                thread.rows["orchestration_events"] = row["n"]
-                thread.payload_bytes += row["bytes"] or 0
-
-        activities_size = "SUM(LENGTH(payload_json))" if with_sizes else "0"
-        for row in connection.execute(f"""
-            SELECT thread_id, COUNT(*) AS n, {activities_size} AS bytes
-            FROM projection_thread_activities GROUP BY thread_id
+            if thread := threads.get(row["thread_id"]):
+                thread.messages = row["n"]
+                thread.attachment_ids |= set((row["attachments"] or "").split())
+        # Provider-native session ids: V2 provider threads, plus the resume cursor of
+        # history imported from 0.0.x (legacy table copied into statev2).
+        for row in db.execute("""
+            SELECT thread_id, json_extract(payload_json, '$.nativeThreadRef.nativeId') AS native
+            FROM orchestration_v2_projection_provider_threads
         """):
-            thread = threads.get(row["thread_id"])
-            if thread:
-                thread.rows["projection_thread_activities"] = row["n"]
-                thread.payload_bytes += row["bytes"] or 0
-
-        blobs_size = "SUM(LENGTH(diff))" if with_sizes else "0"
-        for row in connection.execute(f"""
-            SELECT thread_id, COUNT(*) AS n, {blobs_size} AS bytes
-            FROM checkpoint_diff_blobs GROUP BY thread_id
-        """):
-            thread = threads.get(row["thread_id"])
-            if thread:
-                thread.rows["checkpoint_diff_blobs"] = row["n"]
-                thread.payload_bytes += row["bytes"] or 0
-
-        for table, column in (
-            ("projection_turns", "thread_id"),
-            ("projection_thread_sessions", "thread_id"),
-            ("provider_session_runtime", "thread_id"),
-            ("projection_pending_approvals", "thread_id"),
-            ("projection_thread_proposed_plans", "thread_id"),
-        ):
-            for row in connection.execute(
-                f"SELECT {column} AS key, COUNT(*) AS n FROM {table} GROUP BY {column}"
+            if (thread := threads.get(row["thread_id"])) and row["native"]:
+                thread.session_ids.add(row["native"])
+        if table_exists(db, "provider_session_runtime"):
+            for row in db.execute(
+                "SELECT thread_id, resume_cursor_json FROM provider_session_runtime"
             ):
-                thread = threads.get(row["key"])
-                if thread:
-                    thread.rows[table] = row["n"]
-
-        for row in connection.execute("""
-            SELECT aggregate_id, COUNT(*) AS n FROM orchestration_command_receipts
-            WHERE aggregate_kind = 'thread' GROUP BY aggregate_id
-        """):
-            thread = threads.get(row["aggregate_id"])
-            if thread:
-                thread.rows["orchestration_command_receipts"] = row["n"]
-
-    return list(threads.values())
+                if thread := threads.get(row["thread_id"]):
+                    thread.session_ids |= cursor_session_ids(row["resume_cursor_json"], row["thread_id"])
+    for thread in threads.values():
+        if not thread.top_level and (root := threads.get(thread.root_id)) and root is not thread:
+            root.descendants.append(thread.thread_id)
+    return threads
 
 
-def json_get(raw: str | None, key: str) -> str | None:
-    if not raw:
-        return None
+def table_exists(db: sqlite3.Connection, name: str) -> bool:
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def cursor_session_ids(raw: str | None, t3_thread_id: str) -> set[str]:
+    """Claude cursors carry `resume`/`resumeSessionAt`; Codex its thread under `threadId`
+    (Claude cursors also carry T3's own id there, which must be ignored)."""
     try:
-        value = json.loads(raw).get(key)
-    except (ValueError, AttributeError):
-        return None
-    return value if isinstance(value, str) and value else None
-
-
-def cursor_session_ids(raw: str | None, t3_thread_id: str = "") -> list[str]:
-    """T3 records the provider's own session ids in the resume cursor. Claude:
-    `resume` (+ `resumeSessionAt`, the checkpoint it resumed from). Codex: the
-    Codex thread id under `threadId` — distinct from T3's own thread id, which
-    Claude cursors also carry under that key and which must be ignored."""
-    if not raw:
-        return []
-    try:
-        cursor = json.loads(raw)
+        cursor = json.loads(raw or "{}")
     except ValueError:
-        return []
+        return set()
     if not isinstance(cursor, dict):
-        return []
-    found: list[str] = []
-    for key in ("resume", "resumeSessionAt", "threadId"):
-        value = cursor.get(key)
-        if (
-            isinstance(value, str)
-            and len(value) == 36
-            and value != t3_thread_id
-            and value not in found
-        ):
-            found.append(value)
-    return found
+        return set()
+    return {
+        value
+        for key in ("resume", "resumeSessionAt", "threadId")
+        if isinstance(value := cursor.get(key), str) and UUID.fullmatch(value) and value != t3_thread_id
+    }
 
 
 def claude_homes() -> list[Path]:
-    """Every Claude home T3 can launch: `homePath` per claudeAgent provider
-    instance, plus ~/.claude (empty homePath). Session ids are UUIDs, so a
-    transcript is looked up by id across all homes — no cwd-slug guessing
-    (Claude slugs every non-alphanumeric char, not just `/`)."""
+    """~/.claude plus every claudeAgent instance `homePath`: transcripts are found by
+    session UUID across all homes, never by cwd slug."""
     try:
         instances = json.loads(SETTINGS.read_text()).get("providerInstances", {})
     except (OSError, ValueError):
         instances = {}
     homes = [Path.home() / ".claude"]
-    values = instances.values() if isinstance(instances, dict) else instances
-    for instance in values:
-        config = (instance or {}).get("config", {}) or {}
-        home = (config.get("homePath") or "").strip()
+    for instance in instances.values() if isinstance(instances, dict) else instances:
+        home = (((instance or {}).get("config") or {}).get("homePath") or "").strip()
         if home and (path := Path(home).expanduser()) not in homes:
             homes.append(path)
     return homes
 
 
+def provider_log(thread_id: str) -> Path:
+    """T3 names it events.<lowercased id, non [a-z0-9-] as '-', first 80 chars>.log."""
+    return PROVIDER_LOGS / f"events.{re.sub(r'[^a-z0-9-]', '-', thread_id.lower())[:80]}.log"
+
+
 def attach_files(threads: list[Thread]) -> None:
-    by_prefix: dict[str, list[Path]] = defaultdict(list)
+    homes = claude_homes()
+    by_stem: dict[str, list[Path]] = defaultdict(list)
     if ATTACHMENTS.is_dir():
         for path in ATTACHMENTS.iterdir():
-            if path.is_file() and len(path.name) > 36:
-                by_prefix[path.name[:36]].append(path)
+            by_stem[path.stem].append(path)
     for thread in threads:
-        thread.attachments = by_prefix.get(thread.thread_id, [])
-        log = PROVIDER_LOGS / f"events.{thread.thread_id}.log"
-        thread.provider_log = log if log.is_file() else None
-        resolve_transcripts(thread)
+        files: list[Path] = []
+        for session in sorted(thread.session_ids):
+            files += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session}.jsonl"))
+            for home in homes:
+                files += sorted((home / "projects").glob(f"*/{session}.jsonl"))
+        for attachment in sorted(thread.attachment_ids):
+            files += by_stem.get(attachment, [])
+        log = provider_log(thread.thread_id)
+        if log.is_file():
+            files.append(log)
+        thread.files = [path for path in files if path.is_file()]
 
 
-def resolve_transcripts(thread: Thread) -> None:
-    """Resolve the provider's own transcript files by session id across every
-    Claude home and the Codex sessions dir. Never guess: a thread with no
-    known session id stays `unresolved`."""
-    session_ids = list(thread.session_ids)
-    if thread.provider_log:
-        try:
-            text = thread.provider_log.read_text(errors="ignore")
-        except OSError:
-            text = ""
-        for found in SESSION_ID.findall(text):
-            if found not in session_ids:
-                session_ids.append(found)
-    if not session_ids:
-        thread.transcript_resolved = False
-        return
-    paths: list[Path] = []
-    for session_id in session_ids:
-        paths += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
-        for home in claude_homes():
-            paths += sorted((home / "projects").glob(f"*/{session_id}.jsonl"))
-    thread.transcript_resolved = True
-    thread.transcripts = [path for path in paths if path.is_file()]
-
-
-def pending_wakes() -> dict[str, str]:
-    """thread_id -> why it will be woken again (scheduled continuation, mail link).
-    Purging such a thread loses the context its follow-up needs. A helper absent
-    from PATH means its skill is not installed, so it holds no wakes; a helper
-    that fails leaves the protected set unknown, so refuse (fail closed)."""
+def pending_wakes(store: Path) -> dict[str, str]:
+    """thread_id -> why it will be woken again. A helper absent from PATH holds no
+    wakes; one that fails leaves the protected set unknown, so refuse (fail closed)."""
     wakes: dict[str, list[str]] = defaultdict(list)
+    with connect_readonly(store) as db:
+        for row in db.execute(
+            "SELECT thread_id, title FROM scheduled_tasks WHERE enabled = 1 AND thread_id IS NOT NULL"
+        ):
+            wakes[row["thread_id"]].append(f"scheduled task {row['title']}")
     for command, reason in (
-        (["t3-schedule", "pending-resumes"],
-         lambda fields: f"scheduled resume {fields[1]} ({fields[2]})"),
-        (["t3-mail-link", "list", "--thread-ids"], lambda fields: "mail link"),
+        (["t3-schedule", "pending-resumes"], lambda f: f"t3-schedule resume {f[1]} ({f[2]})"),
+        (["t3-mail-link", "list", "--thread-ids"], lambda f: "mail link"),
     ):
         helper = shutil.which(command[0])
         if not helper:
             continue
-        result = subprocess.run(
-            [helper, *command[1:]], text=True, capture_output=True, check=False
-        )
+        result = subprocess.run([helper, *command[1:]], text=True, capture_output=True, check=False)
         if result.returncode != 0:
             raise SystemExit(
-                f"refusing: `{' '.join(command)}` failed (exit {result.returncode}), "
-                f"so threads with a pending wake-up are unknown: "
-                f"{one_line(result.stderr, 300)}"
+                f"refusing: `{' '.join(command)}` failed (exit {result.returncode}), so threads "
+                f"with a pending wake-up are unknown: {one_line(result.stderr, 300)}"
             )
         for line in result.stdout.splitlines():
             fields = line.split("\t")
             if fields[0].strip():
                 wakes[fields[0].strip()].append(reason(fields + ["?", "?"]))
-    return {thread_id: "; ".join(reasons) for thread_id, reasons in wakes.items()}
+    return {tid: "; ".join(reasons) for tid, reasons in wakes.items()}
 
 
 def select(
-    args: argparse.Namespace, threads: list[Thread], protected: frozenset[str] = frozenset()
-) -> list[Thread]:
-    cohorts = []
-    if args.archived:
-        cohorts.append(lambda item: item.archived)
-    if args.settled:
-        cohorts.append(lambda item: item.settled)
-    if args.deleted:
-        cohorts.append(lambda item: item.deleted)
+    args: argparse.Namespace, threads: dict[str, Thread], wakes: dict[str, str]
+) -> tuple[list[Thread], list[tuple[Thread, str]]]:
+    """(purge cohort, matching threads a wake-up keeps). A family goes as one."""
+    cohorts = [name for name in ("archived", "settled", "deleted") if getattr(args, name)]
     if not cohorts:
-        raise SystemExit(
-            "pick at least one cohort: --archived / --settled / --deleted"
-        )
+        raise SystemExit("pick at least one cohort: --archived / --settled / --deleted")
     cutoff = args.older_than.total_seconds()
-    rows = [
-        item
-        for item in threads
-        if any(match(item) for match in cohorts)
-        and item.age_seconds >= cutoff
-        and not item.pinned
-        and item.session_status not in BUSY_STATUSES
-        and not item.blocked
-        and item.thread_id not in protected
-    ]
-    if args.project:
-        needle = args.project.casefold()
-        rows = [
-            item
-            for item in rows
-            if needle in item.project.casefold()
-            or needle in item.project_id.casefold()
-            or needle in item.workspace_root.casefold()
-        ]
-    return sorted(rows, key=lambda item: item.updated_at)
+    needle = (args.project or "").casefold()
+    rows, kept = [], []
+    for thread in threads.values():
+        if not thread.top_level or not any(getattr(thread, name) for name in cohorts):
+            continue
+        if thread.age_seconds < cutoff or (needle and needle not in f"{thread.project} {thread.workspace_root}".casefold()):
+            continue
+        family = [thread] + [threads[tid] for tid in thread.descendants]
+        if any(member.pinned or member.busy for member in family):
+            continue
+        woken = [wakes[m.thread_id] for m in family if m.thread_id in wakes]
+        if woken:
+            kept.append((thread, "; ".join(woken)))
+        else:
+            rows.append(thread)
+    return sorted(rows, key=lambda t: t.updated_at), kept
+
+
+def family_ids(rows: list[Thread]) -> list[str]:
+    return [tid for thread in rows for tid in (thread.thread_id, *thread.descendants)]
 
 
 # --- list --------------------------------------------------------------------
 
 
-def cmd_list(
-    args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]] = ()
-) -> int:
+def cmd_list(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]]) -> int:
     if args.json:
         print(json.dumps(
-            summary(rows)
-            | {"threads": [r.as_dict() for r in rows],
-               "kept_pending_wake": [
-                   {"thread_id": item.thread_id, "title": item.title, "reason": reason}
-                   for item, reason in kept
-               ]},
-            ensure_ascii=False, indent=2))
+            {
+                "threads": [t.as_dict() for t in rows],
+                "kept_pending_wake": [
+                    {"thread_id": t.thread_id, "title": t.title, "reason": r} for t, r in kept
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
         return 0
-    if not rows:
-        print("No matching threads.")
-        print_kept(kept)
-        return 0
-    for item in rows:
+    for t in rows:
+        extra = f" +{len(t.descendants)} sub" if t.descendants else ""
         print(
-            f"{item.updated_at[:16]}  {item.state:<8}  "
-            f"{one_line(item.instance_id or '-', PROFILE_CHARS):<{PROFILE_CHARS}}  "
-            f"{one_line(item.project, PROJECT_CHARS):<{PROJECT_CHARS}}  "
-            f"{one_line(item.title, TITLE_CHARS):<{TITLE_CHARS}}  "
-            f"{item.messages:>5} msg  {item.events:>6} ev  "
-            f"{mb(item.payload_bytes):>7} MB"
+            f"{t.updated_at[:16]}  {t.state:<8}  {one_line(t.instance_id or '-', 18):<18}  "
+            f"{one_line(t.project, PROJECT_CHARS):<{PROJECT_CHARS}}  "
+            f"{one_line(t.title, TITLE_CHARS):<{TITLE_CHARS}}  {t.messages:>5} msg  "
+            f"{len(t.files):>3} files{extra}"
         )
-    totals = summary(rows)
-    print(f"\n{totals['threads']} threads · {totals['payload_mb']} MB reclaimable")
-    for table, count in sorted(totals["rows"].items()):
-        print(f"  {count:>8}  {table}")
-    files = totals["files"]
+    for t, reason in kept:
+        print(f"kept {short_id(t.thread_id)} {one_line(t.title, TITLE_CHARS)}: {reason}")
+    unresolved = sum(1 for t in rows if not t.session_ids)
     print(
-        f"  files: {files['attachments']} attachments · "
-        f"{files['provider_logs']} provider logs · "
-        f"{files['transcripts']} transcripts "
-        f"({files['unresolved']} threads unresolved)"
+        f"\n{len(rows)} threads (+{len(family_ids(rows)) - len(rows)} descendants) · "
+        f"{sum(len(t.files) for t in rows)} files · {unresolved} without a known transcript\n"
+        "Dry run. `apply --yes` with T3 Code fully closed purges rows and files."
     )
-    print_kept(kept)
-    print("\nDry run. `apply --mode soft` for T3's own delete, "
-          "`apply --mode hard` (T3 closed) to purge the bytes.")
     return 0
-
-
-def print_kept(kept: list[tuple[Thread, str]]) -> None:
-    for item, reason in kept:
-        print(f"kept {item.thread_id[:8]} {one_line(item.title, TITLE_CHARS)}: {reason}")
-
-
-def summary(rows: list[Thread]) -> dict[str, object]:
-    tables: dict[str, int] = defaultdict(int)
-    for item in rows:
-        for table, count in item.rows.items():
-            tables[table] += count
-        tables["projection_threads"] += 1
-    return {
-        "threads": len(rows),
-        "payload_mb": mb(sum(item.payload_bytes for item in rows)),
-        "rows": dict(tables),
-        "files": {
-            "attachments": sum(len(item.attachments) for item in rows),
-            "provider_logs": sum(1 for item in rows if item.provider_log),
-            "transcripts": sum(len(item.transcripts) for item in rows),
-            "unresolved": sum(1 for item in rows if not item.transcript_resolved),
-        },
-    }
 
 
 # --- apply -------------------------------------------------------------------
 
 
-def action_log(operation: str, args: argparse.Namespace, rows: list[Thread]) -> Path:
-    DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
-    path = (
-        DEFAULT_LOG_DIR
-        / f"{now.strftime('%Y%m%dT%H%M%S.%fZ')}-purge-{operation}-{uuid.uuid4().hex[:8]}.json"
-    )
-    path.write_text(
-        json.dumps(
-            {
-                "started_at": iso(now),
-                "operation": f"purge-{operation}",
-                "store": str(args.store),
-                "filters": {
-                    key: str(value)
-                    for key, value in vars(args).items()
-                    if key not in {"func", "store"}
-                },
-                "threads": [item.as_dict() for item in rows],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-    return path
-
-
-def cmd_apply_soft(args: argparse.Namespace, rows: list[Thread]) -> int:
-    helper = shutil.which("t3-delete-thread")
-    if not helper:
-        raise SystemExit(
-            "t3-delete-thread is not on PATH; install t3-manage-thread first"
-        )
-    log_path = action_log("soft", args, rows)
-    # One helper call for the whole batch: a single auth session, one
-    # dispatch per id, one `ok ID` / `FAILED ID reason` line each.
-    result = subprocess.run(
-        [helper, "--yes", *(item.thread_id for item in rows)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    outcome: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) >= 2 and parts[0] in {"ok", "FAILED"}:
-            outcome[parts[1]] = "" if parts[0] == "ok" else (parts[2:] or ["?"])[0]
-    if not outcome:
-        raise SystemExit(
-            f"t3-delete-thread produced no results: {one_line(result.stderr, 300)}"
-        )
-    failures = 0
-    for item in rows:
-        detail = outcome.get(item.thread_id, "no result line from helper")
-        ok = item.thread_id in outcome and detail == ""
-        failures += not ok
-        files = 0
-        if ok:
-            # Provider transcripts + T3's provider log live outside SQLite and
-            # T3 never resumes a deleted thread, so they go now. Attachments
-            # are removed by T3's own delete reactor.
-            for path in [*item.transcripts] + (
-                [item.provider_log] if item.provider_log else []
-            ):
-                try:
-                    path.unlink()
-                    files += 1
-                except OSError as error:
-                    print(f"keep {path}: {error}")
-        print(
-            f"{'ok    ' if ok else 'FAILED'} {item.thread_id[:8]}  "
-            f"{files} files  {one_line(detail, 120)}"
-        )
-    unresolved = sum(1 for item in rows if not item.transcript_resolved)
-    print(f"\n{len(rows)} soft deletes, {failures} failed · log {log_path}")
-    if unresolved:
-        print(f"{unresolved} threads had no resolvable transcript (nothing removed).")
-    print("Rows still in SQLite — run `apply --mode hard` with T3 closed to purge.")
-    return 1 if failures else 0
-
-
 def t3_is_running() -> str | None:
-    """Reason T3 looks alive, or None when it is safe to touch the store."""
-    origin = None
+    """Reason T3 looks alive, or None when it is safe to write the store."""
     try:
         origin = json.loads(SERVER_RUNTIME.read_text()).get("origin")
     except (OSError, ValueError):
@@ -603,65 +375,60 @@ def t3_is_running() -> str | None:
     if origin:
         probe = subprocess.run(
             ["curl", "-fsS", "-m", "3", f"{origin}/.well-known/t3/environment"],
-            capture_output=True,
-            check=False,
+            capture_output=True, check=False,
         )
         if probe.returncode == 0:
             return f"T3 server is reachable at {origin}"
-    process = subprocess.run(
-        ["pgrep", "-f", "T3 Code"], capture_output=True, text=True, check=False
-    )
+    process = subprocess.run(["pgrep", "-f", "T3 Code"], capture_output=True, text=True, check=False)
     if process.returncode == 0 and process.stdout.strip():
         return f"a 'T3 Code' process is running (pid {process.stdout.split()[0]})"
     return None
 
 
-# Tables that make a purged thread readable again (title, project, every
-# message). The event stream + activities are the bulk (>90% of the store) and
-# only matter for a *live* restore, which nobody has ever needed: the purge
-# cohort is settled/deleted threads. `--full-backup` keeps the old VACUUM INTO.
-SLIM_BACKUP_TABLES = ("projection_threads", "projection_thread_messages")
+def thread_columns(db: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(table, column) pairs that hold a thread id, discovered from the live schema."""
+    pairs = []
+    for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+        if table in KEEP_TABLES or table.startswith("sqlite_"):
+            continue
+        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        for column in ("thread_id", *EXTRA_THREAD_COLUMNS.get(table, ())):
+            if column in columns:
+                pairs.append((table, column))
+    return pairs
 
 
-def slim_backup(connection: sqlite3.Connection, ids: list[tuple[str]], target: Path) -> None:
-    """Copy the purged threads' metadata + messages into a fresh SQLite file."""
-    connection.execute("ATTACH DATABASE ? AS backup", (str(target),))
-    try:
-        with connection:
-            connection.execute("CREATE TEMP TABLE purge_ids (thread_id TEXT PRIMARY KEY)")
-            connection.executemany("INSERT INTO purge_ids VALUES (?)", ids)
-            for table in SLIM_BACKUP_TABLES:
-                connection.execute(
-                    f"CREATE TABLE backup.{table} AS SELECT * FROM main.{table} "
-                    "WHERE thread_id IN (SELECT thread_id FROM purge_ids)"
-                )
-            connection.execute("DROP TABLE purge_ids")
-    finally:
-        connection.execute("DETACH DATABASE backup")
-
-
-def make_backup(connection: sqlite3.Connection, ids: list[tuple[str]], full: bool) -> Path:
+def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool) -> Path:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if full:
-        backup = BACKUP_DIR / f"state-before-purge-{stamp}.sqlite"
-        connection.execute("VACUUM INTO ?", (str(backup),))
+        backup = BACKUP_DIR / f"statev2-before-purge-{stamp}.sqlite"
+        db.execute("VACUUM INTO ?", (str(backup),))
     else:
         backup = BACKUP_DIR / f"purged-threads-{stamp}.sqlite"
-        slim_backup(connection, ids, backup)
+        db.execute("ATTACH DATABASE ? AS backup", (str(backup),))
+        try:
+            with db:
+                db.execute("CREATE TEMP TABLE purge_ids (thread_id TEXT PRIMARY KEY)")
+                db.executemany("INSERT INTO purge_ids VALUES (?)", ids)
+                for table in BACKUP_TABLES:
+                    db.execute(
+                        f"CREATE TABLE backup.{table} AS SELECT * FROM main.{table} "
+                        "WHERE thread_id IN (SELECT thread_id FROM purge_ids)"
+                    )
+                db.execute("DROP TABLE purge_ids")
+        finally:
+            db.execute("DETACH DATABASE backup")
     print(f"backup {backup} ({mb(backup.stat().st_size)} MB{'' if full else ', slim: threads + messages'})")
     return backup
 
 
 def offer_backup_cleanup(current: Path, ask=input) -> None:
     """The fresh backup supersedes every earlier one: list them, delete on Y."""
-    stale = sorted(
-        path for path in BACKUP_DIR.glob("*.sqlite")
-        if path.is_file() and path != current
-    )
+    stale = sorted(p for p in BACKUP_DIR.glob("*.sqlite") if p.is_file() and p != current)
     if not stale:
         return
-    total = sum(path.stat().st_size for path in stale)
+    total = sum(p.stat().st_size for p in stale)
     print(f"\n{len(stale)} older backups ({mb(total)} MB) superseded by {current.name}:")
     for path in stale:
         print(f"  {mb(path.stat().st_size):>8} MB  {path.name}")
@@ -672,70 +439,19 @@ def offer_backup_cleanup(current: Path, ask=input) -> None:
         for path in stale:
             path.unlink()
         print(f"deleted {len(stale)} backups (-{mb(total)} MB)")
-    else:
-        print("kept")
 
 
-def cmd_apply_hard(args: argparse.Namespace, rows: list[Thread]) -> int:
-    blocker = t3_is_running()
-    if blocker:
+def refuse_while_running(yes: bool) -> None:
+    if blocker := t3_is_running():
         raise SystemExit(
-            f"Refusing hard purge: {blocker}.\n"
-            "Quit T3 Code entirely (the store is event-sourced; a live server "
-            "keeps writing to the streams being deleted), then retry."
+            f"Refusing: {blocker}. Quit T3 Code entirely (a live server keeps writing "
+            "the store), then retry."
         )
-    if not args.yes:
-        raise SystemExit("Refusing hard purge without --yes.")
-    store = Path(args.store)
-    before = store.stat().st_size
-    log_path = action_log("hard", args, rows)
-    ids = [(item.thread_id,) for item in rows]
-
-    connection = sqlite3.connect(str(store))
-    try:
-        backup = make_backup(connection, ids, full=args.full_backup)
-        with connection:
-            for table in THREAD_KEYED_TABLES:
-                connection.executemany(f"DELETE FROM {table} WHERE thread_id = ?", ids)
-            connection.executemany(
-                "DELETE FROM orchestration_events "
-                "WHERE aggregate_kind = 'thread' AND stream_id = ?",
-                ids,
-            )
-            connection.executemany(
-                "DELETE FROM orchestration_command_receipts "
-                "WHERE aggregate_kind = 'thread' AND aggregate_id = ?",
-                ids,
-            )
-            connection.executemany(
-                "DELETE FROM projection_threads WHERE thread_id = ?", ids
-            )
-        removed = 0
-        for item in rows:
-            for path in [*item.attachments, *item.transcripts] + (
-                [item.provider_log] if item.provider_log else []
-            ):
-                try:
-                    path.unlink()
-                    removed += 1
-                except OSError as error:
-                    print(f"keep {path}: {error}")
-        print(f"removed {removed} files")
-        connection.execute("VACUUM")
-    finally:
-        connection.close()
-    after = store.stat().st_size
-    print(
-        f"{len(rows)} threads purged · store {mb(before)} MB → {mb(after)} MB "
-        f"(-{mb(before - after)} MB) · log {log_path}"
-    )
-    offer_backup_cleanup(backup)
-    return 0
+    if not yes:
+        raise SystemExit("Refusing without --yes.")
 
 
-def cmd_apply(
-    args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]] = ()
-) -> int:
+def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]]) -> int:
     if kept:
         print(f"Keeping {len(kept)} matching threads with a pending wake-up (see `list`).")
     if not rows:
@@ -744,101 +460,112 @@ def cmd_apply(
     if len(rows) > args.max:
         print(f"Batch: oldest {args.max} of {len(rows)} matching threads (--max).")
         rows = rows[: args.max]
-    return (
-        cmd_apply_soft(args, rows)
-        if args.mode == "soft"
-        else cmd_apply_hard(args, rows)
+    refuse_while_running(args.yes)
+    store = Path(args.store)
+    before = store.stat().st_size
+    ids = [(tid,) for tid in family_ids(rows)]
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-purge-{uuid.uuid4().hex[:8]}.json"
+    log_path.write_text(json.dumps(
+        {"store": str(store), "threads": [t.as_dict() for t in rows]}, ensure_ascii=False, indent=2
+    ))
+    db = sqlite3.connect(str(store))
+    try:
+        backup = make_backup(db, ids, full=args.full_backup)
+        with db:
+            for table, column in thread_columns(db):
+                db.executemany(f'DELETE FROM "{table}" WHERE "{column}" = ?', ids)
+        removed = 0
+        for thread in rows:
+            for path in thread.files:
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError as error:
+                    print(f"keep {path}: {error}")
+        db.execute("VACUUM")
+    finally:
+        db.close()
+    after = store.stat().st_size
+    print(
+        f"{len(rows)} threads (+{len(ids) - len(rows)} descendants) purged · {removed} files · "
+        f"store {mb(before)} → {mb(after)} MB · log {log_path}"
     )
+    offer_backup_cleanup(backup)
+    return 0
+
+
+def cmd_drop_v1(args: argparse.Namespace) -> int:
+    files = [p for p in (V1_STORE, *(V1_STORE.with_name(V1_STORE.name + s) for s in ("-wal", "-shm"))) if p.exists()]
+    if not files:
+        print(f"No frozen 0.0.x store at {V1_STORE}.")
+        return 0
+    if not Path(args.store).exists():
+        raise SystemExit(f"Refusing: {args.store} missing; T3 would re-seed from {V1_STORE}.")
+    total = sum(p.stat().st_size for p in files)
+    for path in files:
+        print(f"{mb(path.stat().st_size):>9} MB  {path}")
+    if not args.yes:
+        print(f"Dry run: {mb(total)} MB. T3 0.1 copied it into statev2 once; repeat with --yes "
+              "(T3 closed) to delete.")
+        return 0
+    refuse_while_running(args.yes)
+    for path in files:
+        path.unlink()
+    print(f"deleted {len(files)} files (-{mb(total)} MB)")
+    return 0
 
 
 # --- cli ---------------------------------------------------------------------
 
 
 def add_filters(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS
-    )
     parser.add_argument("--archived", action="store_true", help="cohort: archived")
     parser.add_argument("--settled", action="store_true", help="cohort: settled")
     parser.add_argument("--deleted", action="store_true", help="cohort: soft-deleted")
     parser.add_argument(
-        "--older-than",
-        type=parse_duration,
-        default=parse_duration("3d"),
+        "--older-than", type=parse_duration, default=parse_duration("3d"),
         help="minimum age of updated_at, e.g. 3d or 12h (default 3d)",
     )
-    parser.add_argument("--project", help="project name, id or workspace-root substring")
-    parser.add_argument(
-        "--all-projects",
-        action="store_true",
-        default=True,
-        help="every project (default; --project narrows it)",
-    )
-    parser.add_argument(
-        "--exclude-pinned",
-        action="store_true",
-        default=True,
-        help="always on: pinned threads are never purged",
-    )
-    parser.add_argument(
-        "--size",
-        action="store_true",
-        help="also sum bytes per thread (full scan of the event store, ~20s on "
-        "a multi-GB store); the default listing is row/file counts only",
-    )
+    parser.add_argument("--project", help="project name or workspace-root substring")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    subparsers = parser.add_subparsers(dest="command")
-
-    listing = subparsers.add_parser("list", help="dry run (default)")
+    sub = parser.add_subparsers(dest="command")
+    listing = sub.add_parser("list", help="dry run (default)")
     add_filters(listing)
     listing.add_argument("--json", action="store_true")
-
-    apply_parser = subparsers.add_parser("apply", help="soft delete or hard purge")
+    apply_parser = sub.add_parser("apply", help="hard purge rows + files (T3 closed)")
     add_filters(apply_parser)
-    apply_parser.add_argument(
-        "--mode", choices=("soft", "hard"), required=True,
-        help="soft: t3-delete-thread per thread · hard: delete rows+files (T3 closed)",
-    )
-    apply_parser.add_argument(
-        "--max", type=int, default=50, help="batch cap: oldest N of the matches (default 50)"
-    )
-    apply_parser.add_argument("--yes", action="store_true", help="required by --mode hard")
+    apply_parser.add_argument("--max", type=int, default=50, help="oldest N of the matches (default 50)")
+    apply_parser.add_argument("--yes", action="store_true", help="required")
     apply_parser.add_argument(
         "--full-backup", action="store_true",
-        help="hard mode: VACUUM INTO a full copy of the store before purging "
-        "(minutes, GBs) instead of the default slim backup (purged threads' "
-        "metadata + messages, seconds, MBs)",
+        help="VACUUM INTO a full store copy first (minutes, GBs) instead of the slim "
+        "backup (purged threads + messages, seconds, MBs)",
     )
-    apply_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    drop = sub.add_parser("drop-v1", help="delete the frozen 0.0.x state.sqlite (dry run unless --yes)")
+    drop.add_argument("--yes", action="store_true")
+    for command in (listing, apply_parser, drop):
+        command.add_argument("--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # `list` is the default verb, so bare filters work: `t3-purge-threads --settled`.
-    if not argv or argv[0] not in ("list", "apply", "-h", "--help"):
+    if not argv or argv[0] not in ("list", "apply", "drop-v1", "-h", "--help"):
         argv.insert(0, "list")
     args = build_parser().parse_args(argv)
-    if args.command is None:
-        build_parser().print_help()
-        return 2
-    now = datetime.now(timezone.utc)
-    threads = load_threads(args.store, now, with_sizes=args.size)
-    wakes = pending_wakes()
-    rows = select(args, threads, protected=frozenset(wakes))
-    # Threads the filters matched but a pending wake-up spares.
-    kept = [
-        (item, wakes[item.thread_id])
-        for item in select(args, [t for t in threads if t.thread_id in wakes])
-    ]
+    if args.command == "drop-v1":
+        return cmd_drop_v1(args)
+    threads = load_threads(args.store, datetime.now(UTC))
+    rows, kept = select(args, threads, pending_wakes(args.store))
     attach_files(rows)
-    command = cmd_list if args.command == "list" else cmd_apply
-    return command(args, rows, kept)
+    return (cmd_list if args.command == "list" else cmd_apply)(args, rows, kept)
 
 
 if __name__ == "__main__":

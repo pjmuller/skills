@@ -23,7 +23,7 @@ if [[ "${1-}" == "--check" ]]; then
       status=1
     fi
   done
-  store="${T3CODE_HOME:-$HOME/.t3}/userdata/state.sqlite"
+  store="${T3CODE_HOME:-$HOME/.t3}/userdata/statev2.sqlite"
   if [[ -f "$store" ]]; then
     printf 'ok      T3 store (%s)\n' "$store"
   else

@@ -9,19 +9,17 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
-import os
 from pathlib import Path
 import re
-import sqlite3
 import sys
-from typing import Iterator
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
-DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "state.sqlite"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from t3_store import DEFAULT_STORE, connect_readonly, iso, parse_time
+
 DEFAULT_STATE = Path.home() / ".local" / "state" / "prompt-patterns" / "last_run"
 URL_RE = re.compile(r"https?://[^\s<>()\[\]{}\"']+", re.I)
 SPAWN_OPENER_RE = re.compile(
@@ -59,38 +57,9 @@ class Message:
     created_at: str
     text: str
     opener_text: str
+    opener_by_agent: bool
+    by_agent: bool
     deleted: bool
-
-
-def parse_time(value: str) -> datetime:
-    value = value.strip()
-    if len(value) == 10:
-        value += "T00:00:00+00:00"
-    elif value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    dt = datetime.fromisoformat(value)
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
-
-
-def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-@contextmanager
-def connect(store: Path) -> Iterator[sqlite3.Connection]:
-    """Use SQLite's WAL snapshot; readers do not block T3's writers."""
-    if not store.exists():
-        sys.exit(f"T3 store not found: {store}")
-    uri = f"file:{quote(str(store), safe='/')}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only = ON")
-    conn.execute("BEGIN")
-    try:
-        yield conn
-    finally:
-        conn.rollback()
-        conn.close()
 
 
 def project_name(workspace_root: str, title: str) -> str:
@@ -98,29 +67,34 @@ def project_name(workspace_root: str, title: str) -> str:
 
 
 def load_messages(store: Path, since: datetime, until: datetime, project_filter: str | None) -> list[Message]:
+    """User-role rows of top-level threads; sub-agent and delegated-task threads are agent work."""
     query = """
-        WITH ranked AS (
-          SELECT m.message_id, m.thread_id, m.role, m.text, m.created_at,
+        WITH msg AS (
+          SELECT m.message_id, m.thread_id, m.role, m.created_at,
+                 json_extract(m.payload_json, '$.text') AS text,
+                 json_extract(m.payload_json, '$.createdBy') AS created_by,
                  ROW_NUMBER() OVER (
                    PARTITION BY m.thread_id ORDER BY m.created_at, m.message_id
                  ) AS message_number
-          FROM projection_thread_messages m
+          FROM orchestration_v2_projection_messages m
         ), openers AS (
-          SELECT thread_id, text AS opener_text FROM ranked WHERE message_number = 1
+          SELECT thread_id, text AS opener_text, created_by AS opener_by
+          FROM msg WHERE message_number = 1
         )
-        SELECT r.message_id, r.thread_id, r.text, r.created_at, r.message_number,
-               o.opener_text, t.title AS thread_title, t.deleted_at,
+        SELECT r.message_id, r.thread_id, r.text, r.created_at, r.created_by,
+               o.opener_text, o.opener_by, t.title AS thread_title, t.deleted_at,
                p.title AS project_title, p.workspace_root
-        FROM ranked r
+        FROM msg r
         JOIN openers o ON o.thread_id = r.thread_id
-        JOIN projection_threads t ON t.thread_id = r.thread_id
+        JOIN orchestration_v2_projection_threads t ON t.thread_id = r.thread_id
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
         WHERE r.role = 'user' AND r.created_at >= ? AND r.created_at < ?
+          AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NULL
         ORDER BY r.created_at, r.message_id
     """
     out: list[Message] = []
     needle = project_filter.casefold() if project_filter else None
-    with connect(store) as conn:
+    with connect_readonly(store) as conn:
         for row in conn.execute(query, (iso(since), iso(until))):
             workspace = row["workspace_root"] or ""
             project_title = row["project_title"] or ""
@@ -137,6 +111,8 @@ def load_messages(store: Path, since: datetime, until: datetime, project_filter:
                     created_at=row["created_at"],
                     text=row["text"] or "",
                     opener_text=row["opener_text"] or "",
+                    opener_by_agent=row["opener_by"] not in (None, "user"),
+                    by_agent=row["created_by"] not in (None, "user"),
                     deleted=row["deleted_at"] is not None,
                 )
             )
@@ -146,12 +122,12 @@ def load_messages(store: Path, since: datetime, until: datetime, project_filter:
 def agent_thread_signal(msg: Message) -> str | None:
     """Classify an agent-spawned thread once; all its later user-role rows go too.
 
-    Signals are deliberately high precision, strongest first. Since 2026-09-01
-    round-trip workers are explicitly titled with U+1F3D3. Older workers expose
-    stable spawn-helper opener forms. Title Case versus a hard-set 72-character
-    title was checked against the 2026-09-02 store but did not separate the
-    populations reliably, so it is not a signal.
+    Strongest first: T3 >= 0.1 records the author (`createdBy`). History
+    imported from 0.0.x marks every row as the user's, so the 🏓 title and
+    spawn-helper opener heuristics stay for that era (drop them after 2026-12).
     """
+    if msg.opener_by_agent:
+        return "agent author"
     if msg.thread_title.startswith("🏓"):
         return "ping-pong title"
     opener = msg.opener_text.strip()
@@ -171,6 +147,8 @@ def agent_thread_signal(msg: Message) -> str | None:
 
 def is_agent_message_in_manual_thread(msg: Message) -> bool:
     """Remove cross-thread transport rows without discarding their manual parent thread."""
+    if msg.by_agent:
+        return True
     low = msg.text.strip().casefold()
     return low.startswith("[ping from ") or "t3-ping-thread" in low
 
@@ -484,7 +462,7 @@ def main(argv: list[str] | None = None) -> None:
                 signal = agent_thread_signal(msg)
                 if signal:
                     thread_signals[msg.thread_id] = signal
-    signal_counts = Counter({"ping-pong title": 0, "spawn opener": 0, "ping opener": 0})
+    signal_counts = Counter({"agent author": 0, "ping-pong title": 0, "spawn opener": 0, "ping opener": 0})
     signal_counts.update(thread_signals.values())
     agent_thread_rows_dropped = sum(msg.thread_id in thread_signals for msg in live)
     manual_thread_rows = [msg for msg in live if msg.thread_id not in thread_signals]

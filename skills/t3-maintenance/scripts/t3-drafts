@@ -22,7 +22,6 @@ import binascii
 import json
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -31,11 +30,19 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from t3_store import DEFAULT_STORE, connect_readonly, iso, maybe_time, parse_time
+from t3_store import (
+    DEFAULT_STORE,
+    connect_readonly,
+    id_key,
+    iso,
+    maybe_time,
+    parse_time,
+    short_id,
+)
 
 TZ = ZoneInfo("Europe/Brussels")
 DEFAULT_LEVELDB = (
-    Path.home() / "Library/Application Support/t3code/Local Storage/leveldb"
+    Path.home() / "Library/Application Support/t3code-v2/Local Storage/leveldb"
 )
 DRAFT_KEY = "t3code:composer-drafts:v1"
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
@@ -95,7 +102,6 @@ class Draft:
     title: str = ""
     project: str = "-"
     archived: bool = False
-    limited: bool = False
     updated: datetime | None = None
 
     @property
@@ -105,12 +111,11 @@ class Draft:
     def as_dict(self) -> dict[str, object]:
         return {
             "thread_id": self.thread_id,
-            "short_id": self.thread_id[:MIN_PREFIX],
+            "short_id": short_id(self.thread_id),
             "profile": self.profile,
             "title": self.title,
             "project": self.project,
             "archived": self.archived,
-            "limited": self.limited,
             "updated": iso(self.updated) if self.updated else None,
             "attachments": [
                 {"name": item.get("name", "?"), "size_bytes": size_of(item)}
@@ -135,7 +140,8 @@ def extract_drafts(state: dict) -> list[Draft]:
         attachments = value.get("attachments") or []
         if not prompt and not attachments:
             continue
-        drafts.append(Draft(key.rsplit(":", 1)[-1], prompt, attachments))
+        # `<environmentId>:<threadId>`; thread ids themselves may contain ':'.
+        drafts.append(Draft(key.split(":", 1)[-1], prompt, attachments))
     return drafts
 
 
@@ -143,26 +149,14 @@ def load_threads(store: Path) -> dict[str, dict]:
     with connect_readonly(store) as connection:
         rows = connection.execute("""
             SELECT t.thread_id, t.title, t.updated_at, t.archived_at, t.deleted_at,
-                   json_extract(t.model_selection_json,'$.instanceId') AS profile,
-                   p.title AS project
-            FROM projection_threads t
+                   t.provider_instance_id AS profile, p.title AS project
+            FROM orchestration_v2_projection_threads t
             LEFT JOIN projection_projects p ON p.project_id = t.project_id
         """).fetchall()
     return {row["thread_id"]: dict(row) for row in rows}
 
 
-def load_limited_ids(store: Path) -> set[str]:
-    """Read the usage-window detector through its public JSON interface."""
-    result = subprocess.run(
-        ["t3-usage-windows", "limited", "--store", str(store), "list", "--since", "1970-01-01", "--json"],
-        capture_output=True, text=True, check=True, timeout=60,
-    )
-    return {item["thread_id"] for item in json.loads(result.stdout)}
-
-
-def enrich(
-    drafts: list[Draft], threads: dict[str, dict], limited: set[str]
-) -> tuple[list[Draft], int]:
+def enrich(drafts: list[Draft], threads: dict[str, dict]) -> tuple[list[Draft], int]:
     kept, orphans = [], 0
     for draft in drafts:
         row = threads.get(draft.thread_id)
@@ -173,7 +167,6 @@ def enrich(
         draft.title = " ".join((row.get("title") or "").split())
         draft.project = row.get("project") or "-"
         draft.archived = bool(row.get("archived_at"))
-        draft.limited = draft.thread_id in limited
         draft.updated = maybe_time(row.get("updated_at"))
         kept.append(draft)
     kept.sort(key=lambda d: (d.updated is not None, d.updated or 0), reverse=True)
@@ -183,8 +176,6 @@ def enrich(
 def select(args: argparse.Namespace, drafts: list[Draft]) -> list[Draft]:
     if not args.include_archived:
         drafts = [d for d in drafts if not d.archived]
-    if args.limited:
-        drafts = [d for d in drafts if d.limited]
     if args.since:
         drafts = [d for d in drafts if d.updated is None or d.updated >= args.since]
     if args.profile:
@@ -217,8 +208,8 @@ def cmd_list(args: argparse.Namespace, drafts: list[Draft], orphans: int) -> int
         )
         attachments = str(len(draft.attachments)) if draft.attachments else " "
         print(
-            f"{draft.thread_id[:MIN_PREFIX]}  {draft.profile:<22}  {updated:<11}  "
-            f"{'L' if draft.limited else ' '}  {attachments:<2}  "
+            f"{short_id(draft.thread_id)}  {draft.profile:<22}  {updated:<11}  "
+            f"{attachments:<2}  "
             f"{draft.first_line[:PROMPT_CHARS]:<{PROMPT_CHARS}}  "
             f"{draft.title[:TITLE_CHARS]}"
         )
@@ -229,7 +220,9 @@ def cmd_show(args: argparse.Namespace, drafts: list[Draft], orphans: int) -> int
     prefix = args.thread_id.strip()
     if len(prefix) < MIN_PREFIX:
         raise SystemExit(f"give at least {MIN_PREFIX} characters of the thread id")
-    matches = [d for d in drafts if d.thread_id.startswith(prefix)]
+    matches = [
+        d for d in drafts if d.thread_id == prefix or id_key(d.thread_id).startswith(prefix)
+    ]
     if not matches:
         raise SystemExit(f"no draft for a thread starting with {prefix}")
     if len(matches) > 1:
@@ -243,7 +236,6 @@ def cmd_show(args: argparse.Namespace, drafts: list[Draft], orphans: int) -> int
     print(
         f"updated  {draft.updated.astimezone(TZ).isoformat() if draft.updated else '-'}"
         f"{'   ARCHIVED' if draft.archived else ''}"
-        f"{'   RATE-LIMITED' if draft.limited else ''}"
     )
     print()
     print(draft.prompt)
@@ -267,7 +259,7 @@ def save_attachments(draft: Draft, directory: Path) -> None:
             )
             continue
         name = Path(item.get("name") or "attachment").name
-        target = directory / f"{draft.thread_id[:MIN_PREFIX]}-{name}"
+        target = directory / f"{short_id(draft.thread_id)}-{name}"
         try:
             target.write_bytes(base64.b64decode(payload))
         except (binascii.Error, ValueError) as error:
@@ -301,11 +293,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="thread updated_at window, e.g. 7d, 30d, ISO time",
     )
     listing.add_argument(
-        "--limited",
-        action="store_true",
-        help="only threads currently blocked on a provider limit",
-    )
-    listing.add_argument(
         "--include-archived",
         action="store_true",
         help="also archived threads (deleted are never shown)",
@@ -331,15 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    try:
-        limited = load_limited_ids(args.store)
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
-        print(f"limit detection unavailable; install/update t3-usage-windows ({type(error).__name__})", file=sys.stderr)
-        if getattr(args, "limited", False):
-            return 1  # Recovery must never treat unknown draft protection as an empty set.
-        limited = set()
     drafts, orphans = enrich(
-        extract_drafts(load_state(args.leveldb)), load_threads(args.store), limited
+        extract_drafts(load_state(args.leveldb)), load_threads(args.store)
     )
     if args.command == "show":
         return cmd_show(args, drafts, orphans)

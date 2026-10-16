@@ -1,26 +1,18 @@
 # Provider and T3 limitations
 
-- Rolling windows are provider behavior, not a T3 defect. Hour gate, tick interval and grace
-  period: constants in `scripts/topup.py`; system timezone with DST.
-- Codex OAuth reports no session row even after a turn (2026-09-08), only a weekly window whose
-  start is unknown up front. A missing row is not expired (re-firing every tick); topup gives such
-  accounts one morning turn per day instead. Error rows are unknown: skipped.
-- A reset inside the next poll interval gets one bounded wait until reset + grace. Dry-run never
-  waits; after waiting, the hour gate is checked again.
-- LaunchAgents use `ProcessType=Interactive`: `Standard` got utility QoS, making T3 CLI calls take
-  15–25 s and leaving children visible ~90 s (2026-09-09); a multi-GB store plus Chromium draft
-  scan can then miss the operational window.
-- Launchd, not in-thread timers: T3's ProviderSessionReaper stops idle provider sessions after
-  30 min and Mac idle-sleep kills in-memory timers. Evidence: a 2 h `CronCreate` vanished while the
-  LaunchAgent ran on time (2026-09-05); a 25 min `ScheduleWakeup` never fired after idle-sleep
-  (2026-09-07). For waits > ~15 min use a LaunchAgent or have the worker `t3-ping-thread` back.
-- Limit detection reads the last message because limit hits leave sessions ready and turns
-  completed. Monthly-plus-session banners follow their session reset; plain monthly caps need the
-  operator. Explicit banner timezones win.
-- Logs: `~/.t3/userdata/logs/t3-usage-windows-{topup,limited}.log`.
-- Retire recovery once T3 supports it natively; the upstream quota failover issue #2471 was
-  closed not-planned.
+- Rolling windows are provider behavior. Hour gate, tick, grace: constants in `scripts/topup.py`;
+  system timezone with DST.
+- Codex OAuth reports no session row even after a turn (2026-09-08), only a weekly window. A
+  missing row isn't expired (would re-fire every tick), so topup gives it one morning turn a day.
+  Error rows are skipped.
+- A reset inside the next tick gets one bounded wait (reset + grace); dry-run never waits.
+- LaunchAgent uses `ProcessType=Interactive`: `Standard` got utility QoS, making T3 CLI calls take
+  15–25 s (2026-09-09).
+- Launchd, not in-thread timers: idle-sleep and T3's session reaper kill in-memory timers
+  (2026-09-05/07).
+- Warm-ups go through `t3-relay`: async, no thread id back, so `start` can't verify the turn;
+  check `status` a minute later. The project must be a registered T3 project.
+- Log: `~/.t3/userdata/logs/t3-usage-windows-topup.log`.
 - `reset` uses Codex CLI's experimental app-server methods `account/rateLimits/read` and
-  `account/rateLimitResetCredit/consume` (verified with 0.155.0). There is no public HTTP API; keep
-  the native protocol and fail when credit details are missing rather than consume an unspecified
-  reset.
+  `account/rateLimitResetCredit/consume` (verified 0.155.0). No public HTTP API; fail when credit
+  details are missing rather than consume an unspecified reset.

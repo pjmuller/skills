@@ -1,52 +1,34 @@
 ---
 name: t3-find-thread
-description: Fuzzy-find a past T3 Code thread by project, time window and topic keywords — deterministic FTS5 narrowing over the local thread store, then LLM judging with progressive disclosure (search → peek → grep → read). Use for "which thread did we…", "find the T3 thread where…", "where did I ask about X", "that conversation last month about Y", "/t3-find-thread".
+description: Fuzzy-find a past T3 Code thread by project, time window and topic keywords — deterministic FTS5 narrowing over the local thread store, then LLM judging with progressive disclosure (search → peek → grep). Use for "which thread did we…", "find the T3 thread where…", "where did I ask about X", "that conversation last month about Y", "/t3-find-thread".
 ---
 
 # T3 Find Thread
 
-`scripts/t3-find-thread` narrows deterministically over a read-only FTS5 cache of T3's local
-store; **you** judge. Never dump a whole thread into context. Subcommands, flags, cache location:
-`t3-find-thread --help`; scoring lives in the script. Without FTS5 it falls back to slow LIKE scans.
+`scripts/t3-find-thread` narrows over a read-only FTS5 cache of T3's `statev2.sqlite`; **you** judge.
+Never dump a whole thread into context. Flags: `--help`.
 
 ## Workflow
 
-1. **Translate the fuzzy ask** into filters + 4–8 keyword variants: synonyms, table/file/service
-   names, error strings, the tool involved. The user dictates by voice — add `--fuzzy` when a term
-   looks phonetic. `--since` keeps threads *active* in the window (created earlier but touched
-   inside it still match).
-2. **`search`** — read the `terms` coverage column (`3/4`) first: full coverage beats raw hit count.
-3. **`peek` the top 3–5** if more than one is plausible; first prompts usually settle it.
-4. **`grep`** the finalists for the distinguishing fact — cheap, targeted, quotable.
-5. **Loop ≤3×**: no hits → drop a term, add `--fuzzy`, widen `--since`, relax `--project`.
-   Too many → `--all`, a distinguishing term, or `--role user`.
-6. **Answer** in markdown: top pick + 1–2 lines of why with one evidence snippet, runner-ups as a
-   table of short ids. The user picks one — *then* run `t3-open-thread <id>`, never unasked.
+1. **Translate the ask** into filters + 4–8 keyword variants (synonyms, table/file names, error
+   strings). Voice-dictated: `--fuzzy` for phonetic terms. `--since` = *active* in the window.
+2. **`search`**: full term coverage (`3/4` column) beats raw hits. Sub-agent / delegated threads
+   are hidden; `--subagents` includes them.
+3. **`peek`** the top 3–5 (first prompts usually settle it).
+4. **`grep`** finalists for the distinguishing fact.
+5. **Loop ≤3×**: no hits → drop a term, `--fuzzy`, widen `--since`/`--project`. Too many → `--all`,
+   `--role user`.
+6. **Answer**: top pick + one evidence snippet, runner-ups as short ids. Titles in the output are
+   already native T3 chat links.
 
-Terms may be quoted phrases; `ahoy` matches `ahoy_events` (the index keeps a raw and a
-separator-split copy). Thread ids: any prefix ≥ 8 chars.
+Thread ids: full id or ≥8-char short id (the thread's UUID). Reading a thread in full → native
+`t3_thread_read`.
 
-## Opening a thread
+## Opening
 
-**Links to threads do not work inside T3 chat**: its markdown sanitizer allows only
-http/https/mailto/file, http(s) opens externally, and there is no desktop deep link upstream
-on stable 0.0.45 (native `t3code://` only routes `/welcome`, `/settings`; `t3code://threads/<env>/<thread>` lands with 0.0.46 via [#18454](https://github.com/pingdotgg/t3code/pull/18454), fixing #9745). Hence short
-ids, and `scripts/t3-open-thread <id>` drives the desktop app's cmd+k palette (macOS only:
-osascript; needs Accessibility rights; archived threads are not in the palette; log in the cache
-dir). On Linux/WSL searching works, opening does not: give the user the title to click in the
-sidebar, or `--browser` when the web client is enabled.
+- In T3 chat: `t3-open-thread <id> --link` → `[title](t3-thread://v1/<threadId>)`.
+- Desktop app: `t3-open-thread <id>` (only when the user asks).
+- HTML reports: `t3code://threads/<env>/<url-encoded threadId>`; `t3-open-thread <id> --dry-run`
+  prints it.
 
-## Links from HTML files (`t3open://`)
-
-`url-scheme/` builds "T3 Open.app" (AppleScript applet, `~/Applications`) owning `t3open://<id>`;
-it runs `t3-open-thread <url>`, log in `~/.cache/t3-find-thread/open.log`. Link: `<a href="t3open://7310f5ae">`.
-Install: `url-scheme/install` (`--check`); rebuilds only when the source changed, because a rebuild
-re-signs ad hoc and voids the one-time grant: Accessibility for **T3 Open**. Chrome asks once per
-origin to allow the scheme. Works outside T3 chat only (HTML reports, Notes): the desktop renderer opens only http/https + editor schemes (`parseSafeExternalUrl`, v0.0.45).
-Inside T3 chat use the native link instead: `t3-open-thread <id> --link` prints `[title](t3-thread://v1/<env>/<thread>)` (PR [#16782](https://github.com/pingdotgg/t3code/pull/16782), main 2026-10-07, ships with 0.0.46; plain text on 0.0.45). From 0.0.46, HTML links can use `t3code://threads/<env>/<thread>` directly and T3 Open.app retires (#18454; #8246 closed in its favour).
-
-## Install
-
-`scripts/install` (`--check` verifies deps, store, symlinks). Related:
-[t3-manage-thread](../t3-manage-thread/SKILL.md) (spawn/ping/read/settle),
-[t3-maintenance](../t3-maintenance/SKILL.md) (fleet).
+Install: `scripts/install` (`--check`). Fleet work: [t3-maintenance](../t3-maintenance/SKILL.md).

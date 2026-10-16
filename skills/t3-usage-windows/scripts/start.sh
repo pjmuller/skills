@@ -5,8 +5,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME]
 
-Starts one low-cost warm-up turn on every enabled Codex and Claude profile
-registered in T3 Code, then settles all successfully created child threads.
+Launches one cheap warm-up turn (Luna/Haiku, low effort) per enabled Codex and
+Claude profile via t3-relay; each warm-up thread settles itself.
 
   --only  restrict to these provider instance ids ("codex", "claudeAgent",
           "claudeAgent_work", ...). Unknown/disabled ids warn on stderr.
@@ -29,7 +29,7 @@ while (($#)); do
   shift
 done
 
-for dependency in jq t3-spawn-thread t3-settle-thread; do
+for dependency in jq t3-relay; do
   command -v "$dependency" >/dev/null || {
     echo "Missing dependency: $dependency" >&2
     exit 1
@@ -43,7 +43,7 @@ settings_file="$t3_base_dir/userdata/settings.json"
   exit 1
 }
 
-# Mirror T3/t3-spawn-thread enablement semantics. Built-in Codex and Claude are
+# Mirror T3 enablement semantics. Built-in Codex and Claude are
 # enabled by default; named Codex/Claude instances come directly from the registry.
 # Rows: instance id, label, driver.
 providers=()
@@ -112,82 +112,33 @@ if [[ -n "$only" ]]; then
   }
 fi
 
-# Prefer the caller's repo, then the source repo. CLI global installs have no git
-# root; a launchd cwd of / must never become a T3 project, so fall back to home.
+# Must be a registered T3 project: the caller's repo, else this skill's source repo
+# (launchd runs from /, which must never become a project), else home.
 warmup_project="$(git rev-parse --show-toplevel 2>/dev/null ||
   git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel 2>/dev/null ||
   { [[ "$PWD" != / ]] && pwd -P || printf '%s\n' "$HOME"; })"
 
-created_ids=()
-created_labels=()
+prompt="Reply only: ok. Then, as your last tool call, t3_thread_organize settle without threadId."
 failures=0
-
 for provider_entry in "${providers[@]}"; do
   IFS=$'\t' read -r profile label driver <<< "$provider_entry"
-  if [[ "$driver" == "codex" ]]; then
-    model="gpt-5.6-luna"
-    model_label="Luna"
-  else
-    model="claude-haiku-4-5"
-    model_label="Haiku"
-  fi
-
-  command=(t3-spawn-thread --no-open --project "$warmup_project" --title "Warm-up — $label $model_label"
-    --profile "$profile" --model "$model" --thinking low)
-  ((dry_run)) && command+=(--dry-run)
-  command+=(-- "Reply only: Hello world.")
-
-  if output="$("${command[@]}" 2>&1)"; then
-    status=0
-  else
-    status=$?
-  fi
-  printf '%s\n' "$output"
-
-  expected="Provider: $profile · Model: $model · Thinking: low"
-  if ((status != 0)); then
-    echo "FAILED: $label ($profile) spawn exited $status" >&2
+  model=haiku
+  [[ "$driver" == codex ]] && model=luna
+  command=(t3-relay launch --project "$warmup_project" --instance "$profile" --model "$model"
+    --effort low --title "Warm-up — $label" -- "$prompt")
+  if ((dry_run)); then
+    for arg in "${command[@]}"; do  # byte-safe shell quoting (printf %q mangles UTF-8 under LANG=C)
+      [[ "$arg" =~ ^[A-Za-z0-9_./:=,-]+$ ]] && printf '%s ' "$arg" || printf "'%s' " "${arg//\'/\'\\\'\'}"
+    done; echo
+  elif ! "${command[@]}"; then
+    echo "FAILED: $label ($profile) relay launch" >&2
     failures=$((failures + 1))
-    continue
-  elif ! grep -Fxq "$expected" <<< "$output"; then
-    echo "FAILED: $label resolved an unexpected provider/model selection" >&2
-    failures=$((failures + 1))
-  fi
-
-  if ((! dry_run)); then
-    thread_id="$(sed -n 's/^Thread ID: //p' <<< "$output" | tail -1)"
-    if [[ -z "$thread_id" ]]; then
-      echo "FAILED: $label spawn returned no thread ID" >&2
-      failures=$((failures + 1))
-    else
-      created_ids+=("$thread_id")
-      created_labels+=("$label")
-    fi
   fi
 done
-
-if ((! dry_run)); then
-  for index in "${!created_ids[@]}"; do
-    if output="$(t3-settle-thread --wait 300 "${created_ids[$index]}" 2>&1)"; then
-      status=0
-    else
-      status=$?
-    fi
-    printf '%s\n' "$output"
-    if ((status != 0)) || ! grep -Eq '^Settled at: .*[0-9]Z$' <<< "$output"; then
-      echo "FAILED: ${created_labels[$index]} settle did not verify a timestamp" >&2
-      failures=$((failures + 1))
-    fi
-  done
-fi
 
 if ((failures)); then
   echo "Warm-up run finished with $failures failure(s)." >&2
   exit 1
 fi
-
-if ((dry_run)); then
-  printf 'Dry run verified %d provider(s).\n' "${#providers[@]}"
-else
-  printf 'Created and settled %d provider thread(s).\n' "${#created_ids[@]}"
-fi
+((dry_run)) && verb="Would launch" || verb="Launched"
+printf '%s %d warm-up thread(s); each settles itself.\n' "$verb" "${#providers[@]}"
