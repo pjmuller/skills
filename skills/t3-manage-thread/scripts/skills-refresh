@@ -89,6 +89,11 @@ refresh() {
     new="v$new"
   fi
   [[ "$new" != "$installed" ]] || { echo "up to date: $new"; return 0; }
+  # Releases since v0.5.0 need T3 Code >= 0.1 (statev2.sqlite); never land them on a 0.0.x machine.
+  local t3_data="${T3CODE_HOME:-$HOME/.t3}/userdata"
+  if [[ -e "$t3_data/state.sqlite" && ! -e "$t3_data/statev2.sqlite" ]]; then
+    die "$new needs T3 Code >= 0.1.0: update the T3 app first, then rerun (staying on $installed)"
+  fi
 
   local candidates=() name
   for name in "$SKILLS"/*; do

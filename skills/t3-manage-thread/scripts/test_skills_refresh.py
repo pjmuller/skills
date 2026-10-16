@@ -43,7 +43,8 @@ def env(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     e = {k: v for k, v in os.environ.items() if not k.startswith("SKILLS_REFRESH")}
-    e.update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_REPO=str(repo), T3_MANAGE_BIN=str(bin_dir))
+    e.update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_REPO=str(repo), T3_MANAGE_BIN=str(bin_dir),
+             T3CODE_HOME=str(tmp_path / "t3"))
     return {"repo": repo, "home": home, "bin": bin_dir, "env": e}
 
 
@@ -70,6 +71,15 @@ def test_applies_newest_tag_then_is_idempotent(env):
     assert run(env, "--version").stdout.startswith("v0.2.0 (applied ")
     again = run(env)
     assert again.returncode == 0 and "up to date: v0.2.0" in again.stdout
+
+
+def test_refuses_release_on_t3_0_0_x(env, tmp_path):
+    (tmp_path / "t3/userdata").mkdir(parents=True)
+    (tmp_path / "t3/userdata/state.sqlite").write_text("")  # V1 store only = T3 0.0.x
+    result = run(env)
+    assert result.returncode == 1 and "needs T3 Code >= 0.1.0" in result.stderr and stamp(env) is None
+    (tmp_path / "t3/userdata/statev2.sqlite").write_text("")
+    assert run(env).returncode == 10 and stamp(env) == "v0.2.0"
 
 
 def test_changelog_since_installed_tag(env):
