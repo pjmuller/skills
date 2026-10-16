@@ -23,7 +23,9 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>",
   parent cannot approve; the user clicks them. Leave `runtimeMode` unset.
 - Follow-up with the same context: `t3_thread_send` to `childThreadId` → new `taskId`, wakes you.
   A new review round with fresh judgment → new `delegate_task` with the full history in the brief.
-- `task_cancel` stops it (`interrupted` + partial summary). Stopping the parent stops its tasks.
+- Proven for normal completion only: recovery when the parent or child is limited, stopped or restarted
+  is untested. Keep the task ids and check `task_status` if a wake seems overdue.
+- `task_cancel` stops it (`interrupted` + partial summary). Stopping the parent stops its tasks (#16002, not tested here).
   Settling the parent does **not**: a later child completion wakes and unsettles it.
 - Reading a terminal result (`task_status`, or a full read of the child) acknowledges it, and
   pending wakes for it are dropped. Don't poll; never `mode: "wait"` for long work.
