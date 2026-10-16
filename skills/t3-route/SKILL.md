@@ -84,7 +84,7 @@ verifiable, the full path already has authorization, and no user review/dialogue
 is needed. Review/dialogue means a concrete outstanding user decision or requested
 discussion; task class, completed agent review or a readable result alone do not
 require it. Eligible work appends the
-[completion footer](../t3-manage-thread/settle-thread.md#completion-footer) to `message`.
+[completion footer](../t3-manage-thread/settle-thread.md#completion-footer-for-t3_thread_launch) to `message`.
 Known outstanding approval prevents arming; conditional project gates stay in force
 and unmet gates prevent settling. Result verification belongs to execution.
 Wrappers may tailor defaults/playbooks, never explicit keep-open instructions or
