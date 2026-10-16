@@ -21,7 +21,7 @@ wakes the parent ([workers.md](workers.md)).
 Self-settle takes effect when your turn ends; a failed or interrupted turn or a
 queued message keeps the thread open. Only on the user's explicit request or an
 authorized routing policy in the brief (the
-[completion footer](#completion-footer)):
+[completion footer](#completion-footer-for-t3_thread_launch)):
 
 1. Finish all work. No background shells, sub-agents or monitors left: their
    completion would wake the thread again.
@@ -32,7 +32,7 @@ A thread that needs the user simply stays open: unsettled threads with a finishe
 turn are the inbox. With **Settings → General → Working section** on, busy threads
 stay folded until they finish or need input, so nothing needs hiding.
 
-## Completion footer
+## Completion footer for `t3_thread_launch`
 
 Fire-and-forget `t3_thread_launch` (and `t3-relay launch`, t3-schedule `settle_when_done`) append this to the message:
 

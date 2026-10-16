@@ -45,7 +45,7 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 ```
 
 - Visible top-level thread. Fire-and-forget only with the user's go or a routing policy: append the
-  [completion footer](settle-thread.md#completion-footer).
+  [completion footer](settle-thread.md#completion-footer-for-t3_thread_launch).
 - `projectId` = the repo that owns the work. Another project than yours → say so in the brief.
   Default workspace = project **root**, not your worktree.
 - **No retry key**: after an error or lost response, check `t3_thread_list` before launching again.

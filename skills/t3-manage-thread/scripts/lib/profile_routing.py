@@ -4,7 +4,7 @@
 # ///
 """Automatic account routing for T3 spawns: one policy for Claude and Codex.
 
-Three rules (spawn-thread.md §Automatic profile routing):
+Three rules (routing.md §Accounts):
 
 1. Exclude an account with an exhausted relevant window until it resets; an
    unreachable/stale/malformed reading makes it "unknown" (ranked after every
@@ -53,7 +53,7 @@ WEEKLY_CLASS_SECONDS = 24 * 3600  # windows at least this long carry the urgency
 MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
-OVERRIDE = SETTINGS.parent / "t3-routing-override.json"  # private and temporary, see spawn-thread.md
+OVERRIDE = SETTINGS.parent / "t3-routing-override.json"  # private and temporary, see routing.md
 
 
 def model_family(model):

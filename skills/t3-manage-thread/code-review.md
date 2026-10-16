@@ -17,8 +17,8 @@ once per long session; a diff > ~1000 LOC is too big → split it.
 
 ## Delegate the reviewer
 `delegate_task` with `task: "Read and execute /abs/path/review-brief.md"`, `role: "review"`,
-`target.providerInstanceId` from `t3-pick-instance sol` (builder in Claude) or `t3-pick-instance opus`
-(builder in Codex) and that model's house effort (Sol/Opus high). No sidebar row; its final answer
+`target` from `t3-pick-instance sol` (builder in Claude) or `t3-pick-instance opus` (builder in
+Codex): its `<instanceId> <modelId> <effort>` fill `providerInstanceId`, `model` and the effort option. No sidebar row; its final answer
 wakes you; nothing to settle. Each re-review after fixes = a new `delegate_task` whose brief carries
 the original brief, prior findings, your responses and open objections (distinct `clientRequestId`).
 
