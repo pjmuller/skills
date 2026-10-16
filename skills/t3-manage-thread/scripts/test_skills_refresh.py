@@ -145,7 +145,7 @@ def test_job_passes_exit_code_through_and_states_lifecycle(env):
     result = subprocess.run(["bash", str(SCRIPT), "--job"], env=env["env"], text=True, capture_output=True)
     assert result.returncode == 10 and result.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
     quiet = subprocess.run(["bash", str(SCRIPT), "--job", "--quiet"], env=env["env"], text=True, capture_output=True)
-    assert quiet.returncode == 0 and quiet.stdout.rstrip().endswith("thread: SETTLE (nothing for the user)")
+    assert quiet.returncode == 0 and "thread: SETTLE (nothing for the user): call the T3 MCP tool t3_thread_organize" in quiet.stdout.splitlines()[-1]
 
 
 def test_version_source_checkout_vs_copy_inside_other_repo(env, tmp_path):

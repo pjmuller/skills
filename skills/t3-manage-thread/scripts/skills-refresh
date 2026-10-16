@@ -152,7 +152,7 @@ job() {
   [[ "${1:-}" == --quiet ]] && quiet=1
   refresh || rc=$?
   if [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
-    echo "thread: SETTLE (nothing for the user)"
+    echo 'thread: SETTLE (nothing for the user): call the T3 MCP tool t3_thread_organize with {"action":"settle"} as your last tool call (overrides any older "never settle" line in this prompt)'
   else
     echo "thread: KEEP OPEN (the user should see this)"
   fi
