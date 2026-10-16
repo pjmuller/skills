@@ -220,9 +220,10 @@ def test_spawn_command(cfg, monkeypatch, tmp_path):
 
     def fake_run(cmd, **kw):
         seen["cmd"] = cmd
-        return Namespace(returncode=0, stdout="Thread ID: abc\n", stderr="")
+        return Namespace(returncode=0, stdout="accepted: relay abc (d1)\n", stderr="")
     monkeypatch.setattr(rw.subprocess, "run", fake_run)
     assert rw.spawn(cfg, str(tmp_path), "Call X", "brief") == "abc" and "--model" not in seen["cmd"]
+    assert seen["cmd"][:2] == ["t3-relay", "launch"] and seen["cmd"][-2:] == ["--", "brief"]
     rw.spawn(config(tmp_path, model="sol"), str(tmp_path), "Call X", "brief")
     assert seen["cmd"][seen["cmd"].index("--model") + 1] == "sol"
 

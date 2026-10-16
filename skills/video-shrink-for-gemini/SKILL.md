@@ -103,9 +103,9 @@ of small UI facts (2026-10-12). Opaque IDs still need source frames: compare 3�
 disagree, use [video-frames-for-vision](../video-frames-for-vision/SKILL.md) as the source and the
 Gemini draft as hypotheses. `gemini-3.1-pro-high` did not read small opaque IDs better.
 
-T3 0.0.40 / ACP 1.1.1 has no media tool, so T3 workers cannot watch video; they run
-`transcribe-gemini` (or an orchestrator runs native `agy`). If a future runtime supports media: `t3-spawn-thread --model gemini` with a
-`🏓` title and absolute paths; verify the file before settling; never delegate recursively. All
+T3 workers have no media tool and cannot watch video; they run `transcribe-gemini` (or an
+orchestrator runs native `agy`). If a future runtime supports media: `delegate_task` on
+`t3-pick-instance gemini` with absolute paths; verify the file it writes; never delegate recursively. All
 routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
 Model comparisons: fresh conversations, identical media, held-out reference evidence.
 

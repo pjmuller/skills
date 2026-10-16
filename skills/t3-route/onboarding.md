@@ -5,7 +5,7 @@ known personal setup repo, registered T3 projects and referenced workflow wrappe
 Do not scan arbitrary personal files or copy someone else's credentials/policy.
 Discover facts first; ask only for the dispatch location, intended accounts or
 ownership boundaries that cannot be established. Cloud-only agents without a local
-T3 session cannot use these dispatch helpers; report that limit, not readiness.
+T3 session cannot dispatch; report that limit, not readiness.
 
 ## Register and check
 
@@ -94,8 +94,8 @@ not sensitive source text. Maintain this private file through [corrections.md](c
 
 ## Verification handshake
 
-Run a dry-run spawn using the chosen root/model and a neutral task; inspect actual
-account routing without creating a thread. Then rehearse a ticket/mail/screenshot
+Run `t3-pick-instance <chosen model>`: inspect actual account routing without
+creating a thread. Then rehearse a ticket/mail/screenshot
 route supported by this user's integrations, without external writes: show fetched
 evidence, inferred intent, destination and whether a verified thread would be reused.
 Check that execution context cannot redispatch the same task. Apply one neutral user

@@ -41,7 +41,7 @@ their discovered skill list.
 | [agents-md](skills/agents-md/SKILL.md) | create or simplify a repo's AGENTS.md / CLAUDE.md, write, prune and merge the global cross-project prompt ([template](skills/agents-md/global-template.md)), or write a handoff ([patterns](skills/agents-md/handoff.md)) | personal setup repo; target project when explicitly wanted there | `pnpm dlx skills add pjmuller/skills -s agents-md -y` (no command installer) |
 | [tone-of-voice](skills/tone-of-voice/SKILL.md) | create or refresh `tone-of-voice.md` from an interview and real samples ([starter](skills/tone-of-voice/template.md)) | personal setup repo; target project when explicitly wanted there | `pnpm dlx skills add pjmuller/skills -s tone-of-voice -y` (no command installer) |
 | [text-to-speech](skills/text-to-speech/SKILL.md) | find and audition voices, generate clips with ElevenLabs or Gemini, normalize and compare takes offline | project repo where speech is produced | `pnpm dlx skills add pjmuller/skills -s text-to-speech -y` |
-| [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent must spawn, message, read, hide or settle another T3 Code thread, or read provider rate limits | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
+| [t3-manage-thread](skills/t3-manage-thread/SKILL.md) | an agent delegates to, launches, messages, reads or settles T3 Code threads (native MCP tools), a script starts one (`t3-relay`), or provider rate limits matter | global | `pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y` |
 | [claude-cloud](skills/claude-cloud/SKILL.md) | a local agent must drive Claude Code **cloud** sessions headlessly: create, send, wait, read, archive; cloud dry runs and browser fallback (undocumented API experiment) | project repo where local agents drive its cloud sessions | `pnpm dlx skills add pjmuller/skills -s claude-cloud -y` |
 | [codexbar-setup](skills/codexbar-setup/SKILL.md) | CodexBar should share native profiles with T3/Codex and keep Claude credentials fresh (macOS) | personal setup repo | `pnpm dlx skills add pjmuller/skills -s codexbar-setup -y` |
 | [t3-schedule](skills/t3-schedule/SKILL.md) | a T3 thread should start on a wall clock ("every workday 07:30 run X"); macOS launchd or Linux/WSL systemd user timers | global (with t3-manage-thread) | `pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y` |
@@ -81,7 +81,7 @@ fix what --check reports; PATH availability does not change the skill's discover
 ## Update
 
 The daily `skills-refresh` job applies new release tags of t3-manage-thread + t3-schedule
-(stamp `~/.agents/pjmuller-skills.version`, `t3-spawn-thread --version`). Repo-local copies:
+(stamp `~/.agents/pjmuller-skills.version`, `skills-refresh --version`). Repo-local copies:
 `pnpm dlx skills update -p` inside the repo (commit the diff + lockfile), then rerun
 `scripts/install` and `--check` for updated skills that ship commands.
 Installers refuse to replace commands from another checkout; use `--relink` to choose a new canonical copy.

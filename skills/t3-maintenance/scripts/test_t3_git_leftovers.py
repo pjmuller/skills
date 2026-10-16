@@ -33,12 +33,12 @@ class GitLeftoversTest(unittest.TestCase):
         self.spawn_log = self.base / "spawns.log"
         (self.bin / "t3-fleet").write_text(f"#!/bin/sh\ncat {self.fleet}\n")
         self.refuse = self.base / "refuse"
-        (self.bin / "t3-spawn-thread").write_text(
+        (self.bin / "t3-relay").write_text(
             "#!/bin/sh\n"
             f'[ -e {self.refuse} ] && {{ echo "capacity exhausted" >&2; exit 1; }}\n'
             f'echo "$*" | tr "\\n" " " >> {self.spawn_log}; echo >> {self.spawn_log}\n'
             f'n=$(wc -l < {self.spawn_log} | tr -d " ")\n'
-            'echo "Thread ID: 00000000-0000-0000-0000-00000000000$n"\n'
+            'echo "accepted: relay r$n (d$n)"\n'
         )
         for f in self.bin.iterdir():
             f.chmod(0o755)
@@ -118,17 +118,20 @@ class GitLeftoversTest(unittest.TestCase):
         self.cli("dispatch", str(self.run_dir), "--model", "sol", "--max-parallel", "1", code=3)
         ledger = json.loads((self.run_dir / "ledger.json").read_text())
         self.assertEqual(list(ledger), [str(one)])
-        first = ledger[str(one)]["thread_id"]
+        self.assertEqual(ledger[str(one)]["relay_id"], "r1")
         spawn_args = self.spawn_log.read_text()
+        self.assertIn("launch --project", spawn_args)
         self.assertIn("--model sol", spawn_args)
-        self.assertIn("--settle-when-done --no-open --project", spawn_args)
         self.assertIn("git-leftovers.md", spawn_args)
+        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1", code=3)  # launch in flight holds the slot
+        self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
 
-        running = {"thread_id": first, "title": f"🧹 git leftovers one", "workspace_root": str(one),
+        running = {"thread_id": "th-one", "title": ledger[str(one)]["title"], "workspace_root": str(one),
                    "session_status": "running", "settled": False}
         self.fleet.write_text(json.dumps([running]))
         self.cli("dispatch", str(self.run_dir), "--max-parallel", "1", code=3)  # slot still taken
         self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
+        self.assertEqual(json.loads((self.run_dir / "ledger.json").read_text())[str(one)]["thread_id"], "th-one")
 
         # worker one landed its file and settled; the slot frees up for repo two
         sh(one, "git", "commit", "-qam", "landed")
@@ -138,10 +141,10 @@ class GitLeftoversTest(unittest.TestCase):
         self.cli("dispatch", str(self.run_dir), "--max-parallel", "1")  # rerun: nothing new
         self.assertEqual(len(self.spawn_log.read_text().splitlines()), 2)
 
-        second = json.loads((self.run_dir / "ledger.json").read_text())[str(two)]["thread_id"]
+        second = json.loads((self.run_dir / "ledger.json").read_text())[str(two)]["title"]
         self.fleet.write_text(json.dumps([
             {**running, "session_status": "stopped", "settled": True},
-            {"thread_id": second, "title": "🧹 git leftovers two", "workspace_root": str(two),
+            {"thread_id": "th-two", "title": second, "workspace_root": str(two),
              "session_status": "ready", "settled": False, "last_text": "a.txt — unclear intent"},
         ]))
         status = json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))
@@ -201,6 +204,15 @@ class GitLeftoversTest(unittest.TestCase):
         ledger = json.loads((self.run_dir / "ledger.json").read_text())
         self.assertEqual(ledger[str(first)]["skipped"], "spawn failed 3x")
         self.assertNotIn(str(second), ledger)
+
+    def test_lost_relay_launch_is_retried(self) -> None:
+        (repo,) = self.stale_repos("lost")
+        self.survey(repo)
+        (self.run_dir / "ledger.json").write_text(json.dumps(
+            {str(repo): {"relay_id": "r0", "title": "🧹 git leftovers lost 2026-01-01", "launched_at": "2026-01-01T00:00:00+00:00"}}))
+        self.cli("dispatch", str(self.run_dir))
+        entry = json.loads((self.run_dir / "ledger.json").read_text())[str(repo)]
+        self.assertEqual((entry["relay_id"], entry["errors"]), ("r1", ["relay r0 launch never appeared"]))
 
 
 if __name__ == "__main__":

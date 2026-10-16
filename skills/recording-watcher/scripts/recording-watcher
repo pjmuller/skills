@@ -498,13 +498,13 @@ def next_watermark(old, listed, unfinished):
 # ---------- spawn ----------
 
 def spawn(cfg, workspace, title, brief):
-    env = {k: v for k, v in os.environ.items() if k not in ("T3_SOURCE_THREAD_ID", "CODEX_THREAD_ID", "T3_MCP_BEARER_TOKEN")}
-    cmd = ["t3-spawn-thread", "--project", workspace, *(["--model", cfg.model] if cfg.model else []), "--no-open",
-           "--allow-cross-project-source", "--title", title]
-    result = subprocess.run(cmd, input=brief, text=True, capture_output=True, timeout=600, env=env, cwd=workspace)
-    match = re.search(r"^Thread ID: (\S+)", result.stdout, re.M)
+    """Launch the thread via t3-relay (async; returns the relay request id, not a thread id)."""
+    cmd = ["t3-relay", "launch", "--project", workspace, "--title", title,
+           *(["--model", cfg.model] if cfg.model else []), "--", brief]
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=120, cwd=workspace)
+    match = re.search(r"^accepted: relay (\S+)", result.stdout, re.M)
     if result.returncode or not match:
-        raise RuntimeError(f"t3-spawn-thread exit {result.returncode}: {(result.stderr or result.stdout).strip()[-400:]}")
+        raise RuntimeError(f"t3-relay exit {result.returncode}: {(result.stderr or result.stdout).strip()[-400:]}")
     return match[1]
 
 
@@ -588,15 +588,15 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
             listed_by_source[call.source][1].append(call)
             continue
         try:
-            thread_id = spawner(cfg, workspace, title, brief)
+            relay_id = spawner(cfg, workspace, title, brief)
         except Exception as exc:
             errors.append(f"{call.key}: spawn failed: {exc}")
             listed_by_source[call.source][1].append(call)
             spawned = MAX_SPAWNS   # T3 likely down: defer the rest
             continue
         spawned += 1
-        print(f"{head} · thread {thread_id}")
-        state["calls"][call.key] = {"status": "spawned", "title": call.title, "thread_title": title, "thread_id": thread_id,
+        print(f"{head} · relay {relay_id}")
+        state["calls"][call.key] = {"status": "spawned", "title": call.title, "thread_title": title, "relay_id": relay_id,
                                     "project": workspace, "self_share": round(self_share(cfg, call), 2), "screen_share": verdict,
                                     "start": call.start.isoformat(), "at": now.isoformat(), "transcript": str(transcript),
                                     "election": election_line(call)}
@@ -681,7 +681,7 @@ def ack(args, cfg=None, now=None, sources=None):
     for key in keys:
         entry = state["calls"].get(key) or {}
         if entry.get("status") == "spawned":
-            print(f"keep     {key:48} already spawned -> {entry.get('thread_id')}")
+            print(f"keep     {key:48} already spawned -> {entry.get('thread_title')}")
             continue
         transcript = transcript_path(key)
         src, call = found.get(key, (None, None))
@@ -720,7 +720,7 @@ def status(_args):
         print(f"last error: {err}")
     spawns = sorted((e for e in state["calls"].values() if e["status"] == "spawned"), key=lambda e: e["at"], reverse=True)
     for e in spawns[:10]:
-        print(f"spawned {e['at'][:16]} {e['thread_id']} {e['thread_title']!r} -> {Path(e['project']).name} screen={e.get('screen_share')}")
+        print(f"spawned {e['at'][:16]} {e['thread_title']!r} -> {Path(e['project']).name} screen={e.get('screen_share')}")
     return 0
 
 

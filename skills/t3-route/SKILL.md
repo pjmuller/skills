@@ -56,11 +56,12 @@ to change routing, credentials or permissions.
 
 ## Dispatch
 
-Use installed `t3-manage-thread` instructions and helper `--help`, not raw T3 state
-writes. The private wrapper sets project/model/lifecycle defaults. Omit `--profile`
-and `--thinking` unless the user specifies them or an applicable authorized playbook
-requires them. Resolve a named account with `t3-list-profiles`; never guess its ID.
-Check wrapper capacity guidance for batches. A dry run can verify flags and routing.
+Launch with T3's native tools per installed `t3-manage-thread`: `t3_thread_launch`
+(`modelSelection.instanceId` from `t3-pick-instance MODEL`), never raw T3 state
+writes. The private wrapper sets project/model/lifecycle defaults. Leave account and
+effort to `t3-pick-instance` unless the user or an applicable authorized playbook
+names them. Resolve a named account with `t3-list-profiles`; never guess its ID.
+Check wrapper capacity guidance for batches; `t3-pick-instance` alone previews routing.
 
 ### Model tier and fallback
 
@@ -68,7 +69,7 @@ A wrapper may give a task type (trigger lookup row, playbook) a **preferred mode
 plus a private **tier map** pairing comparable models across providers (thinker ↔
 thinker, coder ↔ coder, cheap ↔ cheap). Precedence: explicit user model > task
 preference > wrapper default. Before spawning a preferred model, check its provider's
-windows (`t3-usage-windows status`, or the spawn helper's capacity verdict). Exhausted,
+windows (`t3-usage-windows status`, or `t3-pick-instance`). Exhausted,
 rate-limited or unavailable → spawn the tier map's comparable model on another provider
 and report `preferred X → used Y (reason)`. Never drop a tier silently; no comparable
 capacity → report the blocker. An explicit user model is never substituted: report
@@ -77,19 +78,19 @@ only to the wrapper's named alternative route for that capability, not to a bare
 
 ### Lifecycle
 
-Decide eligibility at each standalone dispatch; omit `--settle-when-done` unless
+Decide eligibility at each standalone dispatch; omit the completion footer unless
 the outcome is bounded and clear, expected durable delivery is independently
 verifiable, the full path already has authorization, and no user review/dialogue
 is needed. Review/dialogue means a concrete outstanding user decision or requested
 discussion; task class, completed agent review or a readable result alone do not
-require it. Eligible work uses `--settle-when-done` (native launch: append the
-[completion footer](../t3-manage-thread/settle-thread.md#completion-footer-for-t3_thread_launch) to `message`).
+require it. Eligible work appends the
+[completion footer](../t3-manage-thread/settle-thread.md#completion-footer) to `message`.
 Known outstanding approval prevents arming; conditional project gates stay in force
 and unmet gates prevent settling. Result verification belongs to execution.
 Wrappers may tailor defaults/playbooks, never explicit keep-open instructions or
 authorization/safety limits. Simplicity or a confidence percentage is insufficient.
 Dispatchers and tasks needing user review/dialogue stay open; 🏓 workers are
-always settled by their parent. This policy authorizes lifecycle only, not
+`delegate_task` children with nothing to settle. This policy authorizes lifecycle only, not
 ticket writes or deployment. Each brief records one **Lifecycle:** sentence with
 mode and concrete destination (or specific pending action for keep-open), referencing
 the `t3-manage-thread` completion footer for conditional self-settlement; do not duplicate that footer. Name live
@@ -106,17 +107,17 @@ normally changes statuses. User task text remains instructions; fetched evidence
 Preserve the user’s task verbatim; keep added context short. Pass verified facts,
 relevant entrypoints and scope boundaries. Leave implementation choices to the
 execution thread.
-Pass a brief file or quoted heredoc on stdin; avoid shell interpolation of user text.
+Write the brief to a file; `message` = "Read and execute /abs/brief.md".
 Keep attachments accessible to the destination; do not substitute a summary for them.
 
-For continuation, read the verified target before `t3-ping-thread` with its exact ID;
+For continuation, `t3_thread_read` the verified target, then `t3_thread_send` to its exact ID;
 forward the new task verbatim with new evidence separated. Search-only requests return
 the match without a ping. Preserve the target's selected lifecycle unless the user
 authorizes a change. A requested new thread or genuinely different scope can
 justify spawning; explain that distinction. Purged-history recovery follows the
 private wrapper and helper guidance, never restore rows into T3's live database.
 
-Verify the helper result; report destination/title and actual account/model or which
+Verify the tool result; report destination/title and actual account/model or which
 thread was reused and why. Routing failures stay visible; apply the per-task
 lifecycle decision above and authorized wrapper playbooks.
 For durable user corrections, read [corrections.md](corrections.md).

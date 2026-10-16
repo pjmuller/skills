@@ -12,11 +12,11 @@ Use neutral examples/fixtures; preserve useful upstream workaround explanations.
 Keep entrypoints short and link specialized docs. Dependencies: uv for Python,
 pnpm for Node, mise for runtime versions. Test before tagging:
 `uv run --with pytest pytest skills -q`, shell syntax checks, relevant installer
-checks, `t3-spawn-thread --dry-run`, and a launchd smoke job for scheduling changes.
+checks, `t3-pick-instance <model>` / `t3-relay check`, and a launchd smoke job for scheduling changes.
 Verify Markdown relative links. Never exercise destructive purge/cleanup in tests.
 Commit logical changes to main; update CHANGELOG and tag only verified releases.
 
-Tested: macOS arm64, T3 Code 0.0.42, skills CLI 1.5.24 (2026-09-16).
+Targets T3 Code ≥ 0.1.0 (Orchestrator V2) only: agents use its MCP tools, scripts `t3-relay`.
 Linux/WSL thread helpers are supported by code paths but not live-tested here.
 
 ## Domain vocabulary
@@ -28,9 +28,9 @@ Linux/WSL thread helpers are supported by code paths but not live-tested here.
 | **Personal setup / project / skill source repository** | One person's machine and operator maintenance / product-team-domain work / reusable public distribution rather than live configuration. [Scope](README.md#registration-scope). |
 | **Bootstrap** | One-time consumption of setup instructions/templates from `setup/`; not an installed skill and not a claim that maintenance skills are one-time-only. [T3 setup](setup/t3-setup/SKILL.md). |
 | **Helper / installer** | A helper performs work; `scripts/install` exposes its commands and `--check` verifies readiness. Installing instructions alone does not install commands. |
-| **T3 project** | T3's repository/workspace entry, selected when spawning a thread. [Spawn](skills/t3-manage-thread/spawn-thread.md). |
+| **T3 project** | T3's repository/workspace entry, selected when launching a thread. [Workers](skills/t3-manage-thread/workers.md). |
 | **Thread / session / turn** | T3 task conversation / its provider runtime / one agent response cycle. A finished turn can leave the session alive. [Lifecycle](skills/t3-manage-thread/settle-thread.md). |
-| **Profile** | A provider instance/account used to run a thread; distinct from the model and thinking effort. [Routing](skills/t3-manage-thread/spawn-thread.md#automatic-profile-routing). |
-| **Round-trip worker / ping-back** | A separate T3 thread marked 🏓 / its report to the orchestrator. Not an in-session sub-agent. [Worker contract](skills/t3-manage-thread/SKILL.md). |
+| **Profile** | A provider instance/account used to run a thread; distinct from the model and thinking effort. [Routing](skills/t3-manage-thread/routing.md#accounts). |
+| **Round-trip worker** | 🏓 a `delegate_task` child: no sidebar row, its final answer wakes the parent. Not an in-session sub-agent. [Workers](skills/t3-manage-thread/workers.md). |
 | **Settle** | Stops a thread's session and sub-agents and moves it out of the inbox; history stays. No hiding: busy threads fold into T3's Working section, 🏓 workers are `delegate_task` children. [Settle](skills/t3-manage-thread/settle-thread.md). |
 | **Scheduled job** | A wall-clock launcher that spawns a T3 thread (or wakes an existing one: continuation); distinct from that thread's work or an in-session timer. [Scheduling](skills/t3-schedule/SKILL.md). |

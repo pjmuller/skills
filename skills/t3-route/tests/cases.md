@@ -11,7 +11,7 @@ All names, paths, IDs and messages below are fictional. Each case is independent
 - Project catalog: Harbor product `/fixture/harbor-app`; Harbor operations `/fixture/harbor-ops`; Beacon product `/fixture/beacon-app`.
 - Harbor project ClickUp wrapper: workspace `support-ws`, support list `harbor-support`; Beacon wrapper: workspace `support-ws`, list `beacon-support`. Harbor operations owns subscription investigation. Harbor product owns reproducible application defects.
 - Wrapper defaults: visible standalone task threads; model Fable; helper selects provider profile by capacity. Explicit model/account instructions override defaults.
-- Available helper probes: `t3-spawn-thread --help`, `t3-read-thread --help` and `t3-find-thread --help` succeed. `t3-manage-thread/scripts/install --check` succeeds.
+- T3 MCP tools (`t3_thread_launch`, `t3_thread_read`, `t3_thread_send`) available; `t3-pick-instance --help` and `t3-find-thread --help` succeed. `t3-manage-thread/scripts/install --check` succeeds.
 - Public core registration is repo-local at `/fixture/operator-setup/.agents/skills/t3-route`. Private wrapper is `/fixture/operator-setup/.agents/skills/dispatch`; its routes and lessons are committed there.
 
 ## 1. Bare support link
@@ -90,7 +90,7 @@ Profile listing: unique display name “Beacon”, provider instance `beacon-cod
 
 User: “Set up the router here.”
 
-Local discovery: Windows WSL2; personal setup repo `/home/alex/setup`; two registered T3 projects Harbor app and Beacon app; T3 spawn/read helpers installed; ClickUp wrappers installed and identity probes pass; Workspace wrapper documented but absent. Existing private dispatch wrapper has project paths and a cancellation-routing lesson. Rerun user message: “Run onboarding again; I now have a Workspace wrapper.” New wrapper identity passes for `alex@harbor.example`; token grants Gmail read-only access. No other account facts changed.
+Local discovery: Windows WSL2; personal setup repo `/home/alex/setup`; two registered T3 projects Harbor app and Beacon app; T3 MCP tools and `t3-pick-instance` available; ClickUp wrappers installed and identity probes pass; Workspace wrapper documented but absent. Existing private dispatch wrapper has project paths and a cancellation-routing lesson. Rerun user message: “Run onboarding again; I now have a Workspace wrapper.” New wrapper identity passes for `alex@harbor.example`; token grants Gmail read-only access. No other account facts changed.
 
 ## 14. Core refresh
 
@@ -102,7 +102,7 @@ Before update: installed public core revision `fixture-core-a`; separate private
 
 Evaluate dispatch flags and later completion behavior separately. No live tools.
 The synthetic wrapper adopts the core's conditional lifecycle policy, except video
-ingestion uses its established `--settle-when-done` playbook. Each case is independent.
+ingestion uses its established completion-footer playbook. Each case is independent.
 
 ### a. Specific bug, production delivery
 
@@ -170,8 +170,8 @@ successfully. No errors, unresolved findings or pending workers.
 ### i. Round-trip review worker
 
 Parent task: “Implement the billing change and obtain independent review before shipping.”
-Dispatch: this spawn is the review worker with a real parent address; parent owns release.
-End: review finished and findings sent to parent. Parent has not assessed findings
+Dispatch: the parent runs the review as a `delegate_task` child; parent owns release.
+End: review finished; findings are the child's final answer to the parent. Parent has not assessed findings
 or confirmed closure; no review activity remains running.
 
 ### j. Routine tooling maintenance

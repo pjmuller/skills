@@ -23,7 +23,7 @@ loaded() {
 if [[ "${1:-}" == --check ]]; then
   echo "source $script_dir"
   ok=0
-  for dependency in uv t3-spawn-thread; do
+  for dependency in uv t3-relay; do
     PATH="$job_path" command -v "$dependency" >/dev/null && echo "ok      $dependency on job PATH" || { echo "FAIL    $dependency not on job PATH"; ok=1; }
   done
   for helper in recording-watcher; do
@@ -74,7 +74,7 @@ done
 
 mkdir -p "$state"
 shell_bin="$(command -v zsh || command -v bash)"
-run="export PATH=\"$job_path\"; unset T3_SOURCE_THREAD_ID CODEX_THREAD_ID; exec \"$install_dir/recording-watcher\" poll"
+run="export PATH=\"$job_path\"; exec \"$install_dir/recording-watcher\" poll"
 if [[ "$(uname -s)" == Darwin ]]; then
   mkdir -p "$(dirname "$plist")"
   cat > "$plist" <<PLIST
