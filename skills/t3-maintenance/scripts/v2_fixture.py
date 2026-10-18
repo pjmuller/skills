@@ -26,6 +26,10 @@ CREATE TABLE orchestration_v2_projection_runtime_requests (runtime_request_id TE
   thread_id TEXT, status TEXT);
 CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT PRIMARY KEY,
   thread_id TEXT, payload_json TEXT);
+CREATE TABLE projection_thread_activities (activity_id TEXT PRIMARY KEY, thread_id TEXT,
+  kind TEXT, summary TEXT, payload_json TEXT, created_at TEXT);
+CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT,
+  type TEXT, status TEXT, updated_at TEXT, payload_json TEXT);
 CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, stream_id TEXT, payload_json TEXT);
 CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY, title TEXT, enabled INTEGER, thread_id TEXT);
 INSERT INTO projection_projects VALUES ('p', 'fixture', '/tmp/fixture', NULL);
@@ -78,6 +82,19 @@ class Store:
             "INSERT INTO orchestration_v2_projection_messages VALUES (?,?,NULL,?,?,?,?)",
             (f"m{self._n:04d}", tid, role, ago(minutes), ago(minutes), json.dumps(payload)),
         )
+
+    def activity(self, tid: str, kind: str, payload: dict, minutes: float, summary: str = "") -> None:
+        """0.0.x tool history (`projection_thread_activities`)."""
+        self._n += 1
+        self.db.execute("INSERT INTO projection_thread_activities VALUES (?,?,?,?,?,?)",
+                        (f"a{self._n:04d}", tid, kind, summary, json.dumps(payload), ago(minutes)))
+
+    def item(self, tid: str, kind: str, payload: dict, minutes: float, status: str = "completed") -> None:
+        """V2 turn item (tool call, reasoning, diff, sub-agent)."""
+        self._n += 1
+        self.db.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES (?,?,?,?,?,?)",
+                        (f"i{self._n:04d}", tid, kind, status, ago(minutes),
+                         json.dumps({"startedAt": ago(minutes), **payload})))
 
     def task(self, parent: str, child: str, status: str, delivery: str | None = None,
              origin: str = "app_owned") -> None:

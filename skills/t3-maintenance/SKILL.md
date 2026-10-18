@@ -13,6 +13,8 @@ T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`)
 - `t3-my-prompts` — the user's own prompts, compacted for recurring-instruction mining.
 - `t3-purge-threads` — hard-delete old threads + transcripts (secrets); `drop-v1` frees the frozen
   0.0.x `state.sqlite`.
+- `t3-thread-archive` — the searchable backup archive purged threads live on in
+  ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups.
 - `t3-preview-gc` — free browser-preview renderers (macOS): close settled threads' tabs, then
   crash-reload the window when many remain. `--apply` deliberately crashes the UI; recovery:
   File → Close Window, reactivate T3.
@@ -66,10 +68,28 @@ Manual request only.
   descendants go with their root. Never: pinned, live run, pending approval, or a thread a wake-up
   targets (enabled native scheduled task, `t3-schedule pending-resumes`, `t3-mail-link`); `list`
   shows those as `kept`. A failing helper = refuse.
-- `apply` deletes from every thread-keyed table (V2 and the copied 0.0.x tables) after a slim backup
-  (`~/.t3/backups/purged-threads-<stamp>.sqlite`: threads + messages); `--full-backup` = `VACUUM INTO`
-  (GBs). Then offers to delete superseded backups.
+- `apply` first copies the cohort into the [archive](#archive-t3-thread-archive) (a failure or a
+  missing thread aborts), then deletes from every thread-keyed table (V2 and the copied 0.0.x tables).
+  `--full-backup` adds a `VACUUM INTO` store copy (GBs, never offered for deletion). Old
+  `purged-threads-*.sqlite` slim backups are folded into the archive, then offered for deletion.
 - Transcripts resolve by provider session id (V2 `nativeThreadRef`, imported resume cursors) across
   every Claude home and `~/.codex/sessions`, never by cwd slug. Attachments by id, provider log by
   T3's sanitized file name.
 - `--older-than` uses `updated_at`, which settling bumps: conservative.
+
+## Archive (`t3-thread-archive`)
+
+INTENT: purge frees disk and drops secrets from T3, yet old threads stay findable. One cumulative
+SQLite file, `~/.t3/backups/t3-archive.sqlite` (mode 600, `$T3_ARCHIVE`), built for rare searches:
+FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](../t3-find-thread/SKILL.md)).
+
+- Kept: thread metadata + lineage, every user/assistant message whole (+ attachment names),
+  reasoning head, one entry per finished tool call (call + output head/tail, more room for
+  failures), diffs, sub-agent prompt/result, questions/answers, errors. Dropped: event log, receipts, started/updated
+  tool states, context-window / task / checkpoint noise, image bytes. Caps: top of `t3_archive.py`.
+- Written only by `apply` (its cohort) and by hand (`sync`: missing or changed threads; read-only on
+  T3's store). Re-archiving replaces a thread's rows; nothing expires. No nightly job: nothing else
+  hard-deletes T3 history.
+- Measured 2026-10-18: the whole 6.6 GB store archives to 445 MB (incl. the old 0.0.x backup) in
+  ~40 s; tool text is 85% of it. Codex's own
+  `~/.codex/thread_history_1.sqlite` is out of scope: T3 already holds its threads' tool output.

@@ -120,16 +120,17 @@ def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:
     monkeypatch.setattr(cli, "PROVIDER_LOGS", logs)
     monkeypatch.setattr(cli, "ATTACHMENTS", tmp_path / "attachments")
     monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(cli, "ARCHIVE", tmp_path / "backups" / "t3-archive.sqlite")
     monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "actions")
     monkeypatch.setattr(cli, "t3_is_running", lambda: None)
-    monkeypatch.setattr(cli, "offer_backup_cleanup", lambda current: None)
+    monkeypatch.setattr(cli, "offer_backup_cleanup", lambda: None)
     args = cli.build_parser().parse_args(["apply", "--yes", "--archived", *extra])
     args.store = store
     threads = cli.load_threads(store, datetime.now(UTC))
     rows, kept = cli.select(args, threads, {})
     cli.attach_files(rows, threads)
     assert cli.cmd_apply(args, rows, kept) == 0
-    return next((tmp_path / "backups").iterdir())
+    return tmp_path / "backups" / "t3-archive.sqlite"
 
 
 def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, monkeypatch) -> None:
@@ -140,9 +141,10 @@ def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, 
     fork_log.write_text("keep")
     backup = hard_purge(store, tmp_path, monkeypatch)
     assert not child_log.exists() and fork_log.exists()  # family files go, a fork's stay
-    assert backup.name.startswith("purged-threads-")
-    with sqlite3.connect(backup) as copy:
-        assert copy.execute("SELECT COUNT(*) FROM orchestration_v2_projection_messages").fetchone()[0] == 1
+    with sqlite3.connect(backup) as copy:  # the whole family is searchable after the purge
+        archived = {r[0] for r in copy.execute("SELECT thread_id FROM threads")}
+        assert archived == {"archold", "archold-task", "archold-grandchild", "otherpr"}
+        assert copy.execute("SELECT thread_id FROM entries WHERE entries MATCH 'SECRET'").fetchone()[0] == "archold"
     with sqlite3.connect(store) as live:
         left = {r[0] for r in live.execute("SELECT thread_id FROM orchestration_v2_projection_threads")}
         assert not left & {"archold", "archold-task", "archold-grandchild", "otherpr"}
@@ -168,15 +170,21 @@ def test_drop_v1_dry_run_by_default(tmp_path: Path, store: Path, monkeypatch, ca
     assert not v1.exists()
 
 
-@pytest.mark.parametrize("answer,kept", [("", 0), ("y", 0), ("n", 2)])
+@pytest.mark.parametrize("answer,kept", [("", 0), ("y", 0), ("n", 1)])
 def test_offer_backup_cleanup(tmp_path: Path, monkeypatch, answer: str, kept: int) -> None:
     backups = tmp_path / "backups"
     backups.mkdir()
     monkeypatch.setattr(cli, "BACKUP_DIR", backups)
+    monkeypatch.setattr(cli, "ARCHIVE", backups / "t3-archive.sqlite")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    current = backups / "purged-threads-new.sqlite"
-    for name in ("statev2-before-purge-old.sqlite", "purged-threads-older.sqlite", current.name):
+    for name in ("statev2-before-purge-old.sqlite", "purged-threads-imported.sqlite", "purged-threads-new.sqlite"):
         (backups / name).write_bytes(b"x")
-    cli.offer_backup_cleanup(current, ask=lambda prompt: answer)
-    assert current.exists()
-    assert len(list(backups.iterdir())) == 1 + kept
+    archive = cli.t3_archive.open_archive(cli.ARCHIVE)
+    with archive:
+        archive.execute("INSERT INTO meta VALUES ('imported:purged-threads-imported.sqlite', 'now')")
+    archive.close()
+    cli.offer_backup_cleanup(ask=lambda prompt: answer)
+    # only the imported slim backup is ever offered; full copies, unimported files and the archive stay
+    assert {p.name for p in backups.iterdir()} == {
+        "statev2-before-purge-old.sqlite", "purged-threads-new.sqlite", "t3-archive.sqlite",
+    } | ({"purged-threads-imported.sqlite"} if kept else set())

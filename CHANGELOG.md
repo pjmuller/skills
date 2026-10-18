@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- t3-maintenance / t3-find-thread: purged threads stay findable. `t3-purge-threads apply` first copies its cohort into one searchable SQLite archive (`~/.t3/backups/t3-archive.sqlite`, FTS5, mode 600; refuses to purge if any thread misses it), replacing the slim backup. Kept: metadata, lineage, every message whole, tool calls with output head/tail, diffs, sub-agent results, questions/answers, errors; dropped: event log, intermediate tool states, progress noise, images. PJ's whole 6.6 GB store → 445 MB. `t3-find-thread search` adds the archive when no live hit has every term or `--since`/`--until` predate the live store (`--backup on|off`); hits are flagged `_(backup)_`, and the new `read` shows a purged thread in full. New `t3-thread-archive` (`sync`, `stats`, `import` of old `purged-threads-*.sqlite`, done automatically by the next purge). Upgrade: rerun `t3-maintenance/scripts/install`.
+
+- Browser: T3 `preview_*` with explicit `profileId` is the default for signed-in work; the user's Chrome over CDP becomes last resort with their OK (Chrome ≥ 144 shows a focus-stealing consent modal per connection). Sign-in recipe for v0.1.0 (cookie import, focused-tab paste, no passkey sheet) in [browser.md](skills/t3-manage-thread/browser.md); template rule updated.
+- bitwarden: `bw-once --vault NAME` (several accounts via `~/.config/bw-once/vaults.json`, per-vault data dir/socket/lock, wrong-account guard), `session start --reason`, `bw-once login` in the human Terminal, pre-flight before opening a Terminal, `doctor` reports `touch_id_flag` (CLI 2026.10.0 Touch ID unlock is gated by Bitwarden's `biometrics-sdk-ipc` server flag).
 - t3-relay / t3-schedule: standalone threads run on a frontier model. `t3-relay launch` without `--model` now picks opus, else sol (it used to inherit the relay thread's Haiku, not the project default). haiku/luna are refused unless `--allow-small-model` (`allow_small_model` in job specs; grandfathered for existing `skills-refresh` jobs). Rule for agents calling `t3_thread_launch`: [SKILL.md](skills/t3-manage-thread/SKILL.md#model-tier).
 
 ## v0.5.0 (2026-10-16)

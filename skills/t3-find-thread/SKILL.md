@@ -24,6 +24,12 @@ Never dump a whole thread into context. Flags: `--help`.
 Thread ids: full id or ≥8-char short id (the thread's UUID). Reading a thread in full → native
 `t3_thread_read`.
 
+**Purged threads** live on in the backup archive ([t3-maintenance](../t3-maintenance/SKILL.md#archive-t3-thread-archive)).
+`search` adds it when the live store has no hit or `--since`/`--until` reach before the live store
+(`--backup on|off` forces); hits are flagged `_(backup)_` and have no T3 link (the thread is gone).
+`peek`/`grep` take their ids as usual; `read <id> [--tools]` replaces `t3_thread_read` for them.
+Archived tool calls show in `grep` and `read --tools` (role = tool name); entry numbers match.
+
 ## Opening
 
 - In T3 chat: `t3-open-thread <id> --link` → `[title](t3-thread://v1/<threadId>)`.

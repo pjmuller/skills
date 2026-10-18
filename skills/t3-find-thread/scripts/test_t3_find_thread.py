@@ -23,6 +23,44 @@ REFERRAL = "aaaaaaaa-0000-4000-8000-000000000001"  # bare UUID (imported history
 STYLING = "mcp:bbbbbbbb-0000-4000-8000-000000000002"
 WORK = f"thread:project:{PID}:cccccccc-0000-4000-8000-000000000003"
 SUBAGENT = "thread:delegated-task:command%3Amcp%3Axyz"
+PURGED = "mcp:dddddddd-0000-4000-8000-000000000004"
+
+
+def make_archive(root: Path) -> Path:
+    """The backup-archive reader contract (written by t3-maintenance's t3_archive.py)."""
+    path = root / "backups" / "t3-archive.sqlite"
+    path.parent.mkdir(parents=True)
+    db = sqlite3.connect(path)
+    db.executescript(
+        """
+        CREATE TABLE threads (thread_id TEXT PRIMARY KEY, id_key TEXT, subagent INTEGER, project_id TEXT,
+          project_title TEXT, workspace_root TEXT, workspace_name TEXT, title TEXT, created_at TEXT,
+          updated_at TEXT, archived_at TEXT, user_msgs INTEGER, assistant_msgs INTEGER, last_msg_at TEXT);
+        CREATE VIRTUAL TABLE entries USING fts5(text, thread_id UNINDEXED, seq UNINDEXED, role UNINDEXED,
+          tool UNINDEXED, created_at UNINDEXED, tokenize = "unicode61 remove_diacritics 2");
+        CREATE VIRTUAL TABLE vocab USING fts5vocab(entries, 'row');
+        """
+    )
+    db.execute(
+        "INSERT INTO threads VALUES (?,?,0,'p1','Personal','/Users/x/code/personal','personal',"
+        "'Kerberos keytab rotation','2026-03-01T09:00:00Z','2026-03-02T09:00:00Z',NULL,1,1,'2026-03-01T10:00:00Z')",
+        (PURGED, "dddddddd-0000-4000-8000-000000000004"),
+    )
+    db.execute(  # an archived copy of a live thread must not shadow it
+        "INSERT INTO threads VALUES (?,?,0,'p1','Personal','/Users/x/code/personal','personal',"
+        "'Measure Tenant Referral Engagement','2026-08-27T11:40:32Z','2026-08-27T13:00:00Z',NULL,1,0,NULL)",
+        (REFERRAL, REFERRAL),
+    )
+    entries = [
+        ("rotate the kerberos keytab on the build host", PURGED, 0, "user", "", "2026-03-01T09:01:00Z"),
+        ("Rotated after a snapshot; the old principal is revoked.", PURGED, 1, "assistant", "", "2026-03-01T09:30:00Z"),
+        ("Bash: kadmin -q ktadd buildhost\nEntry for principal added", PURGED, 2, "tool", "Bash", "2026-03-01T09:10:00Z"),
+        ("snapshot referral stats", REFERRAL, 0, "user", "", "2026-08-27T11:41:00Z"),
+    ]
+    db.executemany("INSERT INTO entries VALUES (?,?,?,?,?,?)", entries)
+    db.commit()
+    db.close()
+    return path
 
 
 def add_message(db, message_id, thread_id, role, text, stamp):
@@ -85,6 +123,7 @@ class FindThreadTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
         cls.store = make_store(root / "t3")
+        make_archive(root / "t3")
         os.environ["T3CODE_HOME"] = str(root / "t3")
         os.environ["T3_FIND_CACHE_DIR"] = str(root / "cache")
         loader = importlib.machinery.SourceFileLoader("t3findthread", str(HERE / "t3-find-thread"))
@@ -185,6 +224,36 @@ class FindThreadTest(unittest.TestCase):
     def test_grep_returns_snippets_per_term(self):
         payload = json.loads(self.run_cli("--json", "grep", "aaaaaaaa", "-k", "snapshot", "-k", "restore"))
         self.assertEqual({s["term"] for s in payload["snippets"]}, {"snapshot", "restore"})
+
+    # --- backup archive fallback ---------------------------------------------------
+
+    def test_no_live_hit_falls_back_to_the_archive(self):
+        results = self.search("ktadd")
+        self.assertEqual([(r["thread_id"], r["backup"]) for r in results], [(PURGED, True)])
+        out = self.run_cli("search", "keytab")
+        self.assertIn("+backup (no live hit)", out)
+        self.assertIn("Kerberos keytab rotation _(backup)_", out)
+        self.assertNotIn(f"t3-thread://v1/{PURGED}", out)  # purged: no dead link
+
+    def test_live_hit_skips_the_archive_unless_dates_predate_it(self):
+        self.assertTrue(all(not r["backup"] for r in self.search("ahoy")))
+        self.assertEqual([r["thread_id"] for r in self.search("snapshot")], [REFERRAL])  # live hit: archive not asked
+        both = self.search("--since", "2026-01-01", "snapshot")  # archive joins; the live copy wins
+        self.assertEqual(sorted((r["thread_id"], r["backup"]) for r in both), [(REFERRAL, False), (PURGED, True)])
+        partial = self.search("snapshot", "keytab")  # live covers 1/2 terms: the archive joins and wins
+        self.assertEqual([(r["thread_id"], len(r["terms_hit"])) for r in partial[:2]], [(PURGED, 2), (REFERRAL, 1)])
+        self.assertEqual(self.search("--backup", "off", "ktadd"), [])
+
+    def test_peek_and_grep_read_backup_threads(self):
+        peek = json.loads(self.run_cli("--json", "peek", "dddddddd"))[0]
+        self.assertTrue(peek["backup"])
+        self.assertEqual([o["role"] for o in peek["outline"]], ["user", "assistant"])
+        grep = json.loads(self.run_cli("--json", "grep", "dddddddd", "ktadd"))
+        self.assertEqual(grep["snippets"][0]["role"], "Bash")
+        self.assertEqual(grep["snippets"][0]["idx"], 2)  # same numbering as read --tools
+        story = json.loads(self.run_cli("--json", "read", "dddddddd", "--tools", "--from", "1"))["entries"]
+        self.assertEqual([(e["idx"], e["role"]) for e in story], [(1, "assistant"), (2, "Bash")])
+        self.assertIn("revoked", self.run_cli("read", "dddddddd"))
 
     def test_short_id_must_be_long_enough(self):
         with self.assertRaises(SystemExit):
