@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md: distinguish local file deliverables (absolute paths) from live product/ticket links; reserve remote file URLs for versions unavailable in a stable local checkout.
+
 ## v0.5.1 (2026-10-18)
 
 - t3-maintenance / t3-find-thread: purged threads stay findable. `t3-purge-threads apply` first copies its cohort into one searchable SQLite archive (`~/.t3/backups/t3-archive.sqlite`, FTS5, mode 600; refuses to purge if any thread misses it), replacing the slim backup. Kept: metadata, lineage, every message whole, tool calls with output head/tail, diffs, sub-agent results, questions/answers, errors; dropped: event log, intermediate tool states, progress noise, images. PJ's whole 6.6 GB store → 445 MB. `t3-find-thread search` adds the archive when no live hit has every term or `--since`/`--until` predate the live store (`--backup on|off`); hits are flagged `_(backup)_`, and the new `read` shows a purged thread in full. New `t3-thread-archive` (`sync`, `stats`, `import` of old `purged-threads-*.sqlite`, done automatically by the next purge). Upgrade: rerun `t3-maintenance/scripts/install`.
