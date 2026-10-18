@@ -43,7 +43,7 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
 | job field | relay |
 |---|---|
 | `project`, `title` (`{date}` → today) | `launch --project --title` |
-| `model` (ordered list, e.g. `opus,sol`) | first candidate `t3-pick-instance` can route → `--model`, `--instance`; none → run fails, catch-up retries. Omitted → project default |
+| `model` (ordered list, e.g. `opus,sol`) | first candidate `t3-pick-instance` can route → `--model`, `--instance`; none → run fails, catch-up retries. Omitted → opus, else sol. haiku/luna refused unless `allow_small_model` (`--allow-small-model`): orchestration already done, e.g. a script decides everything |
 | `profile` (label or instance id, machine-local, needs `--model`) | narrows the account choice → `--instance` |
 | `thinking` | `--effort` (omitted → house effort) |
 | `settle_when_done` | appends the [completion footer](../t3-manage-thread/settle-thread.md) to the prompt (no 🏓 title) |

@@ -182,7 +182,7 @@ schedule() {
 Run exactly one command: \`skills-refresh --job$quiet\`. Then end the turn with its complete output as your answer, nothing else.
 Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer. Never retry, never fix anything.
 PROMPT
-  t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna \
+  t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna --allow-small-model \
     --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
   # Retire only our legacy Linux entry, and only once its replacement is armed.
   local old_cron
