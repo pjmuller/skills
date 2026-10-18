@@ -10,7 +10,9 @@ t3-relay check
 ```
 
 `--model` takes an alias or id; account and house effort come from `t3-pick-instance` (capacity
-routing). `--instance` / `--effort` override. Without `--model` the project default applies.
+routing). `--instance` / `--effort` override. Without `--model`: opus, else sol (never the relay's
+own Haiku, which an unset `modelSelection` would inherit). haiku/luna refused unless
+`--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)).
 Exit 0 = accepted (HTTP 202). Delivery is async (~15–20 s), with no thread id back. Keep the
 caller's own dedupe state, and don't retry an accepted request.
 

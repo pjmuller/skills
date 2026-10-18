@@ -51,8 +51,10 @@ SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the pr
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
 REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
-             "settle_when_done": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
+             "allow_small_model": False, "settle_when_done": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
              "machines": "one", "adopted_by": None, "paused": False, "pause_until": None}  # [] = nobody (skips)
+# Armed before allow_small_model existed; refusing them would stop the updater that brings the fix.
+LEGACY_SMALL_JOBS = {"skills-refresh"}
 MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
 OWNER_SKIP_EXIT = 5                    # `t3-schedule owner-check` → runner: another machine owns this job, skip
 PAUSED_SKIP_EXIT = 6                   # `t3-schedule pause-check` → runner: repo job is paused, skip
@@ -116,10 +118,12 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
             if not isinstance(repo["model"], str):
                 raise SystemExit(f"model must be a string, got {repo['model']!r}")
             valid_models(repo["model"])
+            if problem := small_model_problem(repo["model"], repo.get("allow_small_model") is True):
+                raise SystemExit(problem)
         for key in ("title", "thinking"):
             if repo.get(key) is not None and not isinstance(repo[key], str):
                 raise SystemExit(f"{key} must be a string, got {repo[key]!r}")
-        for key in ("settle_when_done", "notify"):
+        for key in ("settle_when_done", "notify", "allow_small_model"):
             if repo.get(key) is not None and not isinstance(repo[key], bool):
                 raise SystemExit(f"{key} must be true/false, got {repo[key]!r}")
         if repo.get("paused") is not None and not isinstance(repo["paused"], bool):
@@ -166,6 +170,8 @@ def merge_pointer(local: dict) -> dict:
         repo = json.loads(source.read_text())
     except (OSError, ValueError) as exc:
         return {**merged, "missing": "not found" if isinstance(exc, FileNotFoundError) else f"invalid ({exc!r:.80})"}
+    if local["name"] in LEGACY_SMALL_JOBS and isinstance(repo, dict) and repo.get("allow_small_model") is None:
+        repo["allow_small_model"] = True
     if problem := repo_spec_problem(repo, Path(merged["prompt_path"])):
         return {**merged, "missing": problem}
     spec = {**repo, **{k: d for k, d in REPO_KEYS.items() if repo.get(k) is None}, **merged}
@@ -427,8 +433,17 @@ def valid_models(value: str | None) -> str | None:
     return value
 
 
+def small_model_problem(models: str | None, allowed: bool) -> str | None:
+    """t3-relay refuses a standalone thread on a small model; fail at `add` instead of at fire time."""
+    small = [m for m in (models or "").split(",") if any(s in m for s in ("haiku", "luna"))]
+    if small and not allowed:
+        return (f"--model {','.join(small)}: standalone threads run on a frontier model (opus/sol) that uses "
+                "small models as sub-agents; pass --allow-small-model if orchestration is already done")
+    return None
+
+
 def describe_models(spec: dict) -> str:
-    return spec.get("model") or "project default"
+    return spec.get("model") or "opus,sol (default)"
 
 
 def valid_name(name: str) -> str:
@@ -759,6 +774,8 @@ def cmd_fire(args: argparse.Namespace) -> int:
         argv = ["t3-relay", "launch", "--project", spec["project"], "--title", title]
         if spec.get("settle_when_done"):
             argv.append("--settle-when-done")  # the footer lives once, in settle-thread.md
+        if spec.get("allow_small_model"):
+            argv.append("--allow-small-model")
         if spec.get("model"):
             chosen = pick(spec)
             if not chosen:
@@ -804,6 +821,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
     if args.profile and not args.model:
         raise SystemExit("--profile needs --model (the account is picked per model ecosystem)")
+    if problem := small_model_problem(args.model, args.allow_small_model):
+        raise SystemExit(problem)
     resume = args.resume_thread
     if resume:
         if not thread_exists(resume):
@@ -830,6 +849,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         "profile": args.profile,
         "model": valid_models(args.model),
         "thinking": args.thinking,
+        "allow_small_model": args.allow_small_model,
         "settle_when_done": args.settle_when_done,
         "notify": not args.no_notify,
         "title": args.title or f"⏰ {name} {{date}}",
@@ -1427,8 +1447,10 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: send the prompt as a turn to this thread "
                      "(inside T3: your own t3_thread_list currentThreadId) instead of launching a new one")
     add.add_argument("--profile", help="account label or instance id (t3-list-profiles; machine-local, needs --model); omit → capacity routing at fire time")
-    add.add_argument("--model", help="ordered comma list, first with a routable account wins: opus,sol · fable · MODEL (omit → project default)")
+    add.add_argument("--model", help="ordered comma list, first with a routable account wins: opus,sol · fable · MODEL (omit → opus, else sol)")
     add.add_argument("--thinking", help="effort, e.g. low|medium|high (omit → model's house default)")
+    add.add_argument("--allow-small-model", action="store_true",
+                     help="permit haiku/luna as the launched thread's model (refused by default)")
     add.add_argument("--settle-when-done", action="store_true", help="append the self-settle footer (clean outcome only)")
     add.add_argument("--no-notify", action="store_true", help="no macOS notification on launch (failures still notify once per day)")
     add.add_argument("--title", help="thread title; {date} → YYYY-MM-DD. Default: '⏰ <name> {date}'")

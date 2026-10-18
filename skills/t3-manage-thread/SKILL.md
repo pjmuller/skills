@@ -28,6 +28,15 @@ account routing and an outside-T3 entry point.
   [t3-find-thread](../t3-find-thread/SKILL.md). Scheduled threads: [t3-schedule](../t3-schedule/SKILL.md).
   Browser / computer use: [browser.md](browser.md).
 
+## Model tier
+
+A standalone thread (`t3_thread_launch`, `t3-relay launch`, a `t3-schedule` launch) orchestrates:
+run it on a frontier model (Opus/Fable/Sol/Astra) that hands chores to Haiku/Luna sub-agents or
+`delegate_task` workers. Always pass `modelSelection`: without it the new thread inherits the
+caller's model. `t3-relay` and `t3-schedule` refuse haiku/luna unless `--allow-small-model`
+(orchestration already done, e.g. a script decides everything); before passing a small model to
+`t3_thread_launch` yourself, warn the user and launch it only if they insist.
+
 ## Personal config (optional)
 
 Beside T3's `settings.json` in `${T3CODE_HOME:-~/.t3}/userdata/`:

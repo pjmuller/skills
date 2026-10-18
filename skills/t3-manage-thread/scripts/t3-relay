@@ -8,7 +8,7 @@
 Agents inside T3 never need this: they call the T3 MCP tools directly.
 
     t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
-                    [--settle-when-done] -- PROMPT
+                    [--allow-small-model] [--settle-when-done] -- PROMPT
     t3-relay send   --thread ID [--mode auto|queue|steer] -- MESSAGE
     t3-relay check  # relay task present, server reachable
 
@@ -31,6 +31,11 @@ import uuid
 from pathlib import Path
 
 RELAY_TITLE = "⚙️ T3 relay"
+# A standalone thread orchestrates, so it runs on a frontier model. Without --model it would
+# inherit the relay thread's model (Haiku), not the project default. Small models stay
+# sub-agents/workers unless the caller passes --allow-small-model (orchestration already done).
+DEFAULT_MODELS = ("opus", "sol")    # first one t3-pick-instance can route wins
+SMALL_MODELS = ("haiku", "luna")    # substrings of the resolved model id
 HOME = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata"
 HERE = Path(__file__).resolve().parent
 
@@ -94,13 +99,18 @@ def completion_footer() -> str:
         die("completion footer not found in settle-thread.md")
 
 
-def pick(model: str) -> tuple[str, str, str]:
-    """(instanceId, modelId, house effort or '-') from t3-pick-instance."""
-    out = subprocess.run([str(HERE / "t3-pick-instance"), model], capture_output=True, text=True)
-    fields = out.stdout.split()
-    if out.returncode != 0 or len(fields) != 3:
-        die(f"t3-pick-instance {model} failed: {out.stderr.strip()[-300:]}", 2)
-    return fields[0], fields[1], fields[2]
+def is_small(model_id: str) -> bool:
+    return any(s in model_id for s in SMALL_MODELS)
+
+
+def pick(models: tuple[str, ...]) -> tuple[str, str, str]:
+    """(instanceId, modelId, house effort or '-') of the first model t3-pick-instance can route."""
+    for model in models:
+        out = subprocess.run([str(HERE / "t3-pick-instance"), model], capture_output=True, text=True)
+        fields = out.stdout.split()
+        if out.returncode == 0 and len(fields) == 3:
+            return fields[0], fields[1], fields[2]
+    die(f"t3-pick-instance {','.join(models)} failed: {out.stderr.strip()[-300:]}", 2)
 
 
 def post(base: str, task_id: str, token: str, body: dict) -> str:
@@ -119,7 +129,9 @@ def main() -> None:
     la = sub.add_parser("launch")
     la.add_argument("--project", required=True)
     la.add_argument("--title", required=True)
-    la.add_argument("--model", help="model id or alias (sol, opus, fable, astra, luna, haiku); omit = project default")
+    la.add_argument("--model", help="model id or alias (sol, opus, fable, astra); omit = opus, else sol")
+    la.add_argument("--allow-small-model", action="store_true",
+                    help="permit haiku/luna as the standalone thread's model (default: refused)")
     la.add_argument("--instance", help="provider instance id; default: t3-pick-instance MODEL")
     la.add_argument("--effort", help="reasoning effort option value")
     la.add_argument("--settle-when-done", action="store_true",
@@ -132,7 +144,7 @@ def main() -> None:
     sub.add_parser("check")
     a = ap.parse_args()
     if a.cmd == "launch" and not a.model and (a.instance or a.effort):
-        die("--instance/--effort need --model (without it T3 uses the project default model and account)", 2)
+        die("--instance/--effort need --model", 2)
 
     con = store()
     task_id, token = relay_task(con)
@@ -144,14 +156,16 @@ def main() -> None:
     if a.cmd == "launch":
         message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
         args = {"projectId": project_id(con, a.project), "title": a.title, "message": message}
-        if a.model:
-            instance, model, effort = pick(a.model)
-            sel = {"instanceId": a.instance or instance, "model": model}
-            effort = a.effort or (effort if effort != "-" else None)
-            if effort:
-                key = "reasoningEffort" if model.startswith("gpt-") else "effort"
-                sel["options"] = [{"id": key, "value": effort}]
-            args["modelSelection"] = sel
+        instance, model, effort = pick((a.model,) if a.model else DEFAULT_MODELS)
+        if is_small(model) and not a.allow_small_model:
+            die(f"refusing standalone thread on {model}: launch a frontier model (opus/sol) that uses "
+                "small models as sub-agents, or pass --allow-small-model if orchestration is already done", 2)
+        sel = {"instanceId": a.instance or instance, "model": model}
+        effort = a.effort or (effort if effort != "-" else None)
+        if effort:
+            key = "reasoningEffort" if model.startswith("gpt-") else "effort"
+            sel["options"] = [{"id": key, "value": effort}]
+        args["modelSelection"] = sel
         instruction = "Call t3_thread_launch once with exactly these arguments:\n" + json.dumps(args, ensure_ascii=False)
     else:
         args = {"threadId": a.thread, "message": " ".join(a.message), "mode": a.mode, "clientRequestId": f"relay-{rid}"}

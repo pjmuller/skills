@@ -1,4 +1,5 @@
 """uv run pytest .agents/skills/t3-schedule/scripts — pure functions only, no launchctl."""
+import json
 import plistlib
 import pytest
 from importlib.machinery import SourceFileLoader
@@ -196,6 +197,20 @@ def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=()):
     return mod.cmd_fire(argparse.Namespace(name="job")), calls
 
 
+def test_legacy_skills_refresh_spec_keeps_running(tmp_path):
+    repo = tmp_path / "repo" / ".agents" / "schedules"
+    repo.mkdir(parents=True)
+    (repo / "skills-refresh.json").write_text(json.dumps({"at": "05:15", "days": None, "model": "haiku,luna"}))
+    (repo / "skills-refresh.prompt.md").write_text("go\n")
+    spec = mod.merge_pointer({"name": "skills-refresh", "source": str(repo / "skills-refresh.json")})
+    assert not spec.get("missing") and spec["allow_small_model"] is True
+
+
+def test_fire_passes_allow_small_model(tmp_path, monkeypatch):
+    rc, calls = fire(tmp_path, monkeypatch, {"model": "haiku", "allow_small_model": True})
+    assert rc == 0 and "--allow-small-model" in calls[-1]
+
+
 def test_fire_launch_maps_job_fields(tmp_path, monkeypatch, capsys):
     rc, calls = fire(tmp_path, monkeypatch, {"model": "opus,fable", "profile": "dentai", "thinking": "low",
                                              "settle_when_done": True}, no_capacity=("opus",))
@@ -232,13 +247,14 @@ def test_add_continuation_validation(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, "thread_exists", lambda tid: tid == TID)  # V2 store lookup
     add = lambda **kw: mod.cmd_add(argparse.Namespace(**{
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
-        "profile": None, "model": None, "thinking": None, "settle_when_done": False,
+        "profile": None, "model": None, "thinking": None, "allow_small_model": False, "settle_when_done": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
         "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
     assert add() == 0 and "t3-schedule fire fu" in capsys.readouterr().out  # no project needed
     for kw, msg in (({"resume_thread": "self"}, "currentThreadId"), ({"settle_when_done": True}, "settle-when-done"),
                     ({"model": "opus"}, "drop"), ({"resume_thread": None}, "--project is required"),
-                    ({"resume_thread": None, "project": str(tmp_path), "profile": "dentai"}, "--profile needs --model")):
+                    ({"resume_thread": None, "project": str(tmp_path), "profile": "dentai"}, "--profile needs --model"),
+                    ({"resume_thread": None, "project": str(tmp_path), "model": "haiku,luna"}, "--allow-small-model")):
         with pytest.raises(SystemExit, match=msg):
             add(**kw)
 
@@ -259,7 +275,7 @@ def add_args(**kw):
     import argparse
     return argparse.Namespace(**{
         "name": "nightly", "at": "07:30", "once": None, "weekdays": True, "days": None, "project": None,
-        "profile": "work", "model": "fable", "thinking": None, "settle_when_done": True,
+        "profile": "work", "model": "fable", "thinking": None, "allow_small_model": False, "settle_when_done": True,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["Run the report."], "wait_max": 10,
         "force": False, "dry_run": False, "resume_thread": None, "many_machines": False, "takeover": False, **kw})
 
@@ -274,7 +290,7 @@ def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
     stored = json.loads(src.read_text())
     me = mod.machine_identity()
     assert stored.pop("adopted_by") == [{"machine": me["label"], "user": None, "since": mod.date.today().isoformat(), "id": me["id"]}]
-    assert stored == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable", "thinking": None,
+    assert stored == {"at": "07:30", "days": mod.WEEKDAYS, "title": "⏰ nightly {date}", "model": "fable", "thinking": None, "allow_small_model": False,
                       "settle_when_done": True, "notify": True, "wait_max": 10, "machines": "one",
                       "paused": False, "pause_until": None}
     assert prompt.read_text() == "Run the report.\n"
