@@ -149,6 +149,8 @@ def validate(request):
         if not isinstance(request["hosts"], list):
             raise Failure("Session hosts must be a list")
         request["hosts"] = sorted({host(value) for value in request["hosts"]})
+        if not request["hosts"]:
+            raise Failure("Name the exact hosts (--host); an unscoped session would serve any login")
         request["reason"] = reason_text(request["reason"])
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
