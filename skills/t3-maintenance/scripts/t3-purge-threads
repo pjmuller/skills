@@ -10,9 +10,10 @@ Every env var, token and pasted secret that crossed a turn sits in T3's store
 provider's own transcript files. T3 has no hard delete, so:
 
   list        dry run (default): cohort, rows, files that would go
-  apply --yes delete the rows (every thread-keyed table) + transcripts,
-              provider logs and attachments. Refuses unless T3 Code is
-              fully closed: a live server keeps writing the same streams.
+  apply --yes copy the cohort into the searchable backup archive
+              (t3-thread-archive), then delete the rows (every thread-keyed
+              table) + transcripts, provider logs and attachments. Refuses
+              unless T3 Code is fully closed: a live server keeps writing.
   drop-v1     the frozen 0.0.x `state.sqlite` (T3 0.1 only seeds from it
               once; all history now lives in statev2). Dry run unless --yes.
 
@@ -40,6 +41,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import t3_archive
 from t3_store import (
     DEFAULT_STORE,
     LIVE_RUN,
@@ -56,6 +58,7 @@ PROVIDER_LOGS = USERDATA / "logs" / "provider"
 SERVER_RUNTIME = USERDATA / "server-runtime.json"
 V1_STORE = USERDATA / "state.sqlite"
 BACKUP_DIR = USERDATA.parent / "backups"
+ARCHIVE = t3_archive.ARCHIVE
 CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 LOG_DIR = Path(
     os.environ.get(
@@ -73,7 +76,6 @@ EXTRA_THREAD_COLUMNS = {
     "orchestration_v2_projection_subagents": ("child_thread_id",),
 }
 KEEP_TABLES = {"scheduled_tasks"}
-BACKUP_TABLES = ("orchestration_v2_projection_threads", "orchestration_v2_projection_messages")
 TITLE_CHARS = 44
 PROJECT_CHARS = 16
 
@@ -411,38 +413,39 @@ def thread_columns(db: sqlite3.Connection) -> list[tuple[str, str]]:
     return pairs
 
 
-def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool) -> Path:
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store: Path) -> Path:
+    """Archive the cohort (always; an error aborts the purge), plus a full store copy on request.
+    Old slim backups are folded into the archive so cleanup can offer them."""
+    archive = t3_archive.open_archive(ARCHIVE)
+    with archive:
+        written = t3_archive.archive_threads(db, archive, [tid for (tid,) in ids])
+        if written != len(ids):  # this run must have (re)written every one; a stale copy is no proof
+            raise SystemExit(f"refusing: archived {written} of {len(ids)} threads, nothing purged")
+        for old in sorted(BACKUP_DIR.glob("purged-threads-*.sqlite")):
+            if not t3_archive.imported(archive, old):
+                t3_archive.import_backup(old, archive, store)
+    archive.close()
+    print(f"archived {written} threads → {ARCHIVE} ({mb(ARCHIVE.stat().st_size)} MB)")
     if full:
-        backup = BACKUP_DIR / f"statev2-before-purge-{stamp}.sqlite"
+        backup = BACKUP_DIR / f"statev2-before-purge-{datetime.now(UTC):%Y%m%dT%H%M%SZ}.sqlite"
         db.execute("VACUUM INTO ?", (str(backup),))
-    else:
-        backup = BACKUP_DIR / f"purged-threads-{stamp}.sqlite"
-        db.execute("ATTACH DATABASE ? AS backup", (str(backup),))
-        try:
-            with db:
-                db.execute("CREATE TEMP TABLE purge_ids (thread_id TEXT PRIMARY KEY)")
-                db.executemany("INSERT INTO purge_ids VALUES (?)", ids)
-                for table in BACKUP_TABLES:
-                    db.execute(
-                        f"CREATE TABLE backup.{table} AS SELECT * FROM main.{table} "
-                        "WHERE thread_id IN (SELECT thread_id FROM purge_ids)"
-                    )
-                db.execute("DROP TABLE purge_ids")
-        finally:
-            db.execute("DETACH DATABASE backup")
-    print(f"backup {backup} ({mb(backup.stat().st_size)} MB{'' if full else ', slim: threads + messages'})")
-    return backup
+        print(f"full backup {backup} ({mb(backup.stat().st_size)} MB)")
+        return backup
+    return ARCHIVE
 
 
-def offer_backup_cleanup(current: Path, ask=input) -> None:
-    """The fresh backup supersedes every earlier one: list them, delete on Y."""
-    stale = sorted(p for p in BACKUP_DIR.glob("*.sqlite") if p.is_file() and p != current)
+def offer_backup_cleanup(ask=input) -> None:
+    """Old slim backups the archive has imported are superseded: list them, delete on Y.
+    Full store copies (`--full-backup`) hold more than the archive; never offered."""
+    archive = sqlite3.connect(ARCHIVE)
+    try:
+        stale = [p for p in sorted(BACKUP_DIR.glob("purged-threads-*.sqlite")) if t3_archive.imported(archive, p)]
+    finally:
+        archive.close()
     if not stale:
         return
     total = sum(p.stat().st_size for p in stale)
-    print(f"\n{len(stale)} older backups ({mb(total)} MB) superseded by {current.name}:")
+    print(f"\n{len(stale)} old slim backups ({mb(total)} MB) are now in {ARCHIVE.name}:")
     for path in stale:
         print(f"  {mb(path.stat().st_size):>8} MB  {path.name}")
     if not sys.stdin.isatty():
@@ -484,7 +487,7 @@ def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thr
     ))
     db = sqlite3.connect(str(store))
     try:
-        backup = make_backup(db, ids, full=args.full_backup)
+        backup = make_backup(db, ids, full=args.full_backup, store=store)
         with db:
             for table, column in thread_columns(db):
                 db.executemany(f'DELETE FROM "{table}" WHERE "{column}" = ?', ids)
@@ -504,7 +507,7 @@ def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thr
         f"{len(rows)} threads (+{len(ids) - len(rows)} descendants) purged · {removed} files · "
         f"store {mb(before)} → {mb(after)} MB · log {log_path}"
     )
-    offer_backup_cleanup(backup)
+    offer_backup_cleanup()
     return 0
 
 
@@ -557,8 +560,8 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--yes", action="store_true", help="required")
     apply_parser.add_argument(
         "--full-backup", action="store_true",
-        help="VACUUM INTO a full store copy first (minutes, GBs) instead of the slim "
-        "backup (purged threads + messages, seconds, MBs)",
+        help="also VACUUM INTO a full store copy first (minutes, GBs); the searchable "
+        "archive is always written",
     )
     drop = sub.add_parser("drop-v1", help="delete the frozen 0.0.x state.sqlite (dry run unless --yes)")
     drop.add_argument("--yes", action="store_true")

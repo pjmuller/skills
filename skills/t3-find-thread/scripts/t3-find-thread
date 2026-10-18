@@ -15,6 +15,12 @@ Reading a whole thread: the native `t3_thread_read` MCP tool. Reads T3's store r
 ($T3CODE_HOME/userdata/statev2.sqlite, default ~/.t3/...) and keeps a private FTS5 cache at
 ~/.cache/t3-find-thread/index.sqlite, refreshed incrementally before every command. Sub-agent and
 delegated-task threads are skipped unless --subagents. Nothing is ever written back to T3.
+
+Purged threads live on in the backup archive ($T3_ARCHIVE, default ~/.t3/backups/t3-archive.sqlite,
+written by t3-purge-threads / t3-thread-archive). `--backup auto` (default) also searches it when the
+live store has no hit covering every term, or --since/--until reach before the live store; its hits are
+flagged `backup` and peek/grep/read take them from the archive (grep and `read --tools` also see
+tool calls there; entry numbers match across the three).
 """
 
 from __future__ import annotations
@@ -37,10 +43,12 @@ from urllib.parse import quote
 DEFAULT_STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "statev2.sqlite"
 CACHE_DIR = Path(os.environ.get("T3_FIND_CACHE_DIR", Path.home() / ".cache" / "t3-find-thread"))
 CACHE_DB = CACHE_DIR / "index.sqlite"
+ARCHIVE = Path(os.environ.get("T3_ARCHIVE", DEFAULT_STORE.parent.parent / "backups" / "t3-archive.sqlite"))
 CACHE_VERSION = "2"  # bump on any cache/source schema change: forces one full rebuild
 
 USER_WEIGHT = 3.0
 ASSISTANT_WEIGHT = 1.0
+TOOL_WEIGHT = 0.5  # archive tool/reasoning evidence ranks below conversation
 TERM_COVERAGE_BONUS = 10.0
 TITLE_BONUS = 15.0
 
@@ -316,29 +324,30 @@ def expand_term(cache: sqlite3.Connection, term: str, fuzzy: bool) -> list[str]:
     return [w for w in get_close_matches(lowered, vocabulary, n=5, cutoff=0.8) if w != lowered]
 
 
-def term_hits(cache: sqlite3.Connection, term: str, fuzzy: bool) -> dict[str, dict[str, int]]:
-    """thread_id -> {'user': n, 'assistant': n} for one term."""
+def term_hits(cache: sqlite3.Connection, term: str, fuzzy: bool, table: str = "messages_fts") -> dict[str, dict[str, int]]:
+    """thread_id -> {'user'|'assistant'|'tool': n} for one term (tool = archive tool/reasoning/event)."""
     hits: dict[str, dict[str, int]] = {}
     clauses = [fts_phrase(term) + ("" if " " in term else "*")]
     clauses += [fts_phrase(word) for word in expand_term(cache, term, fuzzy)]
     try:
         rows = cache.execute(
-            "SELECT thread_id, role, COUNT(*) AS n FROM messages_fts WHERE messages_fts MATCH ? "
-            "GROUP BY thread_id, role",
+            f"SELECT thread_id, role, COUNT(*) AS n FROM {table} WHERE {table} MATCH ? GROUP BY thread_id, role",
             (" OR ".join(clauses),),
         ).fetchall()
     except sqlite3.OperationalError as error:
         sys.exit(f"bad search term {term!r}: {error}")
     for row in rows:
-        hits.setdefault(row["thread_id"], {})[row["role"]] = row["n"]
+        bucket = hits.setdefault(row["thread_id"], {})
+        role = row["role"] if row["role"] in ("user", "assistant") else "tool"
+        bucket[role] = bucket.get(role, 0) + row["n"]
     return hits
 
 
-def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: list[str], args) -> list[dict]:
+def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: list[str], args, backup: bool = False) -> list[dict]:
     per_term = {}
     if terms and not args.title_only:
         for term in terms:
-            per_term[term] = term_hits(cache, term, args.fuzzy)
+            per_term[term] = term_hits(cache, term, args.fuzzy, "entries" if backup else "messages_fts")
     keep_roles = {"user", "assistant"} if args.role == "any" else {args.role}
     results = []
     for row in rows:
@@ -349,17 +358,20 @@ def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: lis
             counts = per_term.get(term, {}).get(row["thread_id"], {})
             user = counts.get("user", 0) if "user" in keep_roles else 0
             assistant = counts.get("assistant", 0) if "assistant" in keep_roles else 0
+            tool = counts.get("tool", 0) if "assistant" in keep_roles else 0
             in_title = term.lower() in title_lower
-            if not (user or assistant or in_title):
+            if not (user or assistant or tool or in_title):
                 continue
             matched.append(term)
             user_hits += user
-            assistant_hits += assistant
+            assistant_hits += assistant + tool
             score += TERM_COVERAGE_BONUS
             if user:
                 score += USER_WEIGHT * (1 + math.log(user))
             if assistant:
                 score += ASSISTANT_WEIGHT * (1 + math.log(assistant))
+            if tool:
+                score += TOOL_WEIGHT * (1 + math.log(tool))
             if in_title:
                 title_hit = True
         if title_hit:
@@ -380,6 +392,7 @@ def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: lis
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "archived": bool(row["archived_at"]),
+                "backup": backup,
                 "user_msgs": row["user_msgs"],
                 "assistant_msgs": row["assistant_msgs"],
                 "terms_hit": matched,
@@ -387,9 +400,13 @@ def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: lis
                 "user_hits": user_hits,
                 "assistant_hits": assistant_hits,
                 "score": round(score, 2),
-                "link": thread_link(row["title"], row["thread_id"]),
+                "link": None if backup else thread_link(row["title"], row["thread_id"]),  # purged: no dead link
             }
         )
+    return results
+
+
+def rank(results: list[dict]) -> list[dict]:
     results.sort(key=lambda r: r["updated_at"], reverse=True)  # recency breaks score ties
     results.sort(key=lambda r: r["score"], reverse=True)
     return results
@@ -398,25 +415,55 @@ def score_threads(cache: sqlite3.Connection, rows: list[sqlite3.Row], terms: lis
 # --------------------------------------------------------------------------- messages (source db)
 
 
-def resolve_thread(cache: sqlite3.Connection, ident: str) -> sqlite3.Row:
-    """Exact full id, else a >=8-char prefix of the id_key (see short_id)."""
-    row = cache.execute("SELECT * FROM threads WHERE thread_id = ?", (ident,)).fetchone()
-    if row:
-        return row
-    needle = ident.lower()
-    if len(needle) < 8:
+def open_backup() -> sqlite3.Connection | None:
+    """The purge archive, read-only; None when there is none yet."""
+    if not ARCHIVE.exists():
+        return None
+    backup = sqlite3.connect(f"file:{quote(str(ARCHIVE), safe='/')}?mode=ro", uri=True)
+    backup.row_factory = sqlite3.Row
+    return backup
+
+
+def lookup(db: sqlite3.Connection, ident: str) -> list[sqlite3.Row]:
+    rows = db.execute("SELECT * FROM threads WHERE thread_id = ?", (ident,)).fetchall()
+    if rows or len(ident) < 8:
+        return rows
+    return db.execute("SELECT * FROM threads WHERE substr(id_key, 1, ?) = ?", (len(ident), ident.lower())).fetchall()
+
+
+def resolve_thread(cache: sqlite3.Connection, ident: str) -> tuple[sqlite3.Row, bool]:
+    """(row, from_backup). Exact full id, else a >=8-char prefix of the id_key (see short_id);
+    the live store wins, the backup archive answers for purged threads."""
+    if len(ident) < 8:
         sys.exit(f"thread id {ident!r} too short; use at least 8 characters")
-    rows = cache.execute("SELECT * FROM threads WHERE substr(id_key, 1, ?) = ?", (len(needle), needle)).fetchall()
+    rows, from_backup = lookup(cache, ident), False
+    if not rows and (backup := open_backup()):
+        rows, from_backup = lookup(backup, ident), True
+        backup.close()
     if not rows:
         sys.exit(f"no thread matching {ident!r} (try `t3-find-thread index --rebuild`)")
     if len(rows) > 1:
         sys.exit(f"ambiguous thread id {ident!r}: {', '.join(r['id_key'][:12] for r in rows)}")
-    return rows[0]
+    return rows[0], from_backup
 
 
-def thread_messages(store: Path, thread_id: str) -> list[sqlite3.Row]:
-    with connect_readonly(store) as src:
-        return src.execute(MESSAGES_SQL, (thread_id,)).fetchall()
+def thread_messages(store: Path, thread_id: str, from_backup: bool = False, tools: bool = False) -> list[dict]:
+    """Messages in order (idx, role, text, created_at); backup threads add tool/reasoning/event entries
+    when `tools`, their role then naming the tool. `idx` is stable across peek/grep/read."""
+    if not from_backup:
+        with connect_readonly(store) as src:
+            return [{"idx": i, **dict(m)} for i, m in enumerate(src.execute(MESSAGES_SQL, (thread_id,)))]
+    backup = open_backup()
+    rows = backup.execute(
+        "SELECT seq, role, tool, text, created_at FROM entries WHERE thread_id = ? ORDER BY seq", (thread_id,)
+    ).fetchall()
+    backup.close()
+    return [
+        {"idx": r["seq"], "role": r["role"] if r["role"] in ("user", "assistant") else r["tool"] or r["role"],
+         "text": r["text"], "created_at": r["created_at"]}
+        for r in rows
+        if tools or r["role"] in ("user", "assistant")
+    ]
 
 
 def clip(text: str, limit: int) -> str:
@@ -433,15 +480,40 @@ def cmd_index(args) -> None:
         print(json.dumps(stats, indent=2))
 
 
-def gather(args) -> tuple[list[dict], list[str]]:
+def backup_reason(args, cache: sqlite3.Connection, results: list[dict]) -> str | None:
+    """Why the purge archive joins this search, or None."""
+    if args.backup == "off":
+        return None
+    if args.backup == "on":
+        return "asked"
+    if not results:
+        return "no live hit"
+    if max(len(r["terms_hit"]) for r in results) < results[0]["terms_total"]:
+        return "no live hit has every term"
+    oldest = cache.execute("SELECT min(created_at) FROM threads").fetchone()[0] or ""
+    for flag in ("since", "until"):
+        if getattr(args, flag, None) and iso(parse_date(getattr(args, flag))) < oldest:
+            return f"--{flag} predates the live store ({day(oldest)})"
+    return None
+
+
+def gather(args) -> tuple[list[dict], list[str], str | None]:
     cache = ensure_index(args)
     terms = [t for t in (args.terms or []) + (args.keyword or []) if t.strip()]
     results = score_threads(cache, candidate_threads(cache, args), terms, args)
+    reason = backup_reason(args, cache, results)
+    if reason and (backup := open_backup()):
+        live = {row[0] for row in cache.execute("SELECT thread_id FROM threads")}
+        rows = [r for r in candidate_threads(backup, args) if r["thread_id"] not in live]
+        results += score_threads(backup, rows, terms, args, backup=True)
+        backup.close()
+    elif reason:
+        reason = None  # no archive on this machine
     cache.close()
-    return results, terms
+    return rank(results), terms, reason
 
 
-def filters_line(args, terms: list[str], total: int) -> str:
+def filters_line(args, terms: list[str], total: int, reason: str | None = None) -> str:
     bits = [f"terms={terms or '—'}", f"project={args.project or 'any'}"]
     if args.since:
         bits.append(f"since={day(iso(parse_date(args.since)))}")
@@ -452,19 +524,21 @@ def filters_line(args, terms: list[str], total: int) -> str:
         bits.append("fuzzy=on")
     if args.title_only:
         bits.append("title-only")
+    if reason:
+        bits.append(f"+backup ({reason})")
     return f"{total} candidate(s) · " + " · ".join(bits)
 
 
 def cmd_search(args) -> None:
-    results, terms = gather(args)
+    results, terms, reason = gather(args)
     shown = results[: args.limit]
     if args.json or args.format == "json":
-        print(json.dumps({"filters": filters_line(args, terms, len(results)), "results": shown}, indent=2))
+        print(json.dumps({"filters": filters_line(args, terms, len(results), reason), "results": shown}, indent=2))
         return
     if args.format == "ids":
         print("\n".join(r["short_id"] for r in shown))
         return
-    print(filters_line(args, terms, len(results)))
+    print(filters_line(args, terms, len(results), reason))
     if not shown:
         print("\nNo hits. Widen: drop a term, add --fuzzy, extend --since, or relax --project.")
         return
@@ -472,12 +546,16 @@ def cmd_search(args) -> None:
     print("| # | created | project | title | terms | hits u/a | id |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
     for rank, r in enumerate(shown, 1):
-        title = thread_link(clip(r["title"], 60), r["thread_id"]) + (" _(archived)_" if r["archived"] else "")
+        # Purged threads no longer open in T3: plain title, no dead link.
+        title = (clip(r["title"], 60) + " _(backup)_") if r["backup"] else thread_link(clip(r["title"], 60), r["thread_id"])
+        title += " _(archived)_" if r["archived"] else ""
         print(
             f"| {rank} | {day(r['created_at'])} | {clip(r['project'], 22)} | {title} "
             f"| {len(r['terms_hit'])}/{r['terms_total']} | {r['user_hits']}/{r['assistant_hits']} "
             f"| `{r['short_id']}` |"
         )
+    if not reason and args.backup == "auto" and ARCHIVE.exists():
+        print("\nBackup archive not searched (a live hit has every term); `--backup on` adds purged threads.")
     print(f"\nNext: t3-find-thread peek {','.join(r['short_id'] for r in shown[:3])}")
 
 
@@ -486,22 +564,22 @@ def cmd_peek(args) -> None:
     store = Path(args.store)
     payload = []
     for ident in [i for chunk in args.ids for i in chunk.split(",") if i]:
-        row = resolve_thread(cache, ident)
-        messages = thread_messages(store, row["thread_id"])
+        row, from_backup = resolve_thread(cache, ident)
+        messages = thread_messages(store, row["thread_id"], from_backup)
         prompts = [
-            {"idx": i, "time": minute(m["created_at"]), "text": clip(m["text"], 300)}
-            for i, m in enumerate(messages)
+            {"idx": m["idx"], "time": minute(m["created_at"]), "text": clip(m["text"], 300)}
+            for m in messages
             if m["role"] == "user"
         ][: args.prompts]
         outline = [
             {
-                "idx": i,
+                "idx": m["idx"],
                 "role": m["role"],
                 "time": minute(m["created_at"]),
                 "chars": len(m["text"]),
                 "head": clip(m["text"], 100),
             }
-            for i, m in enumerate(messages)
+            for m in messages
         ]
         if len(outline) > args.outline:
             half = args.outline // 2
@@ -515,9 +593,10 @@ def cmd_peek(args) -> None:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "archived": bool(row["archived_at"]),
+                "backup": from_backup,
                 "user_msgs": row["user_msgs"],
                 "assistant_msgs": row["assistant_msgs"],
-                "link": thread_link(row["title"], row["thread_id"]),
+                "link": row["title"] + " (backup)" if from_backup else thread_link(row["title"], row["thread_id"]),
                 "prompts": prompts,
                 "outline": outline,
             }
@@ -546,20 +625,20 @@ def cmd_peek(args) -> None:
 
 def cmd_grep(args) -> None:
     cache = ensure_index(args)
-    row = resolve_thread(cache, args.id)
+    row, from_backup = resolve_thread(cache, args.id)
     cache.close()
     terms = [t for t in (args.terms or []) + (args.keyword or []) if t.strip()]
     if not terms:
         sys.exit("grep needs at least one term (positional or -k)")
     patterns = [(t, re.compile(re.escape(t), re.I)) for t in terms]
     snippets = []
-    for idx, message in enumerate(thread_messages(Path(args.store), row["thread_id"])):
+    for message in thread_messages(Path(args.store), row["thread_id"], from_backup, tools=True):
         for term, pattern in patterns:
             for match in pattern.finditer(message["text"]):
                 start = max(0, match.start() - args.context // 2)
                 snippets.append(
                     {
-                        "idx": idx,
+                        "idx": message["idx"],
                         "role": message["role"],
                         "time": minute(message["created_at"]),
                         "term": term,
@@ -573,11 +652,32 @@ def cmd_grep(args) -> None:
     if args.json:
         print(json.dumps({"thread_id": row["thread_id"], "title": row["title"], "snippets": snippets}, indent=2))
         return
-    print(f"## {thread_link(row['title'], row['thread_id'])}  ({short_id(row['thread_id'])}) — {len(snippets)} snippet(s) for {terms}")
+    heading = row["title"] + " _(backup)_" if from_backup else thread_link(row["title"], row["thread_id"])
+    print(f"## {heading}  ({short_id(row['thread_id'])}) — {len(snippets)} snippet(s) for {terms}")
     for s in snippets:
         print(f"\n#{s['idx']} {s['role']} {s['time']} [{s['term']}]\n  …{s['text']}…")
     if not snippets:
         print("\n(no hits in this thread — try other synonyms)")
+
+
+def cmd_read(args) -> None:
+    """The story of a purged thread (T3 can no longer open it): entries in order, full text."""
+    cache = ensure_index(args)
+    row, from_backup = resolve_thread(cache, args.id)
+    cache.close()
+    entries = [
+        m for m in thread_messages(Path(args.store), row["thread_id"], from_backup, tools=args.tools)
+        if m["idx"] >= args.start
+    ][: args.limit]
+    if args.json:
+        print(json.dumps({"thread_id": row["thread_id"], "title": row["title"], "entries": entries}, indent=2))
+        return
+    heading = row["title"] + " _(backup)_" if from_backup else thread_link(row["title"], row["thread_id"])
+    print(f"## {heading}  ({short_id(row['thread_id'])})")
+    for m in entries:
+        print(f"\n#{m['idx']} {m['role']} {minute(m['created_at'])}\n{m['text']}")
+    if len(entries) == args.limit:
+        print(f"\nMore: t3-find-thread read {short_id(row['thread_id'])} --from {entries[-1]['idx'] + 1}")
 
 
 # --------------------------------------------------------------------------- cli
@@ -596,6 +696,10 @@ def add_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--title-only", action="store_true", help="match thread titles only")
     parser.add_argument("--fuzzy", action="store_true", help="also match close spellings (speech-to-text typos)")
     parser.add_argument("--subagents", action="store_true", help="include sub-agent / delegated-task threads")
+    parser.add_argument(
+        "--backup", choices=("auto", "on", "off"), default="auto",
+        help="also search purged threads in the backup archive (auto: no live hit with every term, or dates before the live store)",
+    )
     parser.add_argument("--limit", type=int, default=15)
 
 
@@ -621,6 +725,13 @@ def main(argv: list[str] | None = None) -> None:
     peek_parser.add_argument("--prompts", type=int, default=3)
     peek_parser.add_argument("--outline", type=int, default=40)
     peek_parser.set_defaults(func=cmd_peek)
+
+    read_parser = subparsers.add_parser("read", help="a thread's entries in full (for purged threads)")
+    read_parser.add_argument("id")
+    read_parser.add_argument("--tools", action="store_true", help="include archived tool calls / reasoning")
+    read_parser.add_argument("--from", dest="start", type=int, default=0, help="first entry #")
+    read_parser.add_argument("--limit", type=int, default=30)
+    read_parser.set_defaults(func=cmd_read)
 
     grep_parser = subparsers.add_parser("grep", help="snippets around keyword hits in one thread")
     grep_parser.add_argument("id")
