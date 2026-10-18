@@ -443,7 +443,7 @@ def small_model_problem(models: str | None, allowed: bool) -> str | None:
 
 
 def describe_models(spec: dict) -> str:
-    return spec.get("model") or "opus,sol (default)"
+    return spec.get("model") or ("thread's own" if spec.get("resume_thread") else "opus,sol (default)")
 
 
 def valid_name(name: str) -> str:
