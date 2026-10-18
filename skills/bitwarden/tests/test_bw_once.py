@@ -30,7 +30,8 @@ state=json.loads((root/'state').read_text()) if (root/'state').exists() else {'l
 args=sys.argv[1:]
 with (root/'events').open('a') as stream:
  stream.write(json.dumps({'args':args,'session':bool(os.environ.get('BW_SESSION')),'locked':state['locked'],
-  'noninteractive':os.environ.get('BW_NOINTERACTION'),'leaked':os.environ.get('UNRELATED_SECRET')})+'\n')
+  'noninteractive':os.environ.get('BW_NOINTERACTION'),'leaked':os.environ.get('UNRELATED_SECRET'),
+  'appdata':os.environ.get('BITWARDENCLI_APPDATA_DIR')})+'\n')
 if args[0]=='lock':
  state['locks']+=1
  if config.get('fail_lock')==state['locks']:
@@ -43,7 +44,10 @@ elif args[0]=='unlock':
  state['locked']=False
  print(config['session'])
 elif args[0]=='status':
- print(json.dumps({'status':'unauthenticated' if config.get('logged_out') else 'locked' if state['locked'] else 'unlocked','userId':'private-user'}))
+ print(json.dumps({'status':'unauthenticated' if config.get('logged_out') and not state.get('logged_in') else 'locked' if state['locked'] else 'unlocked','userId':'private-user','userEmail':config.get('email')}))
+elif args[0]=='login':
+ state['logged_in']=True;state['locked']=False;print(config['session'])
+elif args[:2]==['config','server'] and len(args)==3:state['server']=args[2]
 elif args[0]=='--version':print('2026.9.1')
 elif args[0]=='sync':
  if not state['locked'] or os.environ.get('BW_SESSION'):sys.exit(5)
@@ -91,7 +95,7 @@ def fake(tmp_path, monkeypatch):
 
 
 def request(op="copy", **values):
-    return {"op": op, "host": "admin.example.com", **({"id": ID, "field": "password"} if op == "copy" else {}), **values}
+    return {"op": op, "vault": "default", "host": "admin.example.com", **({"id": ID, "field": "password"} if op == "copy" else {}), **values}
 
 
 def test_fresh_unlock_lock_before_delivery_and_no_environment_or_result_leaks(fake, capsys):
@@ -233,7 +237,7 @@ def test_send_snapshot_stdin_and_minimal_result(fake, tmp_path, op):
     source = tmp_path / 'a;$(touch PWNED) "document".txt'
     source.write_bytes(original)
 
-    def ask(request, payload):
+    def ask(request, payload, *_):
         source.write_bytes(b"changed after review")
         if op == "send-file":
             assert Path(payload["file"]["fileName"]).stat().st_mode & 0o777 == 0o600
@@ -242,7 +246,7 @@ def test_send_snapshot_stdin_and_minimal_result(fake, tmp_path, op):
             assert payload["text"]["text"] == original.decode()
         return True
 
-    result = bw.transaction(bw.Vault(), {"op": op, "input_file": str(source), "name": "Example", "views": 1}, ask=ask)
+    result = bw.transaction(bw.Vault(), {"op": op, "vault": "default", "input_file": str(source), "name": "Example", "views": 1}, ask=ask)
     payload = json.loads((directory / "send_payload").read_text())
     assert payload["maxAccessCount"] == 1
     assert payload["expirationDate"] == payload["deletionDate"]
@@ -262,7 +266,7 @@ def test_send_bad_size_or_encoding_never_unlocks(fake, tmp_path, content):
     source = tmp_path / "input"
     source.write_bytes(content)
     with pytest.raises(bw.Failure):
-        bw.transaction(bw.Vault(), {"op": "send-text", "input_file": str(source), "name": "Example", "views": 1})
+        bw.transaction(bw.Vault(), {"op": "send-text", "vault": "default", "input_file": str(source), "name": "Example", "views": 1})
     assert not any(event["args"][0] == "unlock" for event in events())
 
 
@@ -270,7 +274,7 @@ def test_fifo_rejected_without_blocking(fake, tmp_path):
     source = tmp_path / "fifo"
     os.mkfifo(source)
     with pytest.raises(bw.Failure, match="regular file"):
-        bw.transaction(bw.Vault(), {"op": "send-file", "input_file": str(source), "name": "Example", "views": 1})
+        bw.transaction(bw.Vault(), {"op": "send-file", "vault": "default", "input_file": str(source), "name": "Example", "views": 1})
 
 
 def test_injection_rejected_and_quoting_preserves_only_arguments(monkeypatch, tmp_path):
@@ -308,7 +312,7 @@ def test_status_is_read_only_and_safe(fake):
     output = subprocess.run([sys.executable, str(SCRIPTS / "bw_once.py"), "doctor"], env=env,
                             capture_output=True, text=True, check=True).stdout
     assert "private-user" not in output and SECRET not in output
-    assert [event["args"] for event in events()] == [["status"], ["--version"]]
+    assert [event["args"] for event in events()] == [["status"], ["--version"], ["config", "server"]]
     assert not json.loads((directory / "state").read_text())["locked"]
 
 
@@ -320,9 +324,9 @@ def test_result_file_permissions_and_no_overwrite(tmp_path):
 
 
 def test_mutex_refuses_contention(fake):
-    with bw.mutex():
+    with bw.mutex("default"):
         with pytest.raises(bw.Failure, match="Another"):
-            with bw.mutex(): pytest.fail("concurrent request accepted")
+            with bw.mutex("default"): pytest.fail("concurrent request accepted")
 
 
 def test_installer_copy_link_and_help_without_vault_access(fake, tmp_path):
@@ -348,7 +352,7 @@ def start_session(fake, monkeypatch, request_values=None, ttl_seconds=None, deli
     import threading
     directory, _, events = fake
     short_dir = Path(tempfile.mkdtemp(prefix="bwo-", dir="/tmp"))  # macOS AF_UNIX paths max 104 bytes
-    monkeypatch.setattr(bw, "session_socket", lambda: short_dir / "s.sock")
+    monkeypatch.setattr(bw, "session_socket", lambda _vault: short_dir / "s.sock")
     if ttl_seconds is not None:
         original_init = bw.Session.__init__
 
@@ -364,7 +368,7 @@ def start_session(fake, monkeypatch, request_values=None, ttl_seconds=None, deli
 
     def run():
         try:
-            outcome["result"] = bw.session_transaction(bw.Vault(), {"op": "session-start", "ttl": 1, "hosts": [],
+            outcome["result"] = bw.session_transaction(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": [],
                                                                   **(request_values or {})}, ask=lambda *_: True,
                                                        announce=announce, deliver=deliver or (lambda _: None),
                                                        audit=outcome.setdefault("audit", []).append)
@@ -384,7 +388,7 @@ def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake
     delivered = []
     thread, announced, outcome = start_session(fake, monkeypatch, deliver=delivered.append)
     assert announced["active"] and announced["hosts"] == [] and 0 < announced["remaining_seconds"] <= 60
-    assert bw.via_session({"op": "session-status"})["active"]
+    assert bw.via_session({"op": "session-status", "vault": "default"})["active"]
     listed = bw.via_session(request("list"))
     assert listed == {"ok": True, "via": "session", "items": [{"id": ID, "name": "Example", "username": "user",
                                                                "host": "admin.example.com"}]}
@@ -392,15 +396,15 @@ def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake
     assert copied["ok"] and copied["copied"] == "password" and SECRET not in json.dumps(copied)
     assert delivered == [SECRET]
     assert not json.loads((directory / "state").read_text())["locked"]  # unlocked while the holder lives
-    assert bw.via_session({"op": "send-text", "input_file": "/x", "name": "n", "views": 1})["ok"] is False
-    assert bw.via_session({"op": "session-stop"}) == {"ok": True, "active": False}
+    assert bw.via_session({"op": "send-text", "vault": "default", "input_file": "/x", "name": "n", "views": 1})["ok"] is False
+    assert bw.via_session({"op": "session-stop", "vault": "default"}) == {"ok": True, "active": False}
     thread.join(5)
     assert outcome.get("result") == {"active": False} and "error" not in outcome
     assert json.loads((directory / "state").read_text())["locked"]
     assert events()[-1]["args"] == ["status"]
     assert sum(event["args"][0] == "unlock" for event in events()) == 1
     assert [line["op"] for line in outcome["audit"]] == ["list", "copy", "session-stop"]
-    assert bw.via_session({"op": "session-status"}) is None and not bw.session_socket().exists()
+    assert bw.via_session({"op": "session-status", "vault": "default"}) is None and not bw.session_socket("default").exists()
     assert SECRET not in capsys.readouterr().out and SECRET not in json.dumps(outcome["audit"])
 
 
@@ -419,12 +423,12 @@ def test_session_host_allowlist_and_expiry_lock(fake, monkeypatch):
 
 def test_session_start_request_validation():
     with pytest.raises(bw.Failure):
-        bw.validate({"op": "session-start", "ttl": 0, "hosts": []})
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 0, "hosts": []})
     with pytest.raises(bw.Failure):
-        bw.validate({"op": "session-start", "ttl": bw.TTL_MAX_MINUTES + 1, "hosts": []})
+        bw.validate({"op": "session-start", "vault": "default", "ttl": bw.TTL_MAX_MINUTES + 1, "hosts": []})
     with pytest.raises(bw.Failure):
-        bw.validate({"op": "session-start", "ttl": 60, "hosts": ["*.example.com"]})
-    assert bw.validate({"op": "session-start", "ttl": 60, "hosts": ["B.example.com", "a.example.com"]})["hosts"] == [
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 60, "hosts": ["*.example.com"]})
+    assert bw.validate({"op": "session-start", "vault": "default", "ttl": 60, "hosts": ["B.example.com", "a.example.com"]})["hosts"] == [
         "a.example.com", "b.example.com"]
     assert bw.ttl_minutes("1h") == 60 and bw.ttl_minutes("45m") == 45 and bw.ttl_minutes("30") == 30
     with pytest.raises(bw.Failure):
@@ -434,6 +438,73 @@ def test_session_start_request_validation():
 def test_logged_out_cli_is_reported_as_login_needed_not_lock_failure(fake):
     _, update, events = fake
     update(logged_out=True)
-    with pytest.raises(bw.Failure, match="bw login"):
+    with pytest.raises(bw.Failure, match="--vault default login"):
         bw.transaction(bw.Vault(), request("list"), ask=lambda *_: pytest.fail("asked while logged out"))
     assert not any(event["args"][0] == "unlock" for event in events())
+
+
+def write_vaults(tmp_path, vaults):
+    path = tmp_path / "home" / ".config" / "bw-once" / "vaults.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(vaults))
+
+
+VAULTS = {"work": {"email": "work@example.com", "default": True},
+          "dentai": {"email": "dentai@example.com", "appdata": "~/bw-dentai", "server": "https://vault.example.eu"}}
+
+
+def test_vault_config_resolves_default_and_rejects_unknown(fake, tmp_path):
+    assert bw.vault_config() == {"name": "default"}
+    with pytest.raises(bw.Failure, match="No vaults configured"):
+        bw.vault_config("dentai")
+    write_vaults(tmp_path, VAULTS)
+    assert bw.vault_config() == {"name": "work", "email": "work@example.com"}
+    assert bw.vault_config("dentai")["appdata"] == str(tmp_path / "home" / "bw-dentai")
+    with pytest.raises(bw.Failure, match="choose --vault dentai|work"):
+        bw.vault_config("personal")
+    write_vaults(tmp_path, {**VAULTS, "dentai": {**VAULTS["dentai"], "server": "https://vault.example.com:8443/"}})
+    assert bw.vault_config("dentai")["server"] == "https://vault.example.com:8443"
+    write_vaults(tmp_path, {**VAULTS, "dentai": {**VAULTS["dentai"], "server": "http://evil.example"}})
+    with pytest.raises(bw.Failure, match="https origin"):
+        bw.vault_config("dentai")
+
+
+def test_vault_uses_its_own_data_dir_and_refuses_another_account(fake, tmp_path):
+    _, update, events = fake
+    write_vaults(tmp_path, VAULTS)
+    update(email="work@example.com")
+    with pytest.raises(bw.Failure, match="another account"):
+        bw.transaction(bw.Vault("dentai"), {**request("list"), "vault": "dentai"},
+                       ask=lambda *_: pytest.fail("asked for the wrong account"))
+    assert {event["appdata"] for event in events()} == {str(tmp_path / "home" / "bw-dentai")}
+    assert not any(event["args"][0] == "unlock" for event in events())
+    with pytest.raises(bw.Failure, match="does not match"):
+        bw.transaction(bw.Vault("work"), {**request("list"), "vault": "dentai"}, ask=lambda *_: True)
+
+
+def test_login_configures_server_logs_in_and_locks(fake, tmp_path):
+    directory, update, events = fake
+    write_vaults(tmp_path, VAULTS)
+    update(logged_out=True, email="dentai@example.com")
+    shown = []
+    result = bw.login_transaction(bw.Vault("dentai"), {"op": "login", "vault": "dentai"},
+                                  ask=lambda request, payload, account: shown.append(account) or True)
+    assert result == {"vault": "dentai", "status": "locked"} and shown == ["dentai@example.com"]
+    args = [event["args"] for event in events()]
+    assert ["config", "server", "https://vault.example.eu"] in args
+    login = args.index(["login", "dentai@example.com", "--raw"])
+    assert ["lock"] in args[login:] and args[-1] == ["status"]
+    assert json.loads((directory / "state").read_text())["locked"]
+    with pytest.raises(bw.Failure, match="already logged in"):
+        bw.login_transaction(bw.Vault("dentai"), {"op": "login", "vault": "dentai"}, ask=lambda *_: True)
+
+
+def test_session_refuses_other_vault_and_reports_reason(fake):
+    session = bw.Session(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": [],
+                                      "reason": "thread X: Sentry login"}, deliver=lambda _: None)
+    assert session.status()["reason"] == "thread X: Sentry login" and session.status()["vault"] == "default"
+    for other in (request("list"), {"op": "session-stop"}, {"op": "session-status"}):
+        with pytest.raises(bw.Failure, match="does not match this session"):
+            session.handle({**other, "vault": "other"})
+    with pytest.raises(bw.Failure, match="Reason"):
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 1, "hosts": [], "reason": "a\nb"})

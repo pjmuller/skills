@@ -10,11 +10,17 @@ commands serve from it; design, paste mechanics and never-list: [session.md](ses
 `scripts/install`; `scripts/install --check` checks dependencies and the installed
 copy. Installer exposes `~/.local/bin/bw-once`, without globally registering this
 skill or installing dependencies. Requires macOS, existing `bw` login, `uv`, and
-Xcode command-line tools. Start with `bw-once doctor` (no unlock). `status: unauthenticated` = bw dropped the login
-(refresh token expired after months without sync): PJ runs `bw login <email> --method 3` in Terminal (his CLI 2FA is a YubiKey OTP, method 3); bw-once never logs in.
+Xcode command-line tools. Start with `bw-once doctor` (no unlock). `status: unauthenticated` = never logged in, or bw
+dropped the login (refresh token expired after months without sync): `bw-once [--vault N] login` opens the human
+Terminal for official `bw login` (password + 2FA typed there; PJ's work 2FA is a YubiKey OTP), then locks.
+
+**Several accounts** (e.g. work + a separate company vault): `~/.config/bw-once/vaults.json` names one CLI context per
+account (`email`, optional `appdata` = separate CLI data dir, `server`, one `"default": true`). `--vault N` goes
+before the command; every request, socket, lock and audit line is per vault, and a context signed in as another
+email fails before any Terminal opens. Never substitute one vault's credentials for another's.
 
 ```sh
-bw-once session start --ttl 60m --host admin.example.com   # optional: PJ unlocks once, auto-lock at expiry
+bw-once session start --ttl 60m --host admin.example.com --reason 'thread X: invoice download'   # PJ unlocks once
 bw-once session status | bw-once session stop
 bw-once list --host admin.example.com
 bw-once copy --id 12345678-1234-1234-1234-123456789abc --host admin.example.com --field password
@@ -28,8 +34,10 @@ cache for login requests, shows
 the request, and asks the human to continue and type the master password into
 official `bw unlock`. **Never send approval/password keystrokes or read that
 Terminal while authentication is in progress.** No agent PTY fallback. Current
-released CLI biometric unlock is [unsupported in cli-v2026.9.1](https://github.com/bitwarden/clients/blob/cli-v2026.9.1/apps/cli/src/key-management/cli-biometrics-service.ts); do not promise Touch ID or invent
-an authentication shim. `--worker` is internal, not a bypass to use from tools.
+Touch ID: CLI ≥ 2026.10.0 unlocks through Bitwarden Desktop biometrics ([PR #22448](https://github.com/bitwarden/clients/pull/22448))
+only while the server flag `biometrics-sdk-ipc` is on (`doctor` → `touch_id_flag`; `false` on EU and US clouds
+2026-10-18), with Desktop ≥ 2026.9.0 running and Touch ID enabled for the same account ([README](https://github.com/bitwarden/clients/blob/cli-v2026.10.0/apps/cli/README.md#unlock-with-desktop-biometrics)). When it flips, the same Terminal shows Touch ID instead
+of the password prompt; no code change. Don't invent an authentication shim. `--worker` is internal, not a bypass to use from tools.
 
 Metadata contains only item UUID/name/username and exact matched DNS host.
 Clipboard accepts one UUID, exact host and username/password/generated TOTP;
@@ -59,8 +67,7 @@ environments; lock cleanup does not erase already copied keys/data. Our mutex
 does not govern other `bw` clients. CLI locking does not lock desktop/extensions.
 Cleanup handles normal errors, timeout, SIGINT/SIGTERM; SIGKILL/power loss can
 prevent cleanup. A lock failure withholds delivery and requires a manual lock.
-No login/logout, account switching, password/session injection or vault
-database copies. The session holder is the only long-lived process: it keeps the key
+No logout, password/session injection or vault database copies. The session holder is the only long-lived process: it keeps the key
 in memory, serves exact-host list/copy over a 0600 Unix socket, logs each request in
 PJ's Terminal and runs `bw lock` at the deadline (`bw lock` anywhere revokes it).
 Status/doctor remain read-only.

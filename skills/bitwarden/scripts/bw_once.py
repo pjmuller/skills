@@ -24,6 +24,7 @@ import tempfile
 import termios
 import time
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 import uuid
 
 AUTH_SECONDS = 180
@@ -77,21 +78,78 @@ def item_id(value):
     return value.lower()
 
 
+def vault_name(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9-]{1,32}", value):
+        raise Failure("Invalid vault name")
+    return value
+
+
+def vault_config(name=None):
+    """Named CLI contexts (one Bitwarden account each) from ~/.config/bw-once/vaults.json:
+    {"work": {"email": "a@x.eu", "default": true}, "dentai": {"email": "b@y.eu", "appdata": "~/…", "server": "https://…"}}.
+    `appdata` = separate CLI data dir (omit = bw's default); no file = one unnamed context without email check."""
+    path = Path.home() / ".config" / "bw-once" / "vaults.json"
+    if not path.is_file():
+        if name not in (None, "default"):
+            raise Failure(f"No vaults configured in {path}; omit --vault")
+        return {"name": "default"}
+    try:
+        vaults = json.loads(path.read_text())
+    except (OSError, ValueError):
+        raise Failure("Invalid vaults.json") from None
+    if not isinstance(vaults, dict) or not vaults or not all(isinstance(v, dict) for v in vaults.values()):
+        raise Failure("Invalid vaults.json")
+    if name is None:
+        defaults = [key for key, entry in vaults.items() if entry.get("default") is True]
+        if len(defaults) != 1:
+            raise Failure("Choose --vault " + "|".join(sorted(vaults)))
+        name = defaults[0]
+    entry = vaults.get(name)
+    if entry is None or not isinstance(entry.get("email"), str) or "@" not in entry["email"]:
+        raise Failure("Unknown vault; choose --vault " + "|".join(sorted(vaults)))
+    config = {"name": vault_name(name), "email": entry["email"].lower()}
+    if entry.get("appdata"):
+        appdata = str(entry["appdata"])
+        appdata = Path.home() / appdata[2:] if appdata.startswith("~/") else Path(appdata)
+        if not appdata.is_absolute():
+            raise Failure("Vault appdata must be absolute or start with ~/")
+        config["appdata"] = str(appdata.resolve())
+    if entry.get("server"):
+        url = urlsplit(entry["server"])
+        if url.scheme != "https" or not url.hostname or url.path not in ("", "/") or url.query or url.username:
+            raise Failure("Vault server must be an https origin")
+        config["server"] = f"https://{url.hostname}" + (f":{url.port}" if url.port else "")
+    return config
+
+
+def reason_text(value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 200 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise Failure("Reason must be 1-200 characters without control characters")
+    return value
+
+
 def validate(request):
-    op = request.get("op")
+    op = request.get("op") if isinstance(request, dict) else None
+    if op == "session-start":
+        request = {"reason": None, **request}
     allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "field"},
                "send-text": {"op", "input_file", "name", "views"},
                "send-file": {"op", "input_file", "name", "views"},
-               "session-start": {"op", "ttl", "hosts"}, "session-stop": {"op"}, "session-status": {"op"}}
-    if not isinstance(request, dict) or op not in allowed or set(request) != allowed[op]:
+               "session-start": {"op", "ttl", "hosts", "reason"}, "session-stop": {"op"}, "session-status": {"op"},
+               "login": {"op"}}
+    if op not in allowed or set(request) != allowed[op] | {"vault"}:
         raise Failure("Invalid request")
     request = dict(request)
+    request["vault"] = vault_name(request["vault"])
     if op == "session-start":
         if type(request["ttl"]) is not int or not 1 <= request["ttl"] <= TTL_MAX_MINUTES:
             raise Failure(f"Session ttl must be 1-{TTL_MAX_MINUTES} minutes")
         if not isinstance(request["hosts"], list):
             raise Failure("Session hosts must be a list")
         request["hosts"] = sorted({host(value) for value in request["hosts"]})
+        request["reason"] = reason_text(request["reason"])
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
     if op == "copy":
@@ -111,11 +169,18 @@ def validate(request):
 
 
 class Vault:
-    def __init__(self):
+    def __init__(self, name=None):
         self.binary = shutil.which("bw")
         if not self.binary:
             raise Failure("Bitwarden CLI is missing")
+        self.config = vault_config(name)
         self.env = clean_env()
+        if "appdata" in self.config:
+            appdata = Path(self.config["appdata"])
+            appdata.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if appdata.is_symlink() or appdata.stat().st_uid != os.getuid():
+                raise Failure("Unsafe vault data directory")
+            self.env["BITWARDENCLI_APPDATA_DIR"] = str(appdata)
         self.session = None
 
     def call(self, *args, data=None, unlock=False):
@@ -147,12 +212,16 @@ class Vault:
             raise Failure("Invalid Bitwarden response") from None
 
     def locked(self):
-        state = self.json("status").get("status")
+        status = self.json("status")
+        state = status.get("status")
         if state == "unauthenticated":
             raise Failure("CLI is logged out (bw drops the login when its refresh token expired, e.g. months "
-                          "without sync); run `bw login <email>` in a human Terminal, then retry")
+                          f"without sync); run `bw-once --vault {self.config['name']} login`, then retry")
         if state != "locked":
             raise Failure("CLI must be logged in and locked; login manually first")
+        expected = self.config.get("email")
+        if expected and str(status.get("userEmail") or "").lower() != expected:
+            raise Failure(f"Vault '{self.config['name']}' CLI context is signed in as another account")
 
     def relock(self):
         with shield_cleanup():
@@ -162,6 +231,8 @@ class Vault:
             except Failure as error:
                 if "logged out" in str(error):
                     raise Failure(f"Nothing to lock: {error}") from None
+                if "another account" in str(error):
+                    raise
                 raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
             except Exception:
                 raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
@@ -178,14 +249,14 @@ def cache_dir():
     return cache
 
 
-def session_socket():
-    return cache_dir() / "session.sock"
+def session_socket(vault):
+    return cache_dir() / f"session-{vault_name(vault)}.sock"
 
 
 @contextmanager
-def mutex():
+def mutex(vault):
     cache = cache_dir()
-    fd = os.open(cache / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = os.open(cache / f"lock-{vault_name(vault)}", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -236,8 +307,9 @@ def snapshot(request):
             yield payload
 
 
-def confirm(request, payload):
-    print("Bitwarden one-time request (master password follows):", flush=True)
+def confirm(request, payload, account=None):
+    print(f"Bitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}); "
+          "master password or Touch ID follows:", flush=True)
     print(json.dumps(request, ensure_ascii=True), flush=True)
     if payload:
         review = {key: payload[key] for key in ("name", "maxAccessCount", "deletionDate", "expirationDate")}
@@ -313,9 +385,38 @@ def clipboard(secret):
     # Child owns the bounded 30-second timer; it has never inherited BW_SESSION.
 
 
+def same_vault(vault, request):
+    if vault.config["name"] != request["vault"]:
+        raise Failure("Request vault does not match the CLI context")
+
+
+def login_transaction(vault, request, ask=confirm):
+    """First login of a CLI context in the human Terminal (master password + 2FA there), then lock."""
+    request = validate(request)
+    same_vault(vault, request)
+    email = vault.config.get("email")
+    if not email:
+        raise Failure("Login needs a configured vault with an email")
+    with mutex(request["vault"]):
+        if vault.json("status").get("status") != "unauthenticated":
+            raise Failure("This vault's CLI context is already logged in")
+        if not ask(request, None, email):
+            raise Failure("Request cancelled")
+        if "server" in vault.config:
+            vault.call("config", "server", vault.config["server"])
+        try:
+            key = vault.call("login", email, "--raw", unlock=True).decode().strip()
+            vault.session = key if re.fullmatch(r"[A-Za-z0-9+/=]+", key) else None
+        finally:
+            vault.relock()
+        vault.locked()
+    return {"vault": request["vault"], "status": "locked"}
+
+
 def transaction(vault, request, ask=confirm, deliver=clipboard):
     request = validate(request)
-    with mutex():
+    same_vault(vault, request)
+    with mutex(request["vault"]):
         if request["op"] == "copy" and deliver is clipboard and not (ROOT / "clipboard").is_file():
             raise Failure("Clipboard helper missing; run installer first")
         vault.relock()
@@ -324,7 +425,7 @@ def transaction(vault, request, ask=confirm, deliver=clipboard):
                 vault.call("sync")
                 vault.locked()
             with snapshot(request) as payload:
-                if not ask(request, payload):
+                if not ask(request, payload, vault.config.get("email")):
                     raise Failure("Request cancelled")
                 key = vault.call("unlock", "--raw", unlock=True).decode().strip()
                 if not key or not re.fullmatch(r"[A-Za-z0-9+/=]+", key):
@@ -356,17 +457,21 @@ class Session:
     """Holds one unlocked session in memory; serves list/copy until the deadline, then locks."""
 
     def __init__(self, vault, request, deliver=clipboard):
-        self.vault, self.deliver = vault, deliver
+        self.bw, self.deliver = vault, deliver
         self.hosts = set(request["hosts"])
+        self.vault, self.reason = request["vault"], request["reason"]
         self.deadline = time.monotonic() + request["ttl"] * 60
         self.expires = datetime.now(timezone.utc) + timedelta(minutes=request["ttl"])
 
     def status(self):
         return {"active": True, "expires_at": self.expires.isoformat(timespec="seconds"),
-                "remaining_seconds": max(0, int(self.deadline - time.monotonic())), "hosts": sorted(self.hosts)}
+                "remaining_seconds": max(0, int(self.deadline - time.monotonic())), "hosts": sorted(self.hosts),
+                "vault": self.vault, "reason": self.reason}
 
     def handle(self, request):
         request = validate(request)
+        if request["vault"] != self.vault:
+            raise Failure("Request vault does not match this session")
         if request["op"] == "session-status":
             return self.status()
         if request["op"] == "session-stop":
@@ -377,14 +482,14 @@ class Session:
             raise Failure("Host is outside this session's allowlist")
         if time.monotonic() >= self.deadline:
             raise Failure("Session expired")
-        result, secret = operate(self.vault, request, None)
+        result, secret = operate(self.bw, request, None)
         if secret is not None:
             self.deliver(secret)
         return {"via": "session", **result}
 
 
 def serve_session(vault, request, announce=lambda status: None, deliver=clipboard, audit=lambda line: None):
-    path = session_socket()
+    path = session_socket(request["vault"])
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         path.unlink()
@@ -423,7 +528,7 @@ def serve_session(vault, request, announce=lambda status: None, deliver=clipboar
                 except OSError:
                     pass
                 if isinstance(incoming, dict) and incoming.get("op") in ("list", "copy"):
-                    audit({key: incoming.get(key) for key in ("op", "host", "id", "field") if key in incoming}
+                    audit({key: incoming.get(key) for key in ("op", "vault", "host", "id", "field") if key in incoming}
                           | {"ok": result["ok"]})
     finally:
         server.close()
@@ -436,12 +541,13 @@ def serve_session(vault, request, announce=lambda status: None, deliver=clipboar
 def session_transaction(vault, request, ask=confirm, announce=lambda status: None, deliver=clipboard,
                         audit=lambda line: None):
     request = validate(request)
-    with mutex():
+    same_vault(vault, request)
+    with mutex(request["vault"]):
         vault.relock()
         try:
             vault.call("sync")
             vault.locked()
-            if not ask(request, None):
+            if not ask(request, None, vault.config.get("email")):
                 raise Failure("Request cancelled")
             key = vault.call("unlock", "--raw", unlock=True).decode().strip()
             if not key or not re.fullmatch(r"[A-Za-z0-9+/=]+", key):
@@ -455,7 +561,7 @@ def session_transaction(vault, request, ask=confirm, announce=lambda status: Non
 
 def via_session(request):
     """Ask a running holder; None when there is none (caller falls back to the Terminal flow)."""
-    path = session_socket()
+    path = session_socket(request["vault"])
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(120)
     try:
@@ -511,6 +617,22 @@ def ttl_minutes(value):
     return int(match.group(1)) * (60 if match.group(2) == "h" else 1)
 
 
+def result_ok(status, expected):
+    return not expected or str(status.get("userEmail") or "").lower() == expected
+
+
+def touch_id_flag(vault):
+    """bw >= 2026.10 unlocks via Desktop Touch ID only when the server enables `biometrics-sdk-ipc`."""
+    try:
+        server = urlsplit(vault.call("config", "server").decode().strip())
+        if server.scheme != "https" or not server.hostname:
+            return None
+        with urlopen(f"https://{server.hostname}/api/config", timeout=5) as response:
+            return json.loads(response.read(1_000_000)).get("featureStates", {}).get("biometrics-sdk-ipc")
+    except Exception:
+        return None
+
+
 def interrupted(*_):
     raise Failure("Request interrupted or timed out")
 
@@ -532,12 +654,15 @@ def worker(directory):
             def announce(status):
                 signal.alarm(0)
                 publish(directory, {"ok": True, **status})
-                print(f"Session active until {status['expires_at']} for hosts {status['hosts'] or 'any'}. "
+                print(f"Session on vault '{status['vault']}' active until {status['expires_at']} for hosts "
+                      f"{status['hosts'] or 'any'}. "
                       "Each request is logged below; Ctrl-C or `bw-once session stop` locks earlier.", flush=True)
-            result = {"ok": True, **session_transaction(Vault(), request, announce=announce,
+            result = {"ok": True, **session_transaction(Vault(request["vault"]), request, announce=announce,
                                                         audit=lambda line: print(json.dumps(line), flush=True))}
+        elif isinstance(request, dict) and request.get("op") == "login":
+            result = {"ok": True, **login_transaction(Vault(request["vault"]), request)}
         else:
-            result = {"ok": True, **transaction(Vault(), request)}
+            result = {"ok": True, **transaction(Vault(request.get("vault")), request)}
     except Failure as error:
         result = {"ok": False, "error": str(error)}
     except Exception:
@@ -566,6 +691,12 @@ def launch(request):
     if sys.platform != "darwin" or not shutil.which("osascript"):
         raise Failure("A real macOS Terminal is required; no noninteractive fallback")
     request = validate(request)
+    vault = Vault(request["vault"])  # Fail before opening a Terminal: wrong account, logged out, already unlocked.
+    if request["op"] == "login":
+        if vault.json("status").get("status") != "unauthenticated":
+            raise Failure("This vault's CLI context is already logged in")
+    else:
+        vault.locked()
     with tempfile.TemporaryDirectory(prefix="bw-once-request-") as directory:
         path = Path(directory)
         private_json(path / "request.json", request)
@@ -598,9 +729,11 @@ def main():
         signal.signal(sig, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", help=argparse.SUPPRESS)
+    parser.add_argument("--vault", help="named CLI context from ~/.config/bw-once/vaults.json (default: its default)")
     commands = parser.add_subparsers(dest="op")
     commands.add_parser("status")
     commands.add_parser("doctor")
+    commands.add_parser("login", help="first login of a vault's CLI context in a human Terminal")
     commands.add_parser("list").add_argument("--host", required=True)
     copy = commands.add_parser("copy")
     copy.add_argument("--id", required=True)
@@ -615,6 +748,7 @@ def main():
     start = session.add_parser("start")
     start.add_argument("--ttl", default=f"{TTL_DEFAULT_MINUTES}m", help="minutes, e.g. 60m or 1h")
     start.add_argument("--host", action="append", default=[], dest="hosts", help="restrict to exact hosts")
+    start.add_argument("--reason", help="one line shown to the human in the Terminal and in session status")
     session.add_parser("stop")
     session.add_parser("status")
     args = vars(parser.parse_args())
@@ -629,16 +763,23 @@ def main():
         if directory:
             worker(directory)
             return
+        args["vault"] = vault_config(args["vault"])["name"]
         if args["op"] in ("status", "doctor"):
-            vault = Vault()
-            state = vault.json("status").get("status")
+            vault = Vault(args["vault"])
+            status = vault.json("status")
+            state = status.get("status")
             version = vault.call("--version").decode().strip()
             if not re.fullmatch(r"\d+\.\d+\.\d+(?:[\w.-]*)", version):
                 raise Failure("Invalid CLI version response")
-            result = {"ok": True, "status": state if state in ("locked", "unlocked", "unauthenticated") else "unknown",
-                      "bw_version": version, "ready": state == "locked" and sys.platform == "darwin",
+            expected = vault.config.get("email")
+            result = {"ok": True, "vault": args["vault"],
+                      "status": state if state in ("locked", "unlocked", "unauthenticated") else "unknown",
+                      "account_matches": None if not expected or state == "unauthenticated"
+                      else str(status.get("userEmail") or "").lower() == expected,
+                      "bw_version": version, "touch_id_flag": touch_id_flag(vault),
+                      "ready": state == "locked" and sys.platform == "darwin" and result_ok(status, expected),
                       "clipboard_ready": (ROOT / "clipboard").is_file(),
-                      "session": via_session({"op": "session-status"}) or {"active": False}}
+                      "session": via_session({"op": "session-status", "vault": args["vault"]}) or {"active": False}}
         elif args["op"] == "session-start":
             args["ttl"] = ttl_minutes(args["ttl"])
             result = launch(args)

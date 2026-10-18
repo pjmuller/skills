@@ -6,8 +6,11 @@ company repo (PB `pro-backup-backend`, KA `kampadmin`) so the wrapper's `yuki.js
 ## Order of routes per open row
 1. **Gmail already has it**: `GWS gmail-search '<vendor> after:<quarter start>'` → `GWS gmail-attachments <id> -o <dir>`.
    Many vendors mail PDFs (Stripe receipts, webshops, forwards from colleagues).
-2. **Supplier portal via PJ's logged-in Chrome** (CDP, background tab, no focus steal; precondition and tool notes in
-   `macbook_setup/ai/t3-preview.md`). Recipe per vendor in the wrapper's `vendor-recipes.md`.
+2. **Supplier portal in the T3 browser, Work profile** (`preview_open {profileId:"Work", open:false}`, then the same
+   `fetch(url,{credentials:'include'})` → `blob` → `<a download>`.click() via `preview_evaluate`; `preview_status`
+   `downloads[].path` then holds the bytes, nothing passes through the model; verified 2026-10-18). PJ's real
+   Chrome over CDP only with his OK for this run: every attach pops Chrome's consent modal (tool notes in
+   `macbook_setup/ai/t3-preview.md`). Recipe per vendor in the wrapper's `vendor-recipes.md`. CDP variant:
    ```bash
    chrome-devtools start --autoConnect
    chrome-devtools new_page '<billing url>' --background        # own tab; pageId from list_pages

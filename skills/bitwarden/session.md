@@ -104,5 +104,7 @@ or the clipboard).
   the browser rules forbid ([URI match detection](https://bitwarden.com/help/uri-match-detection/)).
 - **Keychain item with expiry**: generic-password items have no expiration attribute; the reader would have
   to enforce it anyway, so the holder is simpler and leaves nothing on disk.
-- **Biometric CLI unlock**: merged upstream 2026-09 ([PR #22448](https://github.com/bitwarden/clients/pull/22448)),
-  needs Desktop ≥ 2026.7 and an interactive unlock; not in the installed 2026.6.0. Revisit after upgrading.
+- **Biometric CLI unlock**: shipped in CLI 2026.10.0 ([PR #22448](https://github.com/bitwarden/clients/pull/22448)),
+  needs Desktop ≥ 2026.9.0 with Touch ID on for the same account and an interactive unlock (the holder's `bw unlock` qualifies), but is
+  dark-launched behind server flag `biometrics-sdk-ipc` (false 2026-10-18). Touch ID would replace only the
+  password at mint; the session stays whole-vault, so the holder's scope/TTL rules remain the control.
