@@ -14,11 +14,14 @@ Browser profiles are separate from AI provider/billing profiles.
 3. Open one tab per selected T3 profile. Visit a user-chosen service (Gmail, for example);
    inspect only the visible account identity. A successful import count isn't proof of
    login. Record pass / needs sign-in; let the user complete login or MFA when needed.
-4. Test native `preview_status` → `preview_open` → focused snapshot/DOM read in each
-   installed harness. Check its actual tool schema: v0.0.45 ignores `profileId` on MCP
-   opens (main adds `profileId` + driving unclaimed human tabs, [#16956](https://github.com/pingdotgg/t3code/pull/16956); expected in 0.0.46, re-test). Workaround: T3's **+ → Browser submenu → profile**, via computer use if available,
-   then target the tab. With no assigned agent tab, `preview_open({})` adopts the active
-   UI tab; an existing assignment wins. Don't switch global defaults during parallel work.
+4. Test native `preview_status` → `preview_open {profileId}` → focused snapshot/DOM read in each
+   installed harness (T3 ≥ 0.1.0: `profileId` works; the Settings default profile may be empty, so
+   agents always pass it). Profile cookies are shared by every thread; `incognito` is isolated.
+   Windows: Chromium browsers can't be imported (app-bound encryption) → sign in inside T3 once.
+   Login page later → the agent asks the user to log in inside the visible T3 tab with their
+   password manager app. Passkey-only sites: sign in in the normal browser, then re-import.
+   Real browser over CDP is a last resort: Chrome ≥ 144 shows a focus-stealing consent modal per
+   attach; if those pop up, turn off `chrome://inspect/#remote-debugging`.
 5. Merge one routing line into the user's canonical global AGENTS.md/CLAUDE.md:
    `Browser: T3 first. {purpose} → {profile} ({verified account}); verify identity. Fallback: {browser/profile}. Details: {absolute guide path}.`
    Keep IDs, version-specific workarounds and test results in their private setup repo's
@@ -27,5 +30,5 @@ Browser profiles are separate from AI provider/billing profiles.
 No custom cookie or profile-selection script needed. Re-run the identity check after
 re-import or profile changes; mark any untested harness/profile explicitly.
 
-Sources: [T3 import](https://github.com/pingdotgg/t3code/blob/v0.0.45/docs/user/browser-import.md),
-[profile-selection limitation and workaround](https://github.com/pingdotgg/t3code/issues/13254#issuecomment-5795278755).
+Sources: [T3 import](https://github.com/pingdotgg/t3code/blob/v0.1.0/docs/user/browser-import.md),
+[Chrome consent per attach](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session).
