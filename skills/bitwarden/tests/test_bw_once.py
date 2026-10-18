@@ -368,8 +368,8 @@ def start_session(fake, monkeypatch, request_values=None, ttl_seconds=None, deli
 
     def run():
         try:
-            outcome["result"] = bw.session_transaction(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": [],
-                                                                  **(request_values or {})}, ask=lambda *_: True,
+            outcome["result"] = bw.session_transaction(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1,
+                                                                  "hosts": ["admin.example.com"], **(request_values or {})}, ask=lambda *_: True,
                                                        announce=announce, deliver=deliver or (lambda _: None),
                                                        audit=outcome.setdefault("audit", []).append)
         except Exception as error:  # pragma: no cover - surfaced by the test
@@ -387,7 +387,7 @@ def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake
     directory, _, events = fake
     delivered = []
     thread, announced, outcome = start_session(fake, monkeypatch, deliver=delivered.append)
-    assert announced["active"] and announced["hosts"] == [] and 0 < announced["remaining_seconds"] <= 60
+    assert announced["active"] and announced["hosts"] == ["admin.example.com"] and 0 < announced["remaining_seconds"] <= 60
     assert bw.via_session({"op": "session-status", "vault": "default"})["active"]
     listed = bw.via_session(request("list"))
     assert listed == {"ok": True, "via": "session", "items": [{"id": ID, "name": "Example", "username": "user",
@@ -423,7 +423,9 @@ def test_session_host_allowlist_and_expiry_lock(fake, monkeypatch):
 
 def test_session_start_request_validation():
     with pytest.raises(bw.Failure):
-        bw.validate({"op": "session-start", "vault": "default", "ttl": 0, "hosts": []})
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 0, "hosts": ["a.example.com"]})
+    with pytest.raises(bw.Failure, match="exact hosts"):
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 60, "hosts": []})
     with pytest.raises(bw.Failure):
         bw.validate({"op": "session-start", "vault": "default", "ttl": bw.TTL_MAX_MINUTES + 1, "hosts": []})
     with pytest.raises(bw.Failure):
@@ -500,11 +502,11 @@ def test_login_configures_server_logs_in_and_locks(fake, tmp_path):
 
 
 def test_session_refuses_other_vault_and_reports_reason(fake):
-    session = bw.Session(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": [],
+    session = bw.Session(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": ["admin.example.com"],
                                       "reason": "thread X: Sentry login"}, deliver=lambda _: None)
     assert session.status()["reason"] == "thread X: Sentry login" and session.status()["vault"] == "default"
     for other in (request("list"), {"op": "session-stop"}, {"op": "session-status"}):
         with pytest.raises(bw.Failure, match="does not match this session"):
             session.handle({**other, "vault": "other"})
     with pytest.raises(bw.Failure, match="Reason"):
-        bw.validate({"op": "session-start", "vault": "default", "ttl": 1, "hosts": [], "reason": "a\nb"})
+        bw.validate({"op": "session-start", "vault": "default", "ttl": 1, "hosts": ["a.example.com"], "reason": "a\nb"})

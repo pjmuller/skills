@@ -47,8 +47,8 @@ sequenceDiagram
 
 1. **Mint** (PJ): the agent runs `bw-once session start --ttl 60m [--host a.example.com …]`; a real macOS
    Terminal opens, shows the request (ttl, hosts) and runs official `bw unlock`. PJ types the master password
-   there. Default 60 min, hard cap 240. Prefer `--host` for the hosts the task needs; an empty allowlist means
-   any exact host but still only list/copy.
+   there. Default 60 min, hard cap 240. At least one `--host` is required (2026-10-18: an unscoped session
+   would let a prompt-injected agent pull any login one host at a time).
 2. **Hold**: the holder keeps `BW_SESSION` in process memory and in the env of its own `bw` subprocesses only,
    holds the `bw-once` mutex (no concurrent per-request flow can relock), listens on
    `~/.cache/bw-once/session.sock` (dir 0700, socket 0600) and prints one audit line per request in the
