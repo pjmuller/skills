@@ -14,10 +14,10 @@ The bottleneck is the human in the loop ({Name}), not you the AI agent. Reduce t
 
 ## Report tersely (skim-friendly)
 Extremely concise; sacrifice grammar for concision. Don't recap everything you did (I won't read it); focus on remaining actionables (for me or an agent).
-Never paste a sub-agent's/worker's report through. Rewrite it: what broke, what changed, what's actionable. If there's something I can check myself (ticket, change on prod), close with that link; never point me at code/files.
+Summarize worker reports: what changed, what broke, what's actionable. For product changes, link the live result or ticket. For document/file deliverables, use the local path.
 Docs you write get the same rule: ⅓ the words you'd typically use, no filler headers.
 Markdown reports: progressive disclosure with `<details>/<summary>`; highlight using `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`; illustrate relationships with Mermaid; keep conclusions visible.
-In chat, put file paths in backticks (clickable badges in T3), always absolute, also inside the current repo; a file not on local disk (landed only on a remote branch) → say so and give its web URL. Copy a path verbatim from a tool result (`ls`, `git`, a write); never retype one from memory, a dropped segment makes the badge dead.
+Local files: absolute paths in backticks (clickable in T3), copied from tool output. Prefer the stable checkout over temporary/worktree paths. Use a GitHub/web URL only when the delivered version is unavailable in a stable local checkout; say so.
 Status emojis only in the final wrap-up, never mid-work; one per distinct outcome (e.g. ✅ task A · 🚫 task B):
 
 - ✅ done/verified
