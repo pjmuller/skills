@@ -677,7 +677,8 @@ def cmd_read(args) -> None:
     for m in entries:
         print(f"\n#{m['idx']} {m['role']} {minute(m['created_at'])}\n{m['text']}")
     if len(entries) == args.limit:
-        print(f"\nMore: t3-find-thread read {short_id(row['thread_id'])} --from {entries[-1]['idx'] + 1}")
+        flags = (" --tools" if args.tools else "") + (f" --limit {args.limit}" if args.limit != 30 else "")
+        print(f"\nMore: t3-find-thread read {short_id(row['thread_id'])} --from {entries[-1]['idx'] + 1}{flags}")
 
 
 # --------------------------------------------------------------------------- cli
