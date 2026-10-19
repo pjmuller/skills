@@ -102,7 +102,7 @@ class Call:
     invitees: list = field(default_factory=list)       # [(name, email)]
     recorder: str = ""
     has_video: bool = True
-    segments: list | None = None                      # [(timestamp, speaker, text, verified email)]
+    segments: list | None = None                      # [(timestamp, speaker, text, identity)] see speaker_identity
     decision: recording_owner.Decision | None = None  # set by evaluate
 
     @property
@@ -198,7 +198,8 @@ class Fathom:
     def load(self, call):
         data = http_json(f"{FATHOM_API}/recordings/{call.id}/transcript", self.headers)
         call.segments = [(s.get("timestamp") or "", speaker_name(self.cfg, (s.get("speaker") or {}).get("display_name")),
-                          s.get("text") or "", ((s.get("speaker") or {}).get("matched_calendar_invitee_email") or "").lower())
+                          s.get("text") or "", speaker_identity((s.get("speaker") or {}).get("matched_calendar_invitee_email"),
+                                                                 (s.get("speaker") or {}).get("display_name")))
                          for s in data.get("transcript") or []]
 
 
@@ -237,7 +238,7 @@ class Leexi:
             sp = speakers.get(para.get("speaker_index")) or {}
             text = " ".join((i.get("content") or "").strip() for i in para.get("items") or []).strip()
             call.segments.append((clock(para.get("start_time")), speaker_name(self.cfg, sp.get("name")), text,
-                                  (sp.get("email_address") or "").lower()))
+                                  speaker_identity(sp.get("email_address"), sp.get("name"))))
 
 
 class Monologue:
@@ -289,6 +290,11 @@ def speaker_name(cfg, display_name):
     """Vendor display name -> the person (shared recorder accounts resolved via config speaker_aliases)."""
     name = display_name or "Unknown"
     return cfg.speaker_aliases.get(name.lower(), name)
+
+
+def speaker_identity(email, display_name):
+    """Vendor-verified email, else `name:<display name>` (matches only a roster identity spelled that way)."""
+    return (email or (f"name:{display_name}" if display_name else "")).lower()
 
 
 def is_self(cfg, call, email):
