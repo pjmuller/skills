@@ -242,6 +242,21 @@ def test_monologue_source_shapes(cfg, monkeypatch):
     assert c.segments[1] == ("00:01:01", "speaker_1", "ja", "")
 
 
+def test_leexi_unmatched_speaker_counts_only_via_rostered_display_name(tmp_path, monkeypatch):
+    detail = {"speakers": [{"index": 0, "name": "Ana M", "email_address": None},
+                           {"index": 1, "name": "Client", "email_address": "c@client.example"}],
+              "transcript": [{"speaker_index": i, "start_time": 0, "items": [{"content": words(200)}]} for i in (0, 1)]}
+    monkeypatch.setattr(rw, "http_json", lambda url, headers: detail)
+    monkeypatch.setenv("LEEXI_KEY_ID", "i")
+    monkeypatch.setenv("LEEXI_KEY_SECRET", "s")
+    roster = json.loads(json.dumps(CONFIG["roster"]))
+    for idents, expected in (([ANA], "skipped:fallback"), ([ANA, "leexi:name:ana m"], "qualifies")):
+        roster["people"]["ana"]["identities"] = idents
+        c = call(source="leexi", recorder="desk@beta.example")
+        rw.Leexi(config(tmp_path, roster=roster)).load(c)
+        assert c.segments[0][3] == "name:ana m" and rw.evaluate(config(tmp_path, roster=roster), c, NOW) == expected
+
+
 def test_seed_starts_from_now_without_backfill(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "STATE_DIR", tmp_path / "state")
     rw.save_state({"sources": {"leexi": {"watermark": "2026-10-01T00:00:00+00:00"}}, "calls": {}})

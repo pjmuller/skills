@@ -9,6 +9,8 @@ else `skip` with owner, reason and `Decision.evidence()`. Keep local per-recordi
   Leexi `owner.email`). None → `unknown-team`; several → `ambiguous-team`; `"enabled": false` → `team-disabled`.
 - **Owner** = first person in the team's `priority` who spoke at all under a **verified identity**:
   the vendor's speaker-to-email match (Fathom `speaker.matched_calendar_invitee_email`, Leexi `speakers[].email_address`) equal to one of that person's roster identities.
+  A speaker without that match carries `name:<display name>`: it counts only when a roster identity spells
+  it exactly, e.g. `leexi:name:pj muller` (a teammate's own Meet name the vendor fails to match).
 - Never evidence: calendar invitees/organizer, display-name substrings, who holds the API token,
   most words. Silent attendance is invisible to both vendors, so a silent higher-priority person does not own.
 - No verified team member → the team's declared `fallback` person (an operator statement, e.g. a shared
