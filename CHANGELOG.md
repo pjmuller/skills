@@ -1,8 +1,14 @@
 # Changelog
 
+## v0.5.3 (2026-10-19)
+
+- **t3-relay: confirmed delivery + failover hosts.** `launch`/`send --wait SECS` and `status <rid>` report `ok <threadId>` / `failed` / `pending` from the effect (thread with that title launched, or message `relay-<rid>` landed), not the host's reply wording; failed only once the host turn ended without it, so retries cannot duplicate. Several relay hosts (one task + bound host thread per provider, e.g. Claude Haiku + Codex Luna, effort low): a request goes to the first host that is not stuck, not recently failed and whose account passes the capacity check. `--via INSTANCE` probes one host; `check` lists every host.
+- t3-schedule: a job counts as fired only when t3-relay confirms it (`.last`); unconfirmed → `.pending`, re-checked by the catch-up tick, never blindly re-fired. Previously a relay that accepted and then failed marked the job done and catch-up never retried. Runners change: `skills-refresh` runs `t3-schedule refresh`.
+  **Upgrade (once per machine):** add a host per provider and drop the old single host: [relay.md#heal](skills/t3-manage-thread/relay.md#heal-relay-created-before-2026-10-19).
+
 ## v0.5.2 (2026-10-19)
 
-- **t3-relay: bind the relay to a host thread.** T3 gives an unbound webhook task a fresh git worktree from `origin/main` per run, so every relay request fetched and left a worktree (PJ: 55 in 3 days), and a fetch timeout or `git config` lock race silently dropped the request after the script got 202 (a missed `skills-refresh` and a missed launch). The relay now runs as queued turns in one `⚙️ T3 relay` host thread at the repo root. `t3-relay check` / `install --check` fail on an unbound relay or a deleted host; `launch`/`send` warn. **Heal once per machine** if you set up the relay before this release: [relay.md#heal](skills/t3-manage-thread/relay.md#heal-relay-created-before-2026-10-19-unbound).
+- **t3-relay: bind the relay to a host thread.** T3 gives an unbound webhook task a fresh git worktree from `origin/main` per run, so every relay request fetched and left a worktree (PJ: 55 in 3 days), and a fetch timeout or `git config` lock race silently dropped the request after the script got 202 (a missed `skills-refresh` and a missed launch). The relay now runs as queued turns in one `⚙️ T3 relay` host thread at the repo root. `t3-relay check` / `install --check` fail on an unbound relay or a deleted host; `launch`/`send` warn. **Heal once per machine** if you set up the relay before this release: [relay.md#heal](skills/t3-manage-thread/relay.md#heal-relay-created-before-2026-10-19).
 - agents-md: distinguish local file deliverables (absolute paths) from live product/ticket links; reserve remote file URLs for versions unavailable in a stable local checkout.
 
 ## v0.5.1 (2026-10-18)

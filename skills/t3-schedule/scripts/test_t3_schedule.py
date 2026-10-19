@@ -169,7 +169,7 @@ PROFILES = [{"instance_id": "claudeAgent_dentai", "profile": "dentai", "ecosyste
             {"instance_id": "codex_dentai", "profile": "dentai", "ecosystem": "OpenAI"}]
 
 
-def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=()):
+def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=(), status_rc=None):
     """Run cmd_fire on a machine-local job with faked helpers; returns (rc, argv list)."""
     import argparse
     import json
@@ -192,7 +192,11 @@ def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=()):
                 return subprocess.CompletedProcess(argv, 2, "", "exhausted")
             inst = argv[2].split(",")[0] if len(argv) > 2 else "claudeAgent"
             return ok(f"{inst} {argv[1]}-id high\n")
-        return subprocess.CompletedProcess(argv, relay_rc, "accepted: relay x (d)\n", "")
+        if argv[:2] == ["t3-relay", "status"]:
+            out = {0: "ok mcp:t\n", 1: "failed host turn completed\n", 3: "pending\n"}.get(status_rc, "")
+            return subprocess.CompletedProcess(argv, status_rc, out, "Traceback: database is locked")
+        verdict = {1: "failed host turn completed\n", 3: "pending\n"}.get(relay_rc, "")
+        return subprocess.CompletedProcess(argv, relay_rc, "accepted: relay abc123 via h (d)\n" + verdict, "")
     monkeypatch.setattr(mod.subprocess, "run", run)
     return mod.cmd_fire(argparse.Namespace(name="job")), calls
 
@@ -220,13 +224,15 @@ def test_fire_launch_maps_job_fields(tmp_path, monkeypatch, capsys):
                                      "--settle-when-done"]
     assert relay[7:13] == ["--model", "fable-id", "--instance", "claudeAgent_dentai", "--effort", "low"]
     assert ["t3-pick-instance", "fable", "claudeAgent_dentai"] in calls  # label narrowed to the Claude account
+    assert relay[-3:] == ["--wait", "120", "Run the report."] or relay[-4:] == ["--wait", "120", "--", "Run the report."]
     assert relay[-1] == "Run the report."  # the footer is appended by t3-relay
     assert capsys.readouterr().out.strip().endswith(f"launched ⏰ job {today}")
 
 
 def test_fire_defaults_and_failures(tmp_path, monkeypatch, capsys):
     rc, calls = fire(tmp_path, monkeypatch, {})
-    assert rc == 0 and calls == [["t3-relay", "launch", "--project", "/repo", "--title", calls[0][5], "--", "Run the report."]]
+    assert rc == 0 and calls == [["t3-relay", "launch", "--project", "/repo", "--title", calls[0][5],
+                                  "--wait", "120", "--", "Run the report."]]
     rc, calls = fire(tmp_path, monkeypatch, {"model": "opus"}, no_capacity=("opus",))
     assert rc == 1 and calls[-1][0] == "t3-pick-instance"  # nothing routable: no relay call, catch-up retries
     rc, _ = fire(tmp_path, monkeypatch, {}, relay_rc=1)
@@ -235,7 +241,7 @@ def test_fire_defaults_and_failures(tmp_path, monkeypatch, capsys):
 
 def test_fire_continuation_sends(tmp_path, monkeypatch, capsys):
     rc, calls = fire(tmp_path, monkeypatch, {"resume_thread": TID, "project": None})
-    assert rc == 0 and calls[0][:5] == ["t3-relay", "send", "--thread", TID, "--"]
+    assert rc == 0 and calls[0][:7] == ["t3-relay", "send", "--thread", TID, "--wait", "120", "--"]
     assert calls[0][-1].startswith("Scheduled follow-up (") and calls[0][-1].endswith("thread:\n\nRun the report.")
     assert f"sent follow-up to thread {TID}" in capsys.readouterr().out
 
@@ -663,3 +669,45 @@ def test_pending_resumes(tmp_path, monkeypatch):
     mod.paths("fired")["last"].write_text("2026-09-30\n")
     names = [spec["name"] for spec in mod.pending_resumes(datetime(2026, 9, 30, 12, 0))]
     assert names == ["pending", "weekly"]
+
+
+def test_fire_unconfirmed_leaves_marker_and_never_refires(tmp_path, monkeypatch, capsys):
+    rc, _ = fire(tmp_path, monkeypatch, {}, relay_rc=mod.PENDING_EXIT)
+    marker = mod.paths("job")["pending"]
+    assert rc == mod.PENDING_EXIT and marker.read_text().split()[:2] == [mod.date.today().isoformat(), "abc123"]
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=mod.PENDING_EXIT)   # still pending: no new launch
+    assert rc == mod.PENDING_EXIT and [c[:2] for c in calls] == [["t3-relay", "status"]]
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=0)                  # landed late: done, no launch
+    assert rc == 0 and len(calls) == 1 and not marker.exists()
+
+
+def test_fire_after_failed_request_fires_anew(tmp_path, monkeypatch):
+    fire(tmp_path, monkeypatch, {}, relay_rc=mod.PENDING_EXIT)
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=1)
+    assert rc == 0 and calls[0][:2] == ["t3-relay", "status"] and calls[1][:2] == ["t3-relay", "launch"]
+
+
+def test_stale_marker_fails_without_refire(tmp_path, monkeypatch):
+    fire(tmp_path, monkeypatch, {}, relay_rc=mod.PENDING_EXIT)
+    marker = mod.paths("job")["pending"]
+    day, rid, _ = marker.read_text().split()
+    marker.write_text(f"{day} {rid} 0\n")
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=mod.PENDING_EXIT)
+    assert rc == 1 and len(calls) == 1
+
+
+def test_runner_treats_pending_as_not_fired(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = mod.paths("job")
+    body = mod.runner_script({"name": "job", "project": "/r", "profile": None, "model": None, "thinking": None,
+                              "title": "t", "wait_max": 10}, p)
+    pending, last = body.index(f"rc == {mod.PENDING_EXIT}"), body.index(f'echo "$today" > {p["last"]}')
+    assert pending < last and "exit 0" in body[pending:last]
+
+
+def test_accepted_request_survives_confirmation_crash(tmp_path, monkeypatch):
+    """Sol review P1: POST accepted, then the lookup crashed (no verdict) → marker, never a re-fire."""
+    rc, _ = fire(tmp_path, monkeypatch, {}, relay_rc=99)
+    assert rc == mod.PENDING_EXIT and mod.paths("job")["pending"].exists()
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=99)            # status crashes too: keep waiting
+    assert rc == mod.PENDING_EXIT and len(calls) == 1 and mod.paths("job")["pending"].exists()
