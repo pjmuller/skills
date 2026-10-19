@@ -21,6 +21,9 @@ Never dump a whole thread into context. Flags: `--help`.
 6. **Answer**: top pick + one evidence snippet, runner-ups as short ids. Titles in the output are
    already native T3 chat links.
 
+Gmail URL/id → `t3-mail-link find` ([mail-link.md](../t3-manage-thread/mail-link.md)): it resolves
+the account and every id form first, then calls this search.
+
 Thread ids: full id or ≥8-char short id (the thread's UUID). Reading a thread in full → native
 `t3_thread_read`.
 

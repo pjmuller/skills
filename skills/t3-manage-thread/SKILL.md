@@ -19,6 +19,7 @@ account routing and an outside-T3 entry point.
 | Settle yourself / another thread | `t3_thread_organize {action:"settle"}` ([settle-thread.md](settle-thread.md)) |
 | A script outside T3 starts/messages a thread | `t3-relay launch\|send` ([relay.md](relay.md)) |
 | Gmail case thread woken by new mail | `t3-mail-link` ([mail-link.md](mail-link.md)) |
+| Which T3 thread already works on this Gmail URL | `t3-mail-link find` ([mail-link.md](mail-link.md)) |
 
 - Nothing needs hiding. 🏓 children have no row, and T3's **Working section** (Settings → General) folds busy
   threads until they finish or need you. Snooze is for the user, not for workers.

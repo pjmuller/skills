@@ -25,6 +25,10 @@ Hard rules:
   trash; `slides-delete` needs `--yes`; Gmail sends are not idempotent. Never send mail or edit a
   document just to prove access.
 
+In a T3 thread, any report on a mail you drafted, sent or decided on carries
+`Mail-ref: gmail:<thread id> <account>` (from the command output) so the thread is findable later;
+never in the mail itself (`t3-mail-link find` in the t3-manage-thread skill looks it up).
+
 Conventions: compact text output, `--json` for the raw payload (machine callers always pass it).
 Commands take a Google URL or bare id. Slide arguments take a 1-based number, an objectId or a
 pasted `?slide=id.X` URL (which alone names deck and slide); `slides-resolve` translates.
