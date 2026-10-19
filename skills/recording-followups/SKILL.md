@@ -20,7 +20,8 @@ call): [recording-watcher](../recording-watcher/SKILL.md).
    what was decided, what stays open, timestamps. Personal to-dos and "for a colleague" items in
    their own list, never mixed into the delegable prompts.
 2. **`~/Downloads/<date>-<who>-followup-prompts.md`**: the overview the user reads. Top: a spawn
-   recipe (below). Then one `## N. <title>` section per delegable item.
+   recipe (below) and one current status line, updated when items start. Then one `## N. <title>`
+   section per delegable item.
 3. **One temp file per prompt** beside it: `~/Downloads/<date>-<who>-prompt-N.md` (title line +
    body). Launch by path so extra instructions are a quick edit, not a retype: `t3_thread_launch`
    with `message: "Read and execute ~/Downloads/<date>-<who>-prompt-N.md"` (absolute path) and
@@ -28,15 +29,31 @@ call): [recording-watcher](../recording-watcher/SKILL.md).
 
 ## Prompt shape (each one stands alone)
 
-Repo path + the two or three skill files to read first. Context: the decision, the evidence with
+Two readers: first the user, who was in the call and reads this about an hour later, then the
+worker. Write for the user first, in this order ([examples](prompt-shape.md)):
+
+1. **Title** in the user's words: what is wrong or wanted.
+2. **The moment in the call** (mm:ss), 1–3 sentences: who showed or asked what, and the concrete
+   case behind it. A bug: what came in → what we answered → why that is wrong, with one short
+   verified quote. A feature, research question or mail: who asked for what and why, or which
+   claim to test, or what was promised. Mark paraphrases. The user must recognise the item without
+   opening a link.
+3. **Broader**, 1–2 sentences: the general rule or question this case stands for; already known facts.
+4. **Next steps**, 2–4 terse bullets, including the limit that changes what happens (proposal only,
+   nothing sent).
+5. After a `---` line, **for the agent**: everything below.
+
+Agent block: repo path + the two or three skill files to read first. Evidence with
 **verified** identifiers only (run ids, ticket ids, URLs; a Gemini pass invents small on-screen
 text, take them from source frames or the API). Point at the **verified transcript**
 (`*.transcript.md`, provenance header) when one exists beside the raw vendor ASR, and say so: the
 worker works from that text and never re-runs the video pass; only when no verified transcript
-exists does the prompt name the raw file and the media path. Target behaviour as a numbered list. Verify: which
-tests, which live run or browser check. Ship: commit, push, promote when the repo deploys. Report
-tersely. Add the house rules the thread needs (opposite-model review over 100 loc, no per-project
-code paths) instead of assuming the worker knows them.
+exists does the prompt name the raw file and the media path. Detailed target behaviour only where
+the next steps are not enough. Verify: which tests, which live run or browser check. Authorized
+implementation ships (commit, push, promote when the repo deploys); research delivers findings and
+open decisions, no implementation. Report tersely. Add the house rules the thread needs
+(opposite-model review over 100 loc, no per-project code paths) instead of assuming the worker
+knows them. Source (call link, mm:ss, transcript path, ASR caveat) on one line, not a paragraph.
 
 ## Light research before proposing
 
@@ -58,4 +75,4 @@ children. Research before proposing may use `delegate_task` children ([which one
 ## When the user adds instructions at spawn time
 
 Verbatim: spawn the file. Small additions: append a `Additions from <user>:` paragraph to the temp
-file, then spawn. A changed intent: rewrite the file, keep the overview in sync.
+file, then spawn. A changed intent: rewrite the file. Either way, keep the overview in sync.

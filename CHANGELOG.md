@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **t3-manage-thread / agents-md: one ownership rule.** Native `delegate_task` child = ping-pong inside one task (planning opinion, scoped research, opposite-model review; cross-provider included). Standalone `t3_thread_launch` = independent topic, another repo's work, explicit standalone ask, or a selected recording follow-up (recording-followups: never a child of the intake thread). Every review round is a new `delegate_task` with full context; `childThreadId` only for short same-conversation clarifications. Global template + `global.md` carry the one-line rule.
+- **recording-followups: human-first prompt shape.** Prompts open with the moment in the call and the concrete case (bug: what came in → what we answered → why wrong; request/research/mail: who asked what), then the broader question and 2–4 next steps; repo, skills, Class/Lifecycle, evidence ids and verify/ship move below a `---` agent block. The old "repo + skills first" order made the user open the ticket to recall the item. Two neutral examples in `prompt-shape.md`; overview gets one current status line.
 - t3-schedule: drop the `--settle-when-done` + 🏓-title guard (launched threads are never 🏓 children). dispatch-workers: dispatched items are 📤.
 
 ## v0.5.3 (2026-10-19)
