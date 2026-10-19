@@ -1,5 +1,6 @@
 """t3-relay: argument guard, footer source, and the exact MCP instruction it posts (no live T3)."""
 import json
+import sqlite3
 import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
@@ -26,7 +27,7 @@ def test_footer_comes_from_settle_thread_md():
 def posted(monkeypatch):
     sent = {}
     monkeypatch.setattr(relay, "store", lambda: None)
-    monkeypatch.setattr(relay, "relay_task", lambda con: ("task", "tok"))
+    monkeypatch.setattr(relay, "relay_task", lambda con: ("task", "tok", None))
     monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
     monkeypatch.setattr(relay, "project_id", lambda con, path: "proj-1")
     monkeypatch.setattr(relay, "pick", lambda model: ("codex_a", "gpt-6.1-sol", "high"))
@@ -54,3 +55,19 @@ def test_send_instruction_is_idempotent_per_request(posted):
     assert head == "Call t3_thread_send once with exactly these arguments:"
     assert args["threadId"] == "mcp:abc" and args["message"] == 'quote " and {{body.x}}'
     assert args["clientRequestId"].startswith("relay-") and args["mode"] == "auto"
+
+
+@pytest.mark.parametrize("host, deleted, problem", [
+    ("mcp:host", None, None),
+    (None, None, "not bound"),
+    ("mcp:host", "2026-10-19", "is deleted"),
+])
+def test_relay_health(host, deleted, problem):
+    con = sqlite3.connect(":memory:")
+    con.execute("create table scheduled_tasks (task_id, title, enabled, schedule_json, webhook_token, thread_id)")
+    con.execute("create table orchestration_v2_projection_threads (thread_id, deleted_at)")
+    con.execute("insert into scheduled_tasks values ('t', ?, 1, '{\"type\":\"webhook\"}', 'tok', ?)", (relay.RELAY_TITLE, host))
+    con.execute("insert into orchestration_v2_projection_threads values ('mcp:host', ?)", (deleted,))
+    task_id, token, found = relay.relay_task(con)
+    assert (task_id, token) == ("t", "tok")
+    assert (found is None) if problem is None else (problem in found)

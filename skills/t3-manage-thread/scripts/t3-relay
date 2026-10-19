@@ -56,15 +56,25 @@ def store() -> sqlite3.Connection:
     return con
 
 
-def relay_task(con: sqlite3.Connection) -> tuple[str, str]:
+def relay_task(con: sqlite3.Connection) -> tuple[str, str, str | None]:
+    """(taskId, token, problem). problem: why the relay is unhealthy though still usable."""
     rows = con.execute(
-        "select task_id, webhook_token from scheduled_tasks where title = ? and enabled = 1 "
+        "select task_id, webhook_token, thread_id from scheduled_tasks where title = ? and enabled = 1 "
         "and json_extract(schedule_json, '$.type') = 'webhook' and webhook_token is not null",
         (RELAY_TITLE,),
     ).fetchall()
     if len(rows) != 1:
         die(f"need exactly one enabled webhook task titled {RELAY_TITLE!r}, found {len(rows)}; see relay.md")
-    return rows[0]
+    task_id, token, host = rows[0]
+    problem = None
+    # An unbound task (fresh thread per run) gets a fresh git worktree from origin per request:
+    # a fetch per relay, worktree litter, and timeouts that silently drop the request.
+    if host is None:
+        problem = "relay task is not bound to a host thread (one git worktree + fetch per request)"
+    elif not con.execute("select 1 from orchestration_v2_projection_threads where thread_id = ? "
+                         "and deleted_at is null", (host,)).fetchone():
+        problem = f"relay host thread {host} is deleted: requests go nowhere"
+    return task_id, token, problem
 
 
 def origin() -> str:
@@ -147,12 +157,16 @@ def main() -> None:
         die("--instance/--effort need --model", 2)
 
     con = store()
-    task_id, token = relay_task(con)
+    task_id, token, problem = relay_task(con)
     base = origin()
     rid = uuid.uuid4().hex[:12]
     if a.cmd == "check":
+        if problem:
+            die(f"{problem}; fix: relay.md 'Heal'")
         print(f"ok: relay task {task_id} on {base}")
         return
+    if problem:
+        print(f"t3-relay: warning: {problem}; run `t3-relay check`", file=sys.stderr)
     if a.cmd == "launch":
         message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
         args = {"projectId": project_id(con, a.project), "title": a.title, "message": message}
