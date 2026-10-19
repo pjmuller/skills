@@ -42,7 +42,7 @@ help, not a lower code-quality bar.
 
 | Content | Home |
 | --- | --- |
-| Reporting style, autonomy limits, verification bar, delegation routing, machine tooling monoculture, repo map, personal aliases | global file |
+| Reporting style, autonomy limits, verification bar, delegation routing (the one-line ownership rule: native child vs standalone thread; mechanics stay in the linked workflow skill), machine tooling monoculture, repo map, personal aliases | global file |
 | Architecture, domain terms, build/test/deploy commands of one project | that repo's entrypoint ([SKILL.md](SKILL.md)) |
 | Multi-step procedures, rarely needed know-how | a skill (loads on demand) |
 | Machine facts needed only for some tasks: browser profile IDs, account maps, tool recipes | pointer file beside the global file |

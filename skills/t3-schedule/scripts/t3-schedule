@@ -869,8 +869,6 @@ def cmd_add(args: argparse.Namespace) -> int:
     hour, minute = parse_at(args.at)
     once = parse_once(args.once, hour, minute, datetime.now()) if args.once else None
     days = None if once else parse_days(args)
-    if args.settle_when_done and (args.title or "").startswith("🏓"):
-        raise SystemExit("--settle-when-done cannot use a 🏓 title (round-trip workers need orchestrator settlement)")
     if args.profile and not args.model:
         raise SystemExit("--profile needs --model (the account is picked per model ecosystem)")
     if problem := small_model_problem(args.model, args.allow_small_model):

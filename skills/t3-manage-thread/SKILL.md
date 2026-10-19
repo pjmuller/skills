@@ -10,8 +10,8 @@ account routing and an outside-T3 entry point.
 
 | Need | Tool |
 |---|---|
-| 🏓 worker: the result feeds this thread (review, sub-step, other ecosystem) | `delegate_task`: no sidebar row, the result wakes you ([workers.md](workers.md)) |
-| 📤 standalone thread / hand-off | `t3_thread_launch` ([workers.md](workers.md#-t3_thread_launch)) |
+| 🏓 ping-pong inside this task (planning opinion, research, review; any provider) | `delegate_task`: no sidebar row, the result wakes you ([which one](workers.md#which-one)) |
+| 📤 independent topic, other repo, selected recording follow-up | `t3_thread_launch` ([workers.md](workers.md#-t3_thread_launch)) |
 | Model + account with capacity | `t3-pick-instance MODEL` → `<instanceId> <modelId> <effort>` ([routing.md](routing.md)) |
 | Message a thread | `t3_thread_send` (`mode` auto/queue/steer; `clientRequestId` for retries) |
 | Read / find threads | `t3_thread_read` · `t3_thread_list` (`currentThreadId` = your own id) · `t3_thread_search` |
