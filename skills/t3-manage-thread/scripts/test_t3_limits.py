@@ -273,6 +273,18 @@ class SetupTokenProbeTest(unittest.TestCase):
         self.assertEqual((account.error, account.plan, account.fetched_at), ("", "max_20x (login fallback)", NOW))
         self.assertIn(t3_limits.PROBE_NOTE, account.notes)
 
+    def test_last_live_plan_outranks_the_saved_login_label_on_the_probe_path(self):
+        credentials = {"accessToken": "t", "setup_token": True, "home": str(self.home), "identity": "",
+                       "rateLimitTier": "default_claude_max_5x"}
+        t3_limits.fetch_claude(credentials, lambda _t: {"_t3_claude_plan": "max_20x"}, now=NOW, store_path=self.store)
+        self.first_reading()  # same store, same home
+        payload = t3_limits.probe_claude_usage(str(self.home), "", now=NOW + timedelta(minutes=1),
+                                               store_path=self.store, run=self.run)
+        plan, _, notes = t3_limits.claude_reading(payload, credentials)
+        self.assertEqual(plan, "max_20x (live Sep 5)")
+        self.assertIn("saved login label max_5x", notes)
+        self.assertEqual(t3_limits.plan_multiplier(t3_limits.Account("x", "y", plan)), (20, "label"))
+
     def test_refused_usage_api_falls_back_to_the_probe(self):
         def fetch(_token):
             raise urllib.error.HTTPError(t3_limits.USAGE_URL, 429, "rate_limit_error", {}, None)
