@@ -152,5 +152,46 @@ class ContextTests(unittest.TestCase):
             call.assert_called_once_with('context', chat='me', n=5)
 
 
+class VoiceTests(unittest.TestCase):
+    def test_media_keys_survive_resync_and_never_leak_into_reads(self):
+        from whatsapp_bridge.worker import voice_candidates
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'history.sqlite')
+            pn, lid, own = '32470123456@s.whatsapp.net', '123@lid', '32470123458'
+            store.alias(lid, pn)
+            store.put(lid, 'old', 100, lid, False, '[non-text message]', 'live')  # synced before keys were kept
+            store.put(lid, 'img', 101, lid, False, 'photo', 'live', b'k', 'image')
+            store.put(pn, 'old', 100, pn, False, '[voice note 9s]', 'resent', b'keys', 'audio')  # phone resend
+            store.put(pn, 'v2', 102, pn, False, '[voice note 3s]', 'live', b'keys2', 'audio')
+            store.put(pn, 'v2', 102, pn, False, '[voice note 3s]', 'history')  # later sync without keys
+            for i in range(60):  # notes far back in a busy chat are still found
+                store.put(pn, f't{i}', 200 + i, pn, False, 'text', 'live')
+            rows = voice_candidates(store, {'chat': '+32470123456', 'n': 3}, own)
+            self.assertEqual([(r['id'], r['media']) for r in rows], [('v2', b'keys2'), ('old', b'keys')])
+            store.put(lid, 'legacy', 99, lid, False, '[non-text message]', 'live')
+            # Enough known notes newer than a keyless row: it is not resend-requested (no 90 s wait).
+            self.assertEqual([r['id'] for r in voice_candidates(store, {'chat': '+32470123456', 'n': 2}, own)],
+                             ['v2', 'old'])
+            self.assertEqual([r['id'] for r in voice_candidates(store, {'chat': '+32470123456', 'ids': ['img']}, own)],
+                             ['img'])
+            self.assertNotIn('media', store.read('+32470123456', 5, own)[0])
+
+    def test_transcribe_passes_hint_and_strips_provenance(self):
+        from whatsapp_bridge import transcribe_audio, download_voice_notes
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / '1-x.ogg'
+            def fake(cmd, **_):
+                self.assertEqual(cmd[1:4], [str(audio), '--prompt', str(audio.with_suffix('.prompt.md'))])
+                Path(cmd[5]).write_text('<!-- provenance -->\n- header\n\nHallo PJ, Mexem.')
+            with patch('whatsapp_bridge.subprocess.run', side_effect=fake):
+                self.assertEqual(transcribe_audio(audio, 'Flemish; Mexem'), 'Hallo PJ, Mexem.')
+            self.assertIn('Flemish; Mexem', audio.with_suffix('.prompt.md').read_text())
+        with patch('whatsapp_bridge._call') as call:
+            for ids in ([], [' ']):
+                with self.assertRaises(ValueError):
+                    download_voice_notes('me', 3, ids)
+            call.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

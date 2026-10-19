@@ -2,12 +2,23 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 
 MAX_MESSAGES = 200
 MAX_CONTEXT_CHARS = 12_000
+# Sibling core in the skills checkout; `transcribe-gemini` on PATH (its scripts/install) otherwise.
+TRANSCRIBE = Path(__file__).resolve().parents[2] / "video-shrink-for-gemini" / "scripts" / "transcribe-gemini"
+VOICE_PROMPT = """# WhatsApp voice note
+
+Transcribe this WhatsApp voice note verbatim in its spoken language; do not translate, summarise or fix
+grammar. Plain paragraphs, no speaker labels or timestamps. Keep numbers, names and hesitations.
+Mark uncertain words with (?) right after them and unintelligible parts as [inaudible].
+Reply with the transcript only.
+"""
 
 
 def _check_chat(chat):
@@ -109,6 +120,42 @@ def _bounded_context(contact, messages, n):
             "truncated": truncated, "history_complete": False}
 
 
+def download_voice_notes(chat: str, n: int = 3, ids: list[str] | None = None) -> list[dict]:
+    """Download the last n audio/voice notes of a chat (or exact message ids) into ~/.config/whatsapp-bridge/media.
+
+    Oldest first; each item has id/timestamp/sender/path/seconds, or an error (e.g. expired media).
+    Older rows without media keys are re-requested from the own phone first (invisible to the chat).
+    """
+    chat = _check_chat(chat)
+    _check_n(n)
+    if ids is not None and (not ids or not all(isinstance(i, str) and i.strip() for i in ids)):
+        raise ValueError("ids must be nonempty message ids")
+    return _call("voice", chat=chat, n=n, ids=ids)
+
+
+def transcribe_audio(path: str | Path, hint: str | None = None) -> str:
+    """Transcribe one audio file via transcribe-gemini; hint = language + names/vocabulary to spell exactly."""
+    path = Path(path)
+    script = str(TRANSCRIBE) if TRANSCRIBE.exists() else shutil.which("transcribe-gemini")
+    if not script:
+        raise RuntimeError("transcribe-gemini not found; install video-shrink-for-gemini (scripts/install)")
+    prompt, out = path.with_suffix(".prompt.md"), path.with_suffix(".transcript.md")
+    prompt.write_text(VOICE_PROMPT + (f"\n## Hint (spell these exactly when heard)\n\n{hint.strip()}\n" if hint else ""))
+    subprocess.run([script, str(path), "--prompt", str(prompt), "--out", str(out)], check=True,
+                   stdout=subprocess.DEVNULL, timeout=600)
+    # Drop transcribe-gemini's provenance header (written for video passes).
+    return out.read_text().split("\n\n", 1)[-1].strip()
+
+
+def transcribe_voice_notes(chat: str, n: int = 3, ids: list[str] | None = None, hint: str | None = None) -> list[dict]:
+    """download_voice_notes + a "transcript" per downloaded note (Gemini; hint boosts names and jargon)."""
+    notes = download_voice_notes(chat, n, ids)
+    for note in notes:
+        if "path" in note:
+            note["transcript"] = transcribe_audio(note["path"], hint)
+    return notes
+
+
 def send_text(target: str, text: str, ai_label: bool = False) -> str:
     """Send once to an explicit international number or allowlisted group JID; return message ID.
 
@@ -137,6 +184,12 @@ def main():
     contacts.add_argument("--limit", type=int, default=10)
     resolve = sub.add_parser("resolve", help="resolve an exact name or number")
     resolve.add_argument("chat")
+    voice = sub.add_parser("voice", help="download (and transcribe) a chat's latest audio/voice notes")
+    voice.add_argument("chat")
+    voice.add_argument("-n", type=int, default=3)
+    voice.add_argument("--id", action="append", dest="ids", help="exact message id (repeatable); overrides -n")
+    voice.add_argument("--transcribe", action="store_true", help="transcribe with Gemini via transcribe-gemini")
+    voice.add_argument("--hint", help="language + names/vocabulary for the transcript, e.g. 'Flemish; Mexem, beurstaks'")
     send = sub.add_parser("send", help="send to an international number or an allowlisted group JID")
     send.add_argument("target", help="+32470123456 or 120363...@g.us")
     send.add_argument("text")
@@ -156,8 +209,13 @@ def main():
             result = find_contacts(args.query, args.limit)
         elif args.command == "resolve":
             result = resolve_contact(args.chat)
+        elif args.command == "voice":
+            if args.hint and not args.transcribe:
+                raise ValueError("--hint needs --transcribe")
+            result = (transcribe_voice_notes(args.chat, args.n, args.ids, args.hint) if args.transcribe
+                      else download_voice_notes(args.chat, args.n, args.ids))
         else:
             result = send_text(args.target, args.text, ai_label=args.ai_label)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"{exc}\n")

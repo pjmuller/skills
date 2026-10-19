@@ -11,11 +11,54 @@ import time
 from .store import STATE, Store, check_recipient, normalize_number, normalize_target
 from . import _bounded_context
 
+MEDIA_FIELDS = {"audioMessage": "audio", "imageMessage": "image", "videoMessage": "video", "ptvMessage": "video",
+                "documentMessage": "document", "stickerMessage": "sticker"}
+AUDIO_SUFFIX = {"audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/mpeg": ".mp3", "audio/amr": ".amr"}
+WRAPPERS = ("ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "documentWithCaptionMessage")
+
+
+def unwrap(message):
+    for wrapper in WRAPPERS:
+        if message.HasField(wrapper):
+            return unwrap(getattr(message, wrapper).message)
+    return message
+
+
+def media_keys(message):
+    """(serialized Message with only the media part, kind) or (None, None): enough to download it later."""
+    message = unwrap(message)
+    for field, kind in MEDIA_FIELDS.items():
+        if message.HasField(field) and getattr(message, field).directPath:
+            only = type(message)()
+            getattr(only, field).CopyFrom(getattr(message, field))
+            return only.SerializeToString(), kind
+    return None, None
+
+
+def voice_candidates(store, request, own):
+    """Newest-first rows that can hold the requested notes; ids pick exact messages anywhere in the chat.
+
+    Pre-2026-10 rows have no keys and show as non-text: only those newer than the n-th known audio count.
+    """
+    rows = store.read(request["chat"], 10**9, own, media=True)[::-1]
+    if request.get("ids"):
+        return [r for r in rows if r["id"] in request["ids"]]
+    picked, audio = [], 0
+    for row in rows:
+        if audio == request["n"]:
+            break
+        if row["kind"] == "audio" or (row["media"] is None and row["text"] == "[non-text message]"):
+            picked.append(row)
+            audio += row["kind"] == "audio"
+    return picked
+
 
 def execute(request):
     from neonize.client import NewClient
     from neonize.events import ConnectedEv, HistorySyncEv, MessageEv, LoggedOutEv
-    from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
+    from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import (
+        Message, PeerDataOperationRequestMessage, PeerDataOperationRequestType, ProtocolMessage)
+    from neonize.proto.waCommon.WACommon_pb2 import MessageKey
     from neonize.utils.jid import build_jid
     from neonize.utils import log
     import qrcode
@@ -31,9 +74,7 @@ def execute(request):
         return f"{value.User}@{value.Server}" if value.User else ""
 
     def text(message):
-        for wrapper in ("ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "documentWithCaptionMessage"):
-            if message.HasField(wrapper):
-                return text(getattr(message, wrapper).message)
+        message = unwrap(message)
         visible = {"conversation", "extendedTextMessage", "imageMessage", "videoMessage",
                    "documentMessage", "audioMessage", "stickerMessage", "contactMessage",
                    "contactsArrayMessage", "locationMessage", "liveLocationMessage",
@@ -43,6 +84,9 @@ def execute(request):
         cards = [message.contactMessage] if message.HasField("contactMessage") else list(message.contactsArrayMessage.contacts)
         if cards:
             return "[contact] " + " | ".join(f"{c.displayName}: {vcard_numbers(c.vcard)}" for c in cards)
+        if message.HasField("audioMessage"):
+            audio = message.audioMessage
+            return f"[{'voice note' if audio.PTT else 'audio'} {audio.seconds}s]"
         return (message.conversation or message.extendedTextMessage.text
                 or message.imageMessage.caption or message.videoMessage.caption
                 or message.documentMessage.caption or "[non-text message]")
@@ -92,7 +136,7 @@ def execute(request):
                     msg = item.message
                     store.put(conv.ID, msg.key.ID, msg.messageTimestamp,
                               own_jid if msg.key.fromMe else (msg.key.participant or msg.key.remoteJID),
-                              msg.key.fromMe, text(msg.message), "history")
+                              msg.key.fromMe, text(msg.message), "history", *media_keys(msg.message))
             last_event[0] = time.monotonic()
         except Exception:
             errors.append("History processing failed; cached results may be incomplete")
@@ -106,10 +150,58 @@ def execute(request):
             if source.Chat.Server == "lid" and alternative.Server == "s.whatsapp.net":
                 store.alias(chat, jid(alternative))
             store.put(chat, info.ID, info.Timestamp, jid(source.Sender),
-                      source.IsFromMe, text(event.Message), "live")
+                      source.IsFromMe, text(event.Message), "resent" if event.UnavailableRequestID else "live",
+                      *media_keys(event.Message))
             last_event[0] = time.monotonic()
         except Exception:
             errors.append("Message processing failed")
+
+    def voice_notes(request, own):
+        rows = voice_candidates(store, request, own)
+        missing = [r for r in rows if r["media"] is None][:20]
+        if missing:
+            # Rows synced before keys were stored: ask our own phone to resend them (a peer protocol
+            # message; nothing reaches the chat). Its answer arrives as MessageEv and refreshes the rows.
+            resend = Message(protocolMessage=ProtocolMessage(
+                type=ProtocolMessage.PEER_DATA_OPERATION_REQUEST_MESSAGE,
+                peerDataOperationRequestMessage=PeerDataOperationRequestMessage(
+                    peerDataOperationRequestType=PeerDataOperationRequestType.PLACEHOLDER_MESSAGE_RESEND,
+                    placeholderMessageResendRequest=[
+                        PeerDataOperationRequestMessage.PlaceholderMessageResendRequest(messageKey=MessageKey(
+                            remoteJID=r["chat"], fromMe=r["from_me"], ID=r["id"],
+                            participant=r["sender"] if r["chat"].endswith("@g.us") else None))
+                        for r in missing])))
+            client.send_message(client.get_me().JID, resend)
+            wanted, deadline = {r["id"] for r in missing}, time.monotonic() + 90
+            while time.monotonic() < deadline and any(
+                    r["media"] is None for r in voice_candidates(store, request, own) if r["id"] in wanted):
+                time.sleep(0.5)
+            rows = voice_candidates(store, request, own)
+        folder = STATE / "media"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        notes = []
+        for row in rows:
+            if request.get("ids") is None and len(notes) == request["n"]:
+                break
+            if row["kind"] not in (None, "audio"):
+                if request.get("ids"):
+                    notes.append({"id": row["id"], "error": f"not audio ({row['kind']})"})
+                continue
+            note = {k: row[k] for k in ("id", "chat", "timestamp", "sender", "from_me", "text")}
+            if row["media"] is None:
+                if request.get("ids"):
+                    notes.append({**note, "error": "phone has not resent this message yet (it can take minutes); rerun"})
+                continue  # A legacy non-text row the phone did not resend: not provably audio.
+            message = Message.FromString(row["media"])
+            mime = message.audioMessage.mimetype.split(";")[0].strip()
+            path = folder / f"{row['timestamp']}-{row['id']}{AUDIO_SUFFIX.get(mime, '.bin')}"
+            try:
+                path.write_bytes(client.download_any(message))
+                notes.append({**note, "path": str(path), "seconds": message.audioMessage.seconds,
+                              "voice": message.audioMessage.PTT})
+            except Exception as exc:
+                notes.append({**note, "error": f"download failed (media may have expired): {exc}"})
+        return notes[::-1]
 
     def connect():
         try:
@@ -164,6 +256,8 @@ def execute(request):
             return store.find(request["query"], request["limit"])
         if op == "resolve":
             return store.resolve(request["chat"], own)
+        if op == "voice":
+            return voice_notes(request, own)
         if op == "context":
             return _bounded_context(store.resolve(request["chat"], own),
                                     store.read(request["chat"], request["n"] + 1, own), request["n"])

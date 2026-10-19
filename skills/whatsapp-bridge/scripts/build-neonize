@@ -20,13 +20,16 @@ fi
 [[ "$(git -C .build/neonize rev-parse HEAD)" == "$revision" ]] || {
   echo 'Unexpected Neonize checkout revision; refusing to build.' >&2; exit 1;
 }
-# Only our committed patch may differ from upstream: NEONIZE_BOT_TAG=always (AI badge in groups too).
+# Only our committed patches may differ from upstream: NEONIZE_BOT_TAG=always (AI badge in groups too)
+# and peer requests to our own phone (resend old messages with their media keys).
 git -C .build/neonize checkout -q -- .
-git -C .build/neonize apply "$PWD/scripts/neonize-bot-tag-always.patch"
+for patch in scripts/neonize-bot-tag-always.patch scripts/neonize-peer-request.patch; do
+  git -C .build/neonize apply "$PWD/$patch"
+done
 mise install
 (
   cd .build/neonize/goneonize
   mise exec go@1.26.0 -- env GOTOOLCHAIN=local CGO_ENABLED=1 "${cgo_flags[@]}" \
     go build -buildmode=c-shared -ldflags=-s -o "../neonize/$lib" .
 )
-echo 'Built Neonize 0.4.7 + bot-tag patch. Run uv sync to install.'
+echo 'Built Neonize 0.4.7 + patches. Run uv sync to install.'

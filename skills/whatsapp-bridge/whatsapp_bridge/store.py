@@ -45,6 +45,11 @@ class Store:
                 CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, jid TEXT);
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
             """)
+            # media: serialized Message holding the download keys; kind: audio/image/video/... (added 2026-10).
+            columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+            for column in ("media BLOB", "kind TEXT"):
+                if column.split()[0] not in columns:
+                    db.execute(f"ALTER TABLE messages ADD COLUMN {column}")
 
     @contextmanager
     def db(self):
@@ -65,14 +70,15 @@ class Store:
             with self.db() as db:
                 db.execute("INSERT OR IGNORE INTO names VALUES (?,?)", (name.casefold(), jid))
 
-    def put(self, chat, msg_id, timestamp, sender, from_me, text, source):
+    def put(self, chat, msg_id, timestamp, sender, from_me, text, source, media=None, kind=None):
         if not msg_id or text is None:
             return
         timestamp = timestamp // 1000 if timestamp > 10**11 else timestamp
         with self.db() as db:
-            db.execute("""INSERT INTO messages VALUES (?,?,?,?,?,?,?)
-                ON CONFLICT(chat,id) DO UPDATE SET text=excluded.text, source=excluded.source""",
-                (chat, msg_id, timestamp, sender, bool(from_me), text, source))
+            db.execute("""INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(chat,id) DO UPDATE SET text=excluded.text, source=excluded.source,
+                    media=COALESCE(excluded.media, media), kind=COALESCE(excluded.kind, kind)""",
+                (chat, msg_id, timestamp, sender, bool(from_me), text, source, media, kind))
 
     def canonical(self, jid):
         with self.db() as db:
@@ -113,18 +119,23 @@ class Store:
                 ORDER BY target LIMIT ?""", (query.casefold(), number, limit))
             return [self.contact(row[0]) for row in rows]
 
-    def read(self, chat, n, own):
+    def read(self, chat, n, own, media=False):
+        """Newest n messages, oldest first; media=True keeps the raw download keys (worker-only)."""
         jid = self.resolve(chat, own)["jid"]
         with self.db() as db:
             aliases = [jid] + [r[0] for r in db.execute("SELECT alias FROM aliases WHERE jid=?", (jid,))]
             marks = ",".join("?" for _ in aliases)
             db.row_factory = sqlite3.Row
-            rows = db.execute(f"SELECT * FROM messages WHERE chat IN ({marks}) ORDER BY timestamp DESC, id DESC", aliases)
+            # The same message can sit under its LID and its phone-number chat; prefer the copy with media keys.
+            rows = db.execute(f"""SELECT * FROM messages WHERE chat IN ({marks})
+                ORDER BY timestamp DESC, id DESC, media IS NULL""", aliases)
             result, seen = [], set()
             for row in rows:
                 if row["id"] not in seen:
                     seen.add(row["id"])
                     message = dict(row)
+                    if not media:
+                        del message["media"]
                     message["from_me"] = bool(message["from_me"])
                     if message["from_me"]:
                         message["sender"] = own + "@s.whatsapp.net"

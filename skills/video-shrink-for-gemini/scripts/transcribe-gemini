@@ -13,6 +13,8 @@ Key/backend, first match wins (Gemini Developer API; files over 20 MB go through
   else GOOGLE_CLOUD_PROJECT    Vertex AI (GOOGLE_CLOUD_LOCATION, default global; regional is +10%)
                                with GOOGLE_APPLICATION_CREDENTIALS or ADC; inline upload.
 
+Audio files (.ogg/.opus/.m4a/.aac/.mp3/.wav/.flac) are sent as audio; anything else as video/mp4.
+
 --ranges <name>.screenshare.json (from detect-screenshare; {"method", "ranges": [{"start", "end"}]}) sends
 the full audio but frames only inside those ranges; the rest costs audio tokens only. "ranges": [] means
 audio only; method "full-fallback" (not a Meet recording) sends the whole video as without --ranges.
@@ -29,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -38,7 +41,14 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
+# IPv4 first, IPv6 as fallback: Python has no happy-eyeballs, so broken IPv6 hangs every call (Oct 2026).
+_getaddrinfo = socket.getaddrinfo
+socket.getaddrinfo = lambda *a, **k: sorted(_getaddrinfo(*a, **k), key=lambda r: r[0] != socket.AF_INET)
+
 INLINE_MAX = 20 * 1024 * 1024
+# Audio-only input (e.g. WhatsApp voice notes from whatsapp-bridge); anything else goes as video/mp4.
+AUDIO_MIME = {".ogg": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac",
+              ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac"}
 MACHINE_ENV = Path.home() / ".config/transcribe-gemini/env"
 UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
 # USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
@@ -115,7 +125,8 @@ def provenance_header(video: Path, prompt: Path, model: str, thinking: str, reso
     """Header prepended to the transcript so a downstream agent knows this text already IS the
     audiovisual pass and must not re-run it (the raw vendor ASR beside it says the opposite)."""
     ranges = plan.get("ranges") or []
-    frames = (f"{len(ranges)} screen-share ranges" if plan.get("method") != "full-fallback" and ranges
+    frames = ("none, audio file" if video.suffix.lower() in AUDIO_MIME
+              else f"{len(ranges)} screen-share ranges" if plan.get("method") != "full-fallback" and ranges
               else "whole video")
     return "\n".join([
         "<!-- provenance: Gemini audiovisual pass -->",
@@ -157,7 +168,8 @@ def main() -> None:
             if plan.get("method") != "full-fallback":  # detect-screenshare could not tell: send every frame
                 parts = ranged_parts(client, backend, args.video, plan["ranges"], Path(tmp))
             else:
-                parts = [media_part(client, backend, args.video, "video/mp4")]
+                mime = AUDIO_MIME.get(args.video.suffix.lower(), "video/mp4")
+                parts = [media_part(client, backend, args.video, mime)]
             started = time.time()
             for attempt in range(3):
                 try:
