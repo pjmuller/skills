@@ -125,7 +125,7 @@ for provider_entry in "${providers[@]}"; do
   model=haiku
   [[ "$driver" == codex ]] && model=luna
   command=(t3-relay launch --project "$warmup_project" --instance "$profile" --model "$model"
-    --effort low --title "Warm-up — $label" -- "$prompt")
+    --effort low --allow-small-model --title "Warm-up — $label" -- "$prompt")
   if ((dry_run)); then
     for arg in "${command[@]}"; do  # byte-safe shell quoting (printf %q mangles UTF-8 under LANG=C)
       [[ "$arg" =~ ^[A-Za-z0-9_./:=,-]+$ ]] && printf '%s ' "$arg" || printf "'%s' " "${arg//\'/\'\\\'\'}"

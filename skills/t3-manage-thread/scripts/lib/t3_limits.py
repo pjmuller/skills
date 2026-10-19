@@ -12,7 +12,8 @@ each Codex instance's from `<home>/auth.json`; Claude's current plan comes from
 `/api/oauth/profile`, and percentages come from Anthropic's
 `/api/oauth/usage` and ChatGPT's `/backend-api/wham/usage`. Tokens are never printed
 and never refreshed (a refresh would rotate them out from under the CLI itself); an
-expired token just reports itself.
+expired token just reports itself. A Claude profile with a 1-year setup-token and no
+usable /login token is read through one tiny `claude -p` turn instead (see limits.md).
 
     t3-limits                     # one aligned block per account (Europe/Brussels)
     t3-limits --json              # flat rows for other scripts
@@ -35,6 +36,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,6 +70,17 @@ SESSION_SECONDS = 5 * 3600
 WEEKLY_SECONDS = 7 * 86400
 CURRENCY = {"EUR": "€", "USD": "$", "GBP": "£"}
 EXPIRED_HINT = "token expired — run any turn in that profile to refresh"
+AUTH_CODES = (401, 403)
+PROBE_STORE = SETTINGS.parent / "t3-limits-probe.json"
+PROBE_SECONDS = 5 * 60  # a probe is a real (tiny) Haiku turn; reuse its reading this long
+PROBE_TIMEOUT = 30
+# Unmodified CLI, no tools/MCP/hooks/skills/session file; `user` settings keep the
+# profile's env token, which outranks any token in the caller's environment.
+PROBE_ARGS = ["-p", "Reply with OK.", "--model", "haiku", "--output-format", "stream-json",
+              "--verbose", "--no-session-persistence", "--strict-mcp-config",
+              "--disable-slash-commands", "--tools", "", "--setting-sources", "user",
+              "--settings", '{"disableAllHooks": true}']
+PROBE_NOTE = "via setup-token probe: no per-model caps"
 
 
 def debug(message: str) -> None:
@@ -236,7 +249,22 @@ def fetch_claude_usage(token: str, fetch_profile=fetch_claude_profile) -> dict:
 
 
 def claude_usage_credentials(home_path: str) -> dict:
-    credentials = dict(claude_credentials(home_path))
+    """The /login token when it is still valid, else (setup-token profiles) a marker for
+    the CLI probe; plan labels of an expired login stay usable as fallback metadata."""
+    setup_token = has_setup_token(home_path)
+    try:
+        credentials = dict(claude_credentials(home_path))
+    except LookupError:
+        if not setup_token:
+            raise
+        credentials = {}
+    expires = credentials.get("expiresAt")
+    expired = isinstance(expires, (int, float)) and expires / 1000 < time.time() + 60
+    if expired and not setup_token:
+        credentials["source"] = "expired"  # never sent; fetch refuses after the cache is loaded
+    elif expired or not credentials.get("accessToken"):
+        credentials["source"] = "cli"
+    credentials["home"], credentials["setup_token"] = home_path, setup_token
     config = (claude_home(home_path) / ".claude.json" if home_path or os.environ.get("CLAUDE_CONFIG_DIR")
               else Path.home() / ".claude.json")
     try:
@@ -245,11 +273,139 @@ def claude_usage_credentials(home_path: str) -> dict:
             raise ValueError("no stable account identity")
         identity = f"{account['accountUuid']}|{account.get('organizationUuid', '')}"
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        identity = credentials["accessToken"]  # rotate only when no stable account id exists
+        # rotate only when no stable account id exists
+        identity = (credentials.get("accessToken") if credentials.get("source") != "cli" else None) \
+            or f"home:{claude_home(home_path)}"
     credentials["identity"] = hashlib.sha256(identity.encode()).hexdigest()
     return credentials
 
 
+def last_activity(home_path: str) -> float:
+    """Newest transcript write in the profile (epoch s): only real turns open a window."""
+    newest = 0.0
+    try:
+        for project in os.scandir(claude_home(home_path) / "projects"):
+            if project.is_dir():
+                for entry in os.scandir(project.path):
+                    if entry.name.endswith(".jsonl"):
+                        newest = max(newest, entry.stat().st_mtime)
+    except OSError:
+        pass
+    return newest
+
+
+def run_probe(home_path: str) -> dict:
+    """One tiny turn through the unmodified `claude` CLI on the profile's own token; its
+    stream-json `rate_limit_event` carries the account's windows (fractions, epoch s).
+    Anthropic allows subscription OAuth only in Claude Code itself, so no raw API call."""
+    binary = shutil.which("claude")
+    if not binary:
+        raise LookupError("usage probe: claude CLI not on PATH")
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    if home_path:
+        env["CLAUDE_CONFIG_DIR"] = str(Path(home_path).expanduser())
+    with tempfile.TemporaryDirectory() as cwd:
+        try:
+            result = subprocess.run([binary, *PROBE_ARGS], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False)
+        except subprocess.TimeoutExpired:
+            raise LookupError(f"usage probe timed out ({PROBE_TIMEOUT}s)")
+    windows, failure = {}, ""
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "rate_limit_event":
+            windows = (event.get("rate_limit_info") or {}).get("unifiedWindows") or windows
+        elif event.get("type") == "result" and event.get("is_error"):
+            failure = str(event.get("result") or event.get("subtype") or "error")[:120]
+    payload = {}
+    for key in ("five_hour", "seven_day"):
+        window = windows.get(key)
+        if isinstance(window, dict) and isinstance(window.get("utilization"), (int, float)):
+            reset = window.get("resetsAt")
+            payload[key] = {
+                "utilization": round(float(window["utilization"]) * 100, 1),
+                "resets_at": datetime.fromtimestamp(reset, timezone.utc).isoformat()
+                if isinstance(reset, (int, float)) else None,
+            }
+    if not payload:
+        raise LookupError(f"usage probe: {failure or 'no rate_limit_event'} (exit {result.returncode})")
+    return payload
+
+
+def idle_payload(payload: dict, now: datetime) -> dict:
+    """No turn since the last session window closed: the session is untouched and the
+    weekly reading stands until its own reset."""
+    idle = {"utilization": 0.0, "resets_at": None}
+    weekly = payload.get("seven_day") or {}
+    reset = parse_time(weekly.get("resets_at"))
+    return {"five_hour": idle, "seven_day": weekly if reset and reset > now else idle}
+
+
+def window_open(payload: dict, closed_at: float, activity: float, now: datetime) -> bool:
+    """Would a probe land inside an open session window (so it starts none)? Only when that is
+    certain: the last reading's window still runs, or a local turn came after a point known to
+    be window-free (`closed_at`: the reading's reset or an idle check) less than 5 h ago — the
+    window that turn opened or joined cannot have ended yet."""
+    reset = parse_time((payload.get("five_hour") or {}).get("resets_at"))
+    if reset is not None and reset > now + timedelta(minutes=1):
+        return True
+    closed_at = max(closed_at, reset.timestamp() if reset else 0.0)
+    return activity > closed_at > now.timestamp() - SESSION_SECONDS
+
+
+def probe_claude_usage(home_path: str, identity: str = "", fresh: bool = False, now: datetime | None = None,
+                       store_path: Path | None = None, run=None) -> dict:
+    """Setup-token usage without starting windows: probe only inside an open session window
+    (window_open; `fresh` overrides), else derive the idle reading. Readings are stored per
+    config dir and account identity (never tokens)."""
+    now = now or datetime.now(timezone.utc)
+    store_path = store_path or PROBE_STORE
+    store, key = read_cache(store_path), str(claude_home(home_path))
+    entry = store.get(key) or {}
+    entry = entry if entry.get("identity") == identity else {}
+    payload, observed = entry.get("payload") or {}, float(entry.get("observed_at") or 0)
+    if payload and not fresh and now.timestamp() - observed < PROBE_SECONDS:
+        return dict(payload, _t3_observed_at=observed, _t3_source="cli")
+    activity = last_activity(home_path)
+    if fresh or window_open(payload, float(entry.get("closed_at") or 0), activity, now):
+        payload = (run or run_probe)(home_path)
+        store[key] = {"payload": payload, "observed_at": now.timestamp(), "identity": identity}
+        write_cache(store, store_path)
+        return dict(payload, _t3_observed_at=now.timestamp(), _t3_source="cli")
+    reset = parse_time((payload.get("five_hour") or {}).get("resets_at"))
+    if activity <= max(reset.timestamp() if reset else 0.0, now.timestamp() - SESSION_SECONDS):
+        # No local turn since the reset, or none for 5 h: no window open now. Remember that
+        # point, so the next turn is known to sit in a fresh window.
+        store[key] = dict(entry, identity=identity, closed_at=now.timestamp())
+        write_cache(store, store_path)
+    elif payload:  # turns since the reset that may sit in a window that has since closed
+        raise LookupError("usage unknown: turns since the last reading, window state uncertain "
+                          "(clears ≤ 5 h after the last turn; `t3-limits --fresh` probes now)")
+    if not payload:
+        raise LookupError("no usage reading yet: shows after the next turn in this profile "
+                          "(`t3-limits --fresh` probes now and may start a 5 h window)")
+    return dict(idle_payload(payload, now), _t3_observed_at=observed, _t3_source="cli")
+
+
+def fetch_claude(credentials: dict, fetch, fresh: bool = False, now: datetime | None = None) -> dict:
+    """Usage API with the /login token; a setup-token profile falls back to the CLI probe
+    when that token is gone or the API refuses it (a revoked token can even answer 429)."""
+    if credentials.get("source") == "expired":
+        raise LookupError(EXPIRED_HINT)
+    if credentials.get("source") == "cli":
+        return probe_claude_usage(credentials["home"], credentials.get("identity", ""), fresh, now)
+    try:
+        return fetch(credentials["accessToken"])
+    except (urllib.error.URLError, OSError):
+        if not credentials.get("setup_token"):
+            raise
+        debug("usage API failed — falling back to the setup-token probe")
+        return probe_claude_usage(credentials["home"], credentials.get("identity", ""), fresh, now)
 
 
 def read_cache(path: Path) -> dict:
@@ -365,6 +521,7 @@ def collect(
     accounts, dirty = [], False
     for instance_id, label, home in profiles:
         account = Account(label=label, instance_id=instance_id, driver=driver)
+        auth_failed = False
         credentials: dict = {}
         payload = None
         entry: dict = {}
@@ -384,12 +541,15 @@ def collect(
                                       "identity": identity}
                 dirty = True
         except urllib.error.HTTPError as error:
-            account.error = EXPIRED_HINT if error.code in (401, 403) else f"HTTP {error.code}"
+            auth_failed = error.code in AUTH_CODES
+            account.error = (f"login rejected (HTTP {error.code}): run a turn in that profile, re-login if it fails"
+                             if auth_failed else f"HTTP {error.code}")
         except (LookupError, KeyError, OSError, ValueError) as error:
             account.error = str(error) or error.__class__.__name__
+            auth_failed = account.error == EXPIRED_HINT
         if account.error and entry:
             account.fetched_at = now - timedelta(seconds=age)
-            if account.error != EXPIRED_HINT and age < STALE_SECONDS:
+            if not auth_failed and age < STALE_SECONDS:
                 debug(f"{instance_id}: {account.error} — serving cache ({age:.0f}s old)")
                 payload, account.error, account.stale = entry["payload"], "", True
             else:
@@ -402,6 +562,9 @@ def collect(
                 except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
                     pass
         if payload is not None:
+            observed = payload.get("_t3_observed_at") if isinstance(payload, dict) else None
+            if isinstance(observed, (int, float)) and not account.stale:
+                account.fetched_at = datetime.fromtimestamp(observed, timezone.utc)
             try:
                 account.plan, account.rows, account.notes = parse(payload, credentials)
             except (TypeError, ValueError, KeyError, AttributeError, OverflowError) as error:
@@ -425,6 +588,8 @@ def claude_plan(credentials: dict) -> str:
 
 def claude_reading(payload: dict, credentials: dict) -> tuple:
     rows, notes = claude_rows(payload)
+    if payload.get("_t3_source") == "cli":
+        notes.append(PROBE_NOTE)
     login = claude_plan(credentials)
     live = payload.get("_t3_claude_plan")
     if isinstance(live, str) and live:
@@ -464,7 +629,8 @@ def claude_accounts(
         return collect(
             profiles,
             claude_usage_credentials,
-            lambda credentials: fetch(credentials["accessToken"]),
+            # the probe gate reads the clock itself: earlier profiles may have taken a minute
+            lambda credentials: fetch_claude(credentials, fetch, fresh, now),
             claude_reading,
             cache_path, fresh, now or datetime.now(timezone.utc), "claudeAgent",
         )
@@ -726,16 +892,11 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "resets_in_seconds": int((row.resets_at - now).total_seconds())
                     if row.resets_at
                     else None,
+                    **({"stale": True} if account.stale else {}),
                     **(
-                        {
-                            "stale": True,
-                            "fetched_at": account.fetched_at.isoformat().replace(
-                                "+00:00", "Z"
-                            )
-                            if account.fetched_at
-                            else None,
-                        }
-                        if account.stale
+                        {"fetched_at": account.fetched_at.isoformat().replace("+00:00", "Z")
+                         if account.fetched_at else None}
+                        if account.fetched_at or account.stale
                         else {}
                     ),
                 }

@@ -15,9 +15,15 @@ Invariants: CodexBar is only the quota display; native CLI homes own authenticat
 switch a global account to make a meter work. No credentials in reports or committed files;
 personal mappings live in `~/.config/codexbar-profiles.json`, outside this skill.
 
-- `scripts/install [--check|--relink]` links `codexbar-profiles` onto `~/.local/bin`; `--check`
-  covers macOS, uv, cswap, CodexBar.app and the link.
+- **Claude quota without claude-swap (recommended with setup-tokens):** point CodexBar's Claude
+  Swap executable at `~/.local/bin/codexbar-claude-usage`
+  ([scripts/codexbar-claude-usage](scripts/codexbar-claude-usage)): a read-only claude-swap
+  schema-v1 stand-in fed by `t3-limits` (no refresh, no switching; slots = T3 Claude provider
+  order). Then no `/login` refresher, stash or mirror job is needed. Details:
+  [install.md](install.md#claude-quota-from-t3-limits).
+- `scripts/install [--check|--relink]` links `codexbar-profiles` and `codexbar-claude-usage` onto
+  `~/.local/bin`; `--check` covers macOS, uv, t3-limits, CodexBar.app and the links.
 - [scripts/codexbar-profiles](scripts/codexbar-profiles) (`--help`): mapping validation,
   Keychain service hashing, newer-expiry sync, expiry alerts, launchd jobs. `check`/`expiry`/`sync`
   only read Keychain and never refresh tokens; `sync --apply` writes; `install-jobs` schedules.
-- `scripts/test_profiles.py`: fake credentials, never touches Keychain.
+- `scripts/test_profiles.py`, `scripts/test_claude_usage.py`: fakes only, never touch Keychain.

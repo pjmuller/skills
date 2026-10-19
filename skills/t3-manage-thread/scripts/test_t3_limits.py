@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import sys
 import tempfile
 import unittest
@@ -138,9 +139,148 @@ class ClaudeRowsTest(unittest.TestCase):
             )
 
         accounts = t3_limits.claude_accounts(fetch=fetch, settings_path=settings, cache_path=settings.parent / "cache.json")
-        self.assertEqual(
-            [account.error for account in accounts], [t3_limits.EXPIRED_HINT]
-        )
+        self.assertEqual([account.error[:24] for account in accounts], ["login rejected (HTTP 401"])
+
+    @patch.object(t3_limits, "claude_credentials", return_value={"accessToken": "old", "expiresAt": 1})
+    def test_locally_expired_login_is_never_sent_but_keeps_exhaustion(self, _token):
+        settings = settings_fixture()
+        cache = settings.parent / "c.json"
+        identity = t3_limits.claude_usage_credentials("~/.claude_work_home")["identity"]
+        cache.write_text(json.dumps({"claudeAgent_work": {"payload": CLAUDE_PAYLOAD, "fetched_at": NOW.timestamp() - 600,
+                                                          "identity": f"~/.claude_work_home|{identity}"}}))
+        fetch = Mock()
+        [account] = t3_limits.claude_accounts(fetch=fetch, settings_path=settings, cache_path=cache, now=NOW)
+        self.assertEqual(account.error, t3_limits.EXPIRED_HINT)
+        self.assertEqual([r.window for r in account.rows], ["session"])  # 100 % until its reset
+        fetch.assert_not_called()
+
+
+def probe_stream(five=0.49, seven=0.94) -> str:
+    """stdout of `claude -p --output-format stream-json --verbose` (unifiedWindows are fractions)."""
+    event = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
+        "five_hour": {"utilization": five, "resetsAt": int((NOW + timedelta(hours=2)).timestamp())},
+        "seven_day": {"utilization": seven, "resetsAt": int((NOW + timedelta(days=3)).timestamp())}}}}
+    return "\n".join([json.dumps({"type": "system"}), "not json", json.dumps(event),
+                      json.dumps({"type": "result", "is_error": False, "result": "OK"})])
+
+
+class SetupTokenProbeTest(unittest.TestCase):
+    """Setup-token profiles: usage from one tiny CLI turn, never opening a window."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        (self.home / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x"}}))
+        self.store = self.home / "probe.json"
+        self.run = Mock(return_value={"five_hour": {"utilization": 49.0, "resets_at": "2026-09-05T09:05:00+00:00"},
+                                      "seven_day": {"utilization": 94.0, "resets_at": "2026-09-08T07:05:00+00:00"}})
+
+    def probe(self, now=NOW, **kwargs):
+        return t3_limits.probe_claude_usage(str(self.home), now=now, store_path=self.store, run=self.run, **kwargs)
+
+    def touch_transcript(self, when):
+        transcript = self.home / "projects" / "-repo" / "session.jsonl"
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text("{}")
+        os.utime(transcript, (when.timestamp(), when.timestamp()))
+
+    def test_parses_the_cli_stream_into_percent_windows(self):
+        with patch.object(t3_limits.shutil, "which", return_value="/bin/claude"), \
+                patch.object(t3_limits.subprocess, "run", return_value=Mock(stdout=probe_stream(), returncode=0)) as run:
+            payload = t3_limits.run_probe(str(self.home))
+        self.assertEqual(run.call_args.kwargs["env"]["CLAUDE_CONFIG_DIR"], str(self.home))
+        self.assertNotIn("ANTHROPIC_API_KEY", run.call_args.kwargs["env"])
+        self.assertEqual(payload["five_hour"]["utilization"], 49.0)
+        rows, _ = t3_limits.claude_rows(payload)
+        self.assertEqual([(r.window, r.used_percent) for r in rows], [("session", 49.0), ("weekly", 94.0)])
+        self.assertEqual(rows[0].resets_at, NOW + timedelta(hours=2))
+
+    def test_failed_probe_without_windows_is_an_error(self):
+        failed = json.dumps({"type": "result", "is_error": True, "result": "Invalid bearer token"})
+        with patch.object(t3_limits.shutil, "which", return_value="/bin/claude"), \
+                patch.object(t3_limits.subprocess, "run", return_value=Mock(stdout=failed, returncode=1)):
+            with self.assertRaisesRegex(LookupError, "Invalid bearer token"):
+                t3_limits.run_probe(str(self.home))
+
+    def first_reading(self):
+        """Bootstrap: an idle check records a window-free point; the next turn is then safe."""
+        self.touch_transcript(NOW - timedelta(hours=6))
+        with self.assertRaisesRegex(LookupError, "no usage reading yet"):
+            self.probe(now=NOW - timedelta(minutes=30))
+        self.run.assert_not_called()
+        self.touch_transcript(NOW - timedelta(minutes=5))
+        return self.probe()
+
+    def test_recent_turn_without_known_idle_point_is_not_probed(self):
+        self.touch_transcript(NOW - timedelta(minutes=5))  # may sit in a window that just ended
+        with self.assertRaisesRegex(LookupError, "--fresh"):
+            self.probe()
+        self.run.assert_not_called()
+        self.probe(fresh=True)
+        self.assertEqual(self.run.call_count, 1)
+
+    def test_turn_after_idle_check_probes_then_reuses_the_reading(self):
+        self.assertEqual(self.first_reading()["seven_day"]["utilization"], 94.0)
+        self.probe(now=NOW + timedelta(minutes=4))
+        self.assertEqual(self.run.call_count, 1)
+        self.probe(now=NOW + timedelta(minutes=6))  # reading's window still open: probing starts none
+        self.assertEqual(self.run.call_count, 2)
+
+    def test_reading_is_bound_to_the_account(self):
+        self.first_reading()
+        with self.assertRaisesRegex(LookupError, "no usage reading yet"):
+            t3_limits.probe_claude_usage(str(self.home), "other-account", now=NOW + timedelta(minutes=1),
+                                         store_path=self.store, run=self.run)
+
+    def test_closed_window_without_new_turn_derives_the_idle_reading(self):
+        self.first_reading()
+        later = NOW + timedelta(hours=3)  # session reset passed, weekly still running
+        payload = self.probe(now=later)
+        self.assertEqual(self.run.call_count, 1)
+        self.assertEqual(payload["five_hour"], {"utilization": 0.0, "resets_at": None})
+        self.assertEqual(payload["seven_day"]["utilization"], 94.0)
+        self.touch_transcript(later + timedelta(minutes=1))  # a turn after the reset opened a window
+        self.probe(now=later + timedelta(hours=3))  # reset 4 h ago: that window still runs
+        self.assertEqual(self.run.call_count, 2)
+        self.touch_transcript(later)  # no turn since that reading
+        self.assertEqual(self.probe(now=NOW + timedelta(days=4))["seven_day"]["resets_at"], None)
+
+    def test_turns_long_after_the_last_known_idle_point_are_uncertain(self):
+        self.first_reading()  # session resets NOW+2h
+        self.touch_transcript(NOW + timedelta(hours=3))  # opened a window ~NOW+3h..+8h
+        self.touch_transcript(NOW + timedelta(hours=7, minutes=58))  # last turn, its window ends +8h
+        with self.assertRaisesRegex(LookupError, "uncertain"):
+            self.probe(now=NOW + timedelta(hours=8, minutes=2))  # reset 6 h ago: unknown, no probe
+        self.assertEqual(self.run.call_count, 1)
+        self.probe(now=NOW + timedelta(hours=13))  # last turn > 5 h old: idle again
+        self.assertEqual(self.run.call_count, 1)
+        self.touch_transcript(NOW + timedelta(hours=13, minutes=5))
+        self.probe(now=NOW + timedelta(hours=13, minutes=6))
+        self.assertEqual(self.run.call_count, 2)
+
+    def test_expired_login_with_setup_token_reads_the_probe(self):
+        settings = Path(tempfile.mkdtemp()) / "settings.json"
+        settings.write_text(json.dumps({"providerInstances": {"claudeAgent": {"driver": "claudeAgent", "enabled": True,
+                                        "config": {"homePath": str(self.home)}}}}))
+        fetch = Mock()
+        login = {"accessToken": "old", "expiresAt": 1, "rateLimitTier": "default_claude_max_20x"}
+        with patch.object(t3_limits, "claude_credentials", return_value=login), \
+                patch.object(t3_limits, "probe_claude_usage", return_value=dict(self.run.return_value,
+                             _t3_source="cli", _t3_observed_at=NOW.timestamp())) as probe:
+            [account] = t3_limits.claude_accounts(fetch=fetch, settings_path=settings,
+                                                  cache_path=settings.parent / "c.json", now=NOW)
+        fetch.assert_not_called()
+        probe.assert_called_once()
+        self.assertEqual((account.error, account.plan, account.fetched_at), ("", "max_20x (login fallback)", NOW))
+        self.assertIn(t3_limits.PROBE_NOTE, account.notes)
+
+    def test_refused_usage_api_falls_back_to_the_probe(self):
+        def fetch(_token):
+            raise urllib.error.HTTPError(t3_limits.USAGE_URL, 429, "rate_limit_error", {}, None)
+        with patch.object(t3_limits, "probe_claude_usage", return_value={"seven_day": {"utilization": 3}}):
+            payload = t3_limits.fetch_claude({"accessToken": "t", "setup_token": True, "home": ""}, fetch)
+        self.assertEqual(payload["seven_day"]["utilization"], 3)
+        with self.assertRaises(urllib.error.HTTPError):
+            t3_limits.fetch_claude({"accessToken": "t", "setup_token": False, "home": ""}, fetch)
 
 
 def settings_fixture() -> Path:
