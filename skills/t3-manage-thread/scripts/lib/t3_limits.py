@@ -369,14 +369,17 @@ def probe_claude_usage(home_path: str, identity: str = "", fresh: bool = False, 
     entry = store.get(key) or {}
     entry = entry if entry.get("identity") == identity else {}
     payload, observed = entry.get("payload") or {}, float(entry.get("observed_at") or 0)
+    # The probe can't see the plan; the last live tier from the usage API beats the saved login label.
+    plan = {"_t3_last_live_plan": entry["live_plan"], "_t3_last_live_plan_at": entry.get("live_plan_at")} \
+        if entry.get("live_plan") else {}
     if payload and not fresh and now.timestamp() - observed < PROBE_SECONDS:
-        return dict(payload, _t3_observed_at=observed, _t3_source="cli")
+        return dict(payload, **plan, _t3_observed_at=observed, _t3_source="cli")
     activity = last_activity(home_path)
     if fresh or window_open(payload, float(entry.get("closed_at") or 0), activity, now):
         payload = (run or run_probe)(home_path)
-        store[key] = {"payload": payload, "observed_at": now.timestamp(), "identity": identity}
+        store[key] = dict(entry, payload=payload, observed_at=now.timestamp(), identity=identity)
         write_cache(store, store_path)
-        return dict(payload, _t3_observed_at=now.timestamp(), _t3_source="cli")
+        return dict(payload, **plan, _t3_observed_at=now.timestamp(), _t3_source="cli")
     reset = parse_time((payload.get("five_hour") or {}).get("resets_at"))
     if activity <= max(reset.timestamp() if reset else 0.0, now.timestamp() - SESSION_SECONDS):
         # No local turn since the reset, or none for 5 h: no window open now. Remember that
@@ -389,23 +392,39 @@ def probe_claude_usage(home_path: str, identity: str = "", fresh: bool = False, 
     if not payload:
         raise LookupError("no usage reading yet: shows after the next turn in this profile "
                           "(`t3-limits --fresh` probes now and may start a 5 h window)")
-    return dict(idle_payload(payload, now), _t3_observed_at=observed, _t3_source="cli")
+    return dict(idle_payload(payload, now), **plan, _t3_observed_at=observed, _t3_source="cli")
 
 
-def fetch_claude(credentials: dict, fetch, fresh: bool = False, now: datetime | None = None) -> dict:
+def remember_live_plan(home_path: str, identity: str, plan: str, now: datetime, store_path: Path) -> None:
+    """Keep the usage API's live tier for when this setup-token profile falls back to the probe."""
+    store, key = read_cache(store_path), str(claude_home(home_path))
+    entry = store.get(key) or {}
+    entry = entry if entry.get("identity") == identity else {"identity": identity}
+    if entry.get("live_plan") != plan or now.timestamp() - float(entry.get("live_plan_at") or 0) > 86400:
+        store[key] = dict(entry, live_plan=plan, live_plan_at=now.timestamp())
+        write_cache(store, store_path)
+
+
+def fetch_claude(credentials: dict, fetch, fresh: bool = False, now: datetime | None = None,
+                 store_path: Path | None = None) -> dict:
     """Usage API with the /login token; a setup-token profile falls back to the CLI probe
     when that token is gone or the API refuses it (a revoked token can even answer 429)."""
+    home, identity = credentials.get("home", ""), credentials.get("identity", "")
     if credentials.get("source") == "expired":
         raise LookupError(EXPIRED_HINT)
     if credentials.get("source") == "cli":
-        return probe_claude_usage(credentials["home"], credentials.get("identity", ""), fresh, now)
+        return probe_claude_usage(home, identity, fresh, now, store_path)
     try:
-        return fetch(credentials["accessToken"])
+        payload = fetch(credentials["accessToken"])
     except (urllib.error.URLError, OSError):
         if not credentials.get("setup_token"):
             raise
         debug("usage API failed — falling back to the setup-token probe")
-        return probe_claude_usage(credentials["home"], credentials.get("identity", ""), fresh, now)
+        return probe_claude_usage(home, identity, fresh, now, store_path)
+    live = payload.get("_t3_claude_plan") if isinstance(payload, dict) else None
+    if credentials.get("setup_token") and isinstance(live, str) and live:
+        remember_live_plan(home, identity, live, now or datetime.now(timezone.utc), store_path or PROBE_STORE)
+    return payload
 
 
 def read_cache(path: Path) -> dict:
@@ -596,6 +615,13 @@ def claude_reading(payload: dict, credentials: dict) -> tuple:
         if login and login != live:
             notes.append(f"live plan {live}; saved login label {login}")
         return live, rows, notes
+    last = payload.get("_t3_last_live_plan")
+    if isinstance(last, str) and last:
+        when = payload.get("_t3_last_live_plan_at")
+        seen = datetime.fromtimestamp(when, TZ).strftime("%b %-d") if isinstance(when, (int, float)) else "?"
+        if login and login != last:
+            notes.append(f"saved login label {login}")
+        return f"{last} (live {seen})", rows, notes
     if login:
         login = login[:-1] + ", login fallback)" if login.endswith(")") else login + " (login fallback)"
     return login, rows, notes
@@ -630,7 +656,7 @@ def claude_accounts(
             profiles,
             claude_usage_credentials,
             # the probe gate reads the clock itself: earlier profiles may have taken a minute
-            lambda credentials: fetch_claude(credentials, fetch, fresh, now),
+            lambda credentials: fetch_claude(credentials, fetch, fresh, now, cache_path.with_name(PROBE_STORE.name)),
             claude_reading,
             cache_path, fresh, now or datetime.now(timezone.utc), "claudeAgent",
         )

@@ -52,7 +52,9 @@ Source per enabled T3 provider instance, so each row is the account T3 would run
   can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min, stored per config dir + account
   in `$T3CODE_HOME/userdata/t3-limits-probe.json`. No reading yet → error until the first turn
   after an idle check; `--fresh` probes anyway (may start a window). Lost vs the API: per-model
-  caps and the live plan label (saved login label, `(login fallback)`). Note: `via setup-token probe`.
+  caps; the plan is the last live tier the API reported for that account (`max_20x (live Oct 19)`,
+  kept in the probe store), else the saved login label (`(login fallback)`), which can lag plan
+  changes. Note: `via setup-token probe`.
 - Codex: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint.
   The login e-mail is shown so a mis-assigned home is visible. Only top-level
   windows; API-key logins have none.
