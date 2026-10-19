@@ -1,0 +1,19 @@
+diff --git a/goneonize/main.go b/goneonize/main.go
+index 1384d21..ccdf71e 100644
+--- a/goneonize/main.go
++++ b/goneonize/main.go
+@@ -508,7 +508,13 @@ func SendMessage(id *C.char, JIDByte *C.uchar, JIDSize C.int, messageByte *C.uch
+ 	extra := whatsmeow.SendRequestExtra{}
+ 	extra.AdditionalNodes = GenerateWABinary(context.Background(), utils.DecodeJidProto(&neonize_jid), &message)
+ 	// fmt.Println("SendMessage: Sending message to WhatsApp")
+-	sendresponse, err := client.SendMessage(context.Background(), utils.DecodeJidProto(&neonize_jid), &message, extra)
++	var sendresponse whatsmeow.SendResponse
++	if message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_PEER_DATA_OPERATION_REQUEST_MESSAGE {
++		// Peer data requests (e.g. resend a message with its media keys) only ever go to our own phone.
++		sendresponse, err = client.SendPeerMessage(context.Background(), &message)
++	} else {
++		sendresponse, err = client.SendMessage(context.Background(), utils.DecodeJidProto(&neonize_jid), &message, extra)
++	}
+ 	if err != nil {
+ 		fmt.Println("SendMessage: Error sending message:", err.Error())
+ 		return_.Error = proto.String(err.Error())

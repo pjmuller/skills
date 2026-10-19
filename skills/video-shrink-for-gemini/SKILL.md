@@ -73,7 +73,8 @@ titles/ids instead of guessing from pixels. Opaque URLs/record IDs: read [exact-
 ## Execute and verify
 
 `transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` writes
-`<name>.transcript.md` + `.usage.json` (tokens, USD at list price), from any folder. Key: one per
+`<name>.transcript.md` + `.usage.json` (tokens, USD at list price), from any folder. Audio files
+(`.ogg/.m4a/.mp3/.wav`) go in as audio, no shrink needed; WhatsApp voice notes: [whatsapp-bridge](../whatsapp-bridge/SKILL.md#voice-notes) `wa voice --transcribe --hint …`. Key: one per
 machine: `VIDEO_GEMINI_API_KEY` from the env or `~/.config/transcribe-gemini/env` (chmod 600; never
 in a repo); else a project's `GEMINI_API_KEY`; else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). None →
 [agy-route.md](agy-route.md). `scripts/install --check` reports the key.
