@@ -54,7 +54,7 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 - `projectId` = the repo that owns the work. Another project than yours → say so in the brief.
   Default workspace = project **root**, not your worktree.
 - **No retry key**: after an error or lost response, check `t3_thread_list` before launching again.
-- Report the id as a link: `[title](t3-thread://v1/<threadId>)`.
+- Report the id as a link: `[title](t3-thread://v1/<threadId>)`, the `threadId` verbatim as the tool returned it, prefix included (`t3-thread://v1/mcp:287f…`); never strip `mcp:` or URL-encode it.
 
 ## Briefs and titles
 
