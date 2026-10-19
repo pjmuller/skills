@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **t3-manage-thread / agents-md: one ownership rule.** Native `delegate_task` child = ping-pong inside one task (planning opinion, scoped research, opposite-model review; cross-provider included). Standalone `t3_thread_launch` = independent topic, another repo's work, explicit standalone ask, or a selected recording follow-up (recording-followups: never a child of the intake thread). Every review round is a new `delegate_task` with full context; `childThreadId` only for short same-conversation clarifications. Global template + `global.md` carry the one-line rule.
+- t3-schedule: drop the `--settle-when-done` + 🏓-title guard (launched threads are never 🏓 children). dispatch-workers: dispatched items are 📤.
+
 ## v0.5.3 (2026-10-19)
 
 - **t3-relay: confirmed delivery + failover hosts.** `launch`/`send --wait SECS` and `status <rid>` report `ok <threadId>` / `failed` / `pending` from the effect (thread with that title launched, or message `relay-<rid>` landed), not the host's reply wording; failed only once the host turn ended without it, so retries cannot duplicate. Several relay hosts (one task + bound host thread per provider, e.g. Claude Haiku + Codex Luna, effort low): a request goes to the first host that is not stuck, not recently failed and whose account passes the capacity check. `--via INSTANCE` probes one host; `check` lists every host.

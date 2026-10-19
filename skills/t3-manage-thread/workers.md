@@ -4,11 +4,14 @@ Verified on T3 0.1.0 (2026-10-16; evidence: macbook_setup `decissions/t3_native_
 
 ## Which one
 
-- **🏓 round-trip**: the result feeds **this thread's deliverable** (review, sub-step, second opinion,
-  other ecosystem). Unclear sub-step → 🏓.
-- **📤 standalone**: the user said "separate / own thread / hand off", or it's a new orthogonal scope
-  the user follows on its own. Test: would this thread's answer change when the result lands? No → 📤.
-- One topic + several models = one lead (this thread) with 🏓 workers. Never standalone peers the
+- **🏓 native child** (`delegate_task`): ping-pong inside **this thread's task**: second planning
+  opinion, scoped research, sub-step, opposite-model code review. Any provider/model (cross-provider
+  is native). Runs in this thread's project/checkout. Unclear sub-step → 🏓.
+- **📤 standalone** (`t3_thread_launch`): independent topic the user follows on its own, work owned
+  by another repo, the user said "separate / own thread / hand off", or a **selected** recording or
+  meeting follow-up. Each standalone thread delegates its own 🏓 children. Test: would this
+  thread's answer change when the result lands? No → 📤.
+- One topic + several models = one lead (this thread) with 🏓 children. Never standalone peers the
   user must combine.
 
 ## 🏓 `delegate_task`
@@ -28,8 +31,10 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
   the report there. No footer, no settle.
 - The child gets **only the task text** and shares your checkout (`isolation: "worktree"` for its own).
   Nesting works.
-- Same-context follow-up: `t3_thread_send` to `childThreadId` (new `taskId`). A new review round =
-  a new `delegate_task` whose brief carries prior findings and replies.
+- **Every review round = a new `delegate_task`** (new `clientRequestId`, stable across retries of
+  that round) whose task carries the original brief, prior findings, your responses and open
+  objections. `childThreadId` is storage, not the target of a new round. `t3_thread_send` to it only
+  for a short clarification that needs that child's own conversation (new `taskId`, result wakes you).
 - `task_cancel` stops it. Stopping the parent stops its tasks. Settling the parent does not: a later
   child result wakes and unsettles it.
 - Reading a terminal result acknowledges it. Don't poll, and use `mode: "wait"` only for seconds-long tasks.

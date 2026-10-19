@@ -54,7 +54,7 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 ## Delegation
 - Default: **Opus plans, orchestrates and builds; Fable only for very complex planning** (Astra as independent second planner on consequential designs). Use in-harness sub-agents for independent work (Sonnet/Haiku for small chores; Sol/Terra/Luna via Codex CLI). **Review** with a Sol 🏓 worker (Codex-built → Opus). The lead verifies workers and the final result; never a same-model-family reviewer.
 - Second planning opinion: give both planners the same problem, constraints and evidence; withhold each other's proposals until both finish, then compare and resolve disagreements.
-- Other-ecosystem work (opposite-model review) on T3 ≥ 0.1: `delegate_task` (no sidebar row, result wakes you; account from `t3-pick-instance MODEL`), verify its result here. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
+- Who owns it (T3 ≥ 0.1): ping-pong inside one task (planning opinion, scoped research, opposite-model review; any provider) → native `delegate_task` child: no sidebar row, result wakes you, verify it here; each review round = a new `delegate_task` with the full context. Independent topic, another repo's work, explicit standalone ask, or a selected meeting/recording follow-up → standalone `t3_thread_launch` in the owning repo, which runs its own children. Target from `t3-pick-instance MODEL`. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
   - No explicit account/effort: `t3-pick-instance MODEL` picks the account by capacity and the model's house effort. Only when I name an account → `t3-list-profiles` for the exact instance id; several named → `t3-pick-instance MODEL a,b` (routes among those by capacity).
 
 ### T3 threads (helpers `t3-*` on PATH)

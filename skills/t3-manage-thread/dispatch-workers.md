@@ -6,8 +6,8 @@ add their sources and policies on top of these rules, not instead of them.
 
 ## Title
 
-`<emoji> <3–6 words the user recognises>`, in the user's language. The emoji is the only
-routing signal: `🏓` round-trip or `📤` standalone ([workers.md](workers.md#which-one)).
+`<emoji> <3–6 words the user recognises>`, in the user's language. A dispatched ticket/item is
+standalone work: `📤` ([workers.md](workers.md#which-one)); `🏓` marks `delegate_task` children only.
 No ticket IDs, repo names or phase words in the
 title: they mean nothing at sidebar width; the ID belongs in the brief. Good:
 `📤 Annulatiepolicy toepassen`. Bad: `🎫 869f4kx78 annulatiepolicy: numeric fields, conditional
@@ -43,5 +43,4 @@ it away: a 10–30 KB brief is fine, a one-line "meeting adds" is not.
 
 `projectId` = the primary repo. One worker per ticket. Record `item | thread-id | route | launched-at`
 in a git-ignored run file so a rerun skips already-dispatched items (`t3_thread_launch` has no retry
-key). Standalone threads finish under the project's own auto-settle rule if it has one; 🏓 results
-come back to the dispatcher.
+key). Standalone threads finish under the project's own auto-settle rule if it has one.
