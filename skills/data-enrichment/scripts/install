@@ -5,6 +5,7 @@ command -v uv >/dev/null || { echo "Install uv first" >&2; exit 1; }
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 uv run "$root/treg.py" --help >/dev/null
 uv run "$root/capture_url.py" --help >/dev/null
+uv run "$root/geocode.py" --help >/dev/null
 if [ "${1:-}" = "--check" ]; then
   if [ -z "${TREG_TOKEN:-}" ]; then
     echo "free Jina ready; paid treg fallback off (no TREG_TOKEN)"
@@ -12,4 +13,4 @@ if [ "${1:-}" = "--check" ]; then
     uv run "$root/treg.py" balance
   fi
 fi
-printf '%s\n' 'data-enrichment ready; uv run scripts/capture_url.py or scripts/treg.py (no global command links needed)'
+printf '%s\n' 'data-enrichment ready; uv run scripts/capture_url.py, scripts/treg.py or scripts/geocode.py (no global command links needed)'

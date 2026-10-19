@@ -1,6 +1,6 @@
 ---
 name: data-enrichment
-description: Use for public page/PDF to Markdown (free Jina, then treg/Olostep), or external/live data the repo has no API key for - email verification, people/companies, social posts/profiles, SERP/SEO, reviews, or image/video/voice generation through treg.to.
+description: Use for address geocoding (Mapbox temporary or storable Flemish/Brussels Geopunt), public page/PDF to Markdown (free Jina, then treg/Olostep), or external/live data the repo has no API key for - email verification, people/companies, social, search, reviews or generation through treg.to.
 ---
 
 # Data enrichment (treg.to)
@@ -12,6 +12,13 @@ search the job, read the price, call it. Public pages use the capture helper bel
 Needs `TREG_TOKEN` in the repo's mise env file (`~/.config/mise-env/<org>/<repo>.env`), plus
 `TREG_ORG=<team-slug>` when the token is a personal identity token rather than a team API key.
 Tokens: treg.to dashboard. `scripts/install --check` verifies helpers; with a token, also balance.
+
+## Address → coordinates
+
+Read [geocoding](references/geocoding.md), then `uv run scripts/geocode.py 'ADDRESS'`.
+Mapbox defaults to **temporary, never save/cache/log**; needs scoped `MAPBOX_TOKEN`.
+For stored website coordinates in Flanders/Brussels use `--provider geopunt` (no key;
+retain attribution). One forward request, JSON candidates, no paid permanent mode.
 
 ## Public page or PDF → Markdown
 
@@ -75,7 +82,7 @@ answered. Any other id is one specific provider.
   billed a miss on the way. The helper caps a routed call at $0.05 (`--max-cost`); treg's own
   default is $1.
 - **The real charge is the `charged` figure** (`X-Treg-Cost-Micro`), not the catalog estimate.
-- **Never repeat a paid lookup.** Every hit bills, repeats included: store results in the repo and
+- **Never repeat a paid treg lookup.** Every hit bills, repeats included: store results in the repo and
   read them back. Retrying a lost answer: same `--idempotency-key`, no second charge. Never call
   from tests or uncapped loops.
 - **A 200 is not a result.** Scrapers return homepages, paywalls and error pages with status 200;
