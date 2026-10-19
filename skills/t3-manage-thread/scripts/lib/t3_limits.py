@@ -76,11 +76,15 @@ PROBE_SECONDS = 5 * 60  # a probe is a real (tiny) Haiku turn; reuse its reading
 PROBE_TIMEOUT = 30
 # Unmodified CLI, no tools/MCP/hooks/skills/session file; `user` settings keep the
 # profile's env token, which outranks any token in the caller's environment.
-PROBE_ARGS = ["-p", "Reply with OK.", "--model", "haiku", "--output-format", "stream-json",
+PROBE_ARGS = ["-p", "Respond with hello.", "--effort", "low", "--output-format", "stream-json",
               "--verbose", "--no-session-persistence", "--strict-mcp-config",
               "--disable-slash-commands", "--tools", "", "--setting-sources", "user",
               "--settings", '{"disableAllHooks": true}']
-PROBE_NOTE = "via setup-token probe: no per-model caps"
+# Only a Fable turn reports the Fable weekly cap (as `seven_day_overage_included`, matched
+# against the usage API on two accounts 2026-10-19) and costs ~100x a Haiku turn: refresh it
+# at most this often, inside the same open-window gate.
+FABLE_PROBE_SECONDS = 2 * 3600
+PROBE_NOTE = "via setup-token probe"
 
 
 def debug(message: str) -> None:
@@ -294,7 +298,7 @@ def last_activity(home_path: str) -> float:
     return newest
 
 
-def run_probe(home_path: str) -> dict:
+def run_probe(home_path: str, model: str = "haiku") -> dict:
     """One tiny turn through the unmodified `claude` CLI on the profile's own token; its
     stream-json `rate_limit_event` carries the account's windows (fractions, epoch s).
     Anthropic allows subscription OAuth only in Claude Code itself, so no raw API call."""
@@ -306,7 +310,7 @@ def run_probe(home_path: str) -> dict:
         env["CLAUDE_CONFIG_DIR"] = str(Path(home_path).expanduser())
     with tempfile.TemporaryDirectory() as cwd:
         try:
-            result = subprocess.run([binary, *PROBE_ARGS], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            result = subprocess.run([binary, *PROBE_ARGS, "--model", model], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                     capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False)
         except subprocess.TimeoutExpired:
             raise LookupError(f"usage probe timed out ({PROBE_TIMEOUT}s)")
@@ -323,11 +327,14 @@ def run_probe(home_path: str) -> dict:
         elif event.get("type") == "result" and event.get("is_error"):
             failure = str(event.get("result") or event.get("subtype") or "error")[:120]
     payload = {}
-    for key in ("five_hour", "seven_day"):
+    keys = {"five_hour": "five_hour", "seven_day": "seven_day"}
+    if model == "fable":
+        keys["seven_day_overage_included"] = "seven_day_fable"
+    for key, name in keys.items():
         window = windows.get(key)
         if isinstance(window, dict) and isinstance(window.get("utilization"), (int, float)):
             reset = window.get("resetsAt")
-            payload[key] = {
+            payload[name] = {
                 "utilization": round(float(window["utilization"]) * 100, 1),
                 "resets_at": datetime.fromtimestamp(reset, timezone.utc).isoformat()
                 if isinstance(reset, (int, float)) else None,
@@ -339,11 +346,15 @@ def run_probe(home_path: str) -> dict:
 
 def idle_payload(payload: dict, now: datetime) -> dict:
     """No turn since the last session window closed: the session is untouched and the
-    weekly reading stands until its own reset."""
+    weekly readings stand until their own reset."""
     idle = {"utilization": 0.0, "resets_at": None}
-    weekly = payload.get("seven_day") or {}
-    reset = parse_time(weekly.get("resets_at"))
-    return {"five_hour": idle, "seven_day": weekly if reset and reset > now else idle}
+    out = {"five_hour": idle}
+    for key in ("seven_day", "seven_day_fable"):
+        weekly = payload.get(key) or {}
+        reset = parse_time(weekly.get("resets_at"))
+        if weekly or key == "seven_day":
+            out[key] = weekly if reset and reset > now else idle
+    return out
 
 
 def window_open(payload: dict, closed_at: float, activity: float, now: datetime) -> bool:
@@ -376,7 +387,13 @@ def probe_claude_usage(home_path: str, identity: str = "", fresh: bool = False, 
         return dict(payload, **plan, _t3_observed_at=observed, _t3_source="cli")
     activity = last_activity(home_path)
     if fresh or window_open(payload, float(entry.get("closed_at") or 0), activity, now):
-        payload = (run or run_probe)(home_path)
+        fable = now.timestamp() - float(entry.get("fable_at") or 0) >= FABLE_PROBE_SECONDS
+        if fable:  # counts even if it fails or reports no Fable cap: never a Fable turn per poll
+            entry = store[key] = dict(entry, identity=identity, fable_at=now.timestamp())
+            write_cache(store, store_path)
+        payload = (run or run_probe)(home_path, "fable" if fable else "haiku")
+        if not fable and (entry.get("payload") or {}).get("seven_day_fable"):  # keep the last one
+            payload = dict(payload, seven_day_fable=entry["payload"]["seven_day_fable"])
         store[key] = dict(entry, payload=payload, observed_at=now.timestamp(), identity=identity)
         write_cache(store, store_path)
         return dict(payload, **plan, _t3_observed_at=now.timestamp(), _t3_source="cli")

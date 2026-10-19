@@ -39,7 +39,7 @@ Source per enabled T3 provider instance, so each row is the account T3 would run
   sets it inside that instance's threads), then `~/.claude`. Windows execution stays inside WSL.
 - Claude with a 1-year `claude setup-token` (settings `env.CLAUDE_CODE_OAUTH_TOKEN`) and no
   valid `/login` token (expired locally, or the usage API refuses it: a revoked token can answer
-  429): one tiny turn through the unmodified CLI (`run_probe`: `claude -p --model haiku
+  429): one tiny turn through the unmodified CLI (`run_probe`: `claude -p --model haiku --effort low
   --output-format stream-json`, no tools/MCP/hooks/session file, the profile's config dir) whose
   `rate_limit_event` carries the 5 h and weekly windows. Not a raw API call: Anthropic allows
   subscription OAuth only in Claude Code itself. A probe is a model turn, so `window_open` allows
@@ -50,8 +50,10 @@ Source per enabled T3 provider instance, so each row is the account T3 would run
   window state unprovable → error until the last turn is 5 h old. Turns elsewhere (claude.ai,
   another machine) show at the next probe; a window opened there is invisible locally, so a probe
   can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min, stored per config dir + account
-  in `$T3CODE_HOME/userdata/t3-limits-probe.json`. No reading yet → error until the first turn
-  after an idle check; `--fresh` probes anyway (may start a window). Lost vs the API: per-model
+  in `$T3CODE_HOME/userdata/t3-limits-probe.json`. At most every 2 h (`FABLE_PROBE_SECONDS`) the
+  probe runs on Fable instead: only a Fable turn reports the Fable weekly cap
+  (`seven_day_overage_included` → `Fable only`), at ~100x a Haiku turn's quota. No reading yet → error until the first turn
+  after an idle check; `--fresh` probes anyway (may start a window). Lost vs the API: other per-model
   caps; the plan is the last live tier the API reported for that account (`max_20x (live Oct 19)`,
   kept in the probe store), else the saved login label (`(login fallback)`), which can lag plan
   changes. Note: `via setup-token probe`.
