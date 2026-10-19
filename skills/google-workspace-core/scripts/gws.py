@@ -19,8 +19,14 @@ Data commands refresh an existing offline token and verify the account; only
 secrets: run them for provisioning only, never in a log or a chat.
 """
 
+import socket
 import sys
 from pathlib import Path
+
+# IPv4 first, IPv6 as fallback: on a network with broken IPv6 every Google call otherwise hangs until its
+# timeout (Python has no happy-eyeballs; curl does, so curl works where this CLI hung, Oct 2026).
+_getaddrinfo = socket.getaddrinfo
+socket.getaddrinfo = lambda *a, **k: sorted(_getaddrinfo(*a, **k), key=lambda r: r[0] != socket.AF_INET)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
