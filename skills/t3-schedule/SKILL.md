@@ -38,7 +38,7 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
   cache expiry, deploy soak, a reply). Keep data the prompt needs outside `/tmp`.
   `pending-resumes` lists them; `t3-purge-threads` spares those threads.
 
-## Fire = `t3-relay` (exit 0 = accepted, async, no thread id back)
+## Fire = `t3-relay … --wait 120` (fired = the thread/message exists, not just accepted)
 
 | job field | relay |
 |---|---|
@@ -55,8 +55,10 @@ manager and tails the log.
 
 ## Contract
 
-- **Once per day**: `<name>.last` written only on relay acceptance; failures notify once per day
-  (`<name>.failed`).
+- **Once per day**: `<name>.last` written only once t3-relay confirms the effect; failures notify
+  once per day (`<name>.failed`). Accepted but unconfirmed after 120 s → `<name>.pending` (rid):
+  the catch-up tick re-checks it (`t3-relay status`, no runner): landed → fired; failed → due
+  again; pending → never re-fired (could duplicate), notify once after 30 min.
 - **Catch-up**: LaunchAgent `com.t3-skills.t3-schedule.catch-up` re-kicks a job whose slot passed
   today without a fire, until slot+10h (same day). One job per tick, earliest first, never while
   another runner is active, so capacity is re-read between jobs. Keep slots ≥15 min apart.

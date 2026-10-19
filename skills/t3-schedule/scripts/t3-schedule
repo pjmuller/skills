@@ -27,6 +27,7 @@ import json
 import uuid
 import os
 import plistlib
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -58,6 +59,9 @@ LEGACY_SMALL_JOBS = {"skills-refresh"}
 MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
 OWNER_SKIP_EXIT = 5                    # `t3-schedule owner-check` → runner: another machine owns this job, skip
 PAUSED_SKIP_EXIT = 6                   # `t3-schedule pause-check` → runner: repo job is paused, skip
+PENDING_EXIT = 3                       # fire → runner: relay accepted, launch not yet confirmed (= t3-relay --wait)
+CONFIRM_WAIT = 120                     # seconds fire waits for t3-relay to confirm the thread/message exists
+PENDING_ALERT = 30 * 60                # unconfirmed this long → notify once; never re-fired (could duplicate)
 
 
 # --- paths --------------------------------------------------------------------
@@ -84,6 +88,7 @@ def paths(name: str) -> dict[str, Path]:
         "sh": base / f"{name}.sh",
         "last": base / f"{name}.last",
         "failed": base / f"{name}.failed",
+        "pending": base / f"{name}.pending",  # "<day> <relay rid> <epoch>": accepted, not yet confirmed
         "log": home() / ".t3/userdata/logs" / f"t3-schedule.{name}.log",
     }
 
@@ -575,6 +580,10 @@ export PATH="{SCHEDULE_PATH}"
 {checks_again}  out=$(t3-schedule fire {qname} 2>&1)
   rc=$?
   echo "$out" | sed 's/^/   /'
+  if (( rc == {PENDING_EXIT} )); then
+    echo "-- {name}: relay accepted, not yet confirmed; catch-up re-checks"
+    exit 0
+  fi
   (( rc == 0 )) || fail "{name}: fire FAILED (exit $rc) - see log"
   echo "$today" > {last}
   rm -f {shlex.quote(str(p["failed"]))}
@@ -757,16 +766,54 @@ def pick(spec: dict) -> tuple[str, str] | None:
     return None
 
 
+def resolve_pending(name: str) -> str | None:
+    """Outcome of an earlier accepted-but-unconfirmed fire today: 'ok' (landed), 'pending',
+    'stale' (pending > PENDING_ALERT), or None (no marker, or it failed: fire anew)."""
+    p = paths(name)["pending"]
+    if not p.exists():
+        return None
+    day, rid, since = p.read_text().split()
+    if day != date.today().isoformat():
+        p.unlink()
+        return None
+    result = helper("t3-relay", "status", rid)
+    print(f"relay {rid}: {result.stdout.strip() or 'status failed'}")
+    if result.returncode == 0:
+        p.unlink()
+        return "ok"
+    if relay_failed(result):
+        p.unlink()
+        return None
+    # pending, or the lookup itself broke: the request may still run, so never re-fire it
+    return "stale" if datetime.now().timestamp() - float(since) > PENDING_ALERT else "pending"
+
+
+def relay_failed(result: subprocess.CompletedProcess) -> bool:
+    """Only t3-relay's explicit verdict proves an accepted request will not run."""
+    return result.returncode == 1 and bool(re.search(r"^failed ", result.stdout, re.M))
+
+
 def cmd_fire(args: argparse.Namespace) -> int:
-    """Runner step: hand the job to t3-relay. Exit 0 = relay accepted (delivery is async)."""
+    """Runner step: hand the job to t3-relay and wait for the thread/message to exist.
+    Exit 0 = confirmed, PENDING_EXIT = accepted but unconfirmed (marker; catch-up re-checks), 1 = failed."""
     spec = load_spec(require_spec(args.name)["spec"])
     if spec.get("missing"):
         print(f"MISSING {spec['source']}: {spec['missing']}")
         return 1
+    state = resolve_pending(spec["name"])
+    if state == "ok":
+        print("confirmed: the earlier fire landed")
+        return 0
+    if state == "pending":
+        print("earlier fire not yet confirmed; not firing again")
+        return PENDING_EXIT
+    if state == "stale":
+        print(f"earlier fire unconfirmed for >{PENDING_ALERT // 60} min; not firing again (it may still land)")
+        return 1
     prompt = prompt_path(spec).read_text().strip()
     today = date.today().isoformat()
     if spec.get("resume_thread"):
-        argv = ["t3-relay", "send", "--thread", spec["resume_thread"], "--",
+        argv = ["t3-relay", "send", "--thread", spec["resume_thread"], "--wait", str(CONFIRM_WAIT), "--",
                 resume_message(prompt, spec["name"], today)]
         done = f"sent follow-up to thread {spec['resume_thread']}"
     else:
@@ -784,10 +831,15 @@ def cmd_fire(args: argparse.Namespace) -> int:
             argv += ["--model", chosen[1], "--instance", chosen[0]]
         if spec.get("thinking"):
             argv += ["--effort", spec["thinking"]]
-        argv += ["--", prompt]
+        argv += ["--wait", str(CONFIRM_WAIT), "--", prompt]
         done = f"launched {title}"
     relay = helper(*argv)
     print(relay.stdout.strip())
+    accepted = re.search(r"^accepted: relay (\w+)", relay.stdout, re.M)
+    if relay.returncode and accepted and not relay_failed(relay):  # pending or confirmation broke
+        paths(spec["name"])["pending"].write_text(f"{today} {accepted[1]} {datetime.now().timestamp():.0f}\n")
+        print("relay accepted, not yet confirmed; catch-up re-checks")
+        return PENDING_EXIT
     if relay.returncode:
         print(f"t3-relay FAILED (exit {relay.returncode})")
         return 1
@@ -1004,7 +1056,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
     bootout(args.name)
-    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed"):
+    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed", "pending"):
         p[key].unlink(missing_ok=True)
     if systemd():
         checked_systemctl("daemon-reload")
@@ -1229,11 +1281,33 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
         if status.startswith("expired") and not systemd():
             msg = f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired"
             subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
+    # An accepted-but-unconfirmed fire is re-checked here (a status read, no runner): landed →
+    # mark fired; failed → due again below; still pending → never re-fired (could duplicate).
+    for spec in specs():
+        name = spec["name"]
+        if args.dry_run or running(name) or not paths(name)["pending"].exists():
+            continue
+        state = resolve_pending(name)
+        if state == "ok":
+            paths(name)["last"].write_text(f"{now:%Y-%m-%d}\n")
+            paths(name)["failed"].unlink(missing_ok=True)
+            kicked.append(f"{name} confirmed")
+        elif state == "stale":
+            failed = paths(name)["failed"]
+            if failed.exists() and failed.read_text().strip() == f"{now:%Y-%m-%d}":
+                continue
+            failed.write_text(f"{now:%Y-%m-%d}\n")
+            kicked.append(f"{name} UNCONFIRMED")
+            if not systemd():
+                msg = f"{name}: relay accepted but launch unconfirmed for {PENDING_ALERT // 60}+ min"
+                subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'],
+                               capture_output=True)
     # One job per tick, earliest slot first: after a long power-off several slots are due at
     # once, and firing them together would make every launch route to the same profile from
     # the same limits snapshot. Spacing them by one tick re-reads the limits between jobs.
     due = sorted(
-        (spec for spec in specs() if due_now(spec, now, last_fire(spec["name"]))),
+        (spec for spec in specs() if due_now(spec, now, last_fire(spec["name"]))
+         and not paths(spec["name"])["pending"].exists()),
         key=lambda spec: spec["at"],
     )
     if any(running(spec["name"]) for spec in specs()):
