@@ -55,6 +55,20 @@ Switch/Re-authenticate for these shared accounts. Enable Claude Swap in CodexBar
 absolute path from `command -v cswap`.
 [Upstream Claude notes](https://github.com/steipete/CodexBar/blob/main/docs/claude.md).
 
+### Claude quota from t3-limits
+
+With 1-year `claude setup-token` profiles the `/login` tokens are only kept alive by claude-swap,
+whose refreshes can spend a refresh token (lost reply,
+[claude-swap#434](https://github.com/realiti4/claude-swap/issues/434)) and which die after ~30 days
+anyway. Instead set the Claude provider's `claudeSwapExecutablePath` in
+`~/.config/codexbar/config.json` to the absolute path of `codexbar-claude-usage` (keep
+`claudeSwapEnabled: true`; back up the file first), `codexbar config validate`, restart CodexBar.
+Verify: `codexbar-claude-usage --list --json` lists every T3 Claude provider with usage, and
+`claude-swap-retained-usage.json` (below) updates. Readings come from `t3-limits`
+([limits.md](../t3-manage-thread/limits.md)); per-model caps only while a `/login` token is valid.
+Then retire claude-swap polling and any stash ↔ live mirror jobs (`codexbar-profiles` jobs);
+keep the credentials.
+
 **Antigravity (Gemini):** needs CodexBar 0.60.2+ and a signed-in `agy`
 (`brew install --cask antigravity-cli`, run `agy` once; Antigravity.app not needed). `agy`
 1.2.2+ rejects CodexBar's local HTTPS probe, so CodexBar runs `agy -p /usage` instead; older

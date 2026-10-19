@@ -1,0 +1,138 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Read-only stand-in for claude-swap behind CodexBar's Claude Swap adapter.
+
+CodexBar runs `<path> --list --json` and parses claude-swap's schema v1. This answers
+from `t3-limits --json --claude-only` instead, so the Claude cards show the same
+readings T3 routing uses: setup-token profiles need no /login credential, and nothing
+here refreshes, stores or switches credentials. Account slots follow T3's Claude
+provider order; the instance with an empty homePath (default login) is "active".
+Switch/re-auth requests get a schema-v1 error envelope.
+
+    codexbar-claude-usage --list --json
+    codexbar-claude-usage --version
+"""
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "codexbar-claude-usage 1"
+SETTINGS = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "settings.json"
+LAST_GOOD = SETTINGS.parent / "codexbar-claude-usage.json"  # last answer, served when t3-limits is slow
+DEADLINE = 25  # CodexBar kills the reader at 30 s
+# CodexBar's app environment lacks the login shell PATH (t3-limits, claude, uv).
+PATH_PREFIX = [str(Path.home() / ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+
+
+def fail(kind: str, message: str) -> int:
+    print(json.dumps({"schemaVersion": 1, "error": {"type": kind, "message": message}}))
+    return 2
+
+
+def homes(settings_path: Path = SETTINGS) -> dict[str, str]:
+    """instance id -> Claude config dir ("" = default login), from T3's provider settings."""
+    try:
+        instances = json.loads(settings_path.read_text()).get("providerInstances") or {}
+    except (OSError, ValueError):
+        return {}
+    return {key: (entry.get("config") or {}).get("homePath") or ""
+            for key, entry in instances.items() if entry.get("driver") == "claudeAgent"}
+
+
+def identity(home: str) -> dict:
+    """Display-only email/organization from the profile's `.claude.json` (no tokens there)."""
+    path = Path(home).expanduser() / ".claude.json" if home else Path.home() / ".claude.json"
+    try:
+        account = json.loads(path.read_text()).get("oauthAccount") or {}
+    except (OSError, ValueError, AttributeError):
+        account = {}
+    return {"email": account.get("emailAddress") or "", "organizationName": account.get("organizationName") or ""}
+
+
+def stamp(value: str | None) -> str | None:
+    """Whole-second UTC `...Z`, the form every CodexBar date parser accepts."""
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def window(row: dict) -> dict | None:
+    if row.get("used_percent") is None:
+        return None
+    out = {"pct": float(row["used_percent"])}
+    if stamp(row.get("resets_at")):
+        out["resetsAt"] = stamp(row["resets_at"])
+    return out
+
+
+def account_list(rows: list[dict], home_by_id: dict[str, str], now: datetime) -> dict:
+    accounts, order = [], []
+    for row in rows:
+        if row["instance_id"] not in order:
+            order.append(row["instance_id"])
+    for number, instance in enumerate(order, start=1):
+        own = [row for row in rows if row["instance_id"] == instance]
+        home = home_by_id.get(instance, "")
+        usage = {"scoped": []}
+        for row in own:
+            name, measured = row.get("window"), window(row)
+            if measured is None:
+                continue
+            if name == "session":
+                usage["fiveHour"] = measured
+            elif name == "weekly":
+                usage["sevenDay"] = measured
+            elif name and name.endswith(" only"):
+                usage["scoped"].append({"name": name[:-5], **measured})
+        ok = "fiveHour" in usage or "sevenDay" in usage
+        fetched = next((stamp(row.get("fetched_at")) for row in own if stamp(row.get("fetched_at"))), None)
+        accounts.append({
+            "number": number,
+            **identity(home),
+            "alias": own[0].get("account") or instance,
+            "active": instance in home_by_id and not home,
+            "usageStatus": "ok" if ok else "unavailable",
+            "usage": usage if ok else None,
+            "usageFetchedAt": fetched or now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+    active = next((a["number"] for a in accounts if a["active"]), None)
+    return {"schemaVersion": 1, "activeAccountNumber": active, "accounts": accounts}
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--version"]:
+        print(VERSION)
+        return 0
+    if argv != ["--list", "--json"]:
+        return fail("Unsupported", "read-only quota view: switch and re-auth are disabled")
+    env = dict(os.environ, PATH=os.pathsep.join(PATH_PREFIX + [os.environ.get("PATH", "/usr/bin:/bin")]))
+    env.pop("CLAUDE_CONFIG_DIR", None)  # never let a caller's profile stand in for the default one
+    try:
+        # Not killed on timeout: a slow probe still lands in t3-limits' stores for the next poll.
+        process = subprocess.Popen(["t3-limits", "--json", "--claude-only"], env=env, text=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        rows = json.loads(process.communicate(timeout=DEADLINE)[0])
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        try:
+            print(LAST_GOOD.read_text().strip())
+            return 0
+        except OSError:
+            return fail("T3LimitsFailed", f"t3-limits: {error.__class__.__name__}")
+    answer = json.dumps(account_list(rows, homes(), datetime.now(timezone.utc)))
+    try:
+        LAST_GOOD.write_text(answer + "\n")
+    except OSError:
+        pass
+    print(answer)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

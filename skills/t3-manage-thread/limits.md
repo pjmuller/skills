@@ -37,13 +37,31 @@ Source per enabled T3 provider instance, so each row is the account T3 would run
   macOS falls back to that file if Keychain has no usable login. Empty homePath
   uses `CLAUDE_CONFIG_DIR` (ignored when it is another instance's homePath: T3
   sets it inside that instance's threads), then `~/.claude`. Windows execution stays inside WSL.
+- Claude with a 1-year `claude setup-token` (settings `env.CLAUDE_CODE_OAUTH_TOKEN`) and no
+  valid `/login` token (expired locally, or the usage API refuses it: a revoked token can answer
+  429): one tiny turn through the unmodified CLI (`run_probe`: `claude -p --model haiku
+  --output-format stream-json`, no tools/MCP/hooks/session file, the profile's config dir) whose
+  `rate_limit_event` carries the 5 h and weekly windows. Not a raw API call: Anthropic allows
+  subscription OAuth only in Claude Code itself. A probe is a model turn, so `window_open` allows
+  it only when a window is certainly open: the last reading's window still runs, or a local turn
+  (newest `<config>/projects/*/*.jsonl`) came after a window-free point (the reading's reset, or
+  an idle check: no local turn for 5 h / since that reset) that is < 5 h old. Idle → derived
+  reading (session 0 %, weekly kept until its reset); turns since the last reading with the
+  window state unprovable → error until the last turn is 5 h old. Turns elsewhere (claude.ai,
+  another machine) show at the next probe; a window opened there is invisible locally, so a probe
+  can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min, stored per config dir + account
+  in `$T3CODE_HOME/userdata/t3-limits-probe.json`. No reading yet → error until the first turn
+  after an idle check; `--fresh` probes anyway (may start a window). Lost vs the API: per-model
+  caps and the live plan label (saved login label, `(login fallback)`). Note: `via setup-token probe`.
 - Codex: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint.
   The login e-mail is shown so a mis-assigned home is visible. Only top-level
   windows; API-key logins have none.
 
 Behaviour worth knowing:
 - Tokens are never printed or refreshed (a refresh would rotate the CLI's own
-  copy); an expired one reports itself and the other accounts still report.
+  copy); an expired one reports itself (never sent; setup-token profiles probe
+  instead) and the other accounts still report. `HTTP 429` can also mean a
+  revoked token: this endpoint answers 429 to non-Claude-Code clients.
 - The endpoints are shared with other pollers and often 429. Last good payloads
   are cached in `$T3CODE_HOME/userdata/t3-limits-cache.json` (no tokens), bound
   to home + account identity (Claude: hash of account/org ids, token fingerprint
