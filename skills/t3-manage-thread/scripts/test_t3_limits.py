@@ -273,6 +273,30 @@ class SetupTokenProbeTest(unittest.TestCase):
         self.assertEqual((account.error, account.plan, account.fetched_at), ("", "max_20x (login fallback)", NOW))
         self.assertIn(t3_limits.PROBE_NOTE, account.notes)
 
+    def test_fable_cap_is_probed_at_most_every_two_hours(self):
+        fable_week = {"utilization": 91.0, "resets_at": "2026-09-08T07:05:00+00:00"}
+        self.run.side_effect = lambda _home, model: dict(
+            self.run.return_value, **({"seven_day_fable": fable_week} if model == "fable" else {}))
+        self.first_reading()
+        later = [self.probe(now=NOW + timedelta(minutes=m)) for m in (6, 12)]
+        self.assertEqual([c.args[1] for c in self.run.call_args_list], ["fable", "haiku", "haiku"])
+        rows, _ = t3_limits.claude_rows(later[-1])
+        self.assertEqual([(r.window, r.used_percent) for r in rows][-1], ("Fable only", 91.0))
+        self.probe(now=NOW + timedelta(hours=1, minutes=59))
+        self.touch_transcript(NOW + timedelta(hours=2, minutes=2))  # a turn opens the next window
+        self.probe(now=NOW + timedelta(hours=2, minutes=5))
+        self.assertEqual([c.args[1] for c in self.run.call_args_list][-2:], ["haiku", "fable"])
+
+    def test_failed_fable_probe_still_waits_two_hours(self):
+        self.first_reading()  # the first probe is Fable
+        self.run.side_effect = LookupError("usage probe: Fable unavailable")
+        self.touch_transcript(NOW + timedelta(hours=2, seconds=30))  # a turn opens the next window
+        with self.assertRaises(LookupError):
+            self.probe(now=NOW + timedelta(hours=2, minutes=1))
+        self.run.side_effect = None
+        self.probe(now=NOW + timedelta(hours=2, minutes=7))
+        self.assertEqual([c.args[1] for c in self.run.call_args_list], ["fable", "fable", "haiku"])
+
     def test_last_live_plan_outranks_the_saved_login_label_on_the_probe_path(self):
         credentials = {"accessToken": "t", "setup_token": True, "home": str(self.home), "identity": "",
                        "rateLimitTier": "default_claude_max_5x"}
