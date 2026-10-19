@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.5.2 (2026-10-19)
 
+- **t3-relay: bind the relay to a host thread.** T3 gives an unbound webhook task a fresh git worktree from `origin/main` per run, so every relay request fetched and left a worktree (PJ: 55 in 3 days), and a fetch timeout or `git config` lock race silently dropped the request after the script got 202 (a missed `skills-refresh` and a missed launch). The relay now runs as queued turns in one `⚙️ T3 relay` host thread at the repo root. `t3-relay check` / `install --check` fail on an unbound relay or a deleted host; `launch`/`send` warn. **Heal once per machine** if you set up the relay before this release: [relay.md#heal](skills/t3-manage-thread/relay.md#heal-relay-created-before-2026-10-19-unbound).
 - agents-md: distinguish local file deliverables (absolute paths) from live product/ticket links; reserve remote file URLs for versions unavailable in a stable local checkout.
 
 ## v0.5.1 (2026-10-18)
