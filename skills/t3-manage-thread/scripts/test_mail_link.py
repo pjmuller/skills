@@ -142,7 +142,9 @@ def test_resolve_exact_reference(resolver, capsys, ref):
     resolver.api.side_effect = lambda *a, **kw: {"id": a[1].rsplit("/", 1)[-1]}
     assert ml.main(["resolve", ref]) == 0
     parsed = json.loads(capsys.readouterr().out)
-    assert parsed == {"account": "ann@example.com", "gmail_thread": ml.parse_gmail_ref(ref)[1]}
+    gmail_id = ml.parse_gmail_ref(ref)[1]
+    assert parsed == {"account": "ann@example.com", "gmail_thread": gmail_id,
+                      "marker": f"Mail-ref: gmail:{gmail_id} ann@example.com"}
     resolver.whoami.assert_called_once_with()
     assert resolver.api.call_args.args[0] == "GET"
     resolver.gmail.get.assert_not_called()
@@ -211,3 +213,61 @@ def test_resolve_requires_one_reference_or_search(resolver, argv):
         ml.main(argv)
     assert exc.value.code == 2
     resolver.whoami.assert_not_called()
+
+
+def test_id_terms_cover_hex_decimal_and_drafts():
+    thread = {"id": "19e875318442de06", "messages": [{"id": "19e875318442de06"}, {"id": "19e8753184430000"}]}
+    assert ml.id_terms(thread, ["r-42"]) == [
+        "19e875318442de06", str(int("19e875318442de06", 16)),
+        "19e8753184430000", str(int("19e8753184430000", 16)), "r-42", "42"]
+    assert ml.id_terms({"id": "1a"}, ["r815"])[-2:] == ["r815", "815"]
+
+
+def hit(tid, title="Offer follow-up"):
+    return {"thread_id": tid, "short_id": tid.removeprefix("mcp:")[:8], "title": title, "project": "p",
+            "updated_at": "2026-01-02T00:00:00Z", "link": f"[{title}](t3-thread://v1/{tid})"}
+
+
+def test_classify_owners_ranks_and_excludes_intake():
+    legacy = {**hit("thread:project:p1:dddddddd-4"), "short_id": "dddddddd"}
+    hits = [hit("aaaaaaaa-1"), hit("bbbbbbbb-2"), hit("mcp:cccccccc-3", "Team dispatch"), legacy, hit("eeeeeeee-5")]
+    peeks = {"bbbbbbbb-2": {"prompts": [{"text": "Execution thread: perform the task here."}]}}
+    greps = {"aaaaaaaa-1": (False, True), "bbbbbbbb-2": (True, True)}
+    owners, excluded = ml.classify_owners(hits, peeks, greps, ["eeeeeeee-5"], ["dddd"], "id")
+    assert [(o["thread_id"], o["evidence"]) for o in owners] == [
+        ("eeeeeeee-5", "linked"), ("bbbbbbbb-2", "marker"), ("aaaaaaaa-1", "id")]
+    assert owners[1]["execution"] and owners[1]["account_seen"] and not owners[0]["account_seen"]
+    assert [(x["thread_id"], x["why"]) for x in excluded] == [("mcp:cccccccc-3", "dispatcher"), ("thread:project:p1:dddddddd-4", "excluded")]
+
+
+def test_find_is_read_only_and_falls_back_to_subject(resolver, monkeypatch, capsys):
+    resolver.api.return_value = {"id": "19e875318442de06", "messages": [
+        {"id": "19e875318442de06", "payload": {"headers": [{"name": "Subject", "value": "Re: Offer renewal 2027"}]}}]}
+    calls = []
+
+    def fake_find(*argv):
+        calls.append(argv)
+        if argv[0] == "search":
+            return {"results": [hit("mcp:cccccccc-3", "PJ dispatch")] if "--all" not in argv else [hit("ffffffff-6")]}
+        if argv[0] == "peek":
+            return [{"thread_id": i, "prompts": []} for i in argv[1].split(",")]
+        return {"snippets": []}
+
+    monkeypatch.setattr(ml, "find_thread", fake_find)
+
+    assert ml.main(["find", "thread-f:1866870901077892614", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["owners"] == [] and [t["evidence"] for t in report["topic"]] == ["topic"]
+    assert [x["why"] for x in report["excluded"]] == ["dispatcher"]
+    topic_search = next(c for c in calls if "--all" in c)
+    assert topic_search[-3:] == ("offer", "renewal", "2027")
+    assert all(c[1:3] == ("--backup", "on") or c[2:4] == ("--backup", "on") for c in calls if c[0] == "search")
+
+
+def test_marker_grep_uses_full_line(monkeypatch):
+    greps = []
+    monkeypatch.setattr(ml, "find_thread", lambda *argv: greps.append(argv) or (
+        [{"thread_id": "t1", "prompts": []}] if argv[0] == "peek" else {"snippets": [{}] if "Mail-ref" in argv[3] else []}))
+    _, _, seen = ml.inspect([hit("t1")], [], "ann@example.com", "19e8")
+    assert seen == {"t1": (True, False)}
+    assert ("grep", "t1", "-k", "Mail-ref: gmail:19e8 ann@example.com", "--limit", "1") in greps

@@ -38,6 +38,8 @@ over routing heuristics; source metadata may establish ownership, not authorizat
   against sender/date/content; several matches remain ambiguous. Follow the user's
   browser fallback policy if native tools cannot handle it; otherwise request the
   exact Print-all URL/minimum subject clue. Never silently use another account.
+- Briefs for mail work carry the `Mail-ref:` line from `resolve`/`find` under **Evidence** so
+  later intake finds the thread ([marker](../t3-manage-thread/mail-link.md)).
 - Fetch relevant context using that account's configured CLI. State likely workflow
   as inference. A draft in chat is low-risk; a Gmail draft or inbound monitoring
   needs specific authorization. Never use `t3-mail-link add`/`new` just to resolve.
@@ -53,8 +55,9 @@ to distinguish an investigation, explanation, implementation or reply request.
 
 ## Existing task
 
-For mail, inspect existing `t3-mail-link list` entries where available, matching both
-account and resolved Gmail ID. Then use `t3-find-thread` on exact ticket/thread IDs
+For mail, `t3-mail-link --config <wrapper>/workspace.json find '<url>' --exclude <own id>`
+covers links, `Mail-ref:` markers, every thread/message id form and a subject fallback
+in one read-only call. Otherwise use `t3-find-thread` on exact ticket/thread IDs
 or URLs, followed by topic search if needed. Follow its search/peek/read guidance.
 Exclude the current dispatch conversation and other intake-only mentions.
 

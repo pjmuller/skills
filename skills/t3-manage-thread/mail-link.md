@@ -7,6 +7,7 @@ a reply in Gmail (never sends), asks the user, or settles. Flags: `t3-mail-link 
 
 ```bash
 t3-mail-link --config <wrapper>/workspace.json resolve '<gmail url | hex id>'
+t3-mail-link --config <wrapper>/workspace.json find '<gmail url | hex id>' [--exclude MY_T3_ID] [--json]
 t3-mail-link --config … resolve --search 'from:vendor.example subject:offer'
 t3-mail-link --config <wrapper>/workspace.json add '<gmail url | hex id>' --thread ID [--policy FILE]
 t3-mail-link --config … add --search 'from:vendor.example subject:offer' --thread ID
@@ -17,7 +18,7 @@ t3-mail-link list [--thread-ids] · unlink <t3-or-gmail-id> · poll [--dry-run] 
   [google-workspace-core](../google-workspace-core/SKILL.md) (sibling dir or `$GWS_CORE`). Stored
   per link, so `poll` needs no flags. `--policy` = the consumer wrapper's rules; the ping names it.
 - **Resolve** verifies the authenticated account before reading a reference and prints JSON
-  `{"account":"operator@example.com","gmail_thread":"19e875318442de06"}`. It creates no link,
+  `{"account":…,"gmail_thread":"19e875318442de06","marker":"Mail-ref: gmail:19e875318442de06 operator@example.com"}`. It creates no link,
   saved mail, draft or T3 thread. Choose exactly one reference or `--search`; ambiguous results
   fail closed. Web tokens may briefly open/close a Chrome tab and require its account to match;
   exact references and `--search` avoid the browser.
@@ -30,6 +31,16 @@ t3-mail-link list [--thread-ids] · unlink <t3-or-gmail-id> · poll [--dry-run] 
   are server tokens: the helper prints a 💡 Print-all hint (relay it), reads the Chrome tab title
   (open tab, else opens and closes one) for subject + account, then searches `subject:"…"`. Several
   matches → candidates, exit 3: ask the user. `--search` always works.
+- **Find the owner** (`find`, read-only, no link needed): resolve, then search T3
+  ([t3-find-thread](../t3-find-thread/SKILL.md), purged threads included) for every form of the
+  thread and its message ids (hex, decimal `thread-f`/`msg-f`, API-verified `msg-a` drafts). Ranks
+  `linked` > `marker` > `id`; no id hit → subject search, flagged `topic` (weak). Titles matching
+  "dispatch" and `--exclude` ids are intake, listed apart. Shows execution-brief and account
+  evidence; read the pick before pinging. A match is evidence, never permission to draft, send or link.
+- **Mail-ref marker**: a T3 thread working on a mail writes the `marker` line from `resolve` in its
+  brief and in every report that drafts/sends/decides on it (gws `gmail-draft`/`gmail-send` print the
+  thread id). Only T3 text is searched, not tool output; never put the marker in the mail itself.
+  Renames, settling and URL variants then still find the thread.
 - **State**: `~/.t3/userdata/mail-links.json` (seen ids per link; `add` baselines all current
   messages). Saved mail: `~/.t3/userdata/mail-links/<gmail-thread>/`. A linked thread is never
   purged by [`t3-purge-threads`](../t3-maintenance/SKILL.md) (`list --thread-ids`); unlink first.

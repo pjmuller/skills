@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["google-auth>=2", "requests>=2", "httpx>=0.27", "python-dotenv>=1"]
 # ///
-"""Resolve Gmail references or link a T3 thread; a poller pings it on new inbound mail.
+"""Resolve Gmail references, find the T3 threads working on one, or link a T3 thread; a poller pings it on new inbound mail.
 
 The account comes from a Workspace wrapper config (--config / $GWS_CONFIG), stored per link so
 the LaunchAgent poller needs no arguments. Gmail access goes through the google-workspace-core
@@ -18,6 +18,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -329,6 +330,97 @@ def t3_thread(thread_id: str) -> dict | None:
     return dict(zip(("title", "deleted", "archived"), row)) if row else None
 
 
+# --- find: which T3 threads already own a Gmail thread --------------------------
+FIND_LIMIT = 8  # T3 candidates inspected (one peek + one grep each)
+EXECUTION_SENTINEL = "Execution thread:"
+DISPATCHER_TITLE = re.compile(r"\bdispatch", re.IGNORECASE)
+EVIDENCE_RANK = {"linked": 0, "marker": 1, "id": 2, "topic": 3}
+
+
+def mail_ref(account: str, gmail_thread: str) -> str:
+    """The searchable line a T3 thread writes in briefs/reports (never in mail): canonical id + account."""
+    return f"Mail-ref: gmail:{gmail_thread} {account}"
+
+
+def id_terms(thread: dict, draft_ids: list[str] = ()) -> list[str]:
+    """Hex + decimal of the thread and its messages, plus verified draft ids: every form a T3 thread may hold."""
+    ids = dict.fromkeys([thread["id"], *(m["id"] for m in thread.get("messages", []))])
+    terms = [form for i in ids for form in (i, str(int(i, 16)))]
+    drafts = [form for d in draft_ids for form in (d, d.removeprefix("r-").removeprefix("r"))]  # r123 is one token
+    return list(dict.fromkeys(terms + drafts))
+
+
+def thread_draft_ids(ws, ref: str | None, gmail_thread: str) -> list[str]:
+    """msg-a:r… compose ids in the pasted URL that the API confirms belong to this thread."""
+    from gws_core import ApiError
+    verified = []
+    for draft in dict.fromkeys(re.findall(r"msg-a(?::|%3A)(r-?\d+)", ref or "")):
+        try:
+            if ws.gmail.get_draft(draft)["message"]["threadId"] == gmail_thread:
+                verified.append(draft)
+        except ApiError:  # sent or deleted since: the thread/message ids still match
+            pass
+    return verified
+
+
+def find_thread(*argv: str):
+    exe = shutil.which("t3-find-thread")
+    if not exe:
+        raise SystemExit("t3-find-thread not on PATH: run skills/t3-find-thread/scripts/install")
+    result = subprocess.run([exe, "--json", *argv], capture_output=True, text=True, timeout=180)
+    if result.returncode:
+        raise SystemExit(f"t3-find-thread {argv[0]} failed: {result.stderr.strip()}")
+    return json.loads(result.stdout)
+
+
+def linked_threads(account: str, gmail_thread: str) -> list[str]:
+    path = state_path()  # read-only, like `list --thread-ids`: atomic replace, no lock
+    links = json.loads(path.read_text()).get("links", []) if path.exists() else []
+    return [l["t3_thread"] for l in links if l.get("account") == account and l.get("gmail_thread") == gmail_thread]
+
+
+def classify_owners(hits: list[dict], peeks: dict[str, dict], greps: dict[str, tuple[bool, bool]], linked: list[str],
+                    exclude: list[str], evidence: str) -> tuple[list[dict], list[dict]]:
+    """(owners best first, excluded). Dispatchers and caller-excluded threads are intake, not owners.
+    greps: thread id -> (full Mail-ref line seen, account seen)."""
+    owners, excluded = [], []
+    for hit in hits:
+        tid = hit["thread_id"]
+        if any(tid.startswith(x) or tid.removeprefix("mcp:").startswith(x) or hit["short_id"].startswith(x)
+               for x in exclude):
+            excluded.append({**hit, "why": "excluded"})
+            continue
+        if DISPATCHER_TITLE.search(hit["title"]):
+            excluded.append({**hit, "why": "dispatcher"})
+            continue
+        first = ((peeks.get(tid) or {}).get("prompts") or [{"text": ""}])[0]["text"]
+        marker, account_seen = greps.get(tid, (False, False))
+        kind = "linked" if tid in linked else "marker" if marker else evidence
+        owners.append({**hit, "evidence": kind, "execution": first.lstrip("# ").startswith(EXECUTION_SENTINEL),
+                       "account_seen": account_seen})
+    owners.sort(key=lambda o: (EVIDENCE_RANK[o["evidence"]], not o["account_seen"]))
+    return owners, excluded
+
+
+def inspect(hits: list[dict], extra: list[str], account: str, gmail_thread: str) -> tuple[list[dict], dict, dict]:
+    """Peek + grep candidates. `extra` = linked thread ids the search missed; ones T3 no longer has are dropped."""
+    peeks = {p["thread_id"]: p for p in find_thread("peek", ",".join(h["thread_id"] for h in hits), "--prompts", "1")} if hits else {}
+    hits = list(hits)
+    for tid in extra:
+        try:
+            peek = find_thread("peek", tid, "--prompts", "1")[0]
+        except SystemExit:
+            continue
+        peeks[tid] = peek
+        hits.append({k: peek[k] for k in ("thread_id", "short_id", "title", "project", "updated_at", "link")})
+    def seen(tid: str, term: str) -> bool:
+        return bool(find_thread("grep", tid, "-k", term, "--limit", "1")["snippets"])
+
+    greps = {h["thread_id"]: (seen(h["thread_id"], mail_ref(account, gmail_thread)), seen(h["thread_id"], account))
+             for h in hits}
+    return hits, peeks, greps
+
+
 def notify(text: str) -> None:
     subprocess.run(["osascript", "-e", "on run argv", "-e",
                     "display notification (item 1 of argv) with title \"t3-mail-link\"", "-e", "end run", text],
@@ -351,12 +443,58 @@ def save_messages(ws, link: dict, ids: list[str], name: str, trim: bool) -> Path
 # --- commands -------------------------------------------------------------------
 def cmd_resolve(args) -> int:
     ws = workspace(config_arg(args))
+    account = verified_account(ws)
+    gmail_id = resolve_thread(ws, account, args.ref, args.search)
+    print(json.dumps({"account": account, "gmail_thread": gmail_id, "marker": mail_ref(account, gmail_id)}))
+    return 0
+
+
+def verified_account(ws) -> str:
     account = ws.config.account.lower()
     actual = str(ws.whoami().get("email") or "").lower()
     if actual != account:
         raise SystemExit(f"authorized as {actual or 'unknown'}, expected {account}; nothing resolved")
+    return account
+
+
+def cmd_find(args) -> int:
+    """Resolve, then rank T3 threads that recorded this Gmail thread (link > Mail-ref > any id > subject)."""
+    ws = workspace(config_arg(args))
+    account = verified_account(ws)
     gmail_id = resolve_thread(ws, account, args.ref, args.search)
-    print(json.dumps({"account": account, "gmail_thread": gmail_id}))
+    thread = thread_metadata(ws, gmail_id)
+    messages = thread.get("messages", [])
+    subject = header(messages[0], "Subject") if messages else ""
+    terms = id_terms(thread, thread_draft_ids(ws, args.ref, gmail_id))
+    linked = linked_threads(account, gmail_id)
+    hits = find_thread("search", "--backup", "on", "--limit", str(FIND_LIMIT), *terms)["results"]
+    extra = [t for t in linked if t not in {h["thread_id"] for h in hits}]
+    owners, excluded = classify_owners(*inspect(hits, extra, account, gmail_id), linked, args.exclude, "id")
+    topic = []
+    if not owners and (words := re.findall(r"\w{4,}", norm_subject(subject))[:6]):
+        weak = find_thread("search", "--all", "--backup", "on", "--limit", "5", *words)["results"]
+        topic, more = classify_owners(*inspect(weak, [], account, gmail_id), [], args.exclude, "topic")
+        excluded += [x for x in more if x["thread_id"] not in {e["thread_id"] for e in excluded}]
+    report = {"account": account, "gmail_thread": gmail_id, "subject": subject, "marker": mail_ref(account, gmail_id),
+              "terms": terms, "owners": owners, "topic": topic, "excluded": excluded}
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    print(f"Gmail thread {gmail_id} · {account} · {subject!r}\n{report['marker']}\n")
+    rows = owners or topic
+    if rows:
+        print("| evidence | T3 thread | project | updated | execution brief | account seen |\n| --- | --- | --- | --- | --- | --- |")
+        for o in rows:
+            title = o.get("link") or f"{o['title']} (backup)"
+            print(f"| {o['evidence']} | {title} `{o['short_id']}` | {o['project']} | {o['updated_at'][:10]} "
+                  f"| {'yes' if o['execution'] else 'no'} | {'yes' if o['account_seen'] else 'no'} |")
+    else:
+        print("No T3 thread recorded this Gmail thread or its subject: spawn, or search other topic words.")
+    for x in excluded:
+        print(f"excluded ({x['why']}): {x['title']} `{x['short_id']}`")
+    if topic:
+        print("\nSubject match only: weak, verify sender/date/scope.")
+    print("\nNext: t3_thread_read the pick before pinging. A match is evidence, not permission to draft, send or monitor.")
     return 0
 
 
@@ -561,6 +699,9 @@ def main(argv: list[str] | None = None) -> int:
         return p
 
     reference("resolve", "read-only: verify the configured account and print its Gmail thread id as JSON")
+    find = reference("find", "read-only: resolve, then list T3 threads that already work on this Gmail thread")
+    find.add_argument("--exclude", action="append", default=[], help="T3 thread id (prefix) to skip, e.g. your own")
+    find.add_argument("--json", action="store_true")
     add = linker("add", "link a Gmail thread to a T3 thread")
     add.add_argument("--thread", required=True, help="T3 thread id (an agent passes its own: t3_thread_list currentThreadId)")
     listing = sub.add_parser("list", help="show links")
@@ -575,9 +716,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("schedule", help="arm the weekday LaunchAgent poller")
     sub.add_parser("unschedule", help="remove the LaunchAgent poller")
     args = parser.parse_args(argv)
-    if args.command in ("resolve", "add") and bool(args.ref) == bool(args.search):
+    if args.command in ("resolve", "find", "add") and bool(args.ref) == bool(args.search):
         parser.error("give exactly one of REF or --search")
-    return {"resolve": cmd_resolve, "add": cmd_add, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll, "draft": cmd_draft,
+    return {"resolve": cmd_resolve, "find": cmd_find, "add": cmd_add, "list": cmd_list, "unlink": cmd_unlink, "poll": cmd_poll, "draft": cmd_draft,
             "schedule": cmd_schedule, "unschedule": cmd_unschedule}[args.command](args)
 
 
