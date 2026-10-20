@@ -71,3 +71,5 @@ filling swap. `sample`/`vmmap`/`fs_usage` on it need root. Without root,
 was internal backlog or a leak, not a live flood. Fix = restart it (Activity Monitor → fseventsd →
 Force Quit, admin password; launchd respawns it). File watchers rescan; no data loss.
 Never delete `/.fseventsd`. If it regrows, capture `sudo fs_usage -w -f filesys` before restarting.
+Likely trigger: agent Go builds across ~14 worktrees wrote ~270k files (80G) to `go-build` that
+day. Capping churny build caches (LRU trim, paced deletes) cuts the event load.
