@@ -6,17 +6,22 @@ who asked comes from speaker identity, not from the name. Active for calls recor
 
 | Said in the call | Means |
 | --- | --- |
-| "James, please spawn [for OWNER] TASK" · "James, start een agent [voor OWNER] om TASK" | Green light: start the thread for that bounded task now, no second approval round. |
+| "James, please spawn/do/fix/research TASK" · "James, voer TASK uit / zoek TASK uit" · "James, can you look into TASK?" | Green light: start the thread for that bounded task now, no second approval round. |
 | "James, please create a ClickUp ticket [for OWNER]: TASK" · "James, maak een ClickUp-ticket [voor OWNER]: TASK" | Create that ticket in OWNER's queue. Not execution of its content. |
-| "James, …" anything else, or no cue | Default: a proposal in the follow-up thread. |
+| "James, prepare a prompt only" · "werk alleen een prompt uit" · "don’t execute yet" · "wacht op mijn akkoord" | Prepare the brief; do not launch or execute that action until selected. |
+| No explicit mode | Follow the operator’s wrapper policy. Without one, deliver proposals. An auto-dispatch policy may launch clear, grounded operator-owned actions; tentative ideas stay proposals. |
 
-A command needs all of: direct address at the start of the request, an imperative spawn/ticket verb,
+A command needs direct address, a clear request to act (including polite “can you…” phrasing),
 a concrete task, and an attributable speaker (verified transcript label, or unambiguous context such
 as a two-person call). ASR may write the name as "Jaymes", "Jems" or "Djems" (unverified); accept those
 only in the same direct-address shape.
 
-Never a command: the name alone, questions ("should James…?"), maybe/could, quoted or demo examples,
+Never a command: the name alone, speculation ("should James…?", "maybe we could…"), quoted or demo examples,
 talk about this cue system, negation, or a request withdrawn later in the call. Corrected → use the last version.
+
+Explicit hold/prepare-only wording wins over an auto-dispatch default and applies to the scoped action,
+not unrelated actions. A later direct user instruction may release the hold. Execution means the
+requested outcome: “research” authorizes research, not its recommended build; “draft” never means send.
 
 ## How the thread processing the call reacts
 
