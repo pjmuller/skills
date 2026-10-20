@@ -111,7 +111,13 @@ def record_take(index: str, path: Path, beep: Path, seconds: float) -> dict:
         beep_at = time.monotonic() - started
         subprocess.run(["afplay", str(beep)], check=False)
         beep_end = time.monotonic() - started
-        process.wait(timeout=total + 10)
+        cancel, deadline = path.parent / CANCEL_FILE, time.monotonic() + total + 10
+        while process.poll() is None:  # the agent side may cancel mid-take; finally stops ffmpeg
+            if cancel.exists():
+                raise KeyboardInterrupt("cancelled by the waiting agent")
+            if time.monotonic() > deadline:
+                raise RuntimeError("ffmpeg did not stop at its -t limit")
+            time.sleep(0.1)
     finally:
         if process.poll() is None:
             process.terminate()
@@ -384,6 +390,8 @@ def cmd_run(args) -> None:
     for tool in ("ffmpeg", "ffprobe", "say", "afplay"):
         if not shutil.which(tool):
             fail(f"missing {tool}")
+    if not 1 <= args.seconds <= 30:
+        fail("--seconds must be between 1 and 30 (bounded takes)", 2)
     device = resolve_device(args.device)
     if args.keep_gain:
         levels: list[float | None] = [None] * args.takes
