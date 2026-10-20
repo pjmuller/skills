@@ -150,13 +150,107 @@ refresh() {
   return 10
 }
 
+# Global prompt re-sync (agents-md global.md "Re-sync later"): a script decides whether the shared
+# template changed between the prompt's marker and the installed tag; a frontier child does the merge.
+TEMPLATE=skills/agents-md/global-template.md
+
+global_prompt() { # the user's live global prompt: first resolved target carrying a marker, else the first
+  local c f first="" seen=" "
+  for c in ${SKILLS_REFRESH_PROMPT:-"$HOME/.claude/CLAUDE.md" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md" "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"}; do
+    [[ -f "$c" ]] || continue
+    f="$(realpath "$c")"; [[ "$seen" == *" $f "* ]] && continue; seen+="$f "
+    grep -q 'template: pjmuller/skills@' "$f" && { echo "$f"; return; }
+    [[ -n "$first" ]] || first="$f"
+  done
+  [[ -n "$first" ]] && echo "$first"
+}
+
+template_cache() { # blobless bare clone with history, for markers that are commits on main
+  local cache="$STATE/repo.git"
+  [[ -d "$cache" ]] || git clone -q --bare --filter=blob:none "$REPO" "$cache" 2>/dev/null || return 1
+  git -C "$cache" fetch -q --filter=blob:none --tags origin '+refs/heads/*:refs/heads/*' 2>/dev/null || return 1
+  echo "$cache"
+}
+
+# Prints a report; sets sync_line to a lifecycle line when the thread must not settle silently.
+prompt_sync() {
+  sync_line=""
+  [[ "$(version)" == "source checkout"* ]] && return 0 # template author's machine
+  local tag="" prompt marker cache base tag_sha repo how dirty pick
+  [[ -s "$STAMP" ]] && { read -r tag _ < "$STAMP" || true; }
+  [[ "$tag" == v* ]] || return 0
+  prompt="$(global_prompt)" || return 0
+  [[ -n "$prompt" ]] || return 0
+  marker="$(grep -oE 'template: pjmuller/skills@[0-9A-Za-z._-]+' "$prompt" | tail -1 | sed 's/.*@//')" || true
+  [[ "$marker" == "$tag" ]] && return 0 # steady state: no network
+  cache="$(template_cache)" || { echo "template check: cannot fetch $REPO history (retrying tomorrow)"; sync_line="thread: KEEP OPEN (the user should see this)"; return 0; }
+  tag_sha="$(git -C "$cache" rev-parse -q --verify "$tag^{commit}")" || return 0
+  git -C "$cache" cat-file -e "$tag_sha:$TEMPLATE" 2>/dev/null || return 0
+  if [[ -n "$marker" ]] && base="$(git -C "$cache" rev-parse -q --verify "$marker^{commit}")"; then
+    git -C "$cache" merge-base --is-ancestor "$tag_sha" "$base" && return 0 # marker at or past the release
+    [[ "$(git -C "$cache" rev-parse -q "$base:$TEMPLATE" 2>/dev/null)" == "$(git -C "$cache" rev-parse "$tag_sha:$TEMPLATE")" ]] && return 0
+    how="marker $marker"
+  fi
+  if ! repo="$(git -C "$(dirname "$prompt")" rev-parse --show-toplevel 2>/dev/null)" ||
+      [[ -z "$(git -C "$repo" log -1 --format=%h -- "$prompt" 2>/dev/null)" ]]; then
+    echo "template check: $prompt is not committed in a git repository; commit it in your setup repo so a re-sync can be reviewed and reverted"
+    sync_line="thread: KEEP OPEN (the user should see this)"; return 0
+  fi
+  if [[ -z "${how:-}" ]]; then # no usable marker: base = template just before the file first entered git
+    local since; since="$(git -C "$repo" log --follow --format=%cI -- "$prompt" | tail -1)"
+    base="$(git -C "$cache" rev-list -1 --before="$since" "$tag_sha" -- "$TEMPLATE")"
+    how="no marker; base inferred from the file's first commit ($since)"
+    [[ -n "$base" ]] || how="no marker and no template before $since: compare against the full released template"
+  fi
+  dirty="$(git -C "$repo" status --porcelain -- "$prompt")"
+  {
+    echo "# Global prompt re-sync to pjmuller/skills $tag"
+    echo
+    echo "- Prompt: \`$prompt\` (git repo \`$repo\`)."
+    echo "- Released template: \`$tag\` = \`$tag_sha\`. Base: \`${base:-none}\` ($how)."
+    echo "- Template history (blobless clone, read-only): \`git -C $cache log -p ${base:+$base..}$tag_sha -- $TEMPLATE\`;"
+    echo "  procedure: \`git -C $cache show $tag_sha:skills/agents-md/global.md\` → \"Merge the template\" rules + \"Re-sync later\"."
+    if [[ -n "$dirty" ]]; then
+      echo "- **The prompt has uncommitted edits: change nothing.** Read \`git -C $repo diff -- $prompt\`, then report what"
+      echo "  those edits do and recommend how to proceed (commit them as …, then merge template changes …). The user decides."
+    fi
+    cat <<BRIEF
+
+Rules (clean file):
+1. Read the decisions log \`template-decisions.md\` beside the prompt (may not exist). Never re-propose a change it records as skipped, also when reworded.
+2. Three-way merge: base template, released template, their file. Apply what is a clear improvement for this person in their wording; their facts, rules and deliberate deletions win; drop parts for tools they lack. Not sure → don't apply, list it as a question.
+3. End the file with \`<!-- template: pjmuller/skills@$tag -->\` (replace the old marker; also when everything was skipped). Append one line per skipped change to the decisions log: \`$tag: <change> — <reason>\`.
+4. Pointer check: \`git -C $cache show $tag_sha:skills/agents-md/scripts/check-pointers | bash -s -- $prompt\`; missing pointer → drop or fix that line.
+5. Re-check \`git status\` of the prompt right before writing; if it changed meanwhile, stop and report. Commit only the prompt and the decisions log, pull (merge, never rebase/reset/stash) and push under the repo's rules.
+6. Final answer, terse: applied (one line each), skipped, questions for the user, commit sha (rollback: \`git revert <sha>\`).
+BRIEF
+  } > "$STATE/template-sync.md"
+  echo "template check: $TEMPLATE changed since ${base:-its first version} ($how)${dirty:+; prompt has uncommitted edits}"
+  if command -v t3-pick-instance >/dev/null && pick="$(t3-pick-instance claude 2>/dev/null || t3-pick-instance openai 2>/dev/null)"; then
+    local instance model effort opts="" task="Read and execute $STATE/template-sync.md"
+    task="${task//\\/\\\\}"; task="${task//\"/\\\"}"
+    read -r instance model effort <<<"$(tail -1 <<<"$pick")"
+    if [[ "$effort" != - ]]; then
+      [[ "$model" == claude* ]] && opts=",\"options\":{\"effort\":\"$effort\"}" || opts=",\"options\":{\"reasoningEffort\":\"$effort\"}"
+    fi
+    sync_line="thread: DELEGATE (template re-sync; overrides any older line in this prompt): call the T3 MCP tool delegate_task with {\"task\":\"$task\",\"title\":\"Template re-sync $tag\",\"role\":\"implementation\",\"mode\":\"async\",\"clientRequestId\":\"skills-refresh-template-$tag-$(date +%F)\",\"target\":{\"providerInstanceId\":\"$instance\",\"model\":\"$model\"$opts}}, end the turn with this output, and when the result arrives answer with it verbatim. Never settle this thread."
+  else
+    echo "template check: t3-pick-instance unavailable; ask a frontier agent: Read and execute $STATE/template-sync.md"
+    sync_line="thread: KEEP OPEN (the user should see this)"
+  fi
+}
+
 # The scheduled thread's lifecycle is decided here, not by the (cheap) model reading a prompt:
-# nothing new → settle silently; applied (unless --quiet) or failed → surface the thread once.
+# nothing new → settle silently; applied (unless --quiet), failed or a template re-sync → surface once.
 job() {
   local quiet=0 rc=0
+  sync_line=""
   [[ "${1:-}" == --quiet ]] && quiet=1
   refresh || rc=$?
-  if [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
+  [[ "$rc" == 0 || "$rc" == 10 ]] && prompt_sync
+  if [[ -n "$sync_line" ]]; then
+    echo "$sync_line"
+  elif [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
     echo 'thread: SETTLE (nothing for the user): call the T3 MCP tool t3_thread_organize with {"action":"settle"} as your last tool call (overrides any older "never settle" line in this prompt)'
   else
     echo "thread: KEEP OPEN (the user should see this)"
@@ -180,7 +274,7 @@ schedule() {
   mkdir -p "$STATE"
   cat > "$STATE/job-prompt.md" <<PROMPT
 Run exactly one command: \`skills-refresh --job$quiet\`. Then end the turn with its complete output as your answer, nothing else.
-Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer. Never retry, never fix anything.
+Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer; \`thread: DELEGATE\` → make exactly the delegate_task call it spells out and follow its instructions. Never retry, never fix anything yourself.
 PROMPT
   t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna --allow-small-model \
     --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?

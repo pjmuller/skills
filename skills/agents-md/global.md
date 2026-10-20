@@ -113,8 +113,14 @@ Adapt the [role](roles.md) without creating a second competing Git policy.
    unresolved difference or failed check. Don't change accounts or working
    tooling as part of prompt installation.
 
-Re-sync later: `git log -p <sha>.. -- skills/agents-md/global-template.md` in a
-clone of the skills repo; offer each change as adopt/skip, rerun the pointer check of step 6, then update the marker.
+Re-sync later: the daily [skills-refresh](../t3-manage-thread/skills-refresh.md) job
+detects a template change between the marker and the installed release tag (never
+`main`) and hands this to a frontier child; by hand, the same with
+`git log -p <marker>..<tag> -- skills/agents-md/global-template.md`. Three-way: their
+wording, facts and deletions win; apply clear improvements, ask about unclear ones;
+uncommitted prompt edits → change nothing, recommend. Log each skipped change in
+`template-decisions.md` beside the prompt so it is never re-proposed; rerun the pointer
+check of step 6; set the marker to the tag even when everything was skipped.
 
 ## Port a live file's improvements into a shared template
 

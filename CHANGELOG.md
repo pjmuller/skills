@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **skills-refresh: global prompt re-sync.** After each run the job compares the template marker in your global prompt (`<!-- template: pjmuller/skills@… -->`) with the installed tag. Changed template → a frontier `delegate_task` child merges three-way (base, released template, your file): commits clear improvements, your facts/rules/deletions win, logs skips in `template-decisions.md`, asks about the rest, bumps the marker. Uncommitted prompt edits → it only recommends; no marker → base inferred from the prompt's first commit. Marker at the tag → no network, thread settles as before. Existing jobs need nothing: the `thread: DELEGATE` line explains itself ([skills-refresh.md](skills/t3-manage-thread/skills-refresh.md)).
 - t3-manage-thread: provider aliases select Astra (OpenAI/Codex) or Opus (Claude); relay defaults to Opus then Astra. Instance-only launches infer the provider default and capacity-route within the named account; explicit models/efforts survive. Document native T3 inheritance separately. Fresh delegates for independent opinions; distinct outcomes keep separate threads.
 
 - agents-md: OpenAI entrypoints use Astra (house medium); direct Sol for code review, with Astra free to choose scoped workers. Preserve explicit user choices and account routing; no silent Astra-to-Sol orchestration fallback.
