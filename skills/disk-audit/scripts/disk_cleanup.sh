@@ -34,12 +34,11 @@ have brew && step "homebrew cache" "$(brew --cache)" brew cleanup --prune=all
 step "golangci-lint cache" "$HOME/Library/Caches/golangci-lint" "$here/go_cache_trim.sh" 0 "$HOME/Library/Caches/golangci-lint"
 step "gopls cache" "$HOME/Library/Caches/gopls" rm -rf "$HOME/Library/Caches/gopls"
 
-# stale pnpm store versions (keep the one pnpm reports)
-if have pnpm; then
-  keep=$(pnpm store path 2>/dev/null)
-  for v in "$HOME"/Library/pnpm/store/v*; do
-    [ -d "$v" ] && [ "$v" != "$keep" ] && step "stale store $(basename "$v")" "$v" rm -rf "$v"
-  done
-fi
+# stale pnpm store versions: no new files for 30 days. Not "every version but the one the global
+# pnpm reports": repos pinning an older pnpm (packageManager) keep using its store.
+for v in "$HOME"/Library/pnpm/store/v*; do
+  [ -d "$v" ] && [ -z "$(find "$v" -maxdepth 2 -mtime -30 -print -quit)" ] &&
+    step "stale store $(basename "$v")" "$v" rm -rf "$v"
+done
 
 echo "done — rerun scripts/disk_audit.sh to confirm"

@@ -168,11 +168,11 @@ suggest "$(bytes "${PNPM_STORE:-/nonexistent}")" 2 \
   "pnpm store prune" "pnpm store — drops packages no project references"
 suggest "$(bytes "$HOME_DIR/Library/Caches/pnpm/dlx")" 1 \
   "rm -rf ~/Library/Caches/pnpm/dlx" "pnpm dlx one-off package cache"
-# stale pnpm store versions (only the version pnpm reports is in use)
+# stale pnpm store versions: no new files for 30 days (repos pinning an older pnpm still use theirs)
 if [ -d "$HOME_DIR/Library/pnpm/store" ]; then
   for v in "$HOME_DIR"/Library/pnpm/store/v*; do
-    [ "$v" = "${PNPM_STORE:-}" ] && continue
-    suggest "$(bytes "$v")" 0.5 "rm -rf $(short "$v")" "stale pnpm store version (in use: $(short "${PNPM_STORE:-?}"))"
+    [ -n "$(find "$v" -maxdepth 2 -mtime -30 -print -quit)" ] && continue
+    suggest "$(bytes "$v")" 0.5 "rm -rf $(short "$v")" "stale pnpm store version (no new files for 30 days)"
   done
 fi
 suggest "$(bytes "$HOME_DIR/.cache/huggingface")" 1 \
