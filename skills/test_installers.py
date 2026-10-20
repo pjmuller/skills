@@ -18,7 +18,10 @@ def test_checkout_guard(installer, tmp_path):
     # Copy only this installer's scripts: every skill must work independently.
     scripts = tmp_path / 'project/.agents/skills' / installer.parts[-3] / 'scripts'
     shutil.copytree(installer.parent, scripts)
-    names = re.search(r'for command_name in (.*); do', installer.read_text())[1].split()
+    text = installer.read_text()
+    names = re.search(r'for command_name in (.*); do', text)[1].split()
+    if names == ['"${commands[@]}"']:
+        names = re.search(r'^commands=\((.*)\)', text, re.M)[1].split()
     previous = tmp_path / 'previous' / names[-1]
     previous.parent.mkdir()
     previous.touch()
