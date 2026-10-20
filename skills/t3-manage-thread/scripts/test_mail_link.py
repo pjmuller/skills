@@ -63,8 +63,10 @@ def test_upsert_dedupes_per_account_and_thread():
     state = {"links": []}
     assert ml.upsert(state, {"account": "a@x", "gmail_thread": "t1", "t3_thread": "one"}) is None
     assert ml.upsert(state, {"account": "b@x", "gmail_thread": "t1", "t3_thread": "two"}) is None
-    old = ml.upsert(state, {"account": "a@x", "gmail_thread": "t1", "t3_thread": "three"})
+    state["links"][0]["seen"] = ["m1"]
+    old = ml.upsert(state, {"account": "a@x", "gmail_thread": "t1", "t3_thread": "three", "seen": ["m1", "m2"]})
     assert old["t3_thread"] == "one" and [l["t3_thread"] for l in state["links"]] == ["three", "two"]
+    assert state["links"][0]["seen"] == ["m1"]  # re-add keeps the old baseline: m2 still pings
 
 
 def test_ping_text_is_shell_safe():

@@ -112,11 +112,12 @@ def baseline(messages: list[dict]) -> list[str]:
 
 
 def upsert(state: dict, link: dict) -> dict | None:
-    """One link per (account, Gmail thread); returns the replaced link, if any."""
+    """One link per (account, Gmail thread); returns the replaced link, if any. A re-add keeps the old
+    seen set: re-baselining would swallow inbound mail that arrived since the last ping."""
     links = state.setdefault("links", [])
     for i, old in enumerate(links):
         if old["account"] == link["account"] and old["gmail_thread"] == link["gmail_thread"]:
-            links[i] = link
+            links[i] = {**link, "seen": old.get("seen", [])}
             return old
     links.append(link)
     return None
@@ -501,7 +502,7 @@ def cmd_find(args) -> int:
 def make_link(args, t3_id: str) -> tuple[object, dict, dict]:
     config = config_arg(args)
     ws = workspace(config)
-    account = ws.config.account.lower()
+    account = verified_account(ws)
     gmail_id = resolve_thread(ws, account, args.ref, args.search)
     thread = thread_metadata(ws, gmail_id)
     messages = thread.get("messages", [])
@@ -604,9 +605,11 @@ def cmd_poll(args) -> int:
     print(f"--- poll {datetime.now():%Y-%m-%d %H:%M}")
     with locked_state() as state:
         errors = {e for link in state.get("links", []) if (e := poll_link(link, args.dry_run))}
-        if "gmail" in errors and not args.dry_run and state.get("gmail_error_notified") != str(date.today()):
-            notify("Gmail check failed for linked mail cases; see ~/.t3/userdata/logs/t3-mail-link.log")
-            state["gmail_error_notified"] = str(date.today())
+        if errors and not args.dry_run and state.get("error_notified") != str(date.today()):
+            what = " and ".join(sorted({"gmail": "Gmail check", "t3": "T3 ping"}[e] for e in errors))
+            notify(f"{what} failed for linked mail cases; see ~/.t3/userdata/logs/t3-mail-link.log")
+            state["error_notified"] = str(date.today())
+            state.pop("gmail_error_notified", None)
     return 1 if errors else 0
 
 
