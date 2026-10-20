@@ -7,6 +7,9 @@ HOME_="${SKILLS_REFRESH_HOME:-$HOME/.agents}"
 REPO="${SKILLS_REFRESH_REPO:-https://github.com/pjmuller/skills.git}"
 SKILLS="$HOME_/skills" STAMP="$HOME_/pjmuller-skills.version" STATE="$HOME_/pjmuller-skills"
 LOCK="$STATE/lock"
+MIN_VERIFYING_RELEASE='v0.5.5'
+# Bootstrap trust is the installed script, never the fetched release. No env override.
+ALLOWED_SIGNERS='pjmuller namespaces="git" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDlzBlNIEQq+VIuJRLVILwIikQ3B0uytO32FlNsNfT1GalT3yD+GB5cgSrXFmkz3updjSkTdSOkL45k3C3BZgvYfDvr1lKdaKLxhrL1WA0fux0R94DwGa+pYR1B4tox/5HD/01h8XyM9OXLVW9ZRJzMfDhIK+tk7a8VBX9A2NgbrQIFURzSbvjoSnVsbY/okj3QYuTwKjzC5Ah6PWh1LMyUqqF/TQKAozVeJiBhSOOpDTuVk/76BTCu/LsR9XIPtmb6jbRwE3HfeAZ0+CuigoZwy0eYZ2M3P0viGLIurygfIogMc+RMGChUlJcaXzKhA+t69xDt+5DYImSbCyo19ttZTZeQx8VYMK5MzC9pbSVfJgpLG+C4m22iJwRenH1ARjqAuctwIKUOa42LHxuu6fvdCMSmu+2F3vrDnUxdlFd8/nFEIDh74qhvVyobhWqMJKCqT5rBlBeALr9DdJ4cifhZdyEc8BtUdPvME1CTKGcOHAQad6smNmSLkcYSrYxCzK+hCki9Gz25gOOLbR6Hdl/Hf3TXWLIdtBsA3aj3GUmb9GchFTGLd0RN22VgOOQBtrsB+VvI4jndwIfEDTemqlWqI+zcscIJQhIxyLOktewjSpPFFFYMew5zjRk66MiG7rGtEDv7j4LmGabz5fls96XHLFApnMpZ59otjiIv5Tclfw=='
 
 usage() {
   cat <<'USAGE'
@@ -16,12 +19,41 @@ Usage:
   skills-refresh --job [--quiet] same, then settle (0) or surface (10, 1) the T3 thread it runs in;
                                  --quiet also settles on 10 (no changelog thread)
   skills-refresh --version       installed tag + date
+  skills-refresh --verify-tag REPO TAG   verify with this installed pin; print commit SHA
   skills-refresh schedule [--project DIR] [--at HH:MM] [--quiet]   daily job (idempotent)
 Env: SKILLS_REFRESH_HOME (~/.agents), SKILLS_REFRESH_REPO (GitHub URL or local path),
      SKILLS_REFRESH_TAG (force a tag)
 USAGE
 }
 die() { echo "skills-refresh: $*" >&2; exit 1; }
+version_at_least() {
+  [[ "$(printf '%s\n' "${1#v}" "${2#v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "${1#v}" ]]
+}
+
+# Subshell keeps the temporary trust file and trap independent of refresh's lock.
+verify_release() (
+  local repo="$1" tag="$2" object body trust major minor
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid release tag: $tag"
+  read -r major minor < <(git --version | sed -E 's/.* ([0-9]+)\.([0-9]+).*/\1 \2/')
+  [[ "$major" -gt 2 || ( "$major" == 2 && "$minor" -ge 34 ) ]] ||
+    die "signature verification needs Git >= 2.34 and OpenSSH with ssh-keygen -Y"
+  command -v ssh-keygen >/dev/null || die "signature verification needs ssh-keygen"
+  object="$(git -C "$repo" rev-parse --verify "refs/tags/$tag")" || exit 1
+  body="$(git -C "$repo" cat-file tag "$object")" || die "$tag is not an annotated signed tag"
+  [[ "$(printf '%s\n' "$body" | sed -n '2p')" == "type commit" &&
+     "$(printf '%s\n' "$body" | sed -n '3p')" == "tag $tag" &&
+     "$body" == *'-----BEGIN SSH SIGNATURE-----'* &&
+     "$body" != *'-----BEGIN PGP SIGNATURE-----'* &&
+     "$body" != *'-----BEGIN SIGNED MESSAGE-----'* ]] ||
+    die "$tag: expected an SSH-signed commit tag with matching name"
+  trust="$(mktemp)" || exit 1
+  trap 'rm -f "$trust"' EXIT
+  printf '%s\n' "$ALLOWED_SIGNERS" > "$trust" || exit 1
+  git -C "$repo" -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen \
+    -c gpg.minTrustLevel=fully -c gpg.ssh.allowedSignersFile="$trust" \
+    verify-tag "$object" >&2 || die "$tag: signature rejected by the installed signing pin"
+  git -C "$repo" rev-parse --verify "$object^{commit}"
+)
 
 version() {
   local dir="$SKILLS/t3-manage-thread" top
@@ -88,7 +120,14 @@ refresh() {
     [[ -n "$new" ]] || die "no vX.Y.Z tags at $REPO"
     new="v$new"
   fi
+  [[ "$new" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid release tag: $new"
+  version_at_least "$new" "$MIN_VERIFYING_RELEASE" ||
+    die "$new predates mandatory verification ($MIN_VERIFYING_RELEASE); refusing to restore an unsafe updater"
   [[ "$new" != "$installed" ]] || { echo "up to date: $new"; return 0; }
+  if [[ -z "${SKILLS_REFRESH_TAG:-}" && "$installed" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    version_at_least "$new" "$installed" ||
+      die "refusing downgrade from $installed to $new (explicit SKILLS_REFRESH_TAG still requires a signature)"
+  fi
   # Releases since v0.5.0 need T3 Code >= 0.1 (statev2.sqlite); never land them on a 0.0.x machine.
   local t3_data="${T3CODE_HOME:-$HOME/.t3}/userdata"
   if [[ -e "$t3_data/state.sqlite" && ! -e "$t3_data/statev2.sqlite" ]]; then
@@ -103,7 +142,15 @@ refresh() {
 
   stage="$STATE/staging/$new"
   rm -rf "$stage"; mkdir -p "$STATE/staging" "$STATE/last-good"
-  git clone -q --depth 1 --branch "$new" "$REPO" "$stage" 2>/dev/null || die "cannot fetch $new from $REPO"
+  git init -q "$stage" &&
+    git -C "$stage" fetch -q --depth 1 "$REPO" "refs/tags/$new:refs/tags/$new" ||
+    { rm -rf "$stage"; die "cannot fetch $new from $REPO"; }
+  local verified_commit
+  verified_commit="$(verify_release "$stage" "$new")" ||
+    { rm -rf "$stage"; die "$new: verification failed; staying on $installed"; }
+  git -C "$stage" -c core.hooksPath=/dev/null checkout -q --detach "$verified_commit" ||
+    { rm -rf "$stage"; die "$new: cannot check out verified commit"; }
+  echo "verified $new $verified_commit (installed signing pin)"
   managed=() moved=()
   for name in "${candidates[@]}"; do [[ -d "$stage/skills/$name" ]] && managed+=("$name"); done
   if ((${#managed[@]} == 0)); then
@@ -143,7 +190,7 @@ refresh() {
     printf '%s\n' "$check" | grep '^skipped' | sed 's/^/warning: /' || true
   fi
 
-  echo "$new $(date +%F)" > "$STAMP"
+  echo "$new $(date +%F) $verified_commit" > "$STAMP"
   echo "applied $new (was $installed)"
   [[ -f "$stage/CHANGELOG.md" ]] && changelog "$stage/CHANGELOG.md" "$installed"
   rm -rf "$stage"
@@ -176,15 +223,18 @@ template_cache() { # blobless bare clone with history, for markers that are comm
 prompt_sync() {
   sync_line=""
   [[ "$(version)" == "source checkout"* ]] && return 0 # template author's machine
-  local tag="" prompt marker cache base tag_sha repo how dirty pick
-  [[ -s "$STAMP" ]] && { read -r tag _ < "$STAMP" || true; }
+  local tag="" prompt marker cache base tag_sha="" day repo how dirty pick
+  [[ -s "$STAMP" ]] && { read -r tag day tag_sha < "$STAMP" || true; }
   [[ "$tag" == v* ]] || return 0
+  # Old stamps never proved authenticity. Wait for a verified apply before delegating code.
+  [[ "$tag_sha" =~ ^[0-9a-f]{40}$ || "$tag_sha" =~ ^[0-9a-f]{64}$ ]] || return 0
   prompt="$(global_prompt)" || return 0
   [[ -n "$prompt" ]] || return 0
   marker="$(grep -oE 'template: pjmuller/skills@[0-9A-Za-z._-]+' "$prompt" | tail -1 | sed 's/.*@//')" || true
   [[ "$marker" == "$tag" ]] && return 0 # steady state: no network
   cache="$(template_cache)" || { echo "template check: cannot fetch $REPO history (retrying tomorrow)"; sync_line="thread: KEEP OPEN (the user should see this)"; return 0; }
-  tag_sha="$(git -C "$cache" rev-parse -q --verify "$tag^{commit}")" || return 0
+  git -C "$cache" cat-file -e "$tag_sha^{commit}" 2>/dev/null ||
+    { echo "template check: verified commit $tag_sha unavailable"; sync_line="thread: KEEP OPEN (the user should see this)"; return 0; }
   git -C "$cache" cat-file -e "$tag_sha:$TEMPLATE" 2>/dev/null || return 0
   if [[ -n "$marker" ]] && base="$(git -C "$cache" rev-parse -q --verify "$marker^{commit}")"; then
     git -C "$cache" merge-base --is-ancestor "$tag_sha" "$base" && return 0 # marker at or past the release
@@ -221,7 +271,7 @@ Rules (clean file):
 2. Three-way merge: base template, released template, their file. Apply what is a clear improvement for this person in their wording; their facts, rules and deliberate deletions win; drop parts for tools they lack. Not sure → don't apply, list it as a question.
 3. End the file with \`<!-- template: pjmuller/skills@$tag -->\` (replace the old marker; also when everything was skipped). Append one line per skipped change to the decisions log: \`$tag: <change> — <reason>\`.
 4. Pointer check: \`git -C $cache show $tag_sha:skills/agents-md/scripts/check-pointers | bash -s -- $prompt\`; missing pointer → drop or fix that line.
-5. Re-check \`git status\` of the prompt right before writing; if it changed meanwhile, stop and report. Commit only the prompt and the decisions log, pull (merge, never rebase/reset/stash) and push under the repo's rules.
+5. Read released content only by the verified commit \`$tag_sha\`, never by the mutable tag ref. Re-check \`git status\` of the prompt right before writing; if it changed meanwhile, stop and report. Commit only the prompt and the decisions log, pull (merge, never rebase/reset/stash) and push under the repo's rules.
 6. Final answer, terse: applied (one line each), skipped, questions for the user, commit sha (rollback: \`git revert <sha>\`).
 BRIEF
   } > "$STATE/template-sync.md"
@@ -246,7 +296,7 @@ job() {
   local quiet=0 rc=0
   sync_line=""
   [[ "${1:-}" == --quiet ]] && quiet=1
-  refresh || rc=$?
+  (refresh) || rc=$? # die exits the refresh, but the job must still print KEEP OPEN.
   if [[ "$rc" == 0 || "$rc" == 10 ]]; then
     prompt_sync
     [[ -n "$(migrate_job_prompt)" ]] && { echo "job prompt updated for template re-sync; commit .agents/schedules/skills-refresh.prompt.md in your setup repo"; sync_line="${sync_line:-thread: KEEP OPEN (the user should see this)}"; }
@@ -327,6 +377,7 @@ main() {
     "") refresh ;;
     --job) shift; job "$@" ;;
     --version) version ;;
+    --verify-tag) [[ $# == 3 ]] || die "--verify-tag needs REPO TAG"; verify_release "$2" "$3" ;;
     schedule) shift; schedule "$@" ;;
     -h|--help) usage ;;
     *) usage >&2; exit 2 ;;

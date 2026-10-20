@@ -13,7 +13,7 @@ helpers=(t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skill
 
 check() {
   local status=0 dependency
-  for dependency in jq curl sqlite3 uv git; do
+  for dependency in jq curl sqlite3 uv git ssh-keygen; do
     if command -v "$dependency" >/dev/null; then
       printf 'ok      %s (%s)\n' "$dependency" "$(command -v "$dependency")"
     else

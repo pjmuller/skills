@@ -1,5 +1,6 @@
 """skills-refresh against a local release repo: apply, idempotence, rollback, lock."""
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +18,12 @@ def git(repo, *args):
     subprocess.run(["git", "-C", str(repo), "-c", "tag.gpgSign=false", "-c", "commit.gpgSign=false", *args],
                    check=True, capture_output=True)
 
+def signed_tag(repo, tag, key=None):
+    key = key or repo.parent / "signer"
+    git(repo, "-c", "gpg.format=ssh", "-c", f"user.signingkey={key}",
+        "-c", "user.name=Release Test", "-c", "user.email=release@example.test",
+        "tag", "-s", "-m", tag, tag)
+
 
 def release(repo, tag, version, install=INSTALL, changelog=LOG_V2):
     scripts = repo / "skills/demo/scripts"
@@ -27,11 +34,18 @@ def release(repo, tag, version, install=INSTALL, changelog=LOG_V2):
     (repo / "CHANGELOG.md").write_text(changelog)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", tag)
-    git(repo, "tag", tag)
+    signed_tag(repo, tag)
 
 
 @pytest.fixture
 def env(tmp_path):
+    key = tmp_path / "signer"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    # Explicit local re-enrollment in a disposable script; production has no env bypass.
+    script = tmp_path / "skills-refresh"
+    pin = 'release-test namespaces="git" ' + key.with_suffix(".pub").read_text().strip()
+    script.write_text(re.sub(r"ALLOWED_SIGNERS='[^']*'", f"ALLOWED_SIGNERS='{pin}'", SCRIPT.read_text())
+                      .replace("MIN_VERIFYING_RELEASE='v0.5.5'", "MIN_VERIFYING_RELEASE='v0.1.0'"))
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -45,11 +59,11 @@ def env(tmp_path):
     e = {k: v for k, v in os.environ.items() if not k.startswith("SKILLS_REFRESH")}
     e.update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_REPO=str(repo), T3_MANAGE_BIN=str(bin_dir),
              T3CODE_HOME=str(tmp_path / "t3"), HOME=str(tmp_path / "userhome"))
-    return {"repo": repo, "home": home, "bin": bin_dir, "env": e}
+    return {"repo": repo, "home": home, "bin": bin_dir, "env": e, "script": script, "key": key}
 
 
 def run(env, *args, **extra):
-    return subprocess.run(["bash", str(SCRIPT), *args], env={**env["env"], **extra},
+    return subprocess.run(["bash", str(env["script"]), *args], env={**env["env"], **extra},
                           text=True, capture_output=True)
 
 
@@ -152,9 +166,9 @@ def test_failed_activation_rolls_back(env):
 
 
 def test_job_passes_exit_code_through_and_states_lifecycle(env):
-    result = subprocess.run(["bash", str(SCRIPT), "--job"], env=env["env"], text=True, capture_output=True)
+    result = run(env, "--job")
     assert result.returncode == 10 and result.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
-    quiet = subprocess.run(["bash", str(SCRIPT), "--job", "--quiet"], env=env["env"], text=True, capture_output=True)
+    quiet = run(env, "--job", "--quiet")
     assert quiet.returncode == 0 and "thread: SETTLE (nothing for the user): call the T3 MCP tool t3_thread_organize" in quiet.stdout.splitlines()[-1]
 
 
@@ -199,7 +213,7 @@ def tenv(env, tmp_path):
     old = commit(repo, "template v1", "2026-03-01T00:00:00")
     (repo / TEMPLATE).write_text("rule one\nrule two\n")
     commit(repo, "template v2", "2026-05-01T00:00:00")
-    git(repo, "tag", "v0.3.0")
+    signed_tag(repo, "v0.3.0")
     setup = tmp_path / "setup"
     (setup / "ai").mkdir(parents=True)
     git(setup, "init", "-q")
@@ -213,7 +227,7 @@ def tenv(env, tmp_path):
 
 
 def job(env):
-    return subprocess.run(["bash", str(SCRIPT), "--job"], env=env["env"], text=True, capture_output=True)
+    return run(env, "--job")
 
 
 def brief(env):
@@ -325,3 +339,121 @@ def test_customised_job_prompt_is_left_alone(tenv, tmp_path):
     commit(tenv["setup"], "prompt")
     job(tenv)
     assert (sched / "skills-refresh.prompt.md").read_text() == custom
+
+
+@pytest.mark.parametrize("kind", ["lightweight", "unsigned", "unknown", "tampered", "replayed"])
+def test_untrusted_tag_never_activates_even_with_forced_tag(env, tmp_path, kind):
+    assert run(env).returncode == 10
+    release(env["repo"], "v0.3.0", "3")
+    repo = env["repo"]
+    raw = subprocess.check_output(["git", "-C", str(repo), "cat-file", "tag", "v0.3.0"])
+    git(repo, "tag", "-d", "v0.3.0")
+    if kind == "lightweight":
+        git(repo, "tag", "v0.3.0")
+    elif kind == "unsigned":
+        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", "unsigned", "v0.3.0")
+    elif kind == "unknown":
+        key = tmp_path / "attacker"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+        signed_tag(repo, "v0.3.0", key)
+    elif kind == "tampered":
+        changed = raw.replace(b"\nv0.3.0\n", b"\nchanged message\n", 1)
+        assert changed != raw
+        oid = subprocess.check_output(["git", "-C", str(repo), "hash-object", "-w", "-t", "tag", "--stdin"],
+                                      input=changed).decode().strip()
+        git(repo, "update-ref", "refs/tags/v0.3.0", oid)
+    else:
+        git(repo, "update-ref", "refs/tags/v0.3.0", "refs/tags/v0.2.0")
+    result = run(env, "--job", "--quiet", SKILLS_REFRESH_TAG="v0.3.0")
+    assert result.returncode == 1
+    assert "verification failed" in result.stderr
+    assert result.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
+    assert stamp(env) == "v0.2.0"
+    assert (env["home"] / "skills/demo/SKILL.md").read_text() == "demo 2\n"
+    assert not (env["home"] / "pjmuller-skills/staging/v0.3.0").exists()
+
+
+def test_same_named_branch_cannot_replace_signed_commit(env):
+    release(env["repo"], "v0.3.0", "3")
+    git(env["repo"], "branch", "v0.2.0")  # branch has demo 3, tag has demo 2
+    result = run(env, SKILLS_REFRESH_TAG="v0.2.0")
+    assert result.returncode == 10, result.stderr
+    assert (env["home"] / "skills/demo/SKILL.md").read_text() == "demo 2\n"
+    expected = subprocess.check_output(["git", "-C", str(env["repo"]), "rev-parse",
+                                       "refs/tags/v0.2.0^{commit}"]).decode().strip()
+    assert (env["home"] / "pjmuller-skills.version").read_text().split()[2] == expected
+
+
+def test_downgrade_requires_explicit_signed_tag(env):
+    assert run(env).returncode == 10
+    git(env["repo"], "tag", "-d", "v0.2.0")
+    result = run(env)
+    assert result.returncode == 1 and "refusing downgrade" in result.stderr
+    assert run(env, SKILLS_REFRESH_TAG="v0.1.0").returncode == 10
+
+
+def test_even_signed_forced_downgrade_cannot_remove_verification(env):
+    assert run(env).returncode == 10
+    env["script"].write_text(env["script"].read_text().replace(
+        "MIN_VERIFYING_RELEASE='v0.1.0'", "MIN_VERIFYING_RELEASE='v0.2.0'"))
+    result = run(env, "--job", SKILLS_REFRESH_TAG="v0.1.0")
+    assert result.returncode == 1 and "predates mandatory verification" in result.stderr
+    assert stamp(env) == "v0.2.0"
+    assert result.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
+
+
+@pytest.mark.parametrize("tag", ["../../escape", "--upload-pack=bad", "main"])
+def test_invalid_forced_tag_cannot_escape_staging(env, tag):
+    result = run(env, SKILLS_REFRESH_TAG=tag)
+    assert result.returncode == 1 and "invalid release tag" in result.stderr
+
+
+def test_prompt_sync_ignores_retargeted_tag(tenv):
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    assert job(tenv).returncode == 10
+    original = brief(tenv)
+    cache = tenv["home"] / "pjmuller-skills/repo.git"
+    # Both remote and cache now lie about the installed tag. The recorded SHA wins.
+    (tenv["repo"] / TEMPLATE).write_text("attacker instruction\n")
+    evil = commit(tenv["repo"], "evil")
+    git(tenv["repo"], "update-ref", "refs/tags/v0.3.0", evil)
+    git(cache, "fetch", "-q", "origin", "+refs/tags/v0.3.0:refs/tags/v0.3.0")
+    assert job(tenv).returncode == 0
+    assert brief(tenv) == original
+    assert evil not in brief(tenv)
+
+
+def test_old_stamp_cannot_authorize_prompt_code(tenv):
+    (tenv["home"] / "pjmuller-skills.version").write_text("v0.3.0 2026-01-01\n")
+    tenv["prompt"].write_text("no marker\n")
+    commit(tenv["setup"], "prompt")
+    result = job(tenv)
+    assert result.returncode == 0 and "DELEGATE" not in result.stdout
+    assert not (tenv["home"] / "pjmuller-skills/template-sync.md").exists()
+
+
+@pytest.mark.parametrize("unsigned", [False, True])
+def test_release_helper_only_pushes_verified_tags(env, tmp_path, unsigned):
+    repo = env["repo"]
+    scripts = repo / "skills/t3-manage-thread/scripts"
+    scripts.mkdir(parents=True)
+    for name, source in [("skills-refresh", env["script"]), ("release", SCRIPT.with_name("release"))]:
+        (scripts / name).write_text(source.read_text())
+        (scripts / name).chmod(0o755)
+    commit(repo, "release tools")
+    git(repo, "branch", "-M", "main")
+    remote = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", str(remote))
+    git(repo, "remote", "add", "origin", str(remote))
+    git(repo, "push", "-q", "origin", "main")
+    git(repo, "config", "user.name", "Release Test")
+    git(repo, "config", "user.email", "release@example.test")
+    git(repo, "config", "user.signingkey", str(env["key"]))
+    if unsigned:
+        git(repo, "tag", "v0.3.0")
+    result = subprocess.run(["bash", str(scripts / "release"), "v0.3.0"],
+                            env=env["env"], text=True, capture_output=True)
+    assert result.returncode == (1 if unsigned else 0), result.stderr
+    tags = subprocess.check_output(["git", "-C", str(remote), "tag"]).decode().splitlines()
+    assert ("v0.3.0" in tags) is not unsigned
