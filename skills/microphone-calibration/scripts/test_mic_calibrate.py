@@ -201,3 +201,27 @@ def test_agent_cancel_stops_before_next_take_and_restores(tmp_path):
     saved = json.loads((tmp_path / "session.json").read_text())
     assert len(saved["takes"]) == 1 and device.gains() == {1: 0.42, 2: 0.42}
     assert "cancelled" in saved["status"]
+
+
+def test_agent_cancel_stops_an_active_take(tmp_path, monkeypatch):
+    cli = load_cli()
+
+    class Capture:  # ffmpeg stand-in that would record forever and writes data at once
+        def __init__(self, command, **_kwargs):
+            Path(command[-1]).write_bytes(b"\0" * 9000)
+            self.returncode, self.stderr = None, None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    monkeypatch.setattr(cli.subprocess, "Popen", Capture)
+    monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_k: (tmp_path / cli.CANCEL_FILE).touch())
+    monkeypatch.setattr(cli, "PRE_QUIET", 0)
+    with pytest.raises(KeyboardInterrupt):
+        cli.record_take("0", tmp_path / "take.wav", tmp_path / "beep.wav", 30)
