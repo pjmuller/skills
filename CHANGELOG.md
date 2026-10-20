@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **microphone-calibration (new): find the best input gain for dictation.** `mic-calibrate run` records the same sentence once per gain level (beep-driven, bounded, Enter to start in a Terminal window because agent shells have no TTY and agent apps may lack microphone access), restores the original gain on finish, Ctrl-C or window close, then writes `report.md`: peak/clipping, noise floor, speech level, SNR (beep removed by its tone), local Whisper transcripts with word error rate (no hint), playable clips and one tested recommended level. Devices without software gain are refused for sweeps (`--keep-gain` for knob positions and A/B samples). Gain is set on every channel element (some USB mics have no main control).
+
 ## v0.5.4 (2026-10-20)
 
 - **skills-refresh: global prompt re-sync.** After each run the job compares the template marker in your global prompt (`<!-- template: pjmuller/skills@… -->`) with the installed tag. Changed template → a frontier `delegate_task` child merges three-way (base, released template, your file): commits clear improvements, your facts/rules/deletions win, logs skips in `template-decisions.md`, asks about the rest, bumps the marker. Uncommitted prompt edits → it only recommends; no marker → base inferred from the prompt's first commit. Marker at the tag → no network, thread settles as before. Existing jobs need nothing: the first run rewrites an older `.agents/schedules/skills-refresh.prompt.md` (keeps the thread open once: commit that file), delegation starts the next run ([skills-refresh.md](skills/t3-manage-thread/skills-refresh.md)).
