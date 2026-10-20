@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest
@@ -48,31 +49,68 @@ def test_chrome_title():
     assert ml.parse_chrome_title("Gmail") is None
 
 
-def msg(mid, sender="bob@vendor.test", labels=("INBOX",)):
-    return {"id": mid, "labelIds": list(labels), "payload": {"headers": [{"name": "From", "value": f"Bob <{sender}>"}]}}
+def msg(mid, sender="bob@vendor.test", labels=("INBOX",), at=0):
+    return {"id": mid, "labelIds": list(labels), "internalDate": str(at),
+            "payload": {"headers": [{"name": "From", "value": f"Bob <{sender}>"}]}}
 
 
 def test_classify_new():
     messages = [msg("a"), msg("b", "Ann@Example.com", ("INBOX",)), msg("c", labels=("SENT",)),
                 msg("d", labels=("DRAFT",)), msg("e")]
     assert ml.classify_new(messages, {"a"}, "ann@example.com") == (["e"], ["b", "c"])
-    assert ml.baseline(messages) == ["a", "b", "c", "e"]
+    timed = [msg("a", at=100), msg("b", at=200), msg("d", labels=("DRAFT",), at=50)]
+    assert ml.baseline(timed, 150) == ["a"]  # mail after the claim still wakes
 
 
-def test_upsert_dedupes_per_account_and_thread():
-    state = {"links": []}
-    assert ml.upsert(state, {"account": "a@x", "gmail_thread": "t1", "t3_thread": "one"}) is None
-    assert ml.upsert(state, {"account": "b@x", "gmail_thread": "t1", "t3_thread": "two"}) is None
-    state["links"][0]["seen"] = ["m1"]
-    old = ml.upsert(state, {"account": "a@x", "gmail_thread": "t1", "t3_thread": "three", "seen": ["m1", "m2"]})
-    assert old["t3_thread"] == "one" and [l["t3_thread"] for l in state["links"]] == ["three", "two"]
-    assert state["links"][0]["seen"] == ["m1"]  # re-add keeps the old baseline: m2 still pings
+GMAIL = "19e875318442de06"
+
+
+@pytest.mark.parametrize("command,output,expected", [
+    ("gws gmail-draft --to x", f"draft created: r-1\nMail-ref: gmail:{GMAIL} Ann@Example.com\n",
+     [("claim", GMAIL, "ann@example.com", None)]),
+    ("t3-mail-link --config c claim X --for t1", f"Mail-ref: gmail:{GMAIL} a@x owner=t1\nnote", [("claim", GMAIL, "a@x", "t1")]),
+    ("t3-mail-link release X", f"Mail-release: gmail:{GMAIL} a@x", [("release", GMAIL, "a@x", None)]),
+    ("cat mail-link.md", f"Mail-ref: gmail:{GMAIL} a@x", []),                       # quoted docs: no claim
+    ("gws gmail-draft", f"> Mail-ref: gmail:{GMAIL} a@x\n\"marker\": \"Mail-ref: gmail:{GMAIL} a@x\"", []),
+])
+def test_mail_events_only_from_claiming_commands_own_lines(command, output, expected):
+    assert ml.mail_events(command, output) == expected
+
+
+def test_top_thread_maps_children_to_their_parent():
+    assert ml.top_thread("aa83df67-672f-4b2d-b972-a966c8291dbf") == "aa83df67-672f-4b2d-b972-a966c8291dbf"
+    sub = ("thread:provider:claudeAgent:native-thread:provider-thread%3Aprovider%3AclaudeAgent%3Anative-thread%3Apending"
+           "%253Arun%253Athread%253Amcp%25253A3fca46a2-4e91-4021-a9c4-b1d958a79e0d%253Aordinal%253A1%3Aa5c7a70989cea0a88")
+    assert ml.top_thread(sub) == "mcp:3fca46a2-4e91-4021-a9c4-b1d958a79e0d"
+    task = "thread:delegated-task:command%3Amcp%3Ab6678c96-9ecb-442f-a578-4aadfab12538%3Adelegate-task%3Ac811-e2-haiku"
+    assert ml.top_thread(task) == "mcp:b6678c96-9ecb-442f-a578-4aadfab12538"
+
+
+@pytest.mark.parametrize("headers,expected", [
+    ({"Auto-Submitted": "auto-replied", "Subject": "Re: Offer"}, True),
+    ({"Subject": "Automatisch antwoord: Offer"}, True),
+    ({"Subject": "Out of Office: back Monday"}, True),
+    ({"Auto-Submitted": "auto-generated", "Subject": "Delivery Status Notification (Failure)"}, False),  # bounce: triage
+    ({"Subject": "Re: Offer"}, False),
+])
+def test_auto_reply(headers, expected):
+    assert ml.auto_reply(headers) is expected
+
+
+@pytest.mark.parametrize("stdout,expected", [
+    ('{"wake": false, "reason": "thanks only"}', (False, "thanks only")),
+    ('Sure:\n{"wake": true, "reason": "asks a new price"}', (True, "asks a new price")),
+    ("garbage", (True, "no triage reason")),  # fail open
+    ('{"wake": "no"}', (True, "no triage reason")),
+])
+def test_parse_verdict_fails_open(stdout, expected):
+    assert ml.parse_verdict(stdout) == expected
 
 
 def test_ping_text_is_shell_safe():
-    link = {"subject": "Price `rm` $(x)", "account": "a@x", "gmail_thread": "t1", "config": "/c.json", "policy": None, "t3_thread": "id1"}
-    text = ml.ping_text(link, Path("/tmp/m.md"), ["m1", "m2"])
-    assert "`" not in text and "$(" not in text and "m2" in text and "UNTRUSTED" in text
+    case = {"subject": "Price `rm` $(x)", "account": "a@x", "gmail_thread": "t1", "owner": "id1"}
+    text = ml.ping_text(case, Path("/tmp/m.md"), ["m1", "m2"], "new `price`", {"config": "/c.json", "policy": None})
+    assert "`" not in text and "$(" not in text and "m2" in text and "UNTRUSTED" in text and "Triage" in text
 
 
 def cand(tid, *subjects):
@@ -102,10 +140,114 @@ def test_list_thread_ids_reads_state_only(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
     monkeypatch.setattr(ml, "t3_thread", lambda tid: pytest.fail("no T3 lookup"))
     assert ml.main(["list", "--thread-ids"]) == 0 and capsys.readouterr().out == ""  # no state file yet
-    state = tmp_path / "userdata" / "mail-links.json"
-    state.parent.mkdir(parents=True)
-    state.write_text('{"links": [{"t3_thread": "a"}, {"t3_thread": "b"}, {"t3_thread": "a"}]}')
+    legacy = tmp_path / "userdata" / "mail-links.json"  # pre-claim registry: read as cases, not rewritten
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"links": [link(t, g) for t, g in (("a", "g1"), ("b", "g2"), ("a", "g3"))]}))
     assert ml.main(["list", "--thread-ids"]) == 0 and capsys.readouterr().out == "a\nb\n"
+    assert legacy.exists() and not (legacy.parent / "mail-watch.json").exists()
+
+
+def link(t3, gmail):
+    return {"t3_thread": t3, "gmail_thread": gmail, "account": "ann@example.com", "config": "/c.json",
+            "policy": None, "subject": "Deal", "seen": ["m1"], "linked_at": "2026-10-19T12:00:00"}
+
+
+def test_legacy_registry_migrates_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
+    legacy = tmp_path / "userdata" / "mail-links.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"links": [link("t1", GMAIL)]}))
+    with ml.locked_state() as state:
+        case = state["cases"][f"ann@example.com:{GMAIL}"]
+    assert case["owner"] == "t1" and case["seen"] == ["m1"] and state["accounts"]["ann@example.com"]["config"] == "/c.json"
+    assert not legacy.exists() and (tmp_path / "userdata/mail-links.json.migrated").exists()
+
+
+@pytest.fixture
+def t3db(tmp_path, monkeypatch):
+    """A statev2.sqlite with T3's thread and turn-item tables (the columns the poller reads)."""
+    import sqlite3
+    monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
+    (tmp_path / "userdata").mkdir()
+    db = sqlite3.connect(tmp_path / "userdata/statev2.sqlite")
+    db.execute("CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY, title TEXT, "
+               "deleted_at TEXT, archived_at TEXT)")
+    db.execute("CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT, "
+               "type TEXT, status TEXT, payload_json TEXT)")
+    db.executemany("INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?, ?)", [
+        ("aaaaaaaa-0000-0000-0000-000000000001", "Offer case", None, None),
+        ("mcp:bbbbbbbb-0000-0000-0000-000000000002", "Mail dispatch", None, None),
+        ("cccccccc-0000-0000-0000-000000000003", "Old case", "2026-10-01", None),
+        ("dddddddd-0000-0000-0000-000000000004", "Follow-up case", None, None)])
+    db.commit()
+
+    def add(thread, command, output, status="completed", at="2026-10-20T10:00:00.000Z"):
+        rowid = db.execute("SELECT COUNT(*) FROM orchestration_v2_projection_turn_items").fetchone()[0] + 1
+        payload = {"input": command, "output": output, "completedAt": at, "updatedAt": at}
+        db.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES (?, ?, 'command_execution', ?, ?)",
+                   (f"i{rowid}", thread, status, json.dumps(payload)))
+        db.commit()
+        return rowid
+    yield add
+    db.close()
+
+
+def test_scan_events_starts_at_the_end_and_holds_before_a_running_claim(t3db):
+    t3db("aaaaaaaa-0000-0000-0000-000000000001", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x")
+    assert ml.scan_events(None) == ([], 1)  # first run: older text predates the markers
+    t3db("aaaaaaaa-0000-0000-0000-000000000001", "ls", "Mail-ref: gmail:1111111111111111 a@x")  # not a claiming command
+    running = t3db("aaaaaaaa-0000-0000-0000-000000000001", "gws gmail-send", "", status="running",
+                   at=datetime.now(timezone.utc).isoformat())
+    t3db("aaaaaaaa-0000-0000-0000-000000000001", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x")
+    events, cursor = ml.scan_events(1)
+    assert events == [] and cursor == running - 1  # the later claim waits: order is kept
+    old_running = t3db("aaaaaaaa-0000-0000-0000-000000000001", "gws gmail-send", "", status="running",
+                       at="2026-01-01T00:00:00Z")
+    events, cursor = ml.scan_events(running)  # a stale "running" row never pins the cursor
+    assert [e["row"] for e in events] == [running + 1] and cursor == old_running
+
+
+def test_scan_events_canary_on_schema_change(t3db, tmp_path):
+    import sqlite3
+    t3db("x", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x")
+    db = sqlite3.connect(tmp_path / "userdata/statev2.sqlite")
+    db.execute("UPDATE orchestration_v2_projection_turn_items SET payload_json = '{\"cmd\": \"Mail-ref: gmail:\"}'")
+    db.commit()
+    with pytest.raises(sqlite3.DatabaseError):
+        ml.scan_events(0)
+
+
+def test_apply_event_claims_hands_off_and_releases(t3db, monkeypatch, capsys):
+    from types import SimpleNamespace as NS
+    api_error = type("ApiError", (Exception,), {"__init__": lambda self, status: setattr(self, "status", status)})
+    monkeypatch.setitem(sys.modules, "gws_core", NS(ApiError=api_error))
+    monkeypatch.setattr(ml, "workspace", lambda config: None)
+
+    def metadata(ws, gid):
+        if gid != GMAIL:
+            raise api_error(404)
+        return {"messages": [msg("old", at=1000), {**msg("new", at=4_000_000_000_000)}]}
+    monkeypatch.setattr(ml, "thread_metadata", metadata)
+    state = {"accounts": {"a@x": {"config": "/c.json"}}, "cases": {}}
+    key = f"a@x:{GMAIL}"
+
+    def event(kind="claim", owner="aaaaaaaa-0000-0000-0000-000000000001", gmail=GMAIL, account="a@x"):
+        return {"row": 9, "kind": kind, "gmail_thread": gmail, "account": account, "owner": owner,
+                "at": "2026-10-20T10:00:00.000Z"}
+
+    for ignored in (event(owner="mcp:bbbbbbbb-0000-0000-0000-000000000002"),  # dispatch never owns
+                    event(owner="cccccccc-0000-0000-0000-000000000003"),      # deleted thread
+                    event(account="other@x"),                                 # account not watched
+                    event(gmail="1111111111111111")):                         # not a thread of this account
+        assert ml.apply_event(state, ignored) and state["cases"] == {}
+    assert ml.apply_event(state, event())
+    assert state["cases"][key]["seen"] == ["old"]  # baseline at claim time: "new" still wakes
+    state["cases"][key]["seen"] = ["old", "new"]
+    monkeypatch.setattr(ml, "thread_metadata", lambda *a: pytest.fail("a re-claim keeps the seen set"))
+    assert ml.apply_event(state, event(owner="mcp:dddddddd-0000-0000-0000-000000000004"))  # hand-off, id form normalized
+    assert state["cases"][key]["owner"] == "dddddddd-0000-0000-0000-000000000004"
+    assert state["cases"][key]["seen"] == ["old", "new"]
+    assert ml.apply_event(state, event("release")) and state["cases"] == {}
 
 
 @pytest.fixture
@@ -117,12 +259,12 @@ def resolver(tmp_path, monkeypatch):
     monkeypatch.setenv("GWS_CONFIG", str(tmp_path / "workspace.json"))
     monkeypatch.setattr(ml, "workspace", lambda config: ws)
     monkeypatch.setitem(sys.modules, "gws_core", SimpleNamespace(ApiError=RuntimeError))
-    for name in ("locked_state", "save_messages", "store", "t3_thread", "cmd_draft"):
+    for name in ("locked_state", "save_texts", "t3_thread", "cmd_draft"):
         monkeypatch.setattr(ml, name, lambda *a, **kw: pytest.fail("resolve must not mutate or access T3"))
     monkeypatch.setattr(ml.subprocess, "run", lambda *a, **kw: pytest.fail("no subprocess in offline resolve"))
-    state = tmp_path / "userdata/mail-links.json"
+    state = tmp_path / "userdata/mail-watch.json"
     state.parent.mkdir()
-    state.write_text('{"links": [{"gmail_thread": "existing", "t3_thread": "keep"}]}')
+    state.write_text('{"cases": {"ann@example.com:existing": {"gmail_thread": "existing", "owner": "keep"}}}')
     saved = state.parent / "mail-links/existing/thread.md"
     saved.parent.mkdir(parents=True)
     saved.write_text("saved mail remains untouched")
@@ -237,7 +379,7 @@ def test_classify_owners_ranks_and_excludes_intake():
     greps = {"aaaaaaaa-1": (False, True), "bbbbbbbb-2": (True, True)}
     owners, excluded = ml.classify_owners(hits, peeks, greps, ["eeeeeeee-5"], ["dddd"], "id")
     assert [(o["thread_id"], o["evidence"]) for o in owners] == [
-        ("eeeeeeee-5", "linked"), ("bbbbbbbb-2", "marker"), ("aaaaaaaa-1", "id")]
+        ("eeeeeeee-5", "owner"), ("bbbbbbbb-2", "marker"), ("aaaaaaaa-1", "id")]
     assert owners[1]["execution"] and owners[1]["account_seen"] and not owners[0]["account_seen"]
     assert [(x["thread_id"], x["why"]) for x in excluded] == [("mcp:cccccccc-3", "dispatcher"), ("thread:project:p1:dddddddd-4", "excluded")]
 
@@ -277,12 +419,14 @@ def test_marker_grep_uses_full_line(monkeypatch):
 
 def test_ping_marks_seen_only_once_it_landed(monkeypatch, tmp_path):
     """Accepted-but-unconfirmed pings are re-checked, never resent; a failed one is resent."""
-    link = {"gmail_thread": "g1", "t3_thread": "t1", "account": "ann@example.com", "config": "c", "seen": ["a"],
-            "subject": "Deal"}
-    monkeypatch.setattr(ml, "workspace", lambda config: None)
+    case = {"gmail_thread": "g1", "owner": "t1", "account": "ann@example.com", "seen": ["a"], "subject": "Deal"}
+    account = {"config": "c", "policy": None}
+    gmail = SimpleNamespace(get=lambda mid: msg(mid), view=lambda m, trim: {"headers": {}, "attachments": [], "body": "x"})
+    monkeypatch.setattr(ml, "workspace", lambda config: SimpleNamespace(gmail=gmail))
     monkeypatch.setattr(ml, "thread_metadata", lambda ws, gid: {"messages": [msg("a"), msg("e")]})
-    monkeypatch.setattr(ml, "t3_thread", lambda tid: {"deleted": None, "archived": None})
-    monkeypatch.setattr(ml, "save_messages", lambda *a, **kw: tmp_path / "e.md")
+    monkeypatch.setattr(ml, "t3_lookup", lambda tid: (tid, {"title": "Deal"}))
+    monkeypatch.setattr(ml, "save_texts", lambda *a, **kw: tmp_path / "e.md")
+    monkeypatch.setattr(ml, "triage", lambda subject, texts: (True, "asks a price"))
     calls, replies = [], []
 
     def fake_run(cmd, **kw):
@@ -292,16 +436,34 @@ def test_ping_marks_seen_only_once_it_landed(monkeypatch, tmp_path):
     monkeypatch.setattr(ml.subprocess, "run", fake_run)
 
     replies[:] = [(3, "accepted: relay r1 via h (d)\npending host turn running\n")]
-    assert ml.poll_link(link, False) is None and link["seen"] == ["a"] and link["pending"]["rid"] == "r1"
+    assert ml.poll_case(case, account, False) is None and case["seen"] == ["a"] and case["pending"]["rid"] == "r1"
     replies[:] = [(3, "pending host turn running\n")]
-    assert ml.poll_link(link, False) is None and calls[-1] == "status"     # waits, never resends
+    assert ml.poll_case(case, account, False) is None and calls[-1] == "status"     # waits, never resends
     replies[:] = [(0, "ok t1\n")]
-    assert ml.poll_link(link, False) is None and link["seen"] == ["a", "e"] and "pending" not in link
+    assert ml.poll_case(case, account, False) is None and case["seen"] == ["a", "e"] and "pending" not in case
 
-    link["seen"] = ["a"]
+    case["seen"] = ["a"]
     replies[:] = [(1, "accepted: relay r2 via h (d)\nfailed host turn error\n"), (0, "accepted: relay r3 via h (d)\nok t1\n")]
-    assert ml.poll_link(link, False) == "t3" and link["seen"] == ["a"]
-    assert ml.poll_link(link, False) is None and link["seen"] == ["a", "e"]
+    assert ml.poll_case(case, account, False) == "t3" and case["seen"] == ["a"]
+    assert ml.poll_case(case, account, False) is None and case["seen"] == ["a", "e"]
     replies[:] = [(1, "no usable relay host\n")]
-    link["seen"] = ["a"]
-    assert ml.poll_link(link, False) == "t3" and "pending" not in link
+    case["seen"] = ["a"]
+    assert ml.poll_case(case, account, False) == "t3" and "pending" not in case
+
+
+def test_triage_skip_marks_seen_without_waking(monkeypatch, tmp_path):
+    case = {"gmail_thread": "g1", "owner": "t1", "account": "ann@example.com", "seen": ["a"], "subject": "Deal"}
+    ooo = {**msg("o"), "payload": {"headers": [{"name": "From", "value": "b@v.test"},
+                                               {"name": "Subject", "value": "Out of office"}]}}
+    gmail = SimpleNamespace(get=lambda mid: ooo if mid == "o" else msg(mid),
+                            view=lambda m, trim: {"headers": {}, "attachments": [], "body": "thanks!"})
+    monkeypatch.setattr(ml, "workspace", lambda config: SimpleNamespace(gmail=gmail))
+    monkeypatch.setattr(ml, "t3_lookup", lambda tid: (tid, {"title": "Deal"}))
+    monkeypatch.setattr(ml, "save_texts", lambda *a, **kw: tmp_path / "s.md")
+    monkeypatch.setattr(ml, "relay", lambda *a: pytest.fail("a skipped mail never pings"))
+    monkeypatch.setattr(ml, "thread_metadata", lambda ws, gid: {"messages": [msg("a"), ooo]})
+    monkeypatch.setattr(ml, "triage", lambda *a: pytest.fail("auto-replies skip the model"))
+    assert ml.poll_case(case, {"config": "c"}, False) is None and case["seen"] == ["a", "o"]
+    monkeypatch.setattr(ml, "thread_metadata", lambda ws, gid: {"messages": [msg("a"), ooo, msg("t")]})
+    monkeypatch.setattr(ml, "triage", lambda subject, texts: (len(texts) == 1 or pytest.fail("OOO not sent")) and (False, "thanks only"))
+    assert ml.poll_case(case, {"config": "c"}, False) is None and case["seen"] == ["a", "o", "t"]
