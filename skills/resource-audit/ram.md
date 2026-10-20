@@ -61,3 +61,13 @@ Window → T3 Code → View → Reload / Force Reload may fail when the renderer
 Recheck macOS window-close behaviour after upgrades; inspect cleanup logs before
 blaming a scheduled job. No verified CLI recovery utility; do not use renderer
 kill signals as a substitute.
+
+## fseventsd ballooning
+
+Seen 2026-10-20 (29-day uptime): fseventsd grew 4G→33G in ~2.5h at a constant 100% CPU,
+filling swap. `sample`/`vmmap`/`fs_usage` on it need root. Without root,
+`scripts/fsevents_tap.swift` counts live events per path: inflow was only ~180/s
+(golangci-lint and go-build caches, `$TMPDIR` from agent Go builds). So the memory
+was internal backlog or a leak, not a live flood. Fix = restart it (Activity Monitor → fseventsd →
+Force Quit, admin password; launchd respawns it). File watchers rescan; no data loss.
+Never delete `/.fseventsd`. If it regrows, capture `sudo fs_usage -w -f filesys` before restarting.
