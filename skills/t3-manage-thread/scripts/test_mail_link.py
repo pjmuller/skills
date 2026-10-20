@@ -156,10 +156,10 @@ def test_legacy_registry_migrates_once(tmp_path, monkeypatch):
     monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
     legacy = tmp_path / "userdata" / "mail-links.json"
     legacy.parent.mkdir(parents=True)
-    legacy.write_text(json.dumps({"links": [link("t1", GMAIL)]}))
+    legacy.write_text(json.dumps({"links": [{**link("t1", GMAIL), "pending": {"rid": "r1", "inbound": ["m2"], "at": 1}}]}))
     with ml.locked_state() as state:
         case = state["cases"][f"ann@example.com:{GMAIL}"]
-    assert case["owner"] == "t1" and case["seen"] == ["m1"] and state["accounts"]["ann@example.com"]["config"] == "/c.json"
+    assert case["owner"] == "t1" and case["seen"] == ["m1"] and case["pending"]["rid"] == "r1" and state["accounts"]["ann@example.com"]["config"] == "/c.json"
     assert not legacy.exists() and (tmp_path / "userdata/mail-links.json.migrated").exists()
 
 
@@ -244,7 +244,9 @@ def test_apply_event_claims_hands_off_and_releases(t3db, monkeypatch, capsys):
     assert state["cases"][key]["seen"] == ["old"]  # baseline at claim time: "new" still wakes
     state["cases"][key]["seen"] = ["old", "new"]
     monkeypatch.setattr(ml, "thread_metadata", lambda *a: pytest.fail("a re-claim keeps the seen set"))
+    state["cases"][key]["pending"] = {"rid": "r1", "inbound": ["new"], "at": 0}
     assert ml.apply_event(state, event(owner="mcp:dddddddd-0000-0000-0000-000000000004"))  # hand-off, id form normalized
+    assert "pending" not in state["cases"][key]  # the old owner's ping never marks mail seen for the new one
     assert state["cases"][key]["owner"] == "dddddddd-0000-0000-0000-000000000004"
     assert state["cases"][key]["seen"] == ["old", "new"]
     assert ml.apply_event(state, event("release")) and state["cases"] == {}
@@ -467,3 +469,23 @@ def test_triage_skip_marks_seen_without_waking(monkeypatch, tmp_path):
     monkeypatch.setattr(ml, "thread_metadata", lambda ws, gid: {"messages": [msg("a"), ooo, msg("t")]})
     monkeypatch.setattr(ml, "triage", lambda subject, texts: (len(texts) == 1 or pytest.fail("OOO not sent")) and (False, "thanks only"))
     assert ml.poll_case(case, {"config": "c"}, False) is None and case["seen"] == ["a", "o", "t"]
+
+
+def test_one_failing_case_keeps_the_others_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
+    (tmp_path / "userdata").mkdir()
+    cases = {k: {"account": "a@x", "gmail_thread": k, "owner": "t", "subject": "", "seen": [],
+                 "claimed_at": datetime.now(timezone.utc).isoformat()} for k in ("ok", "boom")}
+    (tmp_path / "userdata/mail-watch.json").write_text(json.dumps(
+        {"cursor": 5, "accounts": {"a@x": {"config": "c"}}, "cases": cases}))
+    monkeypatch.setattr(ml, "scan_events", lambda cursor: ([], cursor))
+    monkeypatch.setattr(ml, "notify", lambda text: None)
+
+    def poll_case(case, account, dry_run):
+        if case["gmail_thread"] == "boom":
+            raise RuntimeError("attachment fetch failed")
+        case["seen"].append("woken")
+    monkeypatch.setattr(ml, "poll_case", poll_case)
+    assert ml.main(["poll"]) == 1
+    saved = json.loads((tmp_path / "userdata/mail-watch.json").read_text())
+    assert saved["cases"]["ok"]["seen"] == ["woken"]  # persisted: no second wake next run

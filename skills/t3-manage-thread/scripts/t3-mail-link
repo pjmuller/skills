@@ -221,7 +221,7 @@ def migrated(legacy: dict) -> dict:
         state["cases"][case_key(link["account"], link["gmail_thread"])] = {
             "account": link["account"], "gmail_thread": link["gmail_thread"], "owner": link["t3_thread"],
             "subject": link.get("subject", ""), "seen": link.get("seen", []), "claimed_at": link["linked_at"],
-            "last_wake": None}
+            "last_wake": None, **({"pending": link["pending"]} if link.get("pending") else {})}
     return state
 
 
@@ -740,8 +740,9 @@ def apply_event(state: dict, event: dict) -> bool:
         return True
     owner, case = found[0], state["cases"].get(key)
     if case:  # re-claim or hand-off: keep the seen set
-        if case["owner"] != owner:
+        if case["owner"] != owner:  # a ping still pending went to the old owner: its mail stays unseen for the new one
             print(f"{tag}: owner {case['owner']} -> {owner}")
+            case.pop("pending", None)
         case.update(owner=owner, claimed_at=event["at"])
         return True
     try:
@@ -852,7 +853,11 @@ def cmd_poll(args) -> int:
                     del state["cases"][key]
                 continue
             account = state["accounts"].get(case["account"])
-            outcome = poll_case(case, account, args.dry_run) if account else "gmail"
+            try:  # one case failing (e.g. an attachment fetch) must not discard the others' progress
+                outcome = poll_case(case, account, args.dry_run) if account else "gmail"
+            except Exception as exc:
+                print(f"{case['gmail_thread']}: poll failed: {exc!r}", file=sys.stderr)
+                outcome = "gmail"
             if outcome == "drop" and not args.dry_run:
                 del state["cases"][key]
             elif outcome in ERROR_TEXT:
