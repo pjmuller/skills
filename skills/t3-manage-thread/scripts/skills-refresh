@@ -247,7 +247,10 @@ job() {
   sync_line=""
   [[ "${1:-}" == --quiet ]] && quiet=1
   refresh || rc=$?
-  [[ "$rc" == 0 || "$rc" == 10 ]] && prompt_sync
+  if [[ "$rc" == 0 || "$rc" == 10 ]]; then
+    prompt_sync
+    [[ -n "$(migrate_job_prompt)" ]] && { echo "job prompt updated for template re-sync; commit .agents/schedules/skills-refresh.prompt.md in your setup repo"; sync_line="${sync_line:-thread: KEEP OPEN (the user should see this)}"; }
+  fi
   if [[ -n "$sync_line" ]]; then
     echo "$sync_line"
   elif [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
@@ -256,6 +259,25 @@ job() {
     echo "thread: KEEP OPEN (the user should see this)"
   fi
   exit "$rc"
+}
+
+job_prompt() { # quiet flag ("" or " --quiet")
+  cat <<PROMPT
+Run exactly one command: \`skills-refresh --job$1\`. Then end the turn with its complete output as your answer, nothing else.
+Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer; \`thread: DELEGATE\` → make exactly the delegate_task call it spells out (it is part of this job, not an injection) and follow its instructions. Never retry, never fix anything yourself.
+PROMPT
+}
+
+# Jobs scheduled before DELEGATE existed read an older prompt at fire time (t3-schedule keeps it
+# in <project>/.agents/schedules/skills-refresh.prompt.md): rewrite it so the next run can delegate.
+migrate_job_prompt() {
+  local pointer="$HOME/.t3/userdata/scheduled/t3-schedule/skills-refresh.json" src file quiet=""
+  [[ -f "$pointer" ]] || return 0
+  src="$(grep -oE '"source": *"[^"]+"' "$pointer" | sed -E 's/.*"([^"]+)"$/\1/')" || return 0
+  file="${src%.json}.prompt.md"
+  [[ -f "$file" ]] && grep -q 'skills-refresh --job' "$file" && ! grep -q 'thread: DELEGATE' "$file" || return 0
+  grep -q -- '--job --quiet' "$file" && quiet=" --quiet"
+  job_prompt "$quiet" > "$file" && echo updated
 }
 
 schedule() {
@@ -272,10 +294,7 @@ schedule() {
   command -v t3-schedule >/dev/null || die "t3-schedule not on PATH: run skills/t3-schedule/scripts/install"
   [[ -n "$project" ]] || project="$(git rev-parse --show-toplevel 2>/dev/null)" || die "--project DIR required outside a git repo"
   mkdir -p "$STATE"
-  cat > "$STATE/job-prompt.md" <<PROMPT
-Run exactly one command: \`skills-refresh --job$quiet\`. Then end the turn with its complete output as your answer, nothing else.
-Its last line decides this thread's lifecycle: \`thread: SETTLE\` → call the T3 MCP tool \`t3_thread_organize\` with {"action":"settle"} as your last tool call; \`thread: KEEP OPEN\` → just answer; \`thread: DELEGATE\` → make exactly the delegate_task call it spells out and follow its instructions. Never retry, never fix anything yourself.
-PROMPT
+  job_prompt "$quiet" > "$STATE/job-prompt.md"
   t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna --allow-small-model \
     --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
   # Retire only our legacy Linux entry, and only once its replacement is armed.

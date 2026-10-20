@@ -44,7 +44,7 @@ def env(tmp_path):
     bin_dir.mkdir()
     e = {k: v for k, v in os.environ.items() if not k.startswith("SKILLS_REFRESH")}
     e.update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_REPO=str(repo), T3_MANAGE_BIN=str(bin_dir),
-             T3CODE_HOME=str(tmp_path / "t3"))
+             T3CODE_HOME=str(tmp_path / "t3"), HOME=str(tmp_path / "userhome"))
     return {"repo": repo, "home": home, "bin": bin_dir, "env": e}
 
 
@@ -290,3 +290,20 @@ def test_odd_paths_keep_brief_and_json_intact(tenv, tmp_path):
     payload = json.loads(last.split("delegate_task with ", 1)[1].split(", end the turn", 1)[0])
     assert payload["task"] == f"Read and execute {home}/pjmuller-skills/template-sync.md"
     assert f"bash -s -- {prompt.resolve()}" in (home / "pjmuller-skills/template-sync.md").read_text()
+
+
+def test_old_job_prompt_is_migrated_once(tenv, tmp_path):
+    sched = tenv["setup"] / ".agents/schedules"
+    sched.mkdir(parents=True)
+    (sched / "skills-refresh.json").write_text("{}\n")
+    old = "Run exactly one command: `skills-refresh --job --quiet`. ... `thread: KEEP OPEN` → just answer.\n"
+    (sched / "skills-refresh.prompt.md").write_text(old)
+    pointer = tmp_path / "userhome/.t3/userdata/scheduled/t3-schedule/skills-refresh.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(f'{{"name": "skills-refresh", "source": "{sched / "skills-refresh.json"}"}}\n')
+    tenv["prompt"].write_text("me\n<!-- template: pjmuller/skills@v0.3.0 -->\n")
+    commit(tenv["setup"], "prompt")
+    job(tenv)  # applies v0.3.0
+    new = (sched / "skills-refresh.prompt.md").read_text()
+    assert "thread: DELEGATE" in new and "--job --quiet" in new
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: SETTLE")  # migrated once, then silent
