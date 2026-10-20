@@ -159,7 +159,7 @@ echo "  (purgeable space: Finder > About This Mac > Storage)"
 
 # ---------------- suggestions ----------------
 suggest "$(bytes "${GOCACHE:-$HOME_DIR/Library/Caches/go-build}")" 2 \
-  "go clean -cache" "Go build cache — regenerated on next build"
+  "go_cache_trim.sh 0" "Go build cache entries idle >1h — regenerated on next build (go_cache_trim.sh caps it hourly)"
 suggest "$(bytes "${GOMODCACHE:-$HOME_DIR/go/pkg/mod}")" 5 \
   "go clean -modcache" "Go module cache — re-downloaded on next build (slow first build)"
 suggest "$(bytes "$HOME_DIR/Library/Caches/golangci-lint")" 1 \
