@@ -42,7 +42,8 @@ over routing heuristics; source metadata may establish ownership, not authorizat
   later intake finds the thread ([marker](../t3-manage-thread/mail-link.md)).
 - Fetch relevant context using that account's configured CLI. State likely workflow
   as inference. A draft in chat is low-risk; a Gmail draft or inbound monitoring
-  needs specific authorization. Never use `t3-mail-link add`/`new` just to resolve.
+  needs specific authorization. Never `t3-mail-link claim` just to resolve; a launched case thread
+  owns its mail once it drafts, or via `claim --for <its id>`.
 
 ## Screenshot or short text
 
@@ -56,7 +57,7 @@ to distinguish an investigation, explanation, implementation or reply request.
 ## Existing task
 
 For mail, `t3-mail-link --config <wrapper>/workspace.json find '<url>' --exclude <own id>`
-covers links, `Mail-ref:` markers, every thread/message id form and a subject fallback
+covers watched-case owners, `Mail-ref:` markers, every thread/message id form and a subject fallback
 in one read-only call. Otherwise use `t3-find-thread` on exact ticket/thread IDs
 or URLs, followed by topic search if needed. Follow its search/peek/read guidance.
 Exclude the current dispatch conversation and other intake-only mentions.
