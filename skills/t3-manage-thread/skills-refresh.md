@@ -22,4 +22,13 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   and systemd user timers in WSL; no cron daemon required. After the timer is registered,
   `schedule` removes only old crontab lines tagged `# skills-refresh` to prevent
   duplicate updates. Other cron entries are preserved.
+- **Global prompt re-sync** (`prompt_sync`): after a successful run the script compares the
+  `<!-- template: pjmuller/skills@… -->` marker in the user's global prompt with the installed tag
+  (marker = tag → no network). Template changed → it writes a brief to
+  `~/.agents/pjmuller-skills/template-sync.md` and ends with `thread: DELEGATE`: the job's cheap
+  model hands the three-way merge (base template, released template, their file) to a frontier
+  `delegate_task` child ([agents-md re-sync](../agents-md/global.md#merge-the-template-into-someones-existing-file)),
+  whose result surfaces in the same thread. Uncommitted prompt edits → the child changes nothing
+  and recommends; prompt outside git → keep open. No marker → base = the template just before the
+  prompt's first commit. Skipped on the template author's source checkout.
 - Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.

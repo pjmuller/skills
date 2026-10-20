@@ -175,3 +175,118 @@ def test_version_source_checkout_vs_copy_inside_other_repo(env, tmp_path):
     (env["repo"] / "skills/t3-manage-thread").mkdir()
     (env["home"] / "skills/t3-manage-thread").symlink_to(env["repo"] / "skills/t3-manage-thread")
     assert run(env, "--version").stdout.startswith("source checkout v0.2.0")
+
+
+# --- global prompt re-sync (prompt_sync) ---
+
+TEMPLATE = "skills/agents-md/global-template.md"
+
+
+def commit(repo, msg, date="2026-01-01T00:00:00"):
+    git(repo, "add", "-A")
+    subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgSign=false", "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-qm", msg], check=True, capture_output=True,
+                   env={**os.environ, "GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date})
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True, capture_output=True).stdout.strip()
+
+
+@pytest.fixture
+def tenv(env, tmp_path):
+    """Release v0.3.0 changes the template; the user's prompt lives in a committed setup repo."""
+    repo = env["repo"]
+    (repo / TEMPLATE).parent.mkdir(parents=True)
+    (repo / TEMPLATE).write_text("rule one\n")
+    old = commit(repo, "template v1", "2026-03-01T00:00:00")
+    (repo / TEMPLATE).write_text("rule one\nrule two\n")
+    commit(repo, "template v2", "2026-05-01T00:00:00")
+    git(repo, "tag", "v0.3.0")
+    setup = tmp_path / "setup"
+    (setup / "ai").mkdir(parents=True)
+    git(setup, "init", "-q")
+    prompt = setup / "ai/AGENTS.md"
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "t3-pick-instance").write_text('#!/bin/sh\n[ "$1" = claude ] && echo "claudeAgent claude-opus-5-5 high"\n')
+    (stub / "t3-pick-instance").chmod(0o755)
+    env["env"].update(SKILLS_REFRESH_PROMPT=str(prompt), PATH=f"{stub}:{os.environ['PATH']}")
+    return {**env, "old": old, "setup": setup, "prompt": prompt, "stub": stub}
+
+
+def job(env):
+    return subprocess.run(["bash", str(SCRIPT), "--job"], env=env["env"], text=True, capture_output=True)
+
+
+def brief(env):
+    return (env["home"] / "pjmuller-skills/template-sync.md").read_text()
+
+
+def test_marker_at_installed_tag_settles(tenv):
+    tenv["prompt"].write_text("me\n<!-- template: pjmuller/skills@v0.3.0 -->\n")
+    commit(tenv["setup"], "prompt")
+    result = job(tenv)
+    assert result.stdout.splitlines()[-1].startswith("thread: KEEP OPEN")  # skills applied; no re-sync line
+    assert "template check" not in result.stdout and not (tenv["home"] / "pjmuller-skills/repo.git").exists()
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: SETTLE")  # rerun: silent
+
+
+def test_old_marker_delegates_with_three_way_brief(tenv):
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old'][:7]}; tailored -->\n")
+    commit(tenv["setup"], "prompt")
+    last = job(tenv).stdout.splitlines()[-1]
+    assert last.startswith("thread: DELEGATE") and '"providerInstanceId":"claudeAgent"' in last
+    assert '"options":{"effort":"high"}' in last and "Never settle" in last
+    text = brief(tenv)
+    assert f"Base: `{tenv['old']}` (marker {tenv['old'][:7]})" in text
+    assert "uncommitted" not in text and "@v0.3.0" in text and "TAG" not in text
+
+
+def test_dirty_prompt_asks_instead_of_merging(tenv):
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    tenv["prompt"].write_text(tenv["prompt"].read_text() + "local tweak\n")
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: DELEGATE")
+    assert "uncommitted edits: change nothing" in brief(tenv)
+
+
+def test_missing_marker_infers_base_from_first_commit(tenv):
+    tenv["prompt"].write_text("me\n")
+    commit(tenv["setup"], "prompt", "2026-04-01T00:00:00")  # between template v1 and v2
+    tenv["prompt"].write_text("me, edited\n")
+    commit(tenv["setup"], "edit", "2026-06-01T00:00:00")  # later edits don't move the base
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: DELEGATE")
+    assert f"Base: `{tenv['old']}` (no marker; base inferred" in brief(tenv)
+
+
+def test_uncommitted_prompt_or_no_router_keeps_open(tenv):
+    tenv["prompt"].write_text("me\n")  # never committed
+    result = job(tenv)
+    assert "not committed in a git repository" in result.stdout
+    assert result.stdout.splitlines()[-1].startswith("thread: KEEP OPEN")
+    commit(tenv["setup"], "prompt")
+    (tenv["stub"] / "t3-pick-instance").write_text("#!/bin/sh\nexit 1\n")
+    result = job(tenv)
+    assert "ask a frontier agent" in result.stdout and result.stdout.splitlines()[-1].startswith("thread: KEEP OPEN")
+
+
+def test_unreachable_history_keeps_open(tenv):
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    job(tenv)  # applies v0.3.0, fills the cache
+    (tenv["home"] / "pjmuller-skills/repo.git/config").write_text("garbage\n")
+    result = job(tenv)
+    assert "cannot fetch" in result.stdout and result.stdout.splitlines()[-1].startswith("thread: KEEP OPEN")
+
+
+def test_odd_paths_keep_brief_and_json_intact(tenv, tmp_path):
+    import json
+    home = tmp_path / 'we"ird&home'
+    (home / "skills/demo").mkdir(parents=True)
+    (home / "skills/demo/SKILL.md").write_text("demo 1\n")
+    prompt = tenv["setup"] / "ai/Prompt&rules.md"
+    prompt.write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    tenv["env"].update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_PROMPT=str(prompt))
+    last = job(tenv).stdout.splitlines()[-1]
+    payload = json.loads(last.split("delegate_task with ", 1)[1].split(", end the turn", 1)[0])
+    assert payload["task"] == f"Read and execute {home}/pjmuller-skills/template-sync.md"
+    assert f"bash -s -- {prompt.resolve()}" in (home / "pjmuller-skills/template-sync.md").read_text()

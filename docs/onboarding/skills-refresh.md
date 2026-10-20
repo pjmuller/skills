@@ -32,6 +32,9 @@ skills-refresh --version                                           # prints the 
 
 - Nothing changed (most days): no thread, no notification.
 - A release was applied: one thread `⏰ skills-refresh <date>` with `Skills vX.Y.Z applied` and the CHANGELOG entries since your previous version. Read, close.
+- The shared global-prompt template changed since the marker at the end of your global prompt:
+  the same thread hands the merge to a frontier model, which commits clear improvements (your own
+  rules win), logs skips and lists questions. Uncommitted edits in your prompt: it only recommends.
 - Something failed: the same thread with the error; old helpers keep working. Run `skills-refresh` by hand to retry.
 
 Don't run `pnpm dlx skills update` or `skills check` on these two skills: they re-fetch `main` and bypass the release gate.
