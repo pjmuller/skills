@@ -442,13 +442,13 @@ def small_model_problem(models: str | None, allowed: bool) -> str | None:
     """t3-relay refuses a standalone thread on a small model; fail at `add` instead of at fire time."""
     small = [m for m in (models or "").split(",") if any(s in m for s in ("haiku", "luna"))]
     if small and not allowed:
-        return (f"--model {','.join(small)}: standalone threads run on a frontier model (opus/sol) that uses "
+        return (f"--model {','.join(small)}: standalone threads run on a frontier model (opus/astra) that uses "
                 "small models as sub-agents; pass --allow-small-model if orchestration is already done")
     return None
 
 
 def describe_models(spec: dict) -> str:
-    return spec.get("model") or ("thread's own" if spec.get("resume_thread") else "opus,sol (default)")
+    return spec.get("model") or ("thread's own" if spec.get("resume_thread") else "opus,astra (default)")
 
 
 def valid_name(name: str) -> str:
@@ -1519,7 +1519,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: send the prompt as a turn to this thread "
                      "(inside T3: your own t3_thread_list currentThreadId) instead of launching a new one")
     add.add_argument("--profile", help="account label or instance id (t3-list-profiles; machine-local, needs --model); omit → capacity routing at fire time")
-    add.add_argument("--model", help="ordered comma list, first with a routable account wins: opus,sol · fable · MODEL (omit → opus, else sol)")
+    add.add_argument("--model", help="ordered comma list, first with a routable account wins: opus,astra · fable · MODEL (omit → opus, else astra)")
     add.add_argument("--thinking", help="effort, e.g. low|medium|high (omit → model's house default)")
     add.add_argument("--allow-small-model", action="store_true",
                      help="permit haiku/luna as the launched thread's model (refused by default)")

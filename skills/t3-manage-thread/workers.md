@@ -11,7 +11,11 @@ Verified on T3 0.1.0 (2026-10-16; evidence: macbook_setup `decissions/t3_native_
   by another repo, the user said "separate / own thread / hand off", or a **selected** recording or
   meeting follow-up. Each standalone thread delegates its own 🏓 children. Test: would this
   thread's answer change when the result lands? No → 📤.
-- One topic + several models = one lead (this thread) with 🏓 children. Never standalone peers the
+- A distinct outcome gets a new standalone even within the same topic/repo. For an independent
+  opinion, give a fresh `delegate_task` the original problem, constraints and evidence, withholding
+  the lead's reasoning. Never switch the lead's model for a second opinion; model replacement
+  remains available for an explicit user switch or authorized recovery.
+- One task + several models = one lead (this thread) with 🏓 children. Never standalone peers the
   user must combine.
 
 ## 🏓 `delegate_task`

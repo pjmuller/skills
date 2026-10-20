@@ -32,9 +32,10 @@ account routing and an outside-T3 entry point.
 ## Model tier
 
 A standalone thread (`t3_thread_launch`, `t3-relay launch`, a `t3-schedule` launch) orchestrates:
-run it on a frontier model (Opus/Fable/Sol/Astra) that hands chores to Haiku/Luna sub-agents or
-`delegate_task` workers. Always pass `modelSelection`: without it the new thread inherits the
-caller's model. `t3-relay` and `t3-schedule` refuse haiku/luna unless `--allow-small-model`
+default to Opus for Claude or Astra for OpenAI, delegating scoped work as appropriate.
+Explicit model choices win (including Sol); direct Sol code review remains supported.
+Always pass the model, account and effort explicitly: native inheritance differs from the
+[helper defaults](routing.md#models). `t3-relay` and `t3-schedule` refuse haiku/luna unless `--allow-small-model`
 (orchestration already done, e.g. a script decides everything); before passing a small model to
 `t3_thread_launch` yourself, warn the user and launch it only if they insist.
 

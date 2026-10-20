@@ -58,3 +58,27 @@ def test_codex_account_catalog_and_stale_cache(tmp_path):
 def test_missing_catalog_uses_known_stable_fallback(tmp_path):
     assert resolve("sol", tmp_path) == "gpt-6-sol"
     assert resolve("opus", tmp_path) == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize("requested, expected, effort", [
+    ("openai", "gpt-6-astra", "medium"),
+    ("codex", "gpt-6-astra", "medium"),
+    ("OpenAI", "gpt-6-astra", "medium"),
+    ("claude", "claude-opus-5-5", "high"),
+    ("anthropic", "claude-opus-5-5", "high"),
+    ("sol", "gpt-6.1-sol", "high"),  # Direct review or Astra's scoped child.
+    ("gpt-6.1-sol", "gpt-6.1-sol", "high"),
+])
+def test_provider_alias_and_explicit_model(tmp_path, requested, expected, effort):
+    import os
+    import subprocess
+    write(tmp_path / "userdata/model-manifest.json", {"manifest": {"currentModels": {
+        "codex": ["gpt-6.1-sol"], "claudeAgent": ["claude-opus-5-5"]}}})
+    env = {**os.environ, "T3CODE_HOME": str(tmp_path)}
+    result = subprocess.run([str(SCRIPTS / "t3-pick-instance"), "--resolve", requested],
+                            env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == expected
+    result = subprocess.run(["bash", "-c", 'source "$1"; house_thinking "$2"', "test",
+                             str(SCRIPTS / "lib/t3-common.sh"), expected],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout == effort
