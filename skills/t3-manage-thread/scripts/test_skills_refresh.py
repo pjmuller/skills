@@ -296,14 +296,32 @@ def test_old_job_prompt_is_migrated_once(tenv, tmp_path):
     sched = tenv["setup"] / ".agents/schedules"
     sched.mkdir(parents=True)
     (sched / "skills-refresh.json").write_text("{}\n")
-    old = "Run exactly one command: `skills-refresh --job --quiet`. ... `thread: KEEP OPEN` → just answer.\n"
+    old = ("Run exactly one command: `skills-refresh --job --quiet`. Then end the turn with its complete output as your answer, nothing else.\n"
+           "Its last line decides this thread's lifecycle: `thread: SETTLE` → settle; `thread: KEEP OPEN` → just answer. Never retry, never fix anything.\n")
     (sched / "skills-refresh.prompt.md").write_text(old)
     pointer = tmp_path / "userhome/.t3/userdata/scheduled/t3-schedule/skills-refresh.json"
     pointer.parent.mkdir(parents=True)
-    pointer.write_text(f'{{"name": "skills-refresh", "source": "{sched / "skills-refresh.json"}"}}\n')
+    import json
+    pointer.write_text(json.dumps({"name": "skills-refresh", "source": str(sched / "skills-refresh.json")}, indent=2))
     tenv["prompt"].write_text("me\n<!-- template: pjmuller/skills@v0.3.0 -->\n")
     commit(tenv["setup"], "prompt")
     job(tenv)  # applies v0.3.0
     new = (sched / "skills-refresh.prompt.md").read_text()
     assert "thread: DELEGATE" in new and "--job --quiet" in new
     assert job(tenv).stdout.splitlines()[-1].startswith("thread: SETTLE")  # migrated once, then silent
+
+
+def test_customised_job_prompt_is_left_alone(tenv, tmp_path):
+    import json
+    sched = tenv["setup"] / ".agents/schedules"
+    sched.mkdir(parents=True)
+    custom = ("Run exactly one command: `skills-refresh --job`. Then end the turn with its complete output as your answer, nothing else.\n"
+              "Its last line decides this thread's lifecycle: `thread: KEEP OPEN` → just answer.\nAlso run my security check.\n")
+    (sched / "skills-refresh.prompt.md").write_text(custom)
+    pointer = tmp_path / "userhome/.t3/userdata/scheduled/t3-schedule/skills-refresh.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(json.dumps({"source": str(sched / "skills-refresh.json")}))
+    tenv["prompt"].write_text("me\n<!-- template: pjmuller/skills@v0.3.0 -->\n")
+    commit(tenv["setup"], "prompt")
+    job(tenv)
+    assert (sched / "skills-refresh.prompt.md").read_text() == custom
