@@ -41,10 +41,12 @@ RELAY_TITLE = "⚙️ T3 relay"
 # A standalone thread orchestrates, so it runs on a frontier model. Without --model it would
 # inherit the relay thread's model (Haiku), not the project default. Small models stay
 # sub-agents/workers unless the caller passes --allow-small-model (orchestration already done).
-DEFAULT_MODELS = ("opus", "sol")    # first one t3-pick-instance can route wins
+DEFAULT_MODELS = ("opus", "astra")    # first one t3-pick-instance can route wins
 SMALL_MODELS = ("haiku", "luna")    # substrings of the resolved model id
 HOME = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata"
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "lib"))
+from profile_registry import registry, family
 REQUESTS = HOME / "t3-relay"        # one record per request, for `status`
 KEEP_DAYS = 7
 STUCK = timedelta(minutes=5)        # a relay turn takes ~10 s; an older open run = limited/hung host
@@ -182,14 +184,39 @@ def is_small(model_id: str) -> bool:
     return any(s in model_id for s in SMALL_MODELS)
 
 
-def pick(models: tuple[str, ...]) -> tuple[str, str, str]:
+def pick(models: tuple[str, ...], instance: str | None = None) -> tuple[str, str, str]:
     """(instanceId, modelId, house effort or '-') of the first model t3-pick-instance can route."""
     for model in models:
-        out = subprocess.run([str(HERE / "t3-pick-instance"), model], capture_output=True, text=True)
+        constrained = False
+        if instance:
+            resolved = subprocess.run([str(HERE / "t3-pick-instance"), "--resolve", model],
+                                      capture_output=True, text=True)
+            if resolved.returncode:
+                die(resolved.stderr.strip(), 2)
+            model = resolved.stdout.strip()
+            constrained = model.startswith(("gpt-", "claude-"))
+        out = subprocess.run([str(HERE / "t3-pick-instance"), model,
+                              *([instance] if constrained else [])], capture_output=True, text=True)
+        if out.stderr.strip():
+            print(out.stderr.strip(), file=sys.stderr)
         fields = out.stdout.split()
         if out.returncode == 0 and len(fields) == 3:
-            return fields[0], fields[1], fields[2]
+            return (instance if instance and not constrained else fields[0]), fields[1], fields[2]
     die(f"t3-pick-instance {','.join(models)} failed: {out.stderr.strip()[-300:]}", 2)
+
+
+def launch_models(model: str | None, instance: str | None) -> tuple[str, ...]:
+    if model:
+        return (model,)  # Explicit Sol reviews and scoped workers stay explicit.
+    if not instance:
+        return DEFAULT_MODELS
+    try:
+        provider = family(registry(HOME / "settings.json").get(instance, {}))
+    except (OSError, ValueError) as error:
+        die(f"cannot read provider for {instance}: {error}", 2)
+    if provider not in ("codex", "claude"):
+        die(f"--instance {instance}: unknown provider default; pass --model", 2)
+    return (provider,)  # Provider aliases resolve through t3-pick-instance.
 
 
 def post(base: str, task_id: str, token: str, body: dict) -> str:
@@ -296,7 +323,7 @@ def main() -> None:
     la = sub.add_parser("launch")
     la.add_argument("--project", required=True)
     la.add_argument("--title", required=True)
-    la.add_argument("--model", help="model id or alias (sol, opus, fable, astra); omit = opus, else sol")
+    la.add_argument("--model", help="model id, alias or provider (openai/codex, claude); omit = instance default or opus, else astra")
     la.add_argument("--allow-small-model", action="store_true",
                     help="permit haiku/luna as the standalone thread's model (default: refused)")
     la.add_argument("--instance", help="provider instance id; default: t3-pick-instance MODEL")
@@ -317,8 +344,8 @@ def main() -> None:
     st.add_argument("--wait", type=float, default=0, metavar="SECS")
     sub.add_parser("check")
     a = ap.parse_args()
-    if a.cmd == "launch" and not a.model and (a.instance or a.effort):
-        die("--instance/--effort need --model", 2)
+    if a.cmd == "launch" and not a.model and not a.instance and a.effort:
+        die("--effort needs --model or --instance", 2)
     if a.cmd == "status":
         raise SystemExit(wait_for(a.rid, a.wait))
 
@@ -332,11 +359,11 @@ def main() -> None:
     if a.cmd == "launch":
         message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
         args = {"projectId": project_id(con, a.project), "title": a.title, "message": message}
-        instance, model, effort = pick((a.model,) if a.model else DEFAULT_MODELS)
+        instance, model, effort = pick(launch_models(a.model, a.instance), a.instance)
         if is_small(model) and not a.allow_small_model:
-            die(f"refusing standalone thread on {model}: launch a frontier model (opus/sol) that uses "
+            die(f"refusing standalone thread on {model}: launch a frontier model (opus/astra) that uses "
                 "small models as sub-agents, or pass --allow-small-model if orchestration is already done", 2)
-        sel = {"instanceId": a.instance or instance, "model": model}
+        sel = {"instanceId": instance, "model": model}
         effort = a.effort or (effort if effort != "-" else None)
         if effort:
             key = "reasoningEffort" if model.startswith("gpt-") else "effort"

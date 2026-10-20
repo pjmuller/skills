@@ -11,8 +11,12 @@ t3-relay check                      # every host + its health
 ```
 
 `--model` takes an alias or id; account and house effort come from `t3-pick-instance` (capacity
-routing). `--instance` / `--effort` override. Without `--model`: opus, else sol (never the relay
-host's model, which an unset `modelSelection` would inherit). haiku/luna refused unless
+routing). Provider aliases `--model openai|codex` select Astra, `claude|anthropic` select Opus.
+Without `--model`: the named `--instance`'s provider default, otherwise opus, else astra
+(never the relay host's model). Unknown provider → require `--model`. An explicit model
+wins, including Sol; `--instance` constrains Claude/Codex capacity routing (other providers keep
+the named account), and `--effort` overrides house
+effort. No automatic Astra-to-Sol fallback. haiku/luna refused unless
 `--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)).
 
 Exit 0 = accepted (HTTP 202, async, prints `accepted: relay <rid> via <host>`). With `--wait`:

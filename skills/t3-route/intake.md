@@ -63,6 +63,7 @@ Exclude the current dispatch conversation and other intake-only mentions.
 
 Read the candidate's initial task and recent progress: verify artifact, account,
 project and intended outcome. A keyword hit or recent timestamp is not proof.
+A distinct outcome is a new task even in the same topic/repo; do not merge it into a related thread.
 Matching execution threads can be pinged even when settled; avoid parallel duplicate
 execution if one is already working. Preserve explicit account/model overrides;
 if the verified target cannot honor them, explain and choose an authorized route.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # t3-pick-instance MODEL [ALLOWED_IDS_CSV]
 # Prints "<instanceId> <modelId> <effort>" for MODEL (alias sol/opus/fable/astra/luna/haiku/gemini
-# or a full id): the account with the most capacity (lib/profile_routing.py, one policy for
+# or a full id; openai/codex → Astra, claude/anthropic → Opus): the account with the most capacity (lib/profile_routing.py, one policy for
 # Claude and Codex; ALLOWED_IDS_CSV limits the choice), the resolved model id, and its house
 # effort ("-" when none). Feed them to delegate_task target {providerInstanceId, model,
 # options} or t3_thread_launch modelSelection. Refuses models below the floor (exit 2).

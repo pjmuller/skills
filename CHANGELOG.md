@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-manage-thread: provider aliases select Astra (OpenAI/Codex) or Opus (Claude); relay defaults to Opus then Astra. Instance-only launches infer the provider default and capacity-route within the named account; explicit models/efforts survive. Document native T3 inheritance separately. Fresh delegates for independent opinions; distinct outcomes keep separate threads.
+
 - agents-md: OpenAI entrypoints use Astra (house medium); direct Sol for code review, with Astra free to choose scoped workers. Preserve explicit user choices and account routing; no silent Astra-to-Sol orchestration fallback.
 
 - **t3-mail-link find: which T3 thread owns this mail.** Read-only: resolves a pasted Gmail URL/id (Print-all `thread-f`, `msg-f`, verified `msg-a` drafts, hex) with the account verified, then searches T3 (purged archive included) for every hex/decimal form of the thread and its messages. Ranks mail link > `Mail-ref:` marker > id; dispatcher titles and `--exclude` ids are listed as intake; no id hit → subject fallback flagged weak. `resolve` JSON adds `marker`. Convention (t3-route intake, google-workspace-core, mail-link.md): T3 briefs/reports on mail carry `Mail-ref: gmail:<hex thread> <account>`, never the mail itself. Previously a decimal URL id found only the dispatcher.

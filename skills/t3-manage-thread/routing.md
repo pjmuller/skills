@@ -5,6 +5,17 @@
 
 ## Models
 
+Provider-only helper input (`t3-pick-instance openai|codex`, relay/scheduler `--model codex`)
+selects Astra; `claude|anthropic` selects Opus. Explicit models always win: direct Sol code
+review and Astra-selected scoped Sol children remain valid. House effort and capacity routing
+apply after model selection; personal policy lives in the `instructions` config slot.
+
+Native T3 APIs do **not** use these helper defaults. Always pass the resolved model/account
+and effort in `delegate_task.target` / `t3_thread_launch.modelSelection`. A provider-only
+`delegate_task` inherits the model on the same instance, or takes the provider's first model
+on another instance (which can be Sol). An omitted launch selection inherits the caller, or
+uses the project default outside a thread. This skill does not intercept native calls.
+
 - Aliases: `sol` / `opus` pick the newest version in T3's model manifest (`lib/model_resolution.py`);
   `fable` → `claude-fable-5-1`, `astra` → `gpt-6-astra`, `luna` → `gpt-6-luna`, `haiku` →
   `claude-haiku-5-5`, `gemini` → Antigravity Flash High. Full ids pass through.

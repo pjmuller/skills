@@ -12,10 +12,10 @@ SCRIPT = Path(__file__).resolve().parent / "t3-relay"
 relay = SourceFileLoader("t3_relay", str(SCRIPT)).load_module()
 
 
-def test_instance_without_model_is_refused():
-    out = subprocess.run([str(SCRIPT), "launch", "--project", "/tmp", "--title", "x", "--instance", "codex", "--", "hi"],
+def test_effort_without_model_or_instance_is_refused():
+    out = subprocess.run([str(SCRIPT), "launch", "--project", "/tmp", "--title", "x", "--effort", "high", "--", "hi"],
                          capture_output=True, text=True)
-    assert out.returncode == 2 and "need --model" in out.stderr
+    assert out.returncode == 2 and "needs --model or --instance" in out.stderr
 
 
 def test_footer_comes_from_settle_thread_md():
@@ -31,7 +31,7 @@ def posted(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "pick_host", lambda con, via=None: relay.Host("task", "tok", "mcp:host", "i", "m"))
     monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
     monkeypatch.setattr(relay, "project_id", lambda con, path: "proj-1")
-    monkeypatch.setattr(relay, "pick", lambda model: ("codex_a", "gpt-6.1-sol", "high"))
+    monkeypatch.setattr(relay, "pick", lambda models, instance=None: ("codex_a", "gpt-6.1-sol", "high"))
     monkeypatch.setattr(relay, "post", lambda base, tid, tok, body: sent.update(body) or "d1")
 
     def run(*argv):
@@ -194,3 +194,81 @@ def test_lookup_error_is_pending_not_failed(monkeypatch, tmp_path, capsys):
         raise sqlite3.OperationalError("database is locked")
     monkeypatch.setattr(relay, "store", locked)
     assert relay.wait_for("r1", 0) == 3 and capsys.readouterr().out.startswith("pending lookup error")
+
+
+@pytest.mark.parametrize("flags, expected", [
+    ([], ("opus", "astra")),
+    (["--model", "openai"], ("openai",)),
+    (["--model", "codex"], ("codex",)),
+    (["--instance", "codex_test"], ("codex",)),
+    (["--instance", "claude_test"], ("claude",)),
+    (["--instance", "codex_test", "--model", "sol"], ("sol",)),
+    (["--model", "gpt-6.1-sol"], ("gpt-6.1-sol",)),
+])
+def test_launch_defaults_and_explicit_choices(posted, monkeypatch, tmp_path, flags, expected):
+    monkeypatch.setattr(relay, "HOME", tmp_path)
+    (tmp_path / "settings.json").write_text(json.dumps({"providerInstances": {
+        "codex_test": {"driver": "codex"}, "claude_test": {"driver": "claudeAgent"}}}))
+    selected = []
+    def pick(models, instance=None):
+        selected.append((models, instance))
+        return instance or "codex_a", "gpt-6-astra", "medium"
+    monkeypatch.setattr(relay, "pick", pick)
+    _, args = posted("launch", "--project", "/r", "--title", "x", *flags, "--", "task")
+    instance = flags[flags.index("--instance") + 1] if "--instance" in flags else None
+    assert selected == [(expected, instance)]
+    assert args["modelSelection"]["options"] == [{"id": "reasoningEffort", "value": "medium"}]
+
+
+def test_explicit_effort_wins(posted):
+    _, args = posted("launch", "--project", "/r", "--title", "x", "--model", "sol", "--effort", "low", "--", "review")
+    assert args["modelSelection"]["model"] == "gpt-6.1-sol"
+    assert args["modelSelection"]["options"] == [{"id": "reasoningEffort", "value": "low"}]
+
+
+def test_named_account_is_capacity_routed_without_fallback(monkeypatch):
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1] == "--resolve":
+            return subprocess.CompletedProcess(argv, 0, "gpt-6-astra", "")
+        return subprocess.CompletedProcess(argv, 2, "", "account exhausted")
+    monkeypatch.setattr(relay.subprocess, "run", run)
+    with pytest.raises(SystemExit):
+        relay.pick(("codex",), "codex_test")
+    assert calls == [[str(relay.HERE / "t3-pick-instance"), "--resolve", "codex"],
+                     [str(relay.HERE / "t3-pick-instance"), "gpt-6-astra", "codex_test"]]
+
+
+def test_default_fallback_stops_at_astra(monkeypatch):
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv[1])
+        return subprocess.CompletedProcess(argv, 2, "", "exhausted")
+    monkeypatch.setattr(relay.subprocess, "run", run)
+    with pytest.raises(SystemExit):
+        relay.pick(relay.DEFAULT_MODELS)
+    assert calls == ["opus", "astra"]
+
+
+def test_unknown_instance_requires_explicit_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(relay, "HOME", tmp_path)
+    (tmp_path / "settings.json").write_text("{}")
+    with pytest.raises(SystemExit):
+        relay.launch_models(None, "unknown")
+    assert relay.launch_models("sol", "unknown") == ("sol",)
+
+
+@pytest.mark.parametrize("model, resolved, instance", [
+    ("gemini", "gemini-3.8-flash-high", "antigravity"),
+    ("vendor/custom-model", "vendor/custom-model", "opencode_test"),
+])
+def test_explicit_other_provider_account_survives(monkeypatch, model, resolved, instance):
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        output = resolved if argv[1] == "--resolve" else f"inherited {resolved} -"
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    monkeypatch.setattr(relay.subprocess, "run", run)
+    assert relay.pick((model,), instance) == (instance, resolved, "-")
+    assert calls[-1] == [str(relay.HERE / "t3-pick-instance"), resolved]

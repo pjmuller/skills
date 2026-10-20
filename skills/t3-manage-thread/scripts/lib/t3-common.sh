@@ -21,7 +21,8 @@ normalize_model() {
     sol|opus)
       uv run --script "$t3_lib_dir/model_resolution.py" "$normalized" "$t3_base_dir" "${2:-}"
       ;;
-    astra) printf '%s' "gpt-6-astra" ;;
+    claude|anthropic) normalize_model opus "${2:-}" ;;
+    astra|codex|openai) printf '%s' "gpt-6-astra" ;;
     luna) printf '%s' "gpt-6-luna" ;;
     haiku) printf '%s' "claude-haiku-5-5" ;;
     fable) printf '%s' "claude-fable-5-1" ;;
