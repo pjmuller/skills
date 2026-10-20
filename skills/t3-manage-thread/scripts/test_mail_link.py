@@ -273,3 +273,35 @@ def test_marker_grep_uses_full_line(monkeypatch):
     _, _, seen = ml.inspect([hit("t1")], [], "ann@example.com", "19e8")
     assert seen == {"t1": (True, False)}
     assert ("grep", "t1", "-k", "Mail-ref: gmail:19e8 ann@example.com", "--limit", "1") in greps
+
+
+def test_ping_marks_seen_only_once_it_landed(monkeypatch, tmp_path):
+    """Accepted-but-unconfirmed pings are re-checked, never resent; a failed one is resent."""
+    link = {"gmail_thread": "g1", "t3_thread": "t1", "account": "ann@example.com", "config": "c", "seen": ["a"],
+            "subject": "Deal"}
+    monkeypatch.setattr(ml, "workspace", lambda config: None)
+    monkeypatch.setattr(ml, "thread_metadata", lambda ws, gid: {"messages": [msg("a"), msg("e")]})
+    monkeypatch.setattr(ml, "t3_thread", lambda tid: {"deleted": None, "archived": None})
+    monkeypatch.setattr(ml, "save_messages", lambda *a, **kw: tmp_path / "e.md")
+    calls, replies = [], []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd[1])
+        code, out = replies.pop(0)
+        return SimpleNamespace(args=cmd, returncode=code, stdout=out, stderr="")
+    monkeypatch.setattr(ml.subprocess, "run", fake_run)
+
+    replies[:] = [(3, "accepted: relay r1 via h (d)\npending host turn running\n")]
+    assert ml.poll_link(link, False) is None and link["seen"] == ["a"] and link["pending"]["rid"] == "r1"
+    replies[:] = [(3, "pending host turn running\n")]
+    assert ml.poll_link(link, False) is None and calls[-1] == "status"     # waits, never resends
+    replies[:] = [(0, "ok t1\n")]
+    assert ml.poll_link(link, False) is None and link["seen"] == ["a", "e"] and "pending" not in link
+
+    link["seen"] = ["a"]
+    replies[:] = [(1, "accepted: relay r2 via h (d)\nfailed host turn error\n"), (0, "accepted: relay r3 via h (d)\nok t1\n")]
+    assert ml.poll_link(link, False) == "t3" and link["seen"] == ["a"]
+    assert ml.poll_link(link, False) is None and link["seen"] == ["a", "e"]
+    replies[:] = [(1, "no usable relay host\n")]
+    link["seen"] = ["a"]
+    assert ml.poll_link(link, False) == "t3" and "pending" not in link

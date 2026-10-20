@@ -34,7 +34,8 @@ New machine (macOS or WSL): [setup.md](setup.md).
   source (own Monologue account) is always this machine's. Not owner → `skipped:<reason>` + owner + evidence.
 - Route: a source's pinned `workspace`, else known non-self speakers vote by words, then invitees, else default.
 - Screen share: phrase hits; likely → the brief asks for a Gemini narration first.
-- Spawn = `t3-relay launch` ([relay.md](../t3-manage-thread/relay.md)): async, returns a relay id, no thread id.
-  Max 6 per poll, newest first; the watermark never passes an unfinished call. Each accepted spawn is saved
-  immediately (own dedupe; the relay never retries): never spawned twice. State + transcripts: `~/.local/state/recording-watcher/`.
+- Spawn = `t3-relay launch --wait 120` ([relay.md](../t3-manage-thread/relay.md)): confirmed → `spawned`;
+  accepted but unconfirmed → `relay-pending`, re-checked with `t3-relay status` next poll (landed → `spawned`,
+  failed → spawned again; never resent while pending). Max 6 per poll, newest first; the watermark never passes
+  an unfinished call. Each spawn is saved immediately (own dedupe; the relay never retries). State + transcripts: `~/.local/state/recording-watcher/`.
 - Tests: `uv run --with pytest pytest skills/recording-watcher -q`.

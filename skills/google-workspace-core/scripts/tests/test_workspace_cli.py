@@ -134,3 +134,18 @@ def test_network_failures_name_a_host_outside_googleapis():
     assert "allow lh7-rt.googleusercontent.com" in message
     inside = httpx.Request("GET", "https://slides.googleapis.com/v1/x")
     assert "allow" not in network_failure(httpx.ConnectError("boom", request=inside))
+
+
+def test_draft_prints_a_mail_ref_line_t3_mail_link_can_claim(capsys):
+    from gws_core.cli import cmd_gmail_draft
+    draft = {"id": "r-1", "message": {"id": "m1", "threadId": "19e875318442de06"}, "verified": {"files": 0}}
+    ws = SimpleNamespace(config=SimpleNamespace(account="Operator@Example.com"),
+                         gmail=SimpleNamespace(create_draft=lambda *a, **k: draft))
+    args = build_parser().parse_args(["gmail-draft", "--to", "a@b.c", "--subject", "s", "--body", "b"])
+    args.json = False
+    cmd_gmail_draft(args, ws)
+    assert "\nMail-ref: gmail:19e875318442de06 operator@example.com\n" in capsys.readouterr().out
+    args.json = True
+    cmd_gmail_draft(args, ws)
+    captured = capsys.readouterr()
+    assert captured.err == "Mail-ref: gmail:19e875318442de06 operator@example.com\n"

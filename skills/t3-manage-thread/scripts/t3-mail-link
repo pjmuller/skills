@@ -34,6 +34,8 @@ LABEL = "com.t3-skills.t3-mail-link.poll"
 POLL_HOURS = (8, 10, 12, 14, 16, 18)  # weekdays, every 2 h in working hours
 LAUNCHD_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/Library/pnpm:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 METADATA = ["From", "Subject", "Date", "Message-ID"]
+RELAY_WAIT = 120                      # seconds a ping waits for t3-relay to confirm delivery
+PENDING_ALERT = 30 * 60               # an unconfirmed ping older than this is reported
 
 
 def userdata() -> Path:
@@ -562,8 +564,45 @@ def cmd_unlink(args) -> int:
     return 0 if removed else 1
 
 
+def relay_verdict(result: subprocess.CompletedProcess) -> str:
+    """t3-relay outcome: 'ok' delivered; 'failed' never accepted, or its host turn ended without
+    the send (a retry cannot duplicate); 'pending' accepted but unconfirmed (it may still land)."""
+    if result.returncode == 0:
+        return "ok"
+    if result.returncode == 2 or re.search(r"^failed ", result.stdout, re.M):  # 2: usage, or status record expired
+        return "failed"
+    if result.args[1] == "send" and not re.search(r"^accepted: relay ", result.stdout, re.M):
+        return "failed"
+    return "pending"
+
+
+def relay(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["t3-relay", *args], capture_output=True, text=True, cwd=Path.home())
+
+
+def resolve_pending(link: dict, tag: str, dry_run: bool) -> str | None:
+    """Settle an earlier unconfirmed ping. Returns 'wait' (still pending: never resend), 't3'
+    (pending too long: report, still never resend) or None (resolved; failed pings resend below)."""
+    pending = link["pending"]
+    verdict = relay_verdict(relay("status", pending["rid"]))
+    if verdict == "pending":
+        print(f"{tag}: ping relay {pending['rid']} not yet confirmed; not resending")
+        return "t3" if time.time() - pending["at"] > PENDING_ALERT else "wait"
+    print(f"{tag}: earlier ping relay {pending['rid']} {'landed' if verdict == 'ok' else 'failed; resending'}")
+    if not dry_run:
+        del link["pending"]
+        if verdict == "ok":
+            link["seen"] += pending["inbound"]
+    return None
+
+
 def poll_link(link: dict, dry_run: bool) -> str | None:
-    """Returns an error class ('gmail', 't3') or None. Mutates link['seen'] only after success."""
+    """Returns an error class ('gmail', 't3') or None. Mutates link['seen'] only once the ping landed."""
+    tag = f"{link['gmail_thread']} -> {link['t3_thread']}"
+    if link.get("pending"):
+        held = resolve_pending(link, tag, dry_run)
+        if held:
+            return None if held == "wait" else held
     try:
         ws = workspace(link["config"])
         messages = thread_metadata(ws, link["gmail_thread"]).get("messages", [])
@@ -571,7 +610,6 @@ def poll_link(link: dict, dry_run: bool) -> str | None:
         print(f"gmail error for {link['gmail_thread']}: {exc}", file=sys.stderr)
         return "gmail"
     inbound, own = classify_new(messages, set(link["seen"]), link["account"])
-    tag = f"{link['gmail_thread']} -> {link['t3_thread']}"
     if own:
         print(f"{tag}: {len(own)} own message(s), marked seen")
         if not dry_run:
@@ -591,11 +629,16 @@ def poll_link(link: dict, dry_run: bool) -> str | None:
     except Exception as exc:
         print(f"gmail error saving {tag}: {exc}", file=sys.stderr)
         return "gmail"
-    result = subprocess.run(["t3-relay", "send", "--thread", link["t3_thread"], "--", ping_text(link, saved, inbound)],
-                            capture_output=True, text=True, cwd=Path.home())
-    if result.returncode:  # T3 down or relay missing: next tick retries
-        print(f"{tag}: ping failed: {result.stderr.strip()}", file=sys.stderr)
+    result = relay("send", "--thread", link["t3_thread"], "--wait", str(RELAY_WAIT), "--", ping_text(link, saved, inbound))
+    verdict = relay_verdict(result)
+    if verdict == "failed":  # T3 down, relay missing or host turn failed: next tick retries
+        print(f"{tag}: ping failed: {(result.stderr or result.stdout).strip()}", file=sys.stderr)
         return "t3"
+    if verdict == "pending":  # accepted, may still land: the next tick checks it instead of resending
+        rid = re.search(r"^accepted: relay (\w+)", result.stdout, re.M)
+        link["pending"] = {"rid": rid[1], "inbound": inbound, "at": time.time()}
+        print(f"{tag}: ping relay {rid[1]} accepted, not yet confirmed; next tick checks it")
+        return None
     link["seen"] += inbound
     print(f"{tag}: pinged with {len(inbound)} inbound message(s) ({saved})")
     return None
