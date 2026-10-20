@@ -26,6 +26,8 @@ after the user decides.
   `find DIR -type f -print0 | xargs -0 stat -f '%Sm %z' -t '%m-%d_%H'` summed per hour shows the rate.
   The audit scans only `$HOME`; swap (`sysctl vm.swapusage`, own APFS volume) and `/private/tmp` share the
   container's free space too.
+- Measure freed space with `df`, not `du`: uv venvs are APFS clones of cache files, so `uv cache clean`
+  that removes 12G may free only ~2G (blocks stay shared with project `.venv`s).
 - Prefer deleting by age/LRU over wiping a whole cache while agents build; mass deletes also flood fseventsd,
   so batch and pace them (`go_cache_trim.sh` does).
 
