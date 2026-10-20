@@ -6,11 +6,14 @@ description: Deterministic macOS disk-usage audit and safe-cache cleanup. Use fo
 # Disk audit
 
 Split of labour: the **script** measures, the **LLM** interprets and digs into anomalies.
-Never guess sizes — run the script. `scripts/install` links both onto `~/.local/bin`
+Never guess sizes — run the script. `scripts/install` links the scripts onto `~/.local/bin`
 (`--check` verifies); otherwise run them from this skill's `scripts/`.
 
 - `disk_audit.sh` — read-only snapshot (one `du` pass over `$HOME`); ends with SUGGESTED CLEANUPS, printed, never run.
 - `disk_cleanup.sh` — confirms once, then prunes only self-regenerating caches; `-y` for agents after the user said "go".
+- `go_cache_trim.sh [CAP_GB]` — LRU cap (default 30G) on the Go build cache; never touches entries used in the
+  last hour, so running builds survive. Meant for an hourly scheduler: Go has no size cap and only trims entries
+  idle 5 days, while an agent fleet building many worktrees adds 5-20 GB/h. A weekly prune cannot keep up.
 
 Intent of the split: everything the cleanup script touches regrows on its own (build/package
 caches). Anything that costs a re-download or a lost feature is only *suggested* by the audit,
@@ -18,6 +21,13 @@ prefixed "Operator judgment" (Downloads, docker volumes, node_modules) — copy 
 after the user decides.
 
 ## Agent notes
+
+- Disk filling within days: compare growth per hour, not totals. For a cache dir,
+  `find DIR -type f -print0 | xargs -0 stat -f '%Sm %z' -t '%m-%d_%H'` summed per hour shows the rate.
+  The audit scans only `$HOME`; swap (`sysctl vm.swapusage`, own APFS volume) and `/private/tmp` share the
+  container's free space too.
+- Prefer deleting by age/LRU over wiping a whole cache while agents build; mass deletes also flood fseventsd,
+  so batch and pace them (`go_cache_trim.sh` does).
 
 - Thresholds and the suggestion list sit at the bottom of `scripts/disk_audit.sh`; add new
   offenders there, not in ad-hoc commands.
