@@ -405,6 +405,13 @@ def cmd_gmail_recent(a, ws):
     out(views, a.json, human or f"no mail matching {a.word!r} in the last {a.minutes} minute(s)")
 
 
+def print_mail_ref(ws, thread_id: str | None, as_json: bool) -> None:
+    """Own line after a draft/send: T3 records it under the thread that ran the command, which then
+    owns the mail case for t3-mail-link (t3-manage-thread/mail-link.md). stderr keeps --json parseable."""
+    if thread_id:
+        print(f"Mail-ref: gmail:{thread_id} {ws.config.account.lower()}", file=sys.stderr if as_json else sys.stdout)
+
+
 def cmd_gmail_draft(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     draft = ws.gmail.create_draft(a.to, a.subject, body, cc=a.cc, html=a.html,
@@ -413,6 +420,7 @@ def cmd_gmail_draft(a, ws):
     message = draft.get("message") or {}
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
+    print_mail_ref(ws, message.get("threadId"), a.json)
 
 
 def cmd_gmail_send(a, ws):
@@ -421,6 +429,7 @@ def cmd_gmail_send(a, ws):
                          html_body=html_body, reply_to_message=a.reply_to_message, attach=a.attach)
     out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})  "
                       f"files={sent['verified']['files']}")
+    print_mail_ref(ws, sent.get("threadId"), a.json)
 
 
 def cmd_gmail_draft_list(a, ws):
@@ -441,11 +450,13 @@ def cmd_gmail_draft_update(a, ws):
     message = draft.get("message") or {}
     out(draft, a.json, f"draft updated and read back: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
+    print_mail_ref(ws, message.get("threadId"), a.json)
 
 
 def cmd_gmail_draft_send(a, ws):
     sent = ws.gmail.send_draft(a.id)
     out(sent, a.json, f"sent draft {a.id} as message {sent.get('id')}")
+    print_mail_ref(ws, sent.get("threadId"), a.json)
 
 
 def cmd_gmail_draft_delete(a, ws):

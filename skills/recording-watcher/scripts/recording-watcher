@@ -44,6 +44,9 @@ MIN_WORDS = 150                        # shorter transcripts are false starts (s
 NO_TRANSCRIPT_GIVE_UP = timedelta(hours=6)
 WORK_DAYS, WORK_HOURS = range(0, 5), range(9, 18)
 FINAL = ("spawned", "skipped:")
+RELAY_PENDING = "relay-pending"        # accepted by t3-relay, launch not yet confirmed: never respawn
+RELAY_WAIT = 120                       # seconds a spawn waits for t3-relay to confirm the thread exists
+PENDING_ALERT = timedelta(hours=1)     # an unconfirmed spawn older than this is reported
 SCREEN_SHARE_MIN_HITS = 2              # lowercase phrase hits over the whole transcript => "likely"
 SCREEN_SHARE_PHRASES = [
     "scherm delen", "mijn scherm", "ziet ge mijn scherm", "zie je mijn scherm", "zie jij mijn scherm",
@@ -503,15 +506,49 @@ def next_watermark(old, listed, unfinished):
 
 # ---------- spawn ----------
 
+class RelayPending(Exception):
+    """t3-relay accepted the launch but did not confirm it in time: it may still land."""
+
+
+def relay_failed(result):
+    """Only t3-relay's explicit verdict (or a usage/expired-record exit 2) proves a request will not run."""
+    return result.returncode == 2 or result.returncode == 1 and bool(re.search(r"^failed ", result.stdout, re.M))
+
+
 def spawn(cfg, workspace, title, brief):
-    """Launch the thread via t3-relay (async; returns the relay request id, not a thread id)."""
+    """Launch the thread via t3-relay and wait for it to exist; returns the relay request id.
+    Raises RelayPending when accepted but unconfirmed, RuntimeError when it certainly did not launch."""
     cmd = ["t3-relay", "launch", "--project", workspace, "--title", title,
-           *(["--model", cfg.model] if cfg.model else []), "--", brief]
-    result = subprocess.run(cmd, text=True, capture_output=True, timeout=120, cwd=workspace)
+           *(["--model", cfg.model] if cfg.model else []), "--wait", str(RELAY_WAIT), "--", brief]
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=RELAY_WAIT + 60, cwd=workspace)
     match = re.search(r"^accepted: relay (\S+)", result.stdout, re.M)
-    if result.returncode or not match:
+    if not match or relay_failed(result):
         raise RuntimeError(f"t3-relay exit {result.returncode}: {(result.stderr or result.stdout).strip()[-400:]}")
+    if result.returncode:
+        raise RelayPending(match[1])
     return match[1]
+
+
+def relay_status(relay_id):
+    """'ok' (thread exists), 'failed' (will not run: respawn) or 'pending'."""
+    result = subprocess.run(["t3-relay", "status", relay_id], text=True, capture_output=True, timeout=60)
+    return "ok" if result.returncode == 0 else "failed" if relay_failed(result) else "pending"
+
+
+def resolve_pending_spawns(state, now, errors, checker):
+    """Confirm or drop earlier accepted-but-unconfirmed spawns; a dropped call is re-elected and spawned again."""
+    for key, entry in list(state["calls"].items()):
+        if entry.get("status") != RELAY_PENDING:
+            continue
+        verdict = checker(entry["relay_id"])
+        print(f"relay {entry['relay_id']} for {key}: {verdict}")
+        if verdict == "ok":
+            entry["status"] = "spawned"
+        elif verdict == "failed":
+            del state["calls"][key]
+        elif now - parse_ts(entry["at"]) > PENDING_ALERT:
+            errors.append(f"{key}: relay {entry['relay_id']} unconfirmed since {entry['at'][:16]}; "
+                          "t3-relay status it, or recording-watcher ack")
 
 
 # ---------- commands ----------
@@ -530,7 +567,7 @@ def default_sources(cfg, names=None, errors=None):
     return out
 
 
-def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
+def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_status):
     now = now or datetime.now(timezone.utc)
     if not args.force_hours and not in_hours(now):
         return 0
@@ -543,6 +580,8 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
     state = load_state()
     since_override = datetime.fromisoformat(args.since).replace(tzinfo=TZ) if args.since else None
     errors = []
+    if not args.dry_run:
+        resolve_pending_spawns(state, now, errors, checker)
     sources = sources if sources is not None else default_sources(cfg, errors=errors)
     candidates, listed_by_source = [], {}
     for src in sources:
@@ -555,7 +594,11 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
             continue
         listed_by_source[src.name] = (listed, [])
         for call in listed:
-            if is_final(state["calls"].get(call.key)):
+            entry = state["calls"].get(call.key)
+            if is_final(entry):
+                continue
+            if entry and entry["status"] == RELAY_PENDING:   # hold the watermark until it resolves
+                listed_by_source[src.name][1].append(call)
                 continue
             try:
                 src.load(call)
@@ -593,16 +636,20 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None):
             print(head + " (next poll)")
             listed_by_source[call.source][1].append(call)
             continue
+        status = "spawned"
         try:
             relay_id = spawner(cfg, workspace, title, brief)
+        except RelayPending as exc:
+            relay_id, status = exc.args[0], RELAY_PENDING
+            listed_by_source[call.source][1].append(call)
         except Exception as exc:
             errors.append(f"{call.key}: spawn failed: {exc}")
             listed_by_source[call.source][1].append(call)
             spawned = MAX_SPAWNS   # T3 likely down: defer the rest
             continue
         spawned += 1
-        print(f"{head} · relay {relay_id}")
-        state["calls"][call.key] = {"status": "spawned", "title": call.title, "thread_title": title, "relay_id": relay_id,
+        print(f"{head} · relay {relay_id}" + (" (accepted, unconfirmed: next poll checks)" if status == RELAY_PENDING else ""))
+        state["calls"][call.key] = {"status": status, "title": call.title, "thread_title": title, "relay_id": relay_id,
                                     "project": workspace, "self_share": round(self_share(cfg, call), 2), "screen_share": verdict,
                                     "start": call.start.isoformat(), "at": now.isoformat(), "transcript": str(transcript),
                                     "election": election_line(call)}
@@ -686,8 +733,8 @@ def ack(args, cfg=None, now=None, sources=None):
         backup.write_bytes((STATE_DIR / "state.json").read_bytes())
     for key in keys:
         entry = state["calls"].get(key) or {}
-        if entry.get("status") == "spawned":
-            print(f"keep     {key:48} already spawned -> {entry.get('thread_title')}")
+        if entry.get("status") in ("spawned", RELAY_PENDING):
+            print(f"keep     {key:48} already {entry['status']} -> {entry.get('thread_title')}")
             continue
         transcript = transcript_path(key)
         src, call = found.get(key, (None, None))

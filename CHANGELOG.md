@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **t3-mail-link / recording-watcher: a relay-accepted ping or launch can no longer be lost.** Both now call `t3-relay … --wait 120` and mark mail seen / a call spawned only once the effect exists. Accepted but unconfirmed → recorded as pending and re-checked with `t3-relay status` next tick (landed → done; failed → resent; never resent while pending; reported after 30 min / 1 h). Previously HTTP 202 counted as delivered, so a failed relay host turn dropped the mail ping or the recording follow-up.
+- settle-thread / AGENTS.md: settling stops in-session sub-agents, not `delegate_task` children (their result wakes the parent).
 - **microphone-calibration (new): find the best input gain for dictation.** `mic-calibrate run` records the same sentence once per gain level (beep-driven, bounded, Enter to start in a Terminal window because agent shells have no TTY and agent apps may lack microphone access), restores the original gain on finish, Ctrl-C or window close, then writes `report.md`: peak/clipping, noise floor, speech level, SNR (beep removed by its tone), local Whisper transcripts with word error rate (no hint), playable clips and one tested recommended level. Devices without software gain are refused for sweeps (`--keep-gain` for knob positions and A/B samples). Gain is set on every channel element (some USB mics have no main control).
 
 ## v0.5.4 (2026-10-20)

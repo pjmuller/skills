@@ -45,8 +45,8 @@ t3-mail-link list [--thread-ids] · unlink <t3-or-gmail-id> · poll [--dry-run] 
   messages; a re-add keeps the old baseline, so unpinged mail still pings). Saved mail: `~/.t3/userdata/mail-links/<gmail-thread>/`. A linked thread is never
   purged by [`t3-purge-threads`](../t3-maintenance/SKILL.md) (`list --thread-ids`); unlink first.
 - **Poll**: new ids only from the account / `SENT` → seen, no wake (the user replied);
-  drafts ignored. Any new inbound → save its full text, `t3-relay send`, mark seen only after the
-  relay accepted (T3 down → next tick retries). The ping wakes the thread visibly. Gmail/auth or T3 ping failure → one macOS notification per day, exit 1.
+  drafts ignored. Any new inbound → save its full text, `t3-relay send --wait 120`, mark seen only once
+  the message landed (failed → next tick resends; accepted but unconfirmed → next tick checks `t3-relay status`, never resends). The ping wakes the thread visibly. Gmail/auth or T3 ping failure → one macOS notification per day, exit 1.
 - **Schedule**: LaunchAgent `com.t3-skills.t3-mail-link.poll`, weekdays 08-18 every 2 h,
   `ProcessType=Interactive` ([why](../t3-schedule/SKILL.md)). Log `~/.t3/userdata/logs/t3-mail-link.log`.
 

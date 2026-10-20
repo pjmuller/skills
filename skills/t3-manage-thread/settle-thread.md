@@ -12,9 +12,9 @@ Settle through the T3 MCP tool `t3_thread_organize`
 ## Settle = stop
 
 Settling stops the thread's provider session, including background shells and
-sub-agents inside it. Settle only after the final result is in and verified.
-A `delegate_task` child needs no settle: it has no sidebar row and its result
-wakes the parent ([workers.md](workers.md)).
+in-session sub-agents (Agent tool). Settle only after the final result is in and verified.
+A `delegate_task` child is not stopped (only `task_cancel` or stopping the parent does) and needs
+no settle: it has no sidebar row and its result wakes, and unsettles, the parent ([workers.md](workers.md)).
 
 ## Settle yourself
 

@@ -226,6 +226,31 @@ def test_spawn_command(cfg, monkeypatch, tmp_path):
     assert seen["cmd"][:2] == ["t3-relay", "launch"] and seen["cmd"][-2:] == ["--", "brief"]
     rw.spawn(config(tmp_path, model="sol"), str(tmp_path), "Call X", "brief")
     assert seen["cmd"][seen["cmd"].index("--model") + 1] == "sol"
+    for code, out, raised in ((3, "accepted: relay abc (d1)\npending host turn running\n", rw.RelayPending),
+                              (1, "accepted: relay abc (d1)\nfailed host turn error\n", RuntimeError),
+                              (1, "no usable relay host\n", RuntimeError)):
+        monkeypatch.setattr(rw.subprocess, "run", lambda cmd, **kw: Namespace(returncode=code, stdout=out, stderr=""))
+        with pytest.raises(raised):
+            rw.spawn(cfg, str(tmp_path), "Call X", "brief")
+
+
+def test_unconfirmed_spawn_is_checked_never_respawned(cfg, tmp_path, monkeypatch):
+    src = FakeSource("fathom", [call(id="a", segments=[seg("Ana", 200, ANA), seg("Cleo", 200)])])
+    state = lambda: json.loads((tmp_path / "state" / "state.json").read_text())["calls"]   # noqa: E731
+    spawned = []
+
+    def pending(*a):
+        spawned.append(1)
+        raise rw.RelayPending("r1")
+    run(tmp_path, monkeypatch, cfg, [src], pending)
+    assert state()["fathom:a"]["status"] == rw.RELAY_PENDING
+    later = NOW + timedelta(minutes=30)
+    rw.poll(Namespace(dry_run=False, since=None, force_hours=False), cfg=cfg, sources=[src], spawner=pending,
+            now=later, checker=lambda rid: "pending")
+    assert spawned == [1] and state()["fathom:a"]["status"] == rw.RELAY_PENDING
+    rw.poll(Namespace(dry_run=False, since=None, force_hours=False), cfg=cfg, sources=[src],
+            spawner=lambda *a: spawned.append(2) or "r2", now=later, checker=lambda rid: "failed")
+    assert spawned == [1, 2] and state()["fathom:a"]["status"] == "spawned"
 
 
 def test_monologue_source_shapes(cfg, monkeypatch):
