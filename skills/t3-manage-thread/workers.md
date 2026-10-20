@@ -41,6 +41,21 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
 - Unverified: recovery when parent or child is limited, stopped or restarted. Keep the task ids and
   check `task_status` if a wake seems overdue.
 
+### Provider unavailable or failed
+
+`orchestrator_capabilities` reports cached health; `t3-pick-instance` reports capacity.
+Neither proves execution. A Codex **status-probe timeout** does not prove expired auth:
+with an explicit `providerInstanceId`, `delegate_task` re-probes an unavailable instance
+once before refusing (verified T3 0.1.0). Keep the selected account; let that recheck run.
+If dispatch refuses for a transient timeout, retry once after 30 s with the same
+`clientRequestId`. An accepted task is different: inspect its `taskId`, never blindly resend.
+
+For a failed run, read the concrete provider error first: `ENOTFOUND` means DNS failed;
+“model at capacity” is model availability, not subscription quota; only an authentication
+error warrants investigating credentials. Recheck connectivity/status before reauth.
+Resume a failed standalone owner only when authorized and still failed/inactive; preserve
+its prompt and never duplicate a launch or restart active/completed work.
+
 ## 📤 `t3_thread_launch`
 
 ```text
