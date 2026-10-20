@@ -271,12 +271,24 @@ PROMPT
 # Jobs scheduled before DELEGATE existed read an older prompt at fire time (t3-schedule keeps it
 # in <project>/.agents/schedules/skills-refresh.prompt.md): rewrite it so the next run can delegate.
 migrate_job_prompt() {
-  local pointer="$HOME/.t3/userdata/scheduled/t3-schedule/skills-refresh.json" src file quiet=""
+  local pointer="$HOME/.t3/userdata/scheduled/t3-schedule/skills-refresh.json" src file quiet="" first second
+  local py=(python3); command -v python3 >/dev/null || py=(uv run -q --no-project python)
   [[ -f "$pointer" ]] || return 0
-  src="$(grep -oE '"source": *"[^"]+"' "$pointer" | sed -E 's/.*"([^"]+)"$/\1/')" || return 0
+  src="$("${py[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"])' "$pointer" 2>/dev/null)" || return 0
   file="${src%.json}.prompt.md"
-  [[ -f "$file" ]] && grep -q 'skills-refresh --job' "$file" && ! grep -q 'thread: DELEGATE' "$file" || return 0
-  grep -q -- '--job --quiet' "$file" && quiet=" --quiet"
+  [[ -f "$file" && "$(wc -l < "$file")" -le 2 ]] || return 0
+  # Only an unmodified generated prompt (any earlier version) is replaced; customised ones stay.
+  { IFS= read -r first; IFS= read -r second; } < "$file" || true
+  case "$first" in
+    'Run exactly one command: `skills-refresh --job --quiet`. Then end the turn with its complete output as your answer, nothing else.') quiet=" --quiet" ;;
+    'Run exactly one command: `skills-refresh --job`. Then end the turn with its complete output as your answer, nothing else.') ;;
+    *) return 0 ;;
+  esac
+  case "$second" in
+    *'thread: DELEGATE'*) return 0 ;;
+    "Its last line decides this thread's lifecycle:"*|'The command itself settles or surfaces this thread:'*) ;;
+    *) return 0 ;;
+  esac
   job_prompt "$quiet" > "$file" && echo updated
 }
 
