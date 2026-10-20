@@ -90,6 +90,9 @@ Installers refuse to replace commands from another checkout; use `--relink` to c
 Updates replace installed files; keep personal customizations outside them. After updating
 t3-schedule run `t3-schedule refresh`; with an enabled top-up daemon rerun `t3-usage-windows topup install`.
 Releases and breaking changes: [CHANGELOG.md](CHANGELOG.md).
+Maintainers: after tests and pushing `main`, publish with
+`skills/t3-manage-thread/scripts/release vX.Y.Z`; it requires an SSH signature
+accepted by the consumer's pinned verifier before pushing the tag.
 
 Dependabot opens weekly Python (including transitive pins) and GitHub Actions updates.
 WhatsApp's local Neonize source stays on its documented build/update path.

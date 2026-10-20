@@ -8,6 +8,16 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
 
 - **Managed** = real directories under `~/.agents/skills` that exist at the tag.
   Symlinks (source checkouts) are left alone.
+- **Signed releases only**: the installed updater pins PJ's SSH public key in
+  `ALLOWED_SIGNERS`. It fetches the exact tag ref, verifies its SSH signature,
+  signed name and commit target before checkout or installation. The version stamp
+  also records that verified commit; prompt re-sync reads released code by that SHA.
+  Unsigned, unknown-key, tampered or renamed tags fail closed and keep the job open.
+  Automatic downgrades fail too. `SKILLS_REFRESH_TAG` permits an explicit downgrade
+  only to v0.5.5 or later: earlier releases would remove verification. Neither it
+  nor `SKILLS_REFRESH_REPO` bypasses trust.
+- **Requirements**: Git ≥ 2.34 and OpenSSH with working `ssh-keygen -Y` signature
+  verification. macOS and Linux/WSL use the same verifier.
 - **All or nothing**: every shell script is syntax-checked before activation;
   any swap or `scripts/install` failure restores every skill from `last-good/`.
   `install --check` failures only warn.
@@ -32,3 +42,34 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   and recommends; prompt outside git → keep open. No marker → base = the template just before the
   prompt's first commit. Skipped on the template author's source checkout.
 - Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.
+
+## Trust and bootstrap
+
+First installation (including upgrading an older, non-verifying updater) is
+**trust on first use**. Prefer an independently checked setup-repo copy over
+letting the old updater fetch an unchecked release. Initial RSA fingerprint:
+`SHA256:yaTYKWwRX2oyKCXbDgfKKY4p6bQDlTmcBVbcye8W7bw`.
+`scripts/skills-refresh --verify-tag /path/to/repo vX.Y.Z` verifies without installing.
+There is no trust-key environment override; tests re-enroll disposable script copies.
+An invalid newest tag blocks updates rather than silently selecting another release.
+Investigate it, remove the unauthorized remote tag, then rerun; never disable verification.
+
+Rotation: a release signed by the old key installs a pin containing old + new keys.
+Confirm every consumer received it before signing with the new key; offline consumers
+that miss this bridge must explicitly re-enroll from a trusted local copy. Remove
+the old key in a later signed release. A missing pin never falls back to a fetched key.
+
+This protects against leaked GitHub tokens and unauthorized pushers. It cannot
+protect a compromised signing key or PJ's machine; those need out-of-band recovery.
+The current key also authenticates GitHub SSH; a dedicated release key with interactive
+approval would narrow that risk. GitHub's Verified badge is independent of local trust.
+
+## Maintainer release
+
+After tests, CHANGELOG, commit and push: run `scripts/release vX.Y.Z` from this skill.
+It explicitly SSH-signs, uses the consumer verifier, requires the tag's commit to
+equal pushed `origin/main`, and only then pushes the tag. Never publish using a bare
+`git tag`/`git push --tags` sequence.
+
+References: [Git SSH trust configuration](https://git-scm.com/docs/git-config#Documentation/git-config.txt-gpgsshallowedSignersFile),
+[GitHub SSH signing keys](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).

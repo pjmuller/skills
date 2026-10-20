@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Maintainer entrypoint: create and verify a signed release tag, then push only that tag.
+set -euo pipefail
+dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
+repo="$(git -C "$dir" rev-parse --show-toplevel)"
+tag="${1:-}"
+[[ $# == 1 && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  { echo "Usage: scripts/release vX.Y.Z" >&2; exit 2; }
+[[ -z "$(git -C "$repo" status --porcelain)" ]] ||
+  { echo "Commit changes before releasing" >&2; exit 1; }
+git -C "$repo" fetch -q origin main
+[[ "$(git -C "$repo" rev-parse HEAD)" == "$(git -C "$repo" rev-parse origin/main)" ]] ||
+  { echo "Release HEAD must equal pushed origin/main" >&2; exit 1; }
+if ! git -C "$repo" rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+  git -C "$repo" -c gpg.format=ssh tag -s -m "$tag" "$tag"
+fi
+commit="$("$dir/skills-refresh" --verify-tag "$repo" "$tag")" || {
+  echo "Nothing published. Inspect signing configuration and the local $tag; remove an invalid unpushed tag before retrying." >&2
+  exit 1
+}
+[[ "$commit" == "$(git -C "$repo" rev-parse HEAD)" ]] ||
+  { echo "Existing tag does not point at HEAD" >&2; exit 1; }
+git -C "$repo" push origin "refs/tags/$tag:refs/tags/$tag"
