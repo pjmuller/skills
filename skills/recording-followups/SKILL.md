@@ -67,7 +67,10 @@ thread. Never let this step cost more than the prompts themselves.
 
 Default a thread to the thinker model at medium effort. Plain execute tasks with a clear spec
 (add a link, a page, a lookup) go to a coding model (Opus/Sol). Investigations stay on the
-thinker. Spawn only when the user says so (a valid [spoken cue](spoken-cues.md) counts); until then the files are the deliverable.
+thinker. Apply the operator’s wrapper dispatch policy and [spoken cues](spoken-cues.md).
+An explicit prepare-only / do-not-execute instruction holds that action. Otherwise a wrapper may
+authorize immediate standalone launch of clear, grounded actions; absent that policy or a direct
+execution request, the files are the deliverable. Always deduplicate existing work before launch.
 A selected prompt always becomes a **standalone** thread in the owning repo (`t3_thread_launch`), never a
 `delegate_task` child of this intake thread: each call topic is followed on its own and runs its own
 children. Research before proposing may use `delegate_task` children ([which one](../t3-manage-thread/workers.md#which-one)).
