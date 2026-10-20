@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.5.4 (2026-10-20)
+
 - **skills-refresh: global prompt re-sync.** After each run the job compares the template marker in your global prompt (`<!-- template: pjmuller/skills@… -->`) with the installed tag. Changed template → a frontier `delegate_task` child merges three-way (base, released template, your file): commits clear improvements, your facts/rules/deletions win, logs skips in `template-decisions.md`, asks about the rest, bumps the marker. Uncommitted prompt edits → it only recommends; no marker → base inferred from the prompt's first commit. Marker at the tag → no network, thread settles as before. Existing jobs need nothing: the first run rewrites an older `.agents/schedules/skills-refresh.prompt.md` (keeps the thread open once: commit that file), delegation starts the next run ([skills-refresh.md](skills/t3-manage-thread/skills-refresh.md)).
 - t3-manage-thread: provider aliases select Astra (OpenAI/Codex) or Opus (Claude); relay defaults to Opus then Astra. Instance-only launches infer the provider default and capacity-route within the named account; explicit models/efforts survive. Document native T3 inheritance separately. Fresh delegates for independent opinions; distinct outcomes keep separate threads.
 
@@ -11,6 +13,12 @@
 - **t3-manage-thread / agents-md: one ownership rule.** Native `delegate_task` child = ping-pong inside one task (planning opinion, scoped research, opposite-model review; cross-provider included). Standalone `t3_thread_launch` = independent topic, another repo's work, explicit standalone ask, or a selected recording follow-up (recording-followups: never a child of the intake thread). Every review round is a new `delegate_task` with full context; `childThreadId` only for short same-conversation clarifications. Global template + `global.md` carry the one-line rule.
 - **recording-followups: human-first prompt shape.** Prompts open with the moment in the call and the concrete case (bug: what came in → what we answered → why wrong; request/research/mail: who asked what), then the broader question and 2–4 next steps; repo, skills, Class/Lifecycle, evidence ids and verify/ship move below a `---` agent block. The old "repo + skills first" order made the user open the ticket to recall the item. Two neutral examples in `prompt-shape.md`; overview gets one current status line.
 - t3-schedule: drop the `--settle-when-done` + 🏓-title guard (launched threads are never 🏓 children). dispatch-workers: dispatched items are 📤.
+- t3-limits: a Claude profile with only a setup-token reads usage from one tiny Haiku CLI turn (only while a session window is open); a Fable turn checks the Fable weekly cap every 2 h. codexbar-setup: `codexbar-claude-usage`, a read-only claude-swap stand-in fed by t3-limits. t3-usage-windows warm-ups pass `--allow-small-model`.
+- t3-mail-link: re-`add` keeps the seen baseline; `add` verifies the account; failed T3 pings notify.
+- data-enrichment: `geocode.py` forward geocoding, Mapbox (temporary results) or Geopunt (storable, Flanders/Brussels).
+- whatsapp-bridge: `wa voice --transcribe --hint` downloads and transcribes voice notes (via transcribe-gemini, which now sends audio as audio).
+- recording-watcher: a speaker without a vendor email carries `name:<display name>`, so the roster can claim it. recording-followups: clearer execution cues.
+- t3-manage-thread: thread links keep the threadId verbatim; scoped recovery for stale provider health. google-workspace-core: API enablement vs token renewal in troubleshooting.
 
 ## v0.5.3 (2026-10-19)
 
