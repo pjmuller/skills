@@ -1,12 +1,16 @@
 """Top-up decisions and launchd project fallback."""
+import sys
 from datetime import datetime
 from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-mod = SourceFileLoader(
-    "t3_usage_windows_topup", str(Path(__file__).with_name("topup.py"))
-).load_module()
+loader = SourceFileLoader("t3_usage_windows_topup", str(Path(__file__).with_name("topup.py")))
+spec = spec_from_loader(loader.name, loader)
+mod = module_from_spec(spec)
+sys.modules[loader.name] = mod
+loader.exec_module(mod)
 
 TZ = ZoneInfo("Europe/Brussels")
 
