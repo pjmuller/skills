@@ -1,21 +1,21 @@
 # Close the quarter: status mail to the accountant
 
-After the uploads, PJ sends Jona Vandebosch (PKF Bofidi, Jona.Vandebosch@pkfbofidi.com) one short status mail
-for all companies. Draft with the google-workspace-personal CLI (`gmail-draft` / `gmail-draft-update`, never
-send); PJ reviews in Gmail. PJ may edit the draft himself: read it back (`gmail-draft-get`) before every update.
+After the uploads, the owner sends the accountant one short status mail (one for all companies they run).
+Recipient, subject, company order and examples are owner-specific: the wrapper's `SKILL.md` links them
+(keep names and amounts out of this public core). Draft only, never send; the owner may edit the draft,
+so read it back before every update.
 
-## Format (PJ's rules, 2026-10-13)
-- Subject `BTW Q<n> - <year>: KampAdmin - Momentum Tools - ProBackup`. Dutch, informal: "Dag Jona," … signature once. No sign-off line ("Toy toy toy :)" fit one mail where Jona still had work ahead; never a fixed closer).
-- One section per company: header **bold + underlined** (`<b><u>Pro Backup</u></b>`), so pass `--html-file` with the
-  HTML alternative next to the plain `--body-file` (plain text cannot underline). Order: Pro Backup, Momentum Tools, KampAdmin.
-- Anomalies only, as `-` bullets, one row per bullet: `DD-MM € -bedrag Leverancier: waarom + what Jona should do`
-  ("up to you, mag als privé kost / RC zaakvoerder", "komt via Peppol", "verkeerde rekening, transfer gedaan").
-  Group identical cases in one bullet ("16-07 € -71,56 Gabriels en 28-08 € -22,50 Excelsior: bonnetjes kwijt").
-- Not in the mail: what was uploaded (also last-minute scans), how an invoice looks (private account, missing
-  company name): Jona reacts if something is insufficient. "Alles geüpload, op deze na:" is the whole status.
-- Other recurring topics when relevant: Stripe revenue caveats (refunds, voids, open customer balances), scans
-  paid privately that must flow back via RC zaakvoerder, a company's list still being finished by a colleague
-  ("Tobias laadt de laatste facturen vandaag op").
-- Before drafting: `Y outstanding --quarter <q>` per company for the real open list (PB/KA also have the sheet;
-  Momentum has no sheet, its list is short). Rows DONE in the sheet but still listed by Yuki are fine (async).
-- Examples in Gmail: "BTW Q2 - 2026: …" (2026-07-13), "BTW Q3 - 2026: …" (2026-10-13), thread "Accounting Q1" (2026-04).
+## Format
+- Anomalies only. "Alles geüpload, op deze na:" is the whole status; one section per company.
+- One `-` bullet per payment: `DD-MM € -amount Vendor: why + what the accountant should do`
+  ("up to you, private cost", "comes via Peppol", "wrong account, transfer done"). Group identical cases.
+- Leave out what was uploaded and how an invoice looks: the accountant reacts if something is insufficient.
+- No fixed greeting/closing formula beyond the owner's signature; copy tone, not phrases, from earlier mails.
+
+## Before drafting (same day)
+- `Y sheet-push --quarter <q> --dry-run`, then push: Yuki books bank/card lines late (a payment dated in the
+  quarter can appear a week after the first push; card statements uploaded by hand add a batch). The first
+  push is a snapshot, not the final list.
+- `Y outstanding --quarter <q>` per company is the real open list. Rows DONE in the sheet but still listed by
+  Yuki are fine (async). Rows a `Likely resp` rule labels as "no invoice needed" still need one when Yuki
+  lists them: check those before the mail.
