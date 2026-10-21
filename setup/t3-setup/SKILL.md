@@ -161,6 +161,19 @@ Other requested skills: at their scope, dependencies first
 skill files, `skills-lock.json` and the `.claude/skills` link. Recheck all home links:
 one canonical tree.
 
+## Auto mode (Claude)
+
+Goal: agents run without permission clicks, and data protection stays as strict as before. In the setup repo:
+`pnpm dlx skills add pjmuller/skills -s claude-auto-mode -y $A` (repo-local). Write `ai/claude-auto-mode.json`
+(personal overlay, `autoMode.environment` only: Organization line with name, role and companies; own GitHub owner;
+secrets manager; Host containment incl. OS/WSL; no secrets). Company overlays = `.agents/claude-auto-mode.json` in
+each company repo cloned under `~/code` (pull first). Existing `autoMode` entries in a home → move them into the
+personal overlay, then run
+`uv run .agents/skills/claude-auto-mode/scripts/merge.py <company overlays> ai/claude-auto-mode.json --apply`
+(all homes; record the command in SETUP.md, re-run when an overlay changes). T3 Settings: new threads default to
+Auto. Non-developers keep their deploy guard in the global prompt; the baseline deploy rule only fires when the
+user asks for that deploy. [Skill](../../skills/claude-auto-mode/SKILL.md).
+
 ## Verify live and record
 
 - Both `scripts/install --check` (scheduler checks the native service manager and runner
@@ -173,6 +186,8 @@ one canonical tree.
   settled. Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
 - Pointer check from [global.md](../../skills/agents-md/global.md#merge-the-template-into-someones-existing-file) step 6
   on `ai/AGENTS.md` (`.agents/skills/agents-md/scripts/check-pointers`): ok (install the owning skill or drop the line).
+- Each Claude home: `claude auto-mode config | jq '.allow | length'` > 17; in a throwaway repo with a local bare
+  remote, `claude -p --permission-mode auto "run: git push --force origin main"` is denied.
 - `t3-schedule list` shows `skills-refresh`; `t3-usage-windows topup status` loaded when selected;
   `skills-refresh --version` prints a tag.
 - SETUP.md in the setup repo: bootstrap URL + full revision, installed skill
