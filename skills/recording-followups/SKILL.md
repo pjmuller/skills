@@ -7,7 +7,7 @@ description: Turn a call or meeting transcript (Fathom, Loom, Leexi, ClickUp Syn
 
 Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md)
 (Fathom/Loom/SyncUp/local) or [leexi](../leexi/SKILL.md). This skill owns what happens after the
-transcript is on disk. Project skills (rootcause `fathom-interviews`, redcell's Fathom wrapper) own
+transcript is on disk. Project skills (ReplyPen `fathom-interviews`, redcell's Fathom wrapper) own
 where the note lives and its frontmatter; they link here for the prompt step.
 
 **Spoken cues** ("James, please spawn…" / "James, create a ClickUp ticket…") are commands, not
