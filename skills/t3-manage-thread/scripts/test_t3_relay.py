@@ -1,4 +1,4 @@
-"""t3-relay: argument guard, footer source, and the exact MCP instruction it posts (no live T3)."""
+"""t3-relay: argument guard, footer source, the exact MCP call it makes, outcome records (no live T3)."""
 import json
 import sqlite3
 import subprocess
@@ -23,177 +23,172 @@ def test_footer_comes_from_settle_thread_md():
     assert footer.startswith("---\nConditional self-settlement") and '"action":"settle"' in footer
 
 
+class FakeMcp:
+    def __init__(self, result=None, exc=None):
+        self.calls, self.result, self.exc = [], result, exc
+
+    def call(self, tool, args):
+        self.calls.append((tool, args))
+        if tool == "t3_project_list":
+            return {"projects": [{"id": "proj-1", "workspaceRoot": "/r"}]}
+        if self.exc:
+            raise self.exc
+        return self.result or {"threadId": "mcp:new"}
+
+
 @pytest.fixture
 def posted(monkeypatch, tmp_path):
-    sent = {}
+    fake = FakeMcp()
     monkeypatch.setattr(relay, "REQUESTS", tmp_path)
-    monkeypatch.setattr(relay, "store", lambda: None)
-    monkeypatch.setattr(relay, "pick_host", lambda con, via=None: relay.Host("task", "tok", "mcp:host", "i", "m"))
     monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
-    monkeypatch.setattr(relay, "project_id", lambda con, path: "proj-1")
+    monkeypatch.setattr(relay, "connect", lambda base: fake)
+    monkeypatch.setattr(relay, "project_id", lambda mcp, path: "proj-1")
     monkeypatch.setattr(relay, "pick", lambda models, instance=None: ("codex_a", "gpt-6.1-sol", "high"))
-    monkeypatch.setattr(relay, "post", lambda base, tid, tok, body: sent.update(body) or "d1")
 
     def run(*argv):
         monkeypatch.setattr(sys, "argv", ["t3-relay", *argv])
-        relay.main()
-        head, payload = sent["instruction"].split("\n", 1)
-        sent["record"] = json.loads((tmp_path / f"{sent['id']}.json").read_text())
-        return head, json.loads(payload)
-    run.sent = sent
+        try:
+            relay.main()
+        except SystemExit as exc:
+            run.code = exc.code
+        tool, args = fake.calls[-1]
+        run.record = json.loads(next(tmp_path.glob("*.json")).read_text())
+        return tool, args
+    run.fake, run.code = fake, None
     return run
 
 
-def test_launch_instruction(posted):
-    head, args = posted("launch", "--project", "/r", "--title", "⏰ T", "--model", "sol", "--settle-when-done", "--", "Read", "x.md")
-    assert head == "Call t3_thread_launch once with exactly these arguments:"
+def test_launch_args(posted, capsys):
+    tool, args = posted("launch", "--project", "/r", "--title", "⏰ T", "--model", "sol", "--settle-when-done", "--", "Read", "x.md")
+    assert tool == "t3_thread_launch"
     assert args["projectId"] == "proj-1" and args["title"] == "⏰ T"
+    assert args["workspaceStrategy"] == {"type": "root"} and args["runtimeMode"] == "full-access"
     assert args["modelSelection"] == {"instanceId": "codex_a", "model": "gpt-6.1-sol",
                                       "options": [{"id": "reasoningEffort", "value": "high"}]}
     assert args["message"].startswith("Read x.md\n\n---\nConditional self-settlement")
+    rid = posted.record["rid"]
+    assert capsys.readouterr().out == f"accepted: relay {rid} via mcp (mcp:new)\n"   # callers parse this line
+    assert posted.record["outcome"] == "ok" and posted.record["detail"] == "mcp:new"
+    assert relay.wait_for(rid, 0) == 0
 
 
-def test_send_instruction_is_idempotent_per_request(posted):
-    head, args = posted("send", "--thread", "mcp:abc", "--", 'quote " and {{body.x}}')
-    assert head == "Call t3_thread_send once with exactly these arguments:"
+def test_send_is_idempotent_per_request(posted):
+    tool, args = posted("send", "--thread", "mcp:abc", "--", 'quote " and {{body.x}}')
+    assert tool == "t3_thread_send"
     assert args["threadId"] == "mcp:abc" and args["message"] == 'quote " and {{body.x}}'
-    assert args["clientRequestId"].startswith("relay-") and args["mode"] == "auto"
+    assert args["clientRequestId"] == f"relay-{posted.record['rid']}" and args["mode"] == "auto"
+
+
+def test_lost_answer_is_accepted_but_unconfirmed(posted, capsys):
+    posted.fake.exc = relay.Unknown("t3_thread_launch: TimeoutError")
+    posted("launch", "--project", "/r", "--title", "⏰ T", "--model", "sol", "--", "go")
+    assert posted.code is None and "outcome" not in posted.record          # async: exit 0, status decides
+    assert capsys.readouterr().out.startswith("accepted: relay ")
+
+
+def test_refusal_exits_1_without_accepted_line(posted, monkeypatch, capsys):
+    def refuse(tool, args):
+        relay.die("t3_thread_launch refused: runtime_mode_escalation_denied")
+    monkeypatch.setattr(posted.fake, "call", refuse)
+    monkeypatch.setattr(sys, "argv", ["t3-relay", "launch", "--project", "/r", "--title", "x", "--model", "sol", "--", "go"])
+    with pytest.raises(SystemExit) as exc:
+        relay.main()
+    assert exc.value.code == 1 and "accepted" not in capsys.readouterr().out
 
 
 def db():
     con = sqlite3.connect(":memory:")
     con.executescript("""
-      create table scheduled_tasks (task_id, title, enabled, schedule_json, webhook_token, thread_id,
-                                    model_selection_json, created_at);
       create table orchestration_v2_projection_threads (thread_id, project_id, title, created_at, deleted_at);
-      create table orchestration_v2_projection_runs (run_id, thread_id, ordinal, status, requested_at, completed_at);
       create table orchestration_v2_projection_messages (message_id, thread_id, run_id, role, created_at, payload_json);
-      create table scheduled_task_webhook_deliveries (delivery_id, outcome, error);
     """)
     return con
 
 
-def add_host(con, task, thread, instance="claudeAgent_x", created="1"):
-    con.execute("insert into scheduled_tasks values (?, ?, 1, '{\"type\":\"webhook\"}', 'tok', ?, ?, ?)",
-                (task, relay.RELAY_TITLE, thread, json.dumps({"instanceId": instance, "model": "claude-haiku-5-5"}), created))
-    if thread:
-        con.execute("insert into orchestration_v2_projection_threads values (?, 'p', 'host', '0', null)", (thread,))
+AT = relay.datetime(2026, 10, 19, 12, 1, tzinfo=relay.timezone.utc)
+LATE = relay.datetime(2026, 10, 19, 12, 30, tzinfo=relay.timezone.utc)
 
 
-AT = relay.datetime(2026, 10, 19, 12, 0, tzinfo=relay.timezone.utc)
+def lost(kind="launch"):
+    return {"rid": "r1", "kind": kind, "posted_at": "2026-10-19T12:00:00.000Z", "detail": "TimeoutError",
+            "project_id": "p", "title": "⏰ job", "thread": "mcp:target"}
 
 
-@pytest.mark.parametrize("run, problem", [
-    (None, None),
-    (("completed", "2026-10-19T11:00:00.000Z", "2026-10-19T11:00:10.000Z"), None),
-    (("running", "2026-10-19T11:58:00.000Z", None), None),                       # a normal in-flight turn
-    (("waiting", "2026-10-19T11:30:00.000Z", None), "busy since"),               # limited / hung
-    (("failed", "2026-10-19T11:00:00.000Z", "2026-10-19T11:30:00.000Z"), "failed at"),
-    (("failed", "2026-10-19T09:00:00.000Z", "2026-10-19T09:00:05.000Z"), None),  # cooled down
-])
-def test_host_health(run, problem):
-    con = db()
-    add_host(con, "t", "mcp:host")
-    if run:
-        con.execute("insert into orchestration_v2_projection_runs values ('r', 'mcp:host', 1, ?, ?, ?)", run)
-    (h,) = relay.hosts(con, AT)
-    assert (h.problem is None) if problem is None else (problem in h.problem)
-
-
-def test_unbound_and_deleted_hosts():
-    con = db()
-    add_host(con, "unbound", None, created="1")
-    add_host(con, "gone", "mcp:gone", created="2")
-    con.execute("update orchestration_v2_projection_threads set deleted_at = 'x'")
-    unbound, gone = relay.hosts(con, AT)
-    assert "not bound" in unbound.warning and unbound.problem is None and "deleted" in gone.problem
-
-
-def test_pick_host_fails_over_on_capacity(monkeypatch):
-    con = db()
-    add_host(con, "claude", "mcp:a", "claudeAgent_x", "1")
-    add_host(con, "codex", "mcp:b", "codex_y", "2")
-    monkeypatch.setattr(relay, "capacity_problem", lambda h: "session exhausted" if h.instance == "claudeAgent_x" else None)
-    assert relay.pick_host(con).task_id == "codex"
-    assert relay.pick_host(con, via="codex_y").task_id == "codex"
-    monkeypatch.setattr(relay, "capacity_problem", lambda h: "exhausted")
-    with pytest.raises(SystemExit):
-        relay.pick_host(con)
-
-
-def request(con, kind="launch", rid="r1"):
-    rec = {"rid": rid, "kind": kind, "host": "mcp:host", "posted_at": "2026-10-19T12:00:00.000Z", "delivery": "d1",
-           "project_id": "p", "title": "⏰ job", "thread": "mcp:target"}
-    return lambda: relay.request_status(con, rec)
-
-
-def host_turn(con, status, reply=None, rid="r1"):
-    con.execute("insert into orchestration_v2_projection_runs values ('run', 'mcp:host', 2, ?, '2026-10-19T12:00:01.000Z', null)", (status,))
-    con.execute("insert into orchestration_v2_projection_messages values ('m', 'mcp:host', 'run', 'user', '2026-10-19T12:00:01.000Z', ?)",
-                (json.dumps({"text": f"T3 relay request {rid}, sent by a local script"}),))
-    if reply:
-        con.execute("insert into orchestration_v2_projection_messages values ('a', 'mcp:host', 'run', 'assistant', '2026-10-19T12:00:05.000Z', ?)",
-                    (json.dumps({"text": reply}),))
-
-
-def test_status_launch_pending_ok_by_effect_not_reply():
-    con = db()
-    status = request(con)
-    assert status()[0] == "pending"                                       # not yet delivered
-    host_turn(con, "running")
-    assert status() == ("pending", "host turn running")
-    con.execute("update orchestration_v2_projection_runs set status = 'completed'")
-    con.execute("insert into orchestration_v2_projection_threads values ('mcp:new', 'p', '⏰ job', '2026-10-19T12:00:04.000Z', null)")
-    assert status() == ("ok", "mcp:new")                                  # whatever the host replied
-
-
-def test_status_ignores_older_thread_with_same_title():
+def test_lost_launch_resolves_by_effect_then_gives_up():
     con = db()
     con.execute("insert into orchestration_v2_projection_threads values ('mcp:old', 'p', '⏰ job', '2026-10-19T11:00:00.000Z', null)")
-    host_turn(con, "completed", "relay r1: FAILED boom")
-    state, detail = request(con)()
-    assert state == "failed" and "FAILED boom" in detail
+    assert relay.request_status(con, lost(), AT)[0] == "pending"           # older same-title thread ignored
+    assert relay.request_status(con, lost(), LATE)[0] == "failed"
+    con.execute("insert into orchestration_v2_projection_threads values ('mcp:new', 'p', '⏰ job', '2026-10-19T12:00:01.000Z', null)")
+    assert relay.request_status(con, lost(), LATE) == ("ok", "mcp:new")
 
 
-def test_status_send_matches_client_request_id():
+def test_lost_send_matches_client_request_id():
     con = db()
-    status = request(con, "send")
     con.execute("insert into orchestration_v2_projection_messages values "
-                "('message:mcp:x:thread-send:relay-r1', 'mcp:target', 'rt', 'user', '2026-10-19T12:00:03.000Z', '{}')")
-    assert status() == ("ok", "mcp:target")
-
-
-def test_status_rejected_delivery_fails():
-    con = db()
-    con.execute("insert into scheduled_task_webhook_deliveries values ('d1', 'skipped', 'task paused')")
-    assert request(con)()[0] == "failed"
-
-
-def test_launch_records_request(posted):
-    posted("launch", "--project", "/r", "--title", "⏰ T", "--model", "sol", "--", "go")
-    rec = posted.sent["record"]
-    assert rec["kind"] == "launch" and rec["title"] == "⏰ T" and rec["project_id"] == "proj-1"
-    assert rec["host"] == "mcp:host" and rec["delivery"] == "d1" and rec["posted_at"].endswith("Z")
-
-
-def test_status_unbound_host_finds_turn_in_any_thread():
-    """Sol review P2: an unbound host runs each request in a fresh thread; record host is None."""
-    con = db()
-    con.execute("insert into orchestration_v2_projection_runs values ('run', 'mcp:fresh', 1, 'failed', '2026-10-19T12:00:01.000Z', null)")
-    con.execute("insert into orchestration_v2_projection_messages values ('m', 'mcp:fresh', 'run', 'user', '2026-10-19T12:00:01.000Z', ?)",
-                (json.dumps({"text": "T3 relay request r1, sent by a local script"}),))
-    rec = {"rid": "r1", "kind": "launch", "host": None, "posted_at": "2026-10-19T12:00:00.000Z", "delivery": "d1",
-           "project_id": "p", "title": "⏰ job"}
-    assert relay.request_status(con, rec)[0] == "failed"
+                "('message:mcp:client%3Ax:thread-send:relay-r1', 'mcp:target', 'rt', 'user', '2026-10-19T12:00:03.000Z', '{}')")
+    assert relay.request_status(con, lost("send"), AT) == ("ok", "mcp:target")
 
 
 def test_lookup_error_is_pending_not_failed(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(relay, "REQUESTS", tmp_path)
-    (tmp_path / "r1.json").write_text(json.dumps({"rid": "r1"}))
+    (tmp_path / "r1.json").write_text(json.dumps(lost()))
     def locked():
         raise sqlite3.OperationalError("database is locked")
     monkeypatch.setattr(relay, "store", locked)
     assert relay.wait_for("r1", 0) == 3 and capsys.readouterr().out.startswith("pending lookup error")
+
+
+def test_token_cached_until_close_to_expiry(monkeypatch, tmp_path):
+    monkeypatch.setattr(relay, "TOKEN_FILE", tmp_path / "t.secret")
+    minted = []
+    monkeypatch.setattr(relay, "approve", lambda base: minted.append(base) or {"token": "new"})
+    fresh = {"token": "old", "origin": "o", "expires_at": relay.stamp(relay.now() + relay.timedelta(days=20))}
+    (tmp_path / "t.secret").write_text(json.dumps(fresh))
+    assert relay.client_token("o")["token"] == "old" and not minted
+    assert relay.client_token("other")["token"] == "new"                      # another server origin
+    (tmp_path / "t.secret").write_text(json.dumps({**fresh, "expires_at": relay.stamp(relay.now() + relay.timedelta(days=1))}))
+    assert relay.client_token("o")["token"] == "new" and len(minted) == 2
+
+
+def test_truncated_answer_is_unknown_not_refused():
+    """Sol review: T3 may have acted before the reply broke off; exit 1 would invite a duplicate retry."""
+    mcp = relay.Mcp.__new__(relay.Mcp)
+    def broken(*a, **k):
+        raise relay.http.client.IncompleteRead(b"{")
+    mcp._rpc = broken
+    with pytest.raises(relay.Unknown):
+        mcp.call("t3_thread_launch", {})
+
+
+def test_concurrent_renewals_share_one_approval(monkeypatch, tmp_path):
+    import threading
+    monkeypatch.setattr(relay, "REQUESTS", tmp_path)
+    monkeypatch.setattr(relay, "TOKEN_FILE", tmp_path / "mcp-client.secret")
+    approvals = []
+    def approve(base):
+        approvals.append(base)
+        relay.time.sleep(0.2)
+        return relay.save_token({"token": f"t{len(approvals)}", "origin": base,
+                                 "expires_at": relay.stamp(relay.now() + relay.timedelta(days=30))})
+    monkeypatch.setattr(relay, "approve", approve)
+    got = []
+    workers = [threading.Thread(target=lambda: got.append(relay.client_token("o")["token"])) for _ in range(3)]
+    for w in workers: w.start()
+    for w in workers: w.join()
+    assert approvals == ["o"] and got == ["t1"] * 3
+    assert relay.client_token("o", reject="t1")["token"] == "t2"              # 401 → approve again
+
+
+def test_lost_answer_wait_stays_within_budget(posted, monkeypatch):
+    """Sol review: callers kill t3-relay just above --wait; the call time counts against it."""
+    posted.fake.exc = relay.Unknown("t3_thread_launch: TimeoutError")
+    clock = iter([100.0, 190.0])
+    monkeypatch.setattr(relay.time, "monotonic", lambda: next(clock))
+    budgets = []
+    monkeypatch.setattr(relay, "wait_for", lambda rid, secs: budgets.append(secs) or 3)
+    posted("launch", "--project", "/r", "--title", "x", "--model", "sol", "--wait", "120", "--", "go")
+    assert budgets == [30.0] and posted.code == 3
 
 
 @pytest.mark.parametrize("flags, expected", [

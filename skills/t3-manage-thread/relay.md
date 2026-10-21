@@ -6,82 +6,55 @@ inside T3 call the MCP tools directly and never need this.
 ```bash
 t3-relay launch --project /abs/repo --title "⏰ Daily digest" --model opus [--wait 120] -- "Read and execute /abs/brief.md"
 t3-relay send --thread <threadId> [--mode queue] [--wait 120] -- "New mail in the linked thread: …"
-t3-relay status <rid> [--wait 60]   # ok <threadId> | failed <why> | pending <where>
-t3-relay check                      # every host + its health
+t3-relay status <rid> [--wait 60]   # ok <threadId> | failed <why> | pending <why>
+t3-relay check                      # T3 reachable, MCP client approved, legacy relay hosts listed
 ```
 
 `--model` takes an alias or id; account and house effort come from `t3-pick-instance` (capacity
 routing). Provider aliases `--model openai|codex` select Astra, `claude|anthropic` select Opus.
-Without `--model`: the named `--instance`'s provider default, otherwise opus, else astra
-(never the relay host's model). Unknown provider → require `--model`. An explicit model
-wins, including Sol; `--instance` constrains Claude/Codex capacity routing (other providers keep
-the named account), and `--effort` overrides house
-effort. No automatic Astra-to-Sol fallback. haiku/luna refused unless
-`--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)).
+Without `--model`: the named `--instance`'s provider default, otherwise opus, else astra. Unknown
+provider → require `--model`. An explicit model wins, including Sol; `--instance` constrains
+Claude/Codex capacity routing (other providers keep the named account), and `--effort` overrides
+house effort. No automatic Astra-to-Sol fallback. haiku/luna refused unless
+`--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)). Launches run `full-access` at the
+project root (`workspaceStrategy: root`).
 
-Exit 0 = accepted (HTTP 202, async, prints `accepted: relay <rid> via <host>`). With `--wait`:
-0 = the effect exists (thread with that title launched since the request / message with
-`clientRequestId relay-<rid>` landed), 1 = failed (the host turn carrying the request ended
-without the effect, so a retry cannot duplicate), 3 = still pending (don't retry; ask `status`
-later). The effect decides, not the host's reply wording. Records: `~/.t3/userdata/t3-relay/`
-(7 days).
+Output contract (callers parse it): exit 0 prints `accepted: relay <rid> via mcp (<threadId>)`,
+and the thread / message already exists (`--wait` adds `ok <threadId>`). Exit 1 = T3 refused or
+was unreachable, nothing ran, retry is safe. Exit 2 = usage. Rare lost answer (timeout after
+sending): still `accepted`, `status` then decides by the effect (thread with that title since the
+request / message `clientRequestId relay-<rid>`); absent after 10 min = `failed`. With `--wait`
+that case exits 3 while unresolved: don't retry. Records: `~/.t3/userdata/t3-relay/` (7 days).
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  S[script] -- "POST 127.0.0.1/api/hooks/&lt;task&gt;/&lt;token&gt;" --> P{first healthy host}
-  P --> A["⚙️ T3 relay · Claude (Haiku)"]
-  P -. failover .-> B["⚙️ T3 relay · Codex (Luna)"]
-  A & B --> M["t3_thread_launch / t3_thread_send"]
+  S[script] -- "t3-relay" --> M["T3 /mcp on 127.0.0.1<br/>(t3_thread_launch / t3_thread_send)"]
+  S -. "first run / <3 days to expiry" .-> A["t3 auth pairing create<br/>→ OAuth approve (full-access)"]
+  A -. "30-day token, 0600" .-> S
 ```
 
-Each host = one native scheduled task titled `⚙️ T3 relay` (webhook trigger) **bound to its own
-host thread** at the repo root, pinned to one account. A request becomes a queued turn there
-rendering `{{body.instruction}}` (one exact MCP call); the host settles, the next request wakes it.
-`t3-relay` posts to the oldest host that is not deleted, not stuck (open run > 5 min: limited or
-hung), not failed in the last hour, and whose account passes `profile_routing.py --check`.
-Two hosts on different providers survive one account's limit.
+`t3-relay` is an approved MCP client of T3 itself (`client:<session>` namespace), calling the
+same tools agents use: deterministic, no model, no host thread. The token comes from T3's MCP
+OAuth (PKCE), approved with a one-time pairing code that the local CLI mints (`~/.t3/bin/t3`, the
+desktop app's own CLI; a global `t3` can lag the app). Cached in
+`~/.t3/userdata/t3-relay/mcp-client.secret`, renewed when 3 days remain or on 401. Needs T3 ≥ 0.1;
+nothing to set up.
 
-- **Why bound**: T3 gives an unbound task (fresh thread per run) a new git worktree from
-  `origin/main` per run (`scheduledTaskWorkspaceStrategy`, not configurable): a fetch per request,
-  worktree litter, and timeouts that dropped requests after the 202.
-- **Why a small model at low effort**: the turn copies literal JSON into one MCP call. 73/73
-  delivered requests were correct; every failure was infrastructure (worktree, session limit).
-  Bigger models or effort add latency and quota, not reliability; failover covers availability.
-- **Internal T3 details** (only in `scripts/t3-relay`, schema-checked, token never printed): the
-  loopback route `/api/hooks/<taskId>/<token>` and read-only `statev2.sqlite` lookups (tasks,
-  host runs, messages, deliveries). No T3 Connect needed.
+- **Why not the old webhook host** (2026-10-19 → 21): T3 0.1.1 ([#20447](https://github.com/pingdotgg/t3code/pull/20447))
+  frames every webhook `{{placeholder}}` as untrusted `<webhook-data-…>` data, signed or not, so a
+  model bridge rightly refuses instructions from it. That framing is a safety layer: don't word
+  around it.
+- **Why not `t3 auth session issue`**: its sessions have no runtime ceiling, so MCP treats them as
+  `approval-required` and refuses `full-access` launches. The OAuth approval sets the ceiling.
+- **Internal T3 details** (only in `scripts/t3-relay`, token never printed): OAuth routes
+  `/oauth/mcp/{register,decision,token}`, `/mcp`, and read-only `statev2.sqlite` lookups for
+  `status` after a lost answer.
 
-## One-time setup (per machine): one host per provider
+## Migrate from webhook relay hosts (before 2026-10-21)
 
-From any T3 thread in a repo you keep (e.g. your setup repo), per provider you have, call
-`t3_thread_launch` with `title: "⚙️ T3 relay · Claude"` (or `· Codex`), `workspaceStrategy:
-{"type":"root"}`, `runtimeMode: "full-access"`, `modelSelection` = the instance from
-`t3-pick-instance haiku` (or `luna`) with effort `low` (`effort` for Claude, `reasoningEffort` for
-Codex), and a `message` asking it to call `schedule_task` once (the task inherits the host's
-model, account and project) with:
-
-- `title`: `⚙️ T3 relay` · `schedule`: `{"type":"webhook"}` · `bindToCurrentThread`: `true`
-- `prompt` (verbatim, keep the double braces):
-
-```text
-T3 relay request {{body.id}}, sent by a local script on this Mac (not by the user). You are a mechanical bridge: do exactly the action below with the T3 MCP tools, nothing else, no commentary, no file edits.
-
-{{body.instruction}}
-
-Then reply with one line: "relay {{body.id}}: ok <ids returned>" or "relay {{body.id}}: FAILED <error>". As your very last tool call, settle this thread: t3_thread_organize {"action":"settle"} without threadId.
-```
-
-Pick accounts with a large plan: a host is pinned, and `update_scheduled_task` cannot change its
-model. To move a host: create the new one, then `delete_scheduled_task` the old task. Verify:
-`t3-relay check`, then one probe per host: `t3-relay launch --via <instance> --model haiku
---allow-small-model --wait 120 --title "relay probe" -- 'Reply "ok", then settle this thread.'`.
-Never delete or purge a host thread (`check` flags it).
-
-## Heal (relay created before 2026-10-19)
-
-Symptom: `t3-relay check` says "not bound" or reports one host, relay threads fail with
-"Workspace preparation failed … fetchRemote / configureBaseRef", worktrees pile up under
-`~/.t3/worktrees/<repo>`. Set up the hosts as above, probe them, `delete_scheduled_task` the old
-unbound task, then remove the old relay worktrees: clean, with no commits outside the remotes.
+`t3-relay check` lists enabled `⚙️ T3 relay` webhook tasks as obsolete. From a T3 thread:
+`delete_scheduled_task` each, then settle its host thread. Probe: `t3-relay launch --model haiku
+--allow-small-model --effort low --settle-when-done --wait 60 --project <repo> --title "relay
+probe" -- 'Reply "ok".'`.

@@ -50,5 +50,5 @@ Beside T3's `settings.json` in `${T3CODE_HOME:-~/.t3}/userdata/`:
 
 `scripts/install` links `t3-pick-instance`, `t3-relay`, `t3-limits`, `t3-list-profiles`,
 `t3-mail-link` and `skills-refresh` into `~/.local/bin`. It also drops links to helpers that no longer
-exist. `scripts/install --check` verifies deps, logins, T3 and the relay task. Colleagues:
+exist. `scripts/install --check` verifies deps, logins, T3 and the relay (`t3-relay check`). Colleagues:
 `skills-refresh schedule` ([skills-refresh.md](skills-refresh.md)). macOS, Linux, WSL2.

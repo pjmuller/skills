@@ -12,7 +12,7 @@ if [[ "${1:-}" == "--check" ]]; then
     command -v "$helper" >/dev/null || { echo "missing $helper; run: $remedy" >&2; exit 1; }
     echo "ok      $helper ($(command -v "$helper"))"
   done
-  t3-relay check || { echo "t3-relay not ready: see t3-manage-thread relay.md (one-time setup)" >&2; exit 1; }
+  t3-relay check || { echo "t3-relay not ready: see t3-manage-thread relay.md" >&2; exit 1; }
   "$script_dir/t3-schedule" check
   # Scheduled runners get SCHEDULE_PATH, not your interactive PATH: check the tools there.
   schedule_path="$("$script_dir/t3-schedule" runner-path)"

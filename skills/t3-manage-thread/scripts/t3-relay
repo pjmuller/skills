@@ -8,38 +8,42 @@
 Agents inside T3 never need this: they call the T3 MCP tools directly.
 
     t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
-                    [--allow-small-model] [--settle-when-done] [--wait SECS] [--via INSTANCE] -- PROMPT
+                    [--allow-small-model] [--settle-when-done] [--wait SECS] -- PROMPT
     t3-relay send   --thread ID [--mode auto|queue|steer] [--wait SECS] -- MESSAGE
     t3-relay status RID   # ok <ids> | failed <why> | pending
-    t3-relay check        # relay hosts healthy, server reachable
+    t3-relay check        # T3 reachable, MCP client approved
 
-How: POSTs {id, instruction} to the local webhook of a native scheduled task titled
-RELAY_TITLE, bound to a host thread: each request is a queued turn there that performs exactly
-that MCP call (t3_thread_launch / t3_thread_send). Several hosts (e.g. Claude Haiku + Codex
-Luna) = failover: a request goes to the first host that is not stuck, not recently failed and
-whose account has capacity. Set up once from any T3 thread (relay.md). The internal contract
-lives only here: the local route /api/hooks/<taskId>/<token> and read-only lookups in
-statev2.sqlite (token, host, request outcome).
-Exit: 0 accepted (202; async) or, with --wait, confirmed; 1 T3/relay problem or failed;
-2 usage; 3 still pending after --wait.
+How: calls T3's own MCP endpoint (loopback /mcp, the tools agents use) as an approved MCP
+client "t3-relay" with full-access ceiling. The client token comes from T3's OAuth flow, approved
+with a one-time pairing code from the local `t3 auth pairing create` (no human step), cached 0600
+and renewed before its 30-day expiry. No relay host thread, no webhook, no model in the path.
+Read-only statev2.sqlite lookups remain only for `status` after a lost response.
+Exit: 0 done (prints `accepted: relay <rid>`; without --wait also when T3's answer was lost: ask
+`status`); 1 failed (T3 refused or unreachable, nothing ran); 2 usage; 3 still unknown after --wait.
 """
 import argparse
+import base64
+import fcntl
+import http.client
+import hashlib
 import json
 import os
+import secrets
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-RELAY_TITLE = "⚙️ T3 relay"
-# A standalone thread orchestrates, so it runs on a frontier model. Without --model it would
-# inherit the relay thread's model (Haiku), not the project default. Small models stay
+LEGACY_HOST_TITLE = "⚙️ T3 relay"   # webhook host tasks from before 2026-10-21: `check` flags them
+# A standalone thread orchestrates, so it runs on a frontier model. Small models stay
 # sub-agents/workers unless the caller passes --allow-small-model (orchestration already done).
 DEFAULT_MODELS = ("opus", "astra")    # first one t3-pick-instance can route wins
 SMALL_MODELS = ("haiku", "luna")    # substrings of the resolved model id
@@ -48,10 +52,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 from profile_registry import registry, family
 REQUESTS = HOME / "t3-relay"        # one record per request, for `status`
+TOKEN_FILE = REQUESTS / "mcp-client.secret"   # not *.json: request cleanup must not eat it
 KEEP_DAYS = 7
-STUCK = timedelta(minutes=5)        # a relay turn takes ~10 s; an older open run = limited/hung host
-COOLDOWN = timedelta(minutes=60)    # a host whose last run failed sits out this long
-OPEN = ("queued", "preparing", "starting", "running", "waiting")
+RENEW = timedelta(days=3)           # re-approve when the 30-day client token is this close to expiry
+CALL_TIMEOUT = 60                   # launch/send answer in ~1 s; callers kill t3-relay at 180 s
+GIVE_UP = timedelta(minutes=10)     # a lost response whose effect is still absent by now never ran
+CLIENT = "t3-relay"
+REDIRECT = "http://127.0.0.1/t3-relay/callback"   # never opened: the code comes back in the JSON reply
+# full-access ceiling (scheduled jobs run unattended); the pairing code must hold every scope it grants
+SCOPES = ("orchestration:read", "orchestration:operate", "settings:write", "source-control:write")
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -71,82 +80,8 @@ def store() -> sqlite3.Connection:
     db = HOME / "statev2.sqlite"
     if not db.exists():
         die(f"{db} not found: T3 Code >= 0.1 must have run on this machine")
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
-    cols = {r[1] for r in con.execute("pragma table_info(scheduled_tasks)")}
-    if not {"task_id", "title", "enabled", "schedule_json", "webhook_token", "thread_id",
-            "model_selection_json"} <= cols:
-        die("unexpected statev2 schema (scheduled_tasks); T3 changed its store, update t3-relay")
-    return con
+    return sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
 
-
-@dataclass
-class Host:
-    task_id: str
-    token: str
-    thread_id: str | None
-    instance: str
-    model: str
-    problem: str | None = None   # blocks this host
-    warning: str | None = None   # usable, but fix it (relay.md Heal)
-
-    @property
-    def label(self) -> str:
-        return f"{self.instance}/{self.model}"
-
-
-def hosts(con: sqlite3.Connection, at: datetime | None = None) -> list[Host]:
-    """Every enabled relay task, oldest first, with its health. Capacity is checked lazily (pick_host)."""
-    at = at or now()
-    rows = con.execute(
-        "select task_id, webhook_token, thread_id, model_selection_json from scheduled_tasks "
-        "where title like ? and enabled = 1 and json_extract(schedule_json, '$.type') = 'webhook' "
-        "and webhook_token is not null order by created_at", (RELAY_TITLE + "%",)).fetchall()
-    if not rows:
-        die(f"no enabled webhook task titled {RELAY_TITLE!r}; see relay.md")
-    out = []
-    for task_id, token, thread, selection in rows:
-        sel = json.loads(selection or "{}")
-        h = Host(task_id, token, thread, sel.get("instanceId") or "?", sel.get("model") or "?")
-        # Unbound (fresh thread per run): T3 gives each run a new git worktree from origin,
-        # a fetch per request whose timeouts dropped requests. Still usable, demoted.
-        if thread is None:
-            h.warning = "not bound to a host thread (one git worktree + fetch per request)"
-        elif not con.execute("select 1 from orchestration_v2_projection_threads where thread_id = ? "
-                             "and deleted_at is null", (thread,)).fetchone():
-            h.problem = f"host thread {thread} is deleted"
-        else:
-            last = con.execute("select status, requested_at, completed_at from orchestration_v2_projection_runs "
-                               "where thread_id = ? order by ordinal desc limit 1", (thread,)).fetchone()
-            if last and last[0] in OPEN and at - ts(last[1]) > STUCK:
-                h.problem = f"host busy since {last[1][:16]} ({last[0]}): limited or hung"
-            elif last and last[0] == "failed" and last[2] and at - ts(last[2]) < COOLDOWN:
-                h.problem = f"host run failed at {last[2][:16]}"
-        out.append(h)
-    return out
-
-
-def capacity_problem(h: Host) -> str | None:
-    """profile_routing --check: exit 2 = a relevant window of the host's account is exhausted."""
-    out = subprocess.run(["uv", "run", "-q", "--script", str(HERE / "lib/profile_routing.py"), "--check",
-                          h.model, h.instance, str(HOME / "settings.json")], capture_output=True, text=True)
-    if out.returncode == 2:
-        lines = [l for l in out.stderr.splitlines() if l.startswith("Profile check:")]
-        return (lines[-1].removeprefix("Profile check: ") if lines else "account exhausted")
-    return None
-
-
-def pick_host(con: sqlite3.Connection, via: str | None = None) -> Host:
-    all_hosts = [h for h in hosts(con) if via in (None, h.instance)]
-    if not all_hosts:
-        die(f"no relay host on {via}")
-    for h in sorted(all_hosts, key=lambda h: h.warning is not None):  # stable: bound hosts first
-        if h.problem is None:
-            h.problem = capacity_problem(h)
-        if h.problem is None:
-            if h.warning:
-                print(f"t3-relay: warning: {h.label}: {h.warning}; run `t3-relay check`", file=sys.stderr)
-            return h
-    die("no usable relay host: " + "; ".join(f"{h.label}: {h.problem}" for h in all_hosts))
 
 def origin() -> str:
     for f in (HOME / "server-runtime.json", HOME / "last-server-origin"):
@@ -160,14 +95,147 @@ def origin() -> str:
     die("T3 Code is not running (no server-runtime.json)")
 
 
-def project_id(con: sqlite3.Connection, path: str) -> str:
+
+def t3_cli() -> str:
+    """The desktop app's own CLI (~/.t3/bin/t3, matches the running server); a global `t3` can lag."""
+    for cand in (os.environ.get("T3CODE_CLI_PATH"), str(HOME.parent / "bin" / "t3"), shutil.which("t3")):
+        if cand and os.access(cand, os.X_OK):
+            return cand
+    die("t3 CLI not found (open T3 Code once: it writes ~/.t3/bin/t3)")
+
+
+def fetch(base: str, path: str, body: dict, headers: dict | None = None, form: bool = False,
+         timeout: float = 30) -> tuple[dict | None, dict]:
+    data = urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()
+    h = {"Content-Type": "application/x-www-form-urlencoded" if form else "application/json", **(headers or {})}
+    with urllib.request.urlopen(urllib.request.Request(base + path, data, h), timeout=timeout) as resp:
+        raw = resp.read()
+        return (json.loads(raw) if raw else None), dict(resp.headers)
+
+
+def approve(base: str) -> dict:
+    """OAuth (PKCE) as MCP client CLIENT, approved by a one-time pairing code minted locally."""
+    try:
+        client, _ = fetch(base, "/oauth/mcp/register", {"client_name": CLIENT, "redirect_uris": [REDIRECT]})
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        pairing = subprocess.run([t3_cli(), "auth", "pairing", "create", "--ttl", "2m", "--json",
+                                  "--label", f"{CLIENT} MCP approval", *[a for s in SCOPES for a in ("--scope", s)]],
+                                 capture_output=True, text=True, timeout=60)
+        if pairing.returncode:
+            die(f"t3 auth pairing create failed: {pairing.stderr.strip()[-300:]}")
+        auth = {"response_type": "code", "client_id": client["client_id"], "redirect_uri": REDIRECT,
+                "code_challenge": challenge, "code_challenge_method": "S256",
+                "state": secrets.token_hex(8), "resource": base + "/mcp"}
+        decision, _ = fetch(base, "/oauth/mcp/decision", {"authorization": auth, "decision": {
+            "_tag": "pairing-code", "access": "full-access", "code": json.loads(pairing.stdout)["credential"]}})
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(decision["redirectTo"]).query))
+        if "code" not in query:
+            die(f"MCP approval refused: {query.get('error')} {query.get('error_description', '')}")
+        token, _ = fetch(base, "/oauth/mcp/token", {"grant_type": "authorization_code", "code": query["code"],
+                                                   "redirect_uri": REDIRECT, "client_id": client["client_id"],
+                                                   "code_verifier": verifier, "resource": base + "/mcp"}, form=True)
+    except urllib.error.HTTPError as exc:  # bodies carry no secrets, but keep them short
+        die(f"MCP approval failed: HTTP {exc.code} at {urllib.parse.urlparse(exc.url).path}: {exc.read()[:200]!r}")
+    return save_token({"token": token["access_token"], "origin": base,
+                       "expires_at": stamp(now() + timedelta(seconds=token["expires_in"]))})
+
+
+def save_token(rec: dict) -> dict:
+    fd, tmp = tempfile.mkstemp(dir=TOKEN_FILE.parent, prefix=".mcp-client-")   # 0600, unique per writer
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(rec))
+    os.replace(tmp, TOKEN_FILE)
+    return rec
+
+
+def cached_token(base: str, reject: str | None = None) -> dict | None:
+    try:
+        rec = json.loads(TOKEN_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    ok = rec.get("origin") == base and rec.get("token") != reject and ts(rec["expires_at"]) - now() > RENEW
+    return rec if ok else None
+
+
+def client_token(base: str, reject: str | None = None) -> dict:
+    """Cached token, else approve once; jobs renewing together serialize and reuse the winner's token.
+    `reject` = a token T3 just answered 401 to."""
+    rec = cached_token(base, reject)
+    if rec:
+        return rec
+    REQUESTS.mkdir(parents=True, exist_ok=True)
+    with open(REQUESTS / ".mcp-client.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return cached_token(base, reject) or approve(base)
+
+
+class Unknown(Exception):
+    """The request may have reached T3, but its answer was lost."""
+
+
+class Mcp:
+    def __init__(self, base: str):
+        self.base, self.sid = base, None
+        self.token = client_token(base)["token"]
+        try:
+            self._open()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:  # revoked or T3's store was reset: approve once more
+                raise
+            self.token = client_token(base, reject=self.token)["token"]
+            self._open()
+
+    def _rpc(self, method: str, params: dict | None = None, id: int | None = 1, timeout: float = 30):
+        body = {"jsonrpc": "2.0", "method": method, **({"id": id} if id is not None else {}),
+                **({"params": params} if params is not None else {})}
+        h = {"Authorization": f"Bearer {self.token}", "Accept": "application/json, text/event-stream",
+             "MCP-Protocol-Version": "2025-06-18", **({"Mcp-Session-Id": self.sid} if self.sid else {})}
+        reply, headers = fetch(self.base, "/mcp", body, h, timeout=timeout)
+        self.sid = self.sid or {k.lower(): v for k, v in headers.items()}.get("mcp-session-id")
+        return reply
+
+    def _open(self) -> None:
+        self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                 "clientInfo": {"name": CLIENT, "version": "1"}})
+        self._rpc("notifications/initialized", id=None)
+
+    def call(self, tool: str, args: dict) -> dict:
+        """Tool result; die() when T3 refused (nothing ran); Unknown when the answer was lost
+        (timeout, reset, truncated or unparsable reply: T3 may have acted)."""
+        try:
+            reply = self._rpc("tools/call", {"name": tool, "arguments": args}, id=2, timeout=CALL_TIMEOUT)
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                die(f"{tool}: HTTP {exc.code}")
+            raise Unknown(f"{tool}: HTTP {exc.code}") from exc
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            raise Unknown(f"{tool}: {type(exc).__name__}") from exc
+        if "error" in reply:
+            die(f"{tool}: {reply['error'].get('message', reply['error'])}"[:500])
+        result = reply["result"]
+        text = "".join(c.get("text", "") for c in result.get("content", []))
+        if result.get("isError"):
+            die(f"{tool} refused: {text}"[:500])
+        try:
+            return result.get("structuredContent") or json.loads(text or "{}")
+        except ValueError:
+            return {"text": text}
+
+
+def connect(base: str) -> Mcp:
+    try:
+        return Mcp(base)
+    except (OSError, urllib.error.URLError) as exc:  # never echo headers: they carry the token
+        die(f"T3 MCP unreachable on {base}: {type(exc).__name__} {getattr(exc, 'code', '')}".rstrip())
+
+
+def project_id(mcp: Mcp, path: str) -> str:
     root = str(Path(path).expanduser().resolve())
-    row = con.execute(
-        "select project_id from projection_projects where workspace_root = ? and deleted_at is null", (root,)
-    ).fetchone()
-    if not row:
-        die(f"no T3 project for {root}; add it in T3 first")
-    return row[0]
+    for p in mcp.call("t3_project_list", {}).get("projects", []):
+        if p.get("workspaceRoot") == root and not p.get("deletedAt"):
+            return p["id"]
+    die(f"no T3 project for {root}; add it in T3 first")
 
 
 def completion_footer() -> str:
@@ -219,15 +287,6 @@ def launch_models(model: str | None, instance: str | None) -> tuple[str, ...]:
     return (provider,)  # Provider aliases resolve through t3-pick-instance.
 
 
-def post(base: str, task_id: str, token: str, body: dict) -> str:
-    url = f"{base}/api/hooks/{urllib.parse.quote(task_id, safe='')}/{token}"
-    req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read() or b"{}").get("deliveryId", "?")
-    except Exception as exc:  # never echo the URL: it carries the token
-        die(f"relay POST failed: {type(exc).__name__}: {getattr(exc, 'code', '') or exc.__class__.__name__}")
-
 
 def stamp(at: datetime) -> str:
     """statev2's timestamp format (sortable as text)."""
@@ -243,10 +302,13 @@ def save(rec: dict) -> None:
     (REQUESTS / f"{rec['rid']}.json").write_text(json.dumps(rec) + "\n")
 
 
-def request_status(con: sqlite3.Connection, rec: dict) -> tuple[str, str]:
-    """('ok', thread id) once the effect exists; ('failed', why) once the host turn carrying the
-    request ended without it (a retry cannot duplicate); else ('pending', where it waits).
-    The effect, not the host's reply line, decides: a model may word its reply differently."""
+
+def request_status(con: sqlite3.Connection, rec: dict, at: datetime | None = None) -> tuple[str, str]:
+    """A recorded outcome wins. After a lost answer the effect decides: the thread with that title
+    launched since the request / the message with clientRequestId relay-<rid>; still absent after
+    GIVE_UP = it never ran (T3 creates both synchronously), so a retry cannot duplicate."""
+    if rec.get("outcome"):
+        return rec["outcome"], rec.get("detail", "")
     since = rec["posted_at"]
     if rec["kind"] == "launch":
         row = con.execute("select thread_id from orchestration_v2_projection_threads where project_id = ? "
@@ -257,26 +319,9 @@ def request_status(con: sqlite3.Connection, rec: dict) -> tuple[str, str]:
                           "and created_at >= ?", (f"%:thread-send:relay-{rec['rid']}", since)).fetchone()
     if row:
         return "ok", row[0]
-    turn = con.execute(
-        "select m.run_id, r.status from orchestration_v2_projection_messages m "
-        "left join orchestration_v2_projection_runs r on r.run_id = m.run_id "
-        # An unbound host spawns a fresh thread per request (host None): search every thread.
-        "where (m.thread_id = ? or ? is null) and m.role = 'user' and m.created_at >= ? "
-        "and json_extract(m.payload_json, '$.text') like ?",
-        (rec["host"], rec["host"], since, f"T3 relay request {rec['rid']},%")).fetchone()
-    if turn is None:
-        row = con.execute("select outcome, error from scheduled_task_webhook_deliveries where delivery_id = ?",
-                          (rec.get("delivery"),)).fetchone()
-        if row and row[0] != "accepted":
-            return "failed", f"delivery {row[0]}: {row[1] or ''}".strip()
-        return "pending", "not yet delivered to the host thread"
-    run_id, run_status = turn
-    if run_status in OPEN or run_status is None:
-        return "pending", f"host turn {run_status or 'queued'}"
-    reply = con.execute("select json_extract(payload_json, '$.text') from orchestration_v2_projection_messages "
-                        "where run_id = ? and role = 'assistant' order by created_at desc limit 1",
-                        (run_id,)).fetchone()
-    return "failed", f"host turn {run_status}: {(reply[0] if reply else '') or 'no reply'}"[:300]
+    if (at or now()) - ts(since) > GIVE_UP:
+        return "failed", f"answer lost ({rec.get('detail', '?')}) and no effect after {GIVE_UP}"
+    return "pending", f"answer lost ({rec.get('detail', '?')}); looking for the effect"
 
 
 def wait_for(rid: str, seconds: float) -> int:
@@ -289,9 +334,8 @@ def wait_for(rid: str, seconds: float) -> int:
     deadline = time.monotonic() + seconds
     while True:
         try:
-            con = store()
+            con = None if rec.get("outcome") else store()
             state, detail = request_status(con, rec)
-            con.close()
         except (sqlite3.Error, SystemExit) as exc:
             state, detail = "pending", f"lookup error: {exc}"
         if state != "pending" or time.monotonic() >= deadline:
@@ -300,21 +344,18 @@ def wait_for(rid: str, seconds: float) -> int:
         time.sleep(3)
 
 
-def cmd_check(con: sqlite3.Connection, base: str) -> None:
-    usable, lines = 0, []
-    for h in hosts(con):
-        if h.problem is None:
-            h.problem = capacity_problem(h)
-        usable += h.problem is None
-        state = h.problem or (f"usable, but {h.warning}; fix: relay.md Heal" if h.warning else "ok")
-        lines.append(f"  {h.label}  {h.thread_id or 'unbound'}  {state}")
-    print("\n".join(lines))
-    if not usable:
-        die("no usable relay host (relay.md)")
-    if any(h.warning for h in hosts(con)):
-        die("a relay host needs healing (relay.md 'Heal')")
-    print(f"ok: {usable} usable relay host(s) on {base}" + ("" if usable > 1 else "; add a second host on the "
-                                                            "other provider for failover (relay.md)"))
+def cmd_check(base: str) -> None:
+    mcp = connect(base)
+    mcp._rpc("ping", {}, id=3)
+    expires = json.loads(TOKEN_FILE.read_text())["expires_at"][:10]
+    print(f"ok: T3 MCP on {base} as client {CLIENT!r} (full-access, token expires {expires}, renewed automatically)")
+    try:
+        legacy = store().execute("select task_id from scheduled_tasks where title like ? and enabled = 1",
+                                 (LEGACY_HOST_TITLE + "%",)).fetchall()
+    except sqlite3.Error:
+        legacy = []
+    for (task,) in legacy:
+        print(f"  obsolete webhook relay host {task}: delete_scheduled_task it, settle its thread (relay.md)")
 
 
 def main() -> None:
@@ -335,8 +376,7 @@ def main() -> None:
     se.add_argument("--mode", default="auto", choices=["auto", "queue", "steer"])
     for p in (la, se):
         p.add_argument("--wait", type=float, default=0, metavar="SECS",
-                       help="wait up to SECS for the effect (thread launched / message sent); exit 3 if still pending")
-        p.add_argument("--via", metavar="INSTANCE", help="only the relay host on this provider instance (tests)")
+                       help="kept for callers: the effect exists on exit 0; prints `ok <threadId>`")
     la.add_argument("prompt", nargs="+")
     se.add_argument("message", nargs="+")
     st = sub.add_parser("status")
@@ -349,40 +389,50 @@ def main() -> None:
     if a.cmd == "status":
         raise SystemExit(wait_for(a.rid, a.wait))
 
-    con = store()
     base = origin()
     if a.cmd == "check":
-        cmd_check(con, base)
+        cmd_check(base)
         return
     rid = uuid.uuid4().hex[:12]
     rec = {"rid": rid, "kind": a.cmd}
     if a.cmd == "launch":
-        message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
-        args = {"projectId": project_id(con, a.project), "title": a.title, "message": message}
         instance, model, effort = pick(launch_models(a.model, a.instance), a.instance)
         if is_small(model) and not a.allow_small_model:
             die(f"refusing standalone thread on {model}: launch a frontier model (opus/astra) that uses "
                 "small models as sub-agents, or pass --allow-small-model if orchestration is already done", 2)
+        mcp = connect(base)
+        message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
         sel = {"instanceId": instance, "model": model}
         effort = a.effort or (effort if effort != "-" else None)
         if effort:
             key = "reasoningEffort" if model.startswith("gpt-") else "effort"
             sel["options"] = [{"id": key, "value": effort}]
-        args["modelSelection"] = sel
+        tool, args = "t3_thread_launch", {"projectId": project_id(mcp, a.project), "title": a.title,
+                                          "message": message, "modelSelection": sel,
+                                          "workspaceStrategy": {"type": "root"}, "runtimeMode": "full-access"}
         rec.update(project_id=args["projectId"], title=a.title)
-        instruction = "Call t3_thread_launch once with exactly these arguments:\n" + json.dumps(args, ensure_ascii=False)
     else:
-        args = {"threadId": a.thread, "message": " ".join(a.message), "mode": a.mode, "clientRequestId": f"relay-{rid}"}
+        mcp = connect(base)
+        tool, args = "t3_thread_send", {"threadId": a.thread, "message": " ".join(a.message), "mode": a.mode,
+                                        "clientRequestId": f"relay-{rid}"}
         rec.update(thread=a.thread)
-        instruction = "Call t3_thread_send once with exactly these arguments:\n" + json.dumps(args, ensure_ascii=False)
-    host = pick_host(con, a.via)
-    rec.update(host=host.thread_id, task=host.task_id, posted_at=stamp(now()))
-    delivery = post(base, host.task_id, host.token, {"id": rid, "instruction": instruction})
-    rec["delivery"] = delivery
+    rec["posted_at"] = stamp(now())
+    started = time.monotonic()
+    try:
+        result = mcp.call(tool, args)
+    except Unknown as exc:
+        rec["detail"] = str(exc)
+        save(rec)
+        print(f"accepted: relay {rid} via mcp (answer lost: {exc}; `t3-relay status {rid}`)", flush=True)
+        if a.wait:  # --wait bounds the whole run: callers time t3-relay out just above it
+            raise SystemExit(wait_for(rid, max(0, a.wait - (time.monotonic() - started))))
+        return
+    thread = result.get("threadId") or getattr(a, "thread", None) or "?"
+    rec.update(outcome="ok", detail=thread)
     save(rec)
-    print(f"accepted: relay {rid} via {host.label} ({delivery})")
+    print(f"accepted: relay {rid} via mcp ({thread})")
     if a.wait:
-        raise SystemExit(wait_for(rid, a.wait))
+        print(f"ok {thread}")
 
 
 if __name__ == "__main__":

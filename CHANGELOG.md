@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.5.6 (2026-10-21)
+
+- **t3-relay: direct MCP client, no relay host (fixes T3 0.1.1).** T3 0.1.1 ([#20447](https://github.com/pingdotgg/t3code/pull/20447)) frames webhook placeholders as untrusted data, so the Haiku/Luna host refused every request. `t3-relay` now calls T3's own loopback `/mcp` (`t3_thread_launch` / `t3_thread_send`) as OAuth MCP client `t3-relay` (full-access), approved by a pairing code from the local `t3 auth pairing create`; 30-day token cached 0600, renewed automatically. Output and exit contract unchanged for callers; exit 0 now means the thread/message exists. Migrate: `t3-relay check` lists the old `⚙️ T3 relay` webhook tasks: delete them, settle their host threads ([relay.md](skills/t3-manage-thread/relay.md)).
+
 ## v0.5.5 (2026-10-20)
 
 - **skills-refresh: pinned SSH-signed releases.** Verify the exact tag object, signed name and commit before checkout/install; reject unsigned, unknown-key, tampered, renamed and automatic downgrade releases. Tests and forced tags cannot bypass trust. Prompt re-sync uses the verified commit recorded in the stamp. New maintainer `scripts/release` explicitly signs and verifies before publishing. First enrollment is TOFU; key rotation needs an old-key-signed bridge ([trust and rollout](skills/t3-manage-thread/skills-refresh.md#trust-and-bootstrap)).

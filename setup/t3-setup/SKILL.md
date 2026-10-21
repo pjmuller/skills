@@ -165,7 +165,7 @@ one canonical tree.
 
 - Both `scripts/install --check` (scheduler checks the native service manager and runner
   PATH). `t3-pick-instance <model> <instance>` resolves **each** provider instance,
-  Codex included. `t3-limits`. `t3-relay check` once the relay task exists
+  Codex included. `t3-limits`. `t3-relay check`
   ([relay.md](../../skills/t3-manage-thread/relay.md); launchd jobs and pollers need it).
 - Native scheduler smoke job (free name, e.g. `t3-setup-smoke`, suffix if taken; `--at` = now + 2 min):
   `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,

@@ -1,7 +1,7 @@
 # New machine setup (macOS or Linux/WSL)
 
 Run inside the shell where T3 Code's backend runs (WSL: inside the distro, never Windows paths).
-Prerequisites: T3 Code ≥ 0.1, `t3-relay` on PATH with its relay task created ([relay.md](../t3-manage-thread/relay.md); `t3-relay check` ok), `uv`, `mise`.
+Prerequisites: T3 Code ≥ 0.1, `t3-relay` on PATH ([relay.md](../t3-manage-thread/relay.md); `t3-relay check` ok), `uv`, `mise`.
 
 1. **Skills**, registered globally the way this machine already registers `t3-manage-thread`
    (e.g. the setup repo's `ai/skills`, picked up by its daily refresh):

@@ -50,9 +50,9 @@ check() {
 
   local relay_err
   if relay_err=$("$script_dir/t3-relay" check 2>&1 >/dev/null); then
-    printf 'ok      T3 relay task (t3-relay check)\n'
+    printf 'ok      T3 relay (t3-relay check)\n'
   else
-    printf 'MISSING T3 relay: %s (ask a T3 agent: set up or heal the relay per t3-manage-thread relay.md)\n' "${relay_err#t3-relay: }"
+    printf 'MISSING T3 relay: %s (see t3-manage-thread relay.md)\n' "${relay_err#t3-relay: }"
     status=1
   fi
 
