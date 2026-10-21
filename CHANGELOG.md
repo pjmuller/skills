@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- t3-relay: launches use the user's new-thread permission default (`defaultRuntimeMode`, e.g. Auto) instead of always `full-access`; unset keeps `full-access`.
+
 - agents-md template: auto-mode rule (ask once naming the exact action instead of working around a block; fix repeated false blocks via `autoMode.environment`, keeping `$defaults`).
 
 ## v0.5.9 (2026-10-21)

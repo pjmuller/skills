@@ -16,8 +16,8 @@ Without `--model`: the named `--instance`'s provider default, otherwise opus, el
 provider → require `--model`. An explicit model wins, including Sol; `--instance` constrains
 Claude/Codex capacity routing (other providers keep the named account), and `--effort` overrides
 house effort. No automatic Astra-to-Sol fallback. haiku/luna refused unless
-`--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)). Launches run `full-access` at the
-project root (`workspaceStrategy: root`).
+`--allow-small-model` (see [SKILL.md](SKILL.md#model-tier)). Launches run in the user's new-thread
+permission default (`defaultRuntimeMode`, e.g. Auto; unset → `full-access`) at the project root (`workspaceStrategy: root`).
 
 Output contract (callers parse it): exit 0 prints `accepted: relay <rid> via mcp (<threadId>)`,
 and the thread / message already exists (`--wait` adds `ok <threadId>`). Exit 1 = T3 refused or

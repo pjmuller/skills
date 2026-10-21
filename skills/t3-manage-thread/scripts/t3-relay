@@ -278,6 +278,15 @@ def pick(models: tuple[str, ...], instance: str | None = None) -> tuple[str, str
     die(f"t3-pick-instance {','.join(models)} failed: {out.stderr.strip()[-300:]}", 2)
 
 
+def runtime_mode():
+    """The user's new-thread default (Settings → General → New threads → Permissions), else full-access."""
+    try:
+        mode = json.loads((HOME / "settings.json").read_text()).get("defaultRuntimeMode")
+    except (OSError, ValueError, AttributeError):
+        mode = None
+    return mode if mode in ("approval-required", "auto-accept-edits", "auto", "full-access") else "full-access"
+
+
 def launch_models(model: str | None, instance: str | None) -> tuple[str, ...]:
     if model:
         return (model,)  # Explicit Sol reviews and scoped workers stay explicit.
@@ -414,7 +423,7 @@ def main() -> None:
             sel["options"] = [{"id": key, "value": effort}]
         tool, args = "t3_thread_launch", {"projectId": project_id(mcp, a.project), "title": a.title,
                                           "message": message, "modelSelection": sel,
-                                          "workspaceStrategy": {"type": "root"}, "runtimeMode": "full-access"}
+                                          "workspaceStrategy": {"type": "root"}, "runtimeMode": runtime_mode()}
         rec.update(project_id=args["projectId"], title=a.title)
     else:
         mcp = connect(base)
