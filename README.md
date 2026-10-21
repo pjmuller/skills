@@ -84,7 +84,10 @@ fix what --check reports; PATH availability does not change the skill's discover
 The daily `skills-refresh` job applies new release tags of t3-manage-thread + t3-schedule
 (stamp `~/.agents/pjmuller-skills.version`, `skills-refresh --version`). Repo-local copies:
 `pnpm dlx skills update -p` inside the repo (commit the diff + lockfile), then rerun
-`scripts/install` and `--check` for updated skills that ship commands.
+`scripts/install` and `--check` for updated skills that ship commands. That follows `main`; to match
+your global release instead, add by tag URL
+(`pnpm dlx skills add https://github.com/pjmuller/skills/tree/vX.Y.Z/skills/<name> -y`): the
+lockfile records `ref`, `update -p` keeps it, and the same command with a newer tag moves it.
 Installers refuse to replace commands from another checkout; use `--relink` to choose a new canonical copy.
 `--check` prints its resolved source directory first.
 Updates replace installed files; keep personal customizations outside them. After updating

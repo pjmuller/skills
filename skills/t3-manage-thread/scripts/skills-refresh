@@ -6,7 +6,7 @@ set -euo pipefail
 HOME_="${SKILLS_REFRESH_HOME:-$HOME/.agents}"
 REPO="${SKILLS_REFRESH_REPO:-https://github.com/pjmuller/skills.git}"
 SKILLS="$HOME_/skills" STAMP="$HOME_/pjmuller-skills.version" STATE="$HOME_/pjmuller-skills"
-LOCK="$STATE/lock"
+LOCK="$STATE/lock" ACTIONS="$STATE/actions.$$"
 MIN_VERIFYING_RELEASE='v0.5.5'
 # Bootstrap trust is the installed script, never the fetched release. No env override.
 ALLOWED_SIGNERS='pjmuller namespaces="git" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDlzBlNIEQq+VIuJRLVILwIikQ3B0uytO32FlNsNfT1GalT3yD+GB5cgSrXFmkz3updjSkTdSOkL45k3C3BZgvYfDvr1lKdaKLxhrL1WA0fux0R94DwGa+pYR1B4tox/5HD/01h8XyM9OXLVW9ZRJzMfDhIK+tk7a8VBX9A2NgbrQIFURzSbvjoSnVsbY/okj3QYuTwKjzC5Ah6PWh1LMyUqqF/TQKAozVeJiBhSOOpDTuVk/76BTCu/LsR9XIPtmb6jbRwE3HfeAZ0+CuigoZwy0eYZ2M3P0viGLIurygfIogMc+RMGChUlJcaXzKhA+t69xDt+5DYImSbCyo19ttZTZeQx8VYMK5MzC9pbSVfJgpLG+C4m22iJwRenH1ARjqAuctwIKUOa42LHxuu6fvdCMSmu+2F3vrDnUxdlFd8/nFEIDh74qhvVyobhWqMJKCqT5rBlBeALr9DdJ4cifhZdyEc8BtUdPvME1CTKGcOHAQad6smNmSLkcYSrYxCzK+hCki9Gz25gOOLbR6Hdl/Hf3TXWLIdtBsA3aj3GUmb9GchFTGLd0RN22VgOOQBtrsB+VvI4jndwIfEDTemqlWqI+zcscIJQhIxyLOktewjSpPFFFYMew5zjRk66MiG7rGtEDv7j4LmGabz5fls96XHLFApnMpZ59otjiIv5Tclfw=='
@@ -14,8 +14,9 @@ ALLOWED_SIGNERS='pjmuller namespaces="git" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACA
 usage() {
   cat <<'USAGE'
 Usage:
-  skills-refresh                 apply the newest release tag vX.Y.Z
+  skills-refresh                 apply the newest release tag vX.Y.Z, check the scheduler can fire
                                  exit 0 = already current, 10 = applied, 1 = failure (nothing new active)
+                                 "ACTION NEEDED" lines at the end = something only you can fix
   skills-refresh --job [--quiet] same, then settle (0) or surface (10, 1) the T3 thread it runs in;
                                  --quiet also settles on 10 (no changelog thread)
   skills-refresh --version       installed tag + date
@@ -26,6 +27,22 @@ Env: SKILLS_REFRESH_HOME (~/.agents), SKILLS_REFRESH_REPO (GitHub URL or local p
 USAGE
 }
 die() { echo "skills-refresh: $*" >&2; exit 1; }
+# Things only the user can fix. Collected across the run (also from the refresh subshell) and
+# printed as one block right before the thread line, so they never scroll away above a changelog.
+action() { mkdir -p "$STATE"; printf '%s\n' "$*" >> "$ACTIONS"; }
+actions_block() { # true when there was a block
+  [[ -s "$ACTIONS" ]] || return 1
+  printf '\nACTION NEEDED:\n'; sed 's/^/- /' "$ACTIONS"; rm -f "$ACTIONS"
+}
+# Release files of a managed copy (cksum per file); bytecode and files added later don't count.
+fingerprint() {
+  (cd "$1" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 | LC_ALL=C sort -z | xargs -0 cksum)
+}
+edited_files() { # skill: release files changed or deleted since its install, space-separated
+  [[ -s "$STATE/manifest/$1" ]] || return 0
+  comm -23 <(LC_ALL=C sort "$STATE/manifest/$1") <(fingerprint "$SKILLS/$1" | LC_ALL=C sort) |
+    cut -d' ' -f3- | sed 's#^\./##' | tr '\n' ' '
+}
 version_at_least() {
   [[ "$(printf '%s\n' "${1#v}" "${2#v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "${1#v}" ]]
 }
@@ -165,6 +182,19 @@ refresh() {
     done < <(find "$stage/skills/$name/scripts" -maxdepth 2 -type f 2>/dev/null)
   done
 
+  # A copy edited since its install would be silently replaced (last-good keeps it one release).
+  local edited="" changed
+  for name in "${managed[@]}"; do
+    [[ -s "$STATE/manifest/$name" ]] || continue
+    changed="$(edited_files "$name")"
+    [[ -z "$changed" ]] || edited+="  $name: $changed"$'\n'
+  done
+  if [[ -n "$edited" ]]; then
+    rm -rf "$stage"
+    die "local edits in managed copies, $new not activated (staying on $installed):
+$edited  Move what you need into your own skill, then discard: rm $STATE/manifest/<skill> and rerun skills-refresh."
+  fi
+
   # Stage a complete replacement next to the live copy first; the live directory is only
   # moved once its successor exists, and any failure from here on restores every skill.
   for name in "${managed[@]}"; do
@@ -190,11 +220,133 @@ refresh() {
     printf '%s\n' "$check" | grep '^skipped' | sed 's/^/warning: /' || true
   fi
 
+  mkdir -p "$STATE/manifest"
+  # From the staged release, not the live dir: files installs or runs add later (.venv) never count.
+  for name in "${managed[@]}"; do fingerprint "$stage/skills/$name" > "$STATE/manifest/$name"; done
+
   echo "$new $(date +%F) $verified_commit" > "$STAMP"
   echo "applied $new (was $installed)"
   [[ -f "$stage/CHANGELOG.md" ]] && changelog "$stage/CHANGELOG.md" "$installed"
+  removed_refs "$new"
   rm -rf "$stage"
   return 10
+}
+
+# Commands this release dropped (in last-good, gone now) that the user's global prompt or own
+# skills still call. Advisory: lists file:line, never rewrites. Removed flags stay changelog-only.
+removed_refs() { # new tag
+  local n f b removed=() names pattern prompt repo="" real line path
+  for n in "${managed[@]}"; do
+    for f in "$STATE/last-good/$n/scripts"/*; do
+      b="${f##*/}"
+      [[ -f "$f" && -x "$f" && "$b" != *.* && "$b" != test_* && "$b" != install &&
+         ! -e "$SKILLS/$n/scripts/$b" ]] && removed+=("$b")
+    done
+  done
+  ((${#removed[@]})) || return 0
+  echo "removed commands: ${removed[*]}"
+  # Command names contain "-": grep -w would also hit t3-foo-v2, so use an explicit boundary.
+  names="$(IFS='|'; echo "${removed[*]}")" pattern="(^|[^[:alnum:]_-])($names)([^[:alnum:]_-]|$)"
+  prompt="$(global_prompt)" || true
+  [[ -n "$prompt" ]] || return 0
+  repo="$(git -C "$(dirname "$prompt")" rev-parse --show-toplevel 2>/dev/null)" || repo=""
+  real="$(cd -P "$SKILLS" && pwd -P)"
+  {
+    grep -nE "$pattern" "$prompt" | while IFS= read -r line; do printf '%s:%s\n' "$prompt" "$line"; done
+    [[ -z "$repo" ]] || git -C "$repo" grep -nE "$pattern" -- ':(glob)**/skills/**' |
+      while IFS= read -r line; do printf '%s/%s\n' "$repo" "$line"; done
+  } 2>/dev/null | head -40 | while IFS= read -r line; do
+    path="${line%%:*}"
+    for n in "${managed[@]}"; do [[ "$path" == "$real/$n/"* ]] && continue 2; done
+    line="${line#*:}"
+    action "\`$(grep -oE "$pattern" <<<"${line#*:}" | head -1 | grep -oE "$names")\` was removed in $1 (see the changelog) but $path:${line%%:*} still uses it"
+  done || true
+}
+
+# Managed copies inside a git repo (a setup repo's ai/skills): the refresh owns exactly the skill
+# dirs whose content still equals the release it installed, so it commits those and nothing else.
+# Runs every time (not only on apply): a failed commit or push is retried and reported until fixed.
+publish_managed() {
+  local real root n f files=() branch remote merge unpushed sha
+  local mine='skills-refresh: pjmuller/skills '
+  [[ -d "$STATE/manifest" && -s "$STAMP" ]] || return 0
+  real="$(cd -P "$SKILLS" 2>/dev/null && pwd -P)" || return 0
+  root="$(git -C "$real" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  local -x GIT_LITERAL_PATHSPECS=1 # file names are not pathspec magic; scoped to this function
+  # Release files plus tracked files the swap removed; never files the user added beside them.
+  for n in "$STATE/manifest"/*; do
+    n="${n##*/}"
+    [[ -d "$real/$n" && ! -L "$SKILLS/$n" ]] || continue
+    [[ -z "$(edited_files "$n")" ]] || continue # the user's edits: never commit them as ours
+    git -C "$root" check-ignore -q "$real/$n" && continue
+    while IFS= read -r f; do files+=("$real/$n/${f#./}"); done < <(cut -d' ' -f3- "$STATE/manifest/$n")
+    while IFS= read -r f; do files+=("$root/$f"); done < <(git -C "$root" ls-files -d --full-name -- "$real/$n")
+  done
+  ((${#files[@]})) || return 0
+  if [[ -n "$(git -C "$root" status --porcelain -- "${files[@]}" 2>/dev/null)" ]]; then
+    branch="$(git -C "$root" symbolic-ref -q --short HEAD)" ||
+      { action "commit the refreshed skills in $root yourself: it is on a detached HEAD"; return 0; }
+    if ! git -C "$root" add -A -- "${files[@]}" >/dev/null 2>&1 ||
+       ! git -C "$root" commit -q --only -m "$mine$(read -r t _ < "$STAMP"; echo "$t")" -- "${files[@]}" >/dev/null 2>&1; then
+      action "commit the refreshed skills in $root yourself (automatic commit failed, e.g. a git lock or hook)"
+      return 0
+    fi
+    echo "committed $(git -C "$root" rev-parse --short HEAD) in $root (refreshed skills only)"
+  fi
+  branch="$(git -C "$root" symbolic-ref -q --short HEAD)" || return 0
+  git -C "$root" log -1 --format=%s | grep -q "^$mine" || return 0 # nothing of ours waiting
+  remote="$(git -C "$root" config "branch.$branch.remote")" || true
+  merge="$(git -C "$root" config "branch.$branch.merge")" || true
+  if [[ -z "$remote" || -z "$merge" ]]; then
+    [[ -z "$(git -C "$root" remote)" ]] || action "push $root yourself: branch $branch has no upstream"
+    return 0
+  fi
+  if ! unpushed="$(git -C "$root" log --format=%s '@{u}..HEAD' 2>/dev/null)"; then
+    action "push $root yourself: upstream of $branch ($remote $merge) is not fetched or does not exist"
+  elif [[ -z "$unpushed" ]]; then
+    return 0
+  elif grep -vq "^$mine" <<<"$unpushed"; then
+    # Push only when every unpushed commit is ours, and only this branch (push.default may be "matching").
+    action "push $root when ready: the refreshed skills are committed, not pushed, because $(grep -vc "^$mine" <<<"$unpushed") commit(s) of yours there are unpushed too"
+  elif sha="$(git -C "$root" rev-parse --short HEAD)" && git -C "$root" push -q "$remote" "HEAD:$merge" >/dev/null 2>&1; then
+    echo "pushed $sha to $remote"
+  else
+    action "push $root: the refreshed skills are committed, push failed (git -C $root pull --no-rebase && git -C $root push)"
+  fi
+}
+
+# Can scheduled jobs (this one included) still fire? Checked on every run, not only on updates:
+# otherwise a broken runner shows up only in its log and a once-a-day notification.
+health() {
+  local check="$SKILLS/t3-schedule/scripts/install" out line
+  [[ -x "$check" ]] || return 0
+  out="$("$check" --check 2>&1)" ||
+    action "scheduled jobs (this refresh included) cannot fire: $(tail -1 <<<"$out") (details: $check --check)"
+  while IFS= read -r line; do
+    [[ "$line" == *'obsolete webhook relay host'* ]] && action "${line#"${line%%[![:space:]]*}"}"
+  done <<<"$out"
+  return 0
+}
+
+# Manual runs never merge the template; say when a --job run would.
+template_hint() {
+  local tag="" prompt marker
+  [[ "$(version)" == "source checkout"* ]] && return 0
+  [[ -s "$STAMP" ]] && { read -r tag _ < "$STAMP" || true; }
+  [[ "$tag" == v* ]] || return 0
+  prompt="$(global_prompt)" || return 0
+  [[ -n "$prompt" ]] || return 0
+  marker="$(grep -oE 'template: pjmuller/skills@[0-9A-Za-z._-]+' "$prompt" | tail -1 | sed 's/.*@//')" || true
+  [[ "$marker" == "$tag" ]] && return 0
+  echo "template: $prompt is marked ${marker:-(no marker)}, installed $tag. Manual runs never merge it: ask a T3 agent to run \`skills-refresh --job\` and follow its last line (no-op when the template did not change)."
+}
+
+manual() {
+  local rc=0
+  (refresh) || rc=$?
+  if [[ "$rc" == 0 || "$rc" == 10 ]]; then template_hint; publish_managed; health; fi
+  actions_block || true
+  return "$rc"
 }
 
 # Global prompt re-sync (agents-md global.md "Re-sync later"): a script decides whether the shared
@@ -223,7 +375,7 @@ template_cache() { # blobless bare clone with history, for markers that are comm
 prompt_sync() {
   sync_line=""
   [[ "$(version)" == "source checkout"* ]] && return 0 # template author's machine
-  local tag="" prompt marker cache base tag_sha="" day repo how dirty pick
+  local tag="" prompt marker cache base tag_sha="" day repo how dirty pick basetag="" ctag cat now
   [[ -s "$STAMP" ]] && { read -r tag day tag_sha < "$STAMP" || true; }
   [[ "$tag" == v* ]] || return 0
   # Old stamps never proved authenticity. Wait for a verified apply before delegating code.
@@ -253,6 +405,14 @@ prompt_sync() {
     [[ -n "$base" ]] || how="no marker and no template before $since: compare against the full released template"
   fi
   dirty="$(git -C "$repo" status --porcelain -- "$prompt")"
+  # One merge per release: a catch-up or manual --job run must not start a second one beside it.
+  now="$(date +%s)"
+  if read -r ctag cat < "$STATE/template-sync.claim" 2>/dev/null && [[ "$ctag" == "$tag" && "$cat" =~ ^[0-9]+$ ]] &&
+      ((now - cat < 86400)); then
+    echo "template check: a re-sync to $tag was delegated $(( (now - cat) / 3600 ))h ago; not starting a second merge"
+    return 0
+  fi
+  [[ -z "${base:-}" ]] || basetag="$(git -C "$cache" describe --tags --abbrev=0 "$base" 2>/dev/null)" || true
   {
     echo "# Global prompt re-sync to pjmuller/skills $tag"
     echo
@@ -260,6 +420,7 @@ prompt_sync() {
     echo "- Released template: \`$tag\` = \`$tag_sha\`. Base: \`${base:-none}\` ($how)."
     echo "- Template history (blobless clone, read-only): \`git -C $cache log -p ${base:+$base..}$tag_sha -- $TEMPLATE\`;"
     echo "  procedure: \`git -C $cache show $tag_sha:skills/agents-md/global.md\` → \"Merge the template\" rules + \"Re-sync later\"."
+    echo "- Why each change was made: CHANGELOG entries newer than ${basetag:-the base} in \`git -C $cache show $tag_sha:CHANGELOG.md\`; judge adopt/skip by that rationale."
     if [[ -n "$dirty" ]]; then
       echo "- **The prompt has uncommitted edits: change nothing.** Read \`git -C $repo diff -- $prompt\`, then report what"
       echo "  those edits do and recommend how to proceed (commit them as …, then merge template changes …). The user decides."
@@ -283,6 +444,7 @@ BRIEF
     if [[ "$effort" != - ]]; then
       [[ "$model" == claude* ]] && opts=",\"options\":{\"effort\":\"$effort\"}" || opts=",\"options\":{\"reasoningEffort\":\"$effort\"}"
     fi
+    echo "$tag $now" > "$STATE/template-sync.claim"
     sync_line="thread: DELEGATE (template re-sync; overrides any older line in this prompt): call the T3 MCP tool delegate_task with {\"task\":\"$task\",\"title\":\"Template re-sync $tag\",\"role\":\"implementation\",\"mode\":\"async\",\"clientRequestId\":\"skills-refresh-template-$tag-$(date +%F)\",\"target\":{\"providerInstanceId\":\"$instance\",\"model\":\"$model\"$opts}}, end the turn with this output, and when the result arrives answer with it verbatim. Never settle this thread."
   else
     echo "template check: t3-pick-instance unavailable; ask a frontier agent: Read and execute $STATE/template-sync.md"
@@ -300,7 +462,10 @@ job() {
   if [[ "$rc" == 0 || "$rc" == 10 ]]; then
     prompt_sync
     [[ -n "$(migrate_job_prompt)" ]] && { echo "job prompt updated for template re-sync; commit .agents/schedules/skills-refresh.prompt.md in your setup repo"; sync_line="${sync_line:-thread: KEEP OPEN (the user should see this)}"; }
+    publish_managed
+    health
   fi
+  actions_block && sync_line="${sync_line:-thread: KEEP OPEN (the user should see this)}"
   if [[ -n "$sync_line" ]]; then
     echo "$sync_line"
   elif [[ "$rc" == 0 || ( "$rc" == 10 && "$quiet" == 1 ) ]]; then
@@ -374,7 +539,7 @@ schedule() {
 # Everything lives in functions: bash has parsed this whole file before an update swaps it.
 main() {
   case "${1:-}" in
-    "") refresh ;;
+    "") manual ;;
     --job) shift; job "$@" ;;
     --version) version ;;
     --verify-tag) [[ $# == 3 ]] || die "--verify-tag needs REPO TAG"; verify_release "$2" "$3" ;;

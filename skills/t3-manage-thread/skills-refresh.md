@@ -20,7 +20,24 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   verification. macOS and Linux/WSL use the same verifier.
 - **All or nothing**: every shell script is syntax-checked before activation;
   any swap or `scripts/install` failure restores every skill from `last-good/`.
-  `install --check` failures only warn.
+  `install --check` failures of updated skills only warn.
+- **Local edits**: each apply records a fingerprint of the release files
+  (`pjmuller-skills/manifest/<skill>`). A managed copy whose release files were edited since
+  blocks the next apply (nothing activated, files listed). Files added later (`.venv`, bytecode) don't count.
+- **ACTION NEEDED block**: what only the user can fix is printed last, right before the thread
+  line, and keeps the job thread open even with `--quiet`. Sources (`action()`):
+  - `health()` on **every** run, not only on updates: `t3-schedule/scripts/install --check`
+    (can scheduled jobs, this one included, still fire?) and obsolete relay webhook tasks;
+  - `removed_refs()`, in the update run only: commands a release dropped that the global prompt or
+    the prompt repo's `**/skills/**` still call (file:line, advisory);
+  - `publish_managed()` commit/push problems.
+- **Git-tracked managed dir** (a setup repo's `ai/skills` behind `~/.agents/skills`):
+  `publish_managed()` runs on every run. It commits exactly the managed skill dirs whose release files
+  are unedited (`skills-refresh: pjmuller/skills vX.Y.Z`). It pushes `HEAD:<upstream>` only when every
+  unpushed commit is its own, so it never publishes the user's work, even with `push.default=matching`.
+  Detached HEAD, no upstream, a failed commit or push → ACTION, retried the next day.
+- Code that runs during an apply is the **old** installed script (bash parsed it first): apply-path
+  changes take effect from the following release.
 - **Version**: stamp `~/.agents/pjmuller-skills.version`, shown by
   `skills-refresh --version` and `scripts/install --check`
   (`source checkout <describe>` only when the skill dir is this repo's own
@@ -40,7 +57,10 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   `delegate_task` child ([agents-md re-sync](../agents-md/global.md#merge-the-template-into-someones-existing-file)),
   whose result surfaces in the same thread. Uncommitted prompt edits → the child changes nothing
   and recommends; prompt outside git → keep open. No marker → base = the template just before the
-  prompt's first commit. Skipped on the template author's source checkout.
+  prompt's first commit. Skipped on the template author's source checkout. The brief points the
+  child to the CHANGELOG entries since the base as the "why" per change. One delegation per release
+  per 24 h (`template-sync.claim`), so a catch-up run never starts a second merge beside the first.
+  A manual run never merges; it prints a hint when the marker is behind the installed tag.
 - Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.
 
 ## Trust and bootstrap

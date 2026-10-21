@@ -457,3 +457,151 @@ def test_release_helper_only_pushes_verified_tags(env, tmp_path, unsigned):
     assert result.returncode == (1 if unsigned else 0), result.stderr
     tags = subprocess.check_output(["git", "-C", str(remote), "tag"]).decode().splitlines()
     assert ("v0.3.0" in tags) is not unsigned
+
+
+# --- consumer DX: health, local edits, git ownership, removed commands ---
+
+def test_unhealthy_scheduler_keeps_open_every_run_even_quiet(env, tmp_path):
+    broken = tmp_path / "relay-broken"
+    broken.touch()
+    sched = env["home"] / "skills/t3-schedule/scripts"
+    sched.mkdir(parents=True)
+    (sched / "install").write_text(f'#!/usr/bin/env bash\n[[ -e {broken} ]] && {{ echo "t3-relay not ready: see relay.md" >&2; exit 1; }}\n'
+                                   'echo "  obsolete webhook relay host task-1: delete_scheduled_task it, settle its thread (relay.md)"\n')
+    (sched / "install").chmod(0o755)
+    for _ in range(2):  # the applying run and the next "up to date" run
+        out = run(env, "--job", "--quiet").stdout.splitlines()
+        assert out[-1].startswith("thread: KEEP OPEN") and "ACTION NEEDED:" in out
+        assert any("cannot fire: t3-relay not ready" in line for line in out[-4:])
+    broken.unlink()
+    out = run(env, "--job", "--quiet").stdout.splitlines()
+    assert out[-1].startswith("thread: KEEP OPEN") and "obsolete webhook relay host task-1" in out[-2]
+    (sched / "install").write_text("#!/usr/bin/env bash\necho ok\n")
+    assert run(env, "--job", "--quiet").stdout.splitlines()[-1].startswith("thread: SETTLE")
+    manual = run(env)  # manual runs report the same block
+    assert manual.returncode == 0 and "ACTION NEEDED" not in manual.stdout
+
+
+def test_local_edit_blocks_activation_extra_files_do_not(env):
+    assert run(env).returncode == 10  # v0.2.0 recorded
+    live = env["home"] / "skills/demo"
+    (live / ".venv").mkdir()
+    (live / ".venv/pyvenv.cfg").write_text("generated\n")
+    release(env["repo"], "v0.3.0", "3")
+    (live / "SKILL.md").write_text("demo 2, my tweak\n")
+    blocked = run(env)
+    assert blocked.returncode == 1 and "local edits" in blocked.stderr and "demo: SKILL.md" in blocked.stderr
+    assert stamp(env) == "v0.2.0" and (live / "SKILL.md").read_text() == "demo 2, my tweak\n"
+    (env["home"] / "pjmuller-skills/manifest/demo").unlink()  # the documented way to discard
+    assert run(env).returncode == 10 and stamp(env) == "v0.3.0"
+
+
+def setup_repo(tmp_path, env, unpushed=False):
+    """~/.agents/skills symlinked into a setup repo that tracks ai/skills, with a pushed upstream."""
+    gcfg = tmp_path / "gitconfig"
+    gcfg.write_text("[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgSign = false\n")
+    env["env"].update(GIT_CONFIG_GLOBAL=str(gcfg))
+    remote, setup = tmp_path / "remote.git", tmp_path / "setup"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    (setup / "ai/skills/demo").mkdir(parents=True)
+    (setup / "ai/skills/demo/SKILL.md").write_text("demo 1\n")
+    (setup / "notes.md").write_text("mine\n")
+    g = lambda *a: subprocess.run(["git", "-C", str(setup), *a], check=True, capture_output=True, text=True,
+                                  env={**os.environ, "GIT_CONFIG_GLOBAL": str(gcfg)}).stdout
+    g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-qm", "setup")
+    g("remote", "add", "origin", str(remote)); g("push", "-qu", "origin", "main")
+    if unpushed:
+        (setup / "notes.md").write_text("mine, committed\n"); g("commit", "-qam", "local")
+    (setup / "notes.md").write_text("mine, dirty\n")
+    home = tmp_path / "linked-home"
+    home.mkdir()
+    (home / "skills").symlink_to(setup / "ai/skills")
+    env["env"].update(SKILLS_REFRESH_HOME=str(home))
+    return g
+
+
+def test_refresh_commits_and_pushes_only_managed_paths(env, tmp_path):
+    g = setup_repo(tmp_path, env)
+    result = run(env, "--job")
+    assert result.returncode == 10 and "pushed" in result.stdout and "ACTION NEEDED" not in result.stdout
+    assert g("show", "--name-only", "--format=%s", "HEAD").split() == \
+        ["skills-refresh:", "pjmuller/skills", "v0.2.0", "ai/skills/demo/SKILL.md", "ai/skills/demo/scripts/install"]
+    assert g("status", "--porcelain").strip() == "M notes.md"
+    assert g("rev-parse", "HEAD") == g("rev-parse", "origin/main")
+
+
+def test_publish_failures_are_reported_and_retried_every_run(env, tmp_path):
+    g = setup_repo(tmp_path, env)
+    g("config", "push.default", "matching")
+    g("checkout", "-qb", "private"); g("commit", "-qam", "private work"); g("push", "-q", "origin", "private")
+    (tmp_path / "setup/notes.md").write_text("private, unpushed\n"); g("commit", "-qam", "private 2")
+    g("checkout", "-q", "main")
+    lock = tmp_path / "setup/.git/index.lock"
+    lock.touch()  # another git process holds the index
+    out = run(env, "--job", "--quiet").stdout
+    assert "automatic commit failed" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")
+    lock.unlink()
+    remote = tmp_path / "remote.git"
+    remote.rename(tmp_path / "away.git")  # push fails
+    out = run(env, "--job", "--quiet").stdout  # up to date: retries the commit, push fails
+    assert "committed" in out and "push failed" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")
+    assert "push failed" in run(env, "--job", "--quiet").stdout  # still reported the next day
+    (tmp_path / "away.git").rename(remote)
+    out = run(env, "--job", "--quiet").stdout
+    assert "pushed" in out and out.splitlines()[-1].startswith("thread: SETTLE")
+    # push.default=matching would also have published the other branch's unpushed commit
+    assert g("rev-parse", "origin/private") != g("rev-parse", "private")
+    g("fetch", "-q"); assert g("rev-parse", "origin/private") != g("rev-parse", "private")
+
+
+def test_refresh_never_pushes_the_users_unpushed_commits(env, tmp_path):
+    g = setup_repo(tmp_path, env, unpushed=True)
+    out = run(env, "--job", "--quiet").stdout.splitlines()
+    assert out[-1].startswith("thread: KEEP OPEN") and "1 commit(s) of yours there are unpushed too" in out[-2]
+    assert g("rev-list", "--count", "origin/main..HEAD").strip() == "2"
+
+
+def test_removed_command_still_used_by_the_user_is_listed(env, tmp_path):
+    old = env["repo"] / "skills/demo/scripts/t3-old-cmd"
+    old.write_text("#!/bin/sh\n")
+    old.chmod(0o755)
+    release(env["repo"], "v0.3.0", "3")
+    assert run(env, SKILLS_REFRESH_TAG="v0.3.0").returncode == 10
+    old.unlink()
+    release(env["repo"], "v0.4.0", "4")
+    setup = tmp_path / "setup"
+    (setup / "ai/skills/mine").mkdir(parents=True)
+    (setup / "ai/AGENTS.md").write_text("me\nping with `t3-old-cmd --id x`\n")
+    (setup / "ai/skills/mine/SKILL.md").write_text("calls t3-old-cmd\nt3-old-cmd-v2 is fine\n")
+    git(setup, "init", "-q")
+    git(setup, "add", "-A")
+    env["env"].update(SKILLS_REFRESH_PROMPT=str(setup / "ai/AGENTS.md"))
+    result = run(env)
+    assert result.returncode == 10 and "removed commands: t3-old-cmd" in result.stdout
+    block = result.stdout.split("ACTION NEEDED:")[1]
+    assert f"{(setup / 'ai/AGENTS.md').resolve()}:2" in block and "ai/skills/mine/SKILL.md:1" in block
+    assert block.count("t3-old-cmd") == 2
+
+
+def test_template_hint_rationale_and_one_merge_per_release(tenv):
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    manual = run(tenv)
+    assert manual.returncode == 10 and "Manual runs never merge it" in manual.stdout
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: DELEGATE")
+    assert "Why each change was made: CHANGELOG entries newer than v0.2.0" in brief(tenv)
+    second = job(tenv).stdout
+    assert "not starting a second merge" in second and "DELEGATE" not in second
+
+
+def test_publish_skips_user_files_and_reports_unresolvable_upstream(env, tmp_path):
+    g = setup_repo(tmp_path, env)
+    run(env, "--job")
+    (tmp_path / "setup/ai/skills/demo/personal.txt").write_text("mine\n")
+    assert run(env, "--job", "--quiet").stdout.splitlines()[-1].startswith("thread: SETTLE")  # up to date
+    assert "personal.txt" not in g("ls-tree", "-r", "--name-only", "origin/main")
+    assert g("status", "--porcelain", "--", "ai/skills").strip() == "?? ai/skills/demo/personal.txt"
+    g("config", "branch.main.merge", "refs/heads/gone")  # configured, never fetched
+    release(env["repo"], "v0.3.0", "3")
+    out = run(env, "--job", "--quiet").stdout
+    assert "is not fetched or does not exist" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")

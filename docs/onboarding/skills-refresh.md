@@ -36,6 +36,15 @@ skills-refresh --version                                           # prints the 
   the same thread hands the merge to a frontier model, which commits clear improvements (your own
   rules win), logs skips and lists questions. Uncommitted edits in your prompt: it only recommends.
 - Something failed: the same thread with the error; old helpers keep working. Run `skills-refresh` by hand to retry.
+- Something only you can fix: an `ACTION NEEDED` block at the end of the thread. A scheduler that
+  can't fire or a pending commit/push is re-checked every day until fixed; a command a release removed
+  but your prompt or own skills still use is listed in that release's update thread.
+- The scheduler itself can't start threads (T3 closed, relay broken): no thread can appear. You get
+  one macOS notification per job per day (`t3-schedule: … FAILED`) and the log
+  `~/.t3/userdata/logs/t3-schedule.<job>.log`. Run `skills-refresh` by hand: it applies any fix
+  and prints the same ACTION block.
+- Your skills dir lives in a git repo: each update is committed there (only the refreshed skills),
+  and pushed unless you have unpushed commits of your own.
 
 Don't run `pnpm dlx skills update` or `skills check` on these two skills: they re-fetch `main` and bypass the release gate.
 Bug report? Include the output of `skills-refresh --version`.
