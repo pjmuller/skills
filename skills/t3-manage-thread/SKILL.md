@@ -12,9 +12,9 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 | 🏓 ping-pong inside this task (opinion, research, review; any provider) | `delegate_task`: no row, result wakes you ([which one](workers.md#which-one)) |
 | 📤 independent topic, other repo, selected recording follow-up | `t3_thread_launch` ([workers.md](workers.md#-t3_thread_launch)) |
 | Model + account with capacity | `t3-pick-instance MODEL` → `<instanceId> <modelId> <effort>` ([routing.md](routing.md)) |
-| Message a thread | `t3_thread_send` (`mode` auto/queue/steer; `clientRequestId` for retries) |
+| Message a thread | `t3_thread_send` (`mode` auto/queue/steer; `clientRequestId` for retries); target in a broader permission mode (Auto → Full Access) → [permission-ceiling.md](permission-ceiling.md) |
 | Read / find threads | `t3_thread_read` · `t3_thread_list` (`currentThreadId` = your own id) · `t3_thread_search` |
-| Rename · switch model | `t3_thread_update {action:"rename"}` · `t3_thread_configure` |
+| Rename · switch model | `t3_thread_update {action:"rename"}` · `t3_thread_configure` (model/account only, never permission mode) |
 | Settle yourself / another thread | `t3_thread_organize {action:"settle"}` ([settle-thread.md](settle-thread.md)) |
 | Script outside T3 starts/messages a thread | `t3-relay launch\|send` ([relay.md](relay.md)) |
 | Gmail case thread woken by new mail (drafting claims it) · which thread owns a Gmail URL | `t3-mail-link` · `t3-mail-link find` ([mail-link.md](mail-link.md)) |

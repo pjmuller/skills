@@ -66,7 +66,8 @@ Read the candidate's initial task and recent progress: verify artifact, account,
 project and intended outcome. A keyword hit or recent timestamp is not proof.
 A distinct outcome is a new task even in the same topic/repo; do not merge it into a related thread.
 Matching execution threads can be pinged even when settled; avoid parallel duplicate
-execution if one is already working. Preserve explicit account/model overrides;
+execution if one is already working. A permission-mode mismatch is no reason to spawn: see
+[permission-ceiling](../t3-manage-thread/permission-ceiling.md). Preserve explicit account/model overrides;
 if the verified target cannot honor them, explain and choose an authorized route.
 No verified match → spawn. User explicitly asks for new → spawn with prior context
 as evidence. Missing search capability → disclose the reuse check limit, use any

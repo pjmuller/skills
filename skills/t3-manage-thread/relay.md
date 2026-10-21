@@ -1,7 +1,8 @@
 # t3-relay: start or message a thread from a script outside T3
 
 For launchd jobs and pollers (t3-schedule, recording-watcher, t3-mail-link, warm-ups). Agents
-inside T3 call the MCP tools directly and never need this.
+inside T3 call the MCP tools directly and never need this, not even to get past a
+`runtime_mode_escalation_denied` ([permission-ceiling.md](permission-ceiling.md)).
 
 ```bash
 t3-relay launch --project /abs/repo --title "⏰ Daily digest" --model opus [--wait 120] -- "Read and execute /abs/brief.md"

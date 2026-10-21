@@ -111,7 +111,10 @@ Write the brief to a file; `message` = "Read and execute /abs/brief.md".
 Keep attachments accessible to the destination; do not substitute a summary for them.
 
 For continuation, `t3_thread_read` the verified target, then `t3_thread_send` to its exact ID;
-forward the new task verbatim with new evidence separated. Search-only requests return
+forward the new task verbatim with new evidence separated. Target in a broader permission
+mode than this dispatcher (Auto → Full Access) is refused by T3: follow
+[permission-ceiling](../t3-manage-thread/permission-ceiling.md) (preflight, keep the continuation
+in a brief, one user action); never a duplicate thread or relay to get around it. Search-only requests return
 the match without a ping. Preserve the target's selected lifecycle unless the user
 authorizes a change. A requested new thread or genuinely different scope can
 justify spawning; explain that distinction. Purged-history recovery follows the
