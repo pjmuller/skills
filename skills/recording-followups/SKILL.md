@@ -25,7 +25,8 @@ call): [recording-watcher](../recording-watcher/SKILL.md).
 3. **One temp file per prompt** beside it: `~/Downloads/<date>-<who>-prompt-N.md` (title line +
    body). Launch by path so extra instructions are a quick edit, not a retype: `t3_thread_launch`
    with `message: "Read and execute ~/Downloads/<date>-<who>-prompt-N.md"` (absolute path) and
-   `modelSelection.instanceId` from `t3-pick-instance fable`. Keep the overview section identical to the file.
+   explicit `modelSelection` from `t3-pick-instance opus` with effort `high` (unless the user
+   explicitly selects another model/effort). Keep the overview section identical to the file.
 
 ## Prompt shape (each one stands alone)
 
@@ -65,9 +66,13 @@ thread. Never let this step cost more than the prompts themselves.
 
 ## Routing
 
-Default a thread to the thinker model at medium effort. Plain execute tasks with a clear spec
-(add a link, a page, a lookup) go to a coding model (Opus/Sol). Investigations stay on the
-thinker. Apply the operator’s wrapper dispatch policy and [spoken cues](spoken-cues.md).
+Default every standalone follow-up thread to **Opus High**, including research, documentation
+and guided review. An explicit user model/effort choice for that follow-up overrides the default;
+a model chosen only to interpret or synthesize the recording does not. Never inherit the intake
+thread's model as the launch default. Resolve the account with `t3-pick-instance opus`, pass its
+provider/model explicitly and set `modelSelection.options.effort` to `high`; verify the returned
+selection. This default does not constrain scoped research/review children inside a task.
+Apply the operator’s wrapper dispatch policy and [spoken cues](spoken-cues.md).
 An explicit prepare-only / do-not-execute instruction holds that action. Otherwise a wrapper may
 authorize immediate standalone launch of clear, grounded actions; absent that policy or a direct
 execution request, the files are the deliverable. Always deduplicate existing work before launch.
