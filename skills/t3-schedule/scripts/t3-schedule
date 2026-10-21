@@ -83,7 +83,8 @@ def os_notify(msg: str) -> None:
     """macOS notification; under WSL a Windows tray balloon (no module needed); else nothing (the log stays)."""
     if not systemd():
         subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
-    elif ps := shutil.which("powershell.exe"):
+    elif ps := shutil.which("powershell.exe") or next(  # runners get SCHEDULE_PATH, without Windows dirs
+            (p for p in ("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",) if os.access(p, os.X_OK)), None):
         text = msg.replace("'", "''")
         script = ("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; "
                   "$n.Icon = [System.Drawing.SystemIcons]::Warning; $n.Visible = $true; "
@@ -557,7 +558,7 @@ if [[ "$T3_SCHEDULE_AUTOMATIC" == 1 && "$T3_SCHEDULE_FORCE" != 1 ]]; then
 fi
 """ if systemd() else ""
     pre = f"""  # --pre-command runs without T3: the skills updater must still land when T3 or t3-relay is broken.
-  echo "-- pre-command: {spec['pre_command']}"
+  echo "-- pre-command:" {shlex.quote(spec['pre_command'])}
   ( {spec['pre_command']} ) 2>&1 | sed 's/^/   /'
   pre_rc=${{pipestatus[1]}}
   (( pre_rc == 0 )) || alert "{name}: pre-command FAILED (exit $pre_rc) - see log"
