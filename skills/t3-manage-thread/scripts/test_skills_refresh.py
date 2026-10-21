@@ -524,6 +524,7 @@ def test_refresh_commits_and_pushes_only_managed_paths(env, tmp_path):
     g = setup_repo(tmp_path, env)
     result = run(env, "--job")
     assert result.returncode == 10 and "pushed" in result.stdout and "ACTION NEEDED" not in result.stdout
+    assert "fatal" not in result.stderr
     assert g("show", "--name-only", "--format=%s", "HEAD").split() == \
         ["skills-refresh:", "pjmuller/skills", "v0.2.0", "ai/skills/demo/SKILL.md", "ai/skills/demo/scripts/install"]
     assert g("status", "--porcelain").strip() == "M notes.md"

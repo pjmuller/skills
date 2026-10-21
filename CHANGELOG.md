@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.5.8 (2026-10-21)
+
+- skills-refresh: `git check-ignore` runs without literal pathspecs (v0.5.7 printed a `fatal:` line on every commit and could misjudge an ignored skills dir).
+
 ## v0.5.7 (2026-10-21)
 
 - **skills-refresh: no more silent breakage on consumer machines** (feedback from a colleague's v0.5.0 → v0.5.4 upgrade). What only you can fix now ends the output as one `ACTION NEEDED` block and keeps the job thread open, also with `--quiet`, every day until fixed. Previously a missing relay was a warning above a long changelog, and the scheduler failed for 3 days with only a log and a once-a-day banner. Sources: the scheduler health check (`t3-schedule install --check`, every run, also when up to date; lists obsolete relay webhook tasks); commands a release removed that your global prompt or own skills still call (file:line); commit/push problems. Manual `skills-refresh` prints the same block plus a hint when your prompt's template marker is behind the installed tag (only `--job` merges).
