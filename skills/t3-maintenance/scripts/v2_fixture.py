@@ -19,7 +19,7 @@ CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,
 CREATE TABLE orchestration_v2_projection_messages (message_id TEXT PRIMARY KEY,
   thread_id TEXT, run_id TEXT, role TEXT, created_at TEXT, updated_at TEXT, payload_json TEXT);
 CREATE TABLE orchestration_v2_projection_runs (run_id TEXT PRIMARY KEY, thread_id TEXT,
-  ordinal INTEGER, status TEXT);
+  ordinal INTEGER, status TEXT, completed_at TEXT, payload_json TEXT);
 CREATE TABLE orchestration_v2_projection_subagents (subagent_id TEXT PRIMARY KEY,
   thread_id TEXT, child_thread_id TEXT, origin TEXT, status TEXT, payload_json TEXT);
 CREATE TABLE orchestration_v2_projection_runtime_requests (runtime_request_id TEXT PRIMARY KEY,
@@ -29,7 +29,7 @@ CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TE
 CREATE TABLE projection_thread_activities (activity_id TEXT PRIMARY KEY, thread_id TEXT,
   kind TEXT, summary TEXT, payload_json TEXT, created_at TEXT);
 CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT,
-  type TEXT, status TEXT, updated_at TEXT, payload_json TEXT);
+  type TEXT, status TEXT, updated_at TEXT, payload_json TEXT, run_id TEXT, node_id TEXT, ordinal INTEGER);
 CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, stream_id TEXT, payload_json TEXT);
 CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY, title TEXT, enabled INTEGER, thread_id TEXT);
 INSERT INTO projection_projects VALUES ('p', 'fixture', '/tmp/fixture', NULL);
@@ -70,8 +70,19 @@ class Store:
              json.dumps(payload), instance),
         )
         if run:
-            self.db.execute("INSERT INTO orchestration_v2_projection_runs VALUES (?,?,1,?)",
-                            (f"run:{tid}", tid, run))
+            self.run(tid, run, minutes=minutes)
+
+    def run(self, tid: str, status: str, ordinal: int = 1, minutes: float = 0,
+            selection: dict | None = None, started: bool = True) -> str:
+        run_id = f"run:{tid}:{ordinal}"
+        payload = {"rootNodeId": f"root:{tid}", "modelSelection": selection,
+                   "startedAt": ago(minutes + 1) if started else None,
+                   "requestedAt": ago(minutes + 2)}
+        self.db.execute("INSERT INTO orchestration_v2_projection_runs VALUES (?,?,?,?,?,?)",
+                        (run_id, tid, ordinal, status,
+                         None if status in ("queued", "running", "waiting") else ago(minutes),
+                         json.dumps(payload)))
+        return run_id
 
     def message(self, tid: str, role: str, text: str, minutes: float, *,
                 by: str = "user", sender: str | None = None, attachments=()) -> None:
@@ -92,7 +103,8 @@ class Store:
     def item(self, tid: str, kind: str, payload: dict, minutes: float, status: str = "completed") -> None:
         """V2 turn item (tool call, reasoning, diff, sub-agent)."""
         self._n += 1
-        self.db.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES (?,?,?,?,?,?)",
+        self.db.execute("""INSERT INTO orchestration_v2_projection_turn_items
+                        (turn_item_id, thread_id, type, status, updated_at, payload_json) VALUES (?,?,?,?,?,?)""",
                         (f"i{self._n:04d}", tid, kind, status, ago(minutes),
                          json.dumps({"startedAt": ago(minutes), **payload})))
 

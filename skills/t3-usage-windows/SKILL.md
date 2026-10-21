@@ -21,7 +21,10 @@ Opening one early makes its reset come earlier; a turn inside an active window d
   **Hard rule:** `--apply` spends a scarce credit (resets five-hour + weekly window), only with
   explicit user authorization. Unrelated to Luna Reserve or API credits.
 
-Rate-limited threads: T3 0.1 shows them as Limited and resumes them at reset; no helper needed.
+Rate-limited threads: T3 resumes them at reset. For authorized recovery onto another
+account, inventory with `t3-fleet list --limited` and follow
+[t3-manage-thread recovery](../t3-manage-thread/workers.md#recover-a-limit-interrupted-owner).
+Never infer completion solely from the sidebar status.
 
 ## Install
 

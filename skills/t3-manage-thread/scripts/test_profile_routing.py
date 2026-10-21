@@ -36,7 +36,7 @@ def test_unknown_stale_and_expired_windows():
     healthy = account("b", 90)
     assert choose([stale, healthy], "claude-fable-5", "a", NOW)[0] == "b"
     unknown = Account("c", "c", error="unreachable")
-    assert choose([stale, unknown], "claude-fable-5", "c", NOW)[0] == "c"
+    assert choose([stale, unknown], "claude-fable-5", "c", NOW)[0] == "a"
     stale.rows[0].used_percent = 100
     assert choose([stale, unknown], "claude-fable-5", "a", NOW)[0] == "c"
     stale.rows[0].resets_at = NOW - timedelta(seconds=1)
@@ -46,12 +46,12 @@ def test_unknown_stale_and_expired_windows():
 def test_score_headroom_per_hour_and_stable_ties():
     a, b = account("a", plan="max_20x"), account("b", plan="max_20x")
     assert choose([b, a], "claude-fable-5", "a", NOW)[0] == "a"
-    assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "b"  # equal plans: inherited account wins
+    assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"  # account-neutral ties
     assert choose([b, a], "claude-fable-5", "missing", NOW)[0] == "a"
     selected, reason, candidates = choose([b, a], "claude-fable-5", "a", NOW)
     explanation = explain("claude-fable-5", candidates, NOW, selected, reason)
     assert "a  [max_20x · 20x]" in explanation and "b  [max_20x · 20x]" in explanation and "%/h × 20x" in explanation
-    assert "Percentages are per account" in explanation and "tie → inherited" in reason
+    assert "Percentages are per account" in explanation and "inherited" not in reason
     b.rows[1].resets_at = NOW + timedelta(days=6)  # same headroom, later reset → less urgent
     assert choose([b, a], "claude-fable-5", "b", NOW)[0] == "a"
 
@@ -75,7 +75,7 @@ def test_soonest_weekly_reset_wins_and_grows_continuously():
 
 
 def test_session_never_masks_an_expiring_weekly_but_tight_session_demotes():
-    a = Account("a", "a", rows=[Row("session", 89, NOW + timedelta(hours=5), 18000),
+    a = Account("a", "a", rows=[Row("session", 89, NOW + timedelta(minutes=20), 18000),
                                 Row("weekly", 60, NOW + timedelta(hours=2), 604800)])
     b = Account("b", "b", rows=[Row("session", 5, NOW + timedelta(hours=5), 18000),
                                 Row("weekly", 60, NOW + timedelta(hours=20), 604800)])
@@ -83,7 +83,7 @@ def test_session_never_masks_an_expiring_weekly_but_tight_session_demotes():
     assert selected == "a" and candidates[0].score == 20 and candidates[0].bottleneck == "weekly"
     a.rows[0].used_percent = 95  # session tight: b goes first even though a expires sooner
     selected, reason, candidates = choose([a, b], "gpt-6-sol", "b", NOW)
-    assert selected == "b" and "[session tight: 5 ≤ 10 plan-% units]" in explain("gpt-6-sol", candidates, NOW, selected, reason)
+    assert selected == "b" and "session tight:" in explain("gpt-6-sol", candidates, NOW, selected, reason)
     b.rows[0].used_percent = 97  # everyone tight → best score again, with a warning
     selected, reason, _ = choose([a, b], "gpt-6-sol", "b", NOW)
     assert selected == "a" and "session is tight" in reason
@@ -154,7 +154,7 @@ def test_codex_windows_and_nonstandard_caps():
     assert choose([nan], "gpt-6-astra", "codex_c", NOW)[1].startswith("usage unknown")
 
 
-def test_driver_switch_routes_by_capacity_ties_prefer_sibling(tmp_path):
+def test_driver_switch_routes_by_capacity_without_sibling_affinity(tmp_path):
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"providerInstances": {
         "codex": {"driver": "codex", "displayName": "Codex Alpha", "enabled": True},
@@ -164,7 +164,7 @@ def test_driver_switch_routes_by_capacity_ties_prefer_sibling(tmp_path):
     }}))
     even = lambda id: Account(id, id, rows=[Row("weekly", 20, NOW + timedelta(days=2), 604800)])
     collect = Mock(return_value=[even("codex"), even("codex_beta")])
-    assert route("gpt-6-astra", "claudeAgent", settings, collect)[0] == "codex_beta"  # tie → sibling
+    assert route("gpt-6-astra", "claudeAgent", settings, collect)[0] == "codex"  # no sibling affinity
     assert route("gpt-6-astra", "gamma", settings, collect)[0] == "codex"  # no sibling: still routed
     collect = Mock(return_value=[even("codex"), Account("codex_beta", "codex_beta", rows=[
         Row("weekly", 80, NOW + timedelta(days=2), 604800)])])
@@ -241,7 +241,7 @@ def test_small_plan_still_wins_when_its_reset_is_urgent_or_the_big_one_is_nearly
 def test_session_tightness_is_measured_in_plan_units_of_the_largest_verified_plan():
     big = account("big", 10, plan="max_20x")
     big.rows[1].resets_at = NOW + timedelta(days=5)
-    small = Account("small", "small", plan="max_5x", rows=[Row("session", 59, NOW + timedelta(hours=4), 18000),
+    small = Account("small", "small", plan="max_5x", rows=[Row("session", 59, NOW + timedelta(hours=1), 18000),
                                                             Row("weekly", 10, NOW + timedelta(hours=24), 604800)])
     # 5x at 59 % used: 5·41 = 205 plan-% > 200 → not tight; its sooner reset wins (5·90/24 > 20·90/120).
     selected, _, candidates = choose([big, small], "claude-fable-5", "big", NOW)
@@ -249,7 +249,8 @@ def test_session_tightness_is_measured_in_plan_units_of_the_largest_verified_pla
     small.rows[0].used_percent = 60  # 5·40 = 200 ≤ 200 → tight: ranks after the 20x despite weekly room
     selected, _, candidates = choose([big, small], "claude-fable-5", "big", NOW)
     assert selected == "big" and candidates[1].session_tight and "200 ≤ 200" in candidates[1].detail
-    big.rows[0].used_percent = 89  # 20·11 = 220 → the old ≥ 90 % rule is unchanged for a 20x
+    big.rows[0].resets_at = NOW + timedelta(minutes=10)  # on pace: isolate the plan-unit guard
+    big.rows[0].used_percent = 89  # 20·11 = 220, still above the remaining-capacity floor
     assert not choose([big, small], "claude-fable-5", "big", NOW)[2][0].session_tight
     big.rows[0].used_percent = 90
     assert choose([big, small], "claude-fable-5", "big", NOW)[2][0].session_tight
@@ -349,3 +350,53 @@ def test_override_respects_named_and_explicit_accounts(tmp_path):
     assert route("claude-opus-5", "kamp", settings, collect)[0] == "dentai"
     assert route("claude-opus-5", "kamp", settings, collect, ["kamp"])[0] == "kamp"
     assert "capacity ok" in check("claude-opus-5", "kamp", settings, collect)
+
+
+def test_identity_bound_missing_plan_fallback(tmp_path):
+    mapping = tmp_path / "tiers.json"
+    mapping.write_text(json.dumps({"instances": {"a": {"identity_hash": "account-a", "multiplier": 20}}}))
+    a = account("a", identity_hash="account-a")
+    assert plan_multiplier(a, mapping) == (20, "map")
+    a.identity_hash = "new-login"
+    assert plan_multiplier(a, mapping) == (1, "unknown")
+    a.identity_hash = "account-a"
+    a.plan = "max_5x"
+    assert plan_multiplier(a, mapping) == (5, "label")
+    a.plan = "pro"
+    assert plan_multiplier(a, mapping) == (1, "unknown")  # reported plan beats absent-plan assertion
+    a.plan = ""
+    mapping.write_text(json.dumps({"instances": {"a": {"identity_hash": "account-a", "multiplier": True}}}))
+    assert plan_multiplier(a, mapping) == (1, "unknown")
+
+
+def test_session_pressure_incident_and_low_usage():
+    hot = account("hot", plan="max_20x")
+    spare = account("spare", plan="max_20x")
+    hot.rows = [Row("session", 69, NOW + timedelta(hours=4.25), 18000),
+                Row("weekly", 40, NOW + timedelta(hours=100), 604800)]
+    spare.rows = [Row("session", 6, NOW + timedelta(hours=4.25), 18000),
+                  Row("weekly", 18, NOW + timedelta(hours=140), 604800)]
+    assert choose([hot, spare], "claude-opus-5-5", "hot", NOW)[0] == "spare"
+    hot.rows[0].used_percent = 49
+    assert choose([hot, spare], "claude-opus-5-5", "hot", NOW)[0] == "hot"
+    hot.rows[0].used_percent = 50
+    assert choose([hot, spare], "claude-opus-5-5", "hot", NOW)[0] == "spare"
+    hot.rows[0].resets_at = NOW + timedelta(hours=2)  # 60% elapsed: no longer ahead
+    assert choose([hot, spare], "claude-opus-5-5", "hot", NOW)[0] == "hot"
+
+
+def test_missing_tier_incident_replay(tmp_path, monkeypatch):
+    mapping = tmp_path / "tiers.json"
+    mapping.write_text(json.dumps({"instances": {"empty": {"identity_hash": "empty-account", "multiplier": 20}}}))
+    monkeypatch.setitem(plan_multiplier.__globals__, "MULTIPLIERS", mapping)
+    empty = account("empty", identity_hash="empty-account")
+    empty.rows = [Row("session", 0, NOW + timedelta(hours=4.5), 18000),
+                  Row("weekly", 30, NOW + timedelta(hours=74), 604800)]
+    busy = account("busy", plan="max_20x")
+    busy.rows = [Row("session", 41, NOW + timedelta(hours=4.8), 18000),
+                 Row("weekly", 40, NOW + timedelta(hours=104), 604800)]
+    assert choose([busy, empty], "claude-opus-5-5", "busy", NOW)[0] == "empty"
+    empty.identity_hash = "other-account"
+    selected, reason, candidates = choose([busy, empty], "claude-opus-5-5", "empty", NOW)
+    assert selected == "busy"
+    assert "WARNING: unknown plan tier" in explain("claude-opus-5-5", candidates, NOW)

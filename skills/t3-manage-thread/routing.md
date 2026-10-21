@@ -26,6 +26,11 @@ uses the project default outside a thread. This skill does not intercept native 
 
 ## Accounts
 
+Model, account and repository are independent. A generic model request never pins an
+account or implies product affinity. Resolve immediately before **each** spawn; do not
+reuse an earlier pick for a batch. Native provider children inherit the parent account
+and bypass this router: stage large fan-outs or use explicitly routed `delegate_task`.
+
 One policy for Claude and Codex (`lib/profile_routing.py`, usage from `lib/t3_limits.py`, the numbers
 `t3-limits` prints; [limits.md](limits.md)). The user named an account → use that instance id
 (`t3-list-profiles` for exact ids), and check `t3-limits` when it may be exhausted. They named
@@ -49,7 +54,8 @@ active fleet, and stage it on small-tier accounts one at a time.
   10 % of the largest verified plan's session (20x beside 20x: ≥ 90 % used, the
   old rule; 5x beside 20x: ≥ 60 % used; 1x beside 20x: always, i.e. overflow
   only — the routing output says so). Excluded or unknown accounts do not set
-  the bar.
+  the bar. Also tight: a session at least 50% used and ahead of its elapsed-window
+  pace. This protects running work before the 90% cliff; it does not reserve quota.
 - **Ties** go to the instance id order (`claudeAgent` preferred).
 - Paid overage is never capacity. Every automatic route prints its reasoning on
   stderr.
@@ -73,7 +79,7 @@ preference cutoff, not a ceiling: running threads keep burning, ordinary routing
 account above it. Top-level `until` (UTC offsets required) is mandatory; expired or invalid → ordinary routing,
 noted in the reason. Dry runs print why each entry was taken or skipped. Disable: delete the file.
 
-Accepted trade-offs: bottleneck ranking ignores a strong second window, and
+Accepted trade-offs: weekly ranking ignores a strong second window, and
 near-simultaneous spawns are not spread across equal accounts (the next read,
 ≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
 

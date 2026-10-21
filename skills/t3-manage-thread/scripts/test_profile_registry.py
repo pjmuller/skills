@@ -48,11 +48,11 @@ def test_registry_names_and_ambiguity(settings):
         resolve(profiles, "missing")
 
 
-def test_auto_preserves_codex_and_sibling_tie(settings):
+def test_auto_ties_ignore_inherited_account_and_sibling(settings):
     unknown = lambda **_: [Account("codex", "codex", error="x"), Account("codex_beta", "codex_beta", error="x")]
-    assert route("gpt-6-astra", "codex_beta", settings, unknown)[0] == "codex_beta"
-    # Driver switch with no verified capacity: Claude Beta -> Codex Beta (sibling label).
-    assert route("gpt-6-astra", "claudeAgent", settings, unknown)[0] == "codex_beta"
+    assert route("gpt-6-astra", "codex_beta", settings, unknown)[0] == "codex"
+    # Driver switch with no verified capacity still uses stable account-neutral order.
+    assert route("gpt-6-astra", "claudeAgent", settings, unknown)[0] == "codex"
     assert route("gpt-6-astra", "new_instance", settings, unknown)[0] == "codex"  # no sibling: first id
 
 

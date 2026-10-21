@@ -123,6 +123,7 @@ class Account:
     stale: bool = False  # served from cache after a failed fetch
     fetched_at: datetime | None = None
     driver: str = ""  # T3 driver; scopes the private plan-multiplier map
+    identity_hash: str = ""  # binds operator-confirmed tier metadata to this account
 
 
 # --- Claude ------------------------------------------------------------------
@@ -564,6 +565,7 @@ def collect(
         age = None
         try:
             credentials = credentials_for(home)
+            account.identity_hash = hashlib.sha256(str(credentials["identity"]).encode()).hexdigest() if credentials.get("identity") else ""
             identity = f"{home}|{credentials.get('identity', '')}"
             entry = cache.get(instance_id) or {}
             entry = entry if entry.get("payload") and entry.get("identity") == identity else {}
@@ -817,7 +819,14 @@ def plan_multiplier(account: Account, path: Path | None = None) -> tuple[int, st
     if stated:
         return int(stated.group(1)), "label"
     try:
-        mapped = json.loads((path or MULTIPLIERS).read_text()).get(account.driver, {}).get(re.split(r" · | \(", plan)[0])
+        config = json.loads((path or MULTIPLIERS).read_text())
+        mapped = config.get(account.driver, {}).get(re.split(r" · | \(", plan)[0])
+        # Only absent plan metadata may use an identity-bound operator assertion.
+        # A new login/account or any reported plan invalidates this fallback.
+        if not account.plan and account.identity_hash:
+            entry = config.get("instances", {}).get(account.instance_id, {})
+            if entry.get("identity_hash") == account.identity_hash:
+                mapped = entry.get("multiplier")
     except (OSError, ValueError, AttributeError):
         mapped = None
     if isinstance(mapped, int) and not isinstance(mapped, bool) and mapped >= 1:
@@ -911,6 +920,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "account": account.label,
                     "instance_id": account.instance_id,
                     "plan": plan_label(account),
+                    **({"identity_hash": account.identity_hash} if account.identity_hash else {}),
                     **tier,
                     "window": None,
                     "error": account.error,
@@ -923,6 +933,7 @@ def json_rows(accounts: list[Account], now: datetime) -> list[dict]:
                     "account": account.label,
                     "instance_id": account.instance_id,
                     "plan": plan_label(account),
+                    **({"identity_hash": account.identity_hash} if account.identity_hash else {}),
                     **tier,
                     "window": row.window,
                     "used_percent": None if math.isnan(row.used_percent) else row.used_percent,

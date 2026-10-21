@@ -27,6 +27,14 @@ Glossary:
 - Percentages are relative to each account's own allowance. A 1x account at
   20% and a 20x account at 20% do not have equal quota left; routing multiplies
   headroom by the tier. A fresh reading does not reserve capacity for running jobs.
+- Setup-token profiles can lack a plan label. Never invent one or reauthenticate just
+  to route. After independently confirming the plan, private `t3-plan-multipliers.json`
+  may include `"instances": {"instance-id": {"identity_hash": "<from --json>", "multiplier": 20}}`.
+  This fallback applies only when the plan is absent and the account hash matches;
+  a reported plan or changed observed login identity wins. For setup-token profiles,
+  the identity may come from the last saved login: replacing only the setup token
+  does not prove an account change. Reverify/remove the fallback when replacing it. It describes plan size, never account preference.
+  Unknown tiers remain conservative 1x and routing warns about the resulting demotion.
 - Windows are whatever the endpoint reports, nothing is hardcoded per provider
   (e.g. Codex Pro currently reports weekly only, Plus also a 5 h window).
 

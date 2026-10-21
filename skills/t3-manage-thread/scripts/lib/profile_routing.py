@@ -21,9 +21,10 @@ Three rules (routing.md §Accounts):
    Session tightness is measured in the same plan units: tight when
    multiplier × session headroom % is at most SESSION_TIGHT_SHARE of the largest
    verified plan's full session (20x only: the old ≥ 90 % rule; 5x beside 20x:
-   ≥ 60 % used; 1x beside 20x: always tight, i.e. overflow only).
-3. Ties prefer the inherited account (or its cross-driver sibling), then the
-   instance id. Paid overage is never capacity.
+   ≥ 60 % used; 1x beside 20x: always tight, i.e. overflow only). Sessions
+   at least half spent and ahead of elapsed-window pace are also tight.
+3. Ties use instance id order, never the inherited account or business name.
+   Paid overage is never capacity.
 
 A private, expiring override (t3-routing-override.json beside settings.json)
 may put an ordered account preference on top of rule 2 for a while, e.g. to
@@ -48,6 +49,7 @@ from t3_limits import (PLAN_HINT, SETTINGS, claude_accounts, codex_accounts, pla
                        provider_profiles, relative, tier_text)
 from profile_registry import registry, compatible
 
+SESSION_PACE_GUARD_USED = 50  # once half spent, avoid a session burning ahead of its reset pace
 SESSION_TIGHT_SHARE = 0.10  # session room below this share of the largest verified plan's session demotes
 WEEKLY_CLASS_SECONDS = 24 * 3600  # windows at least this long carry the urgency score
 MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
@@ -147,14 +149,19 @@ def assess(account, model, now):
     return candidate
 
 
-def mark_session_tight(ok):
-    """Relative to the verified candidates only: an excluded or stale big plan
-    must not demote the usable small ones."""
+def mark_session_tight(ok, now):
+    """Keep both a plan-unit reserve and runway for already-running work.
+    Excluded or stale big plans must not demote usable small ones."""
     largest = max((c.weight for c in ok), default=1)
     for c in ok:
         c.session_tight = c.session_room is not None and c.session_room <= SESSION_TIGHT_SHARE * 100 * largest
         if c.session_tight:
             c.detail = f"session tight: {c.session_room:.0f} ≤ {SESSION_TIGHT_SHARE * 100 * largest:.0f} plan-% units"
+        ahead = [r for r in c.rows if (r.length_seconds or 0) < WEEKLY_CLASS_SECONDS
+                 and r.used_percent >= SESSION_PACE_GUARD_USED and r.pace(now) and r.pace(now)[1] < 0]
+        if ahead:
+            c.session_tight = True
+            c.detail = f"session tight: {ahead[0].used_percent:.0f}% used, ahead of reset pace"
 
 
 def relative_age(account, now):
@@ -218,10 +225,10 @@ def choose(accounts, model, preferred, now, override=None):
     candidates = [assess(a, model, now) for a in accounts]
     ok = [c for c in candidates if c.status == "ok"]
     unknown = [c for c in candidates if c.status == "unknown"]
-    tie = lambda c: (c.instance_id != preferred, c.instance_id)
+    tie = lambda c: (c.instance_id,)  # automatic routing has no inherited account/business affinity
     note = (override or {}).get("note", "")
     if ok:
-        mark_session_tight(ok)
+        mark_session_tight(ok, now)
         if override and not note:
             pick, skipped = override_pick(candidates, override, now)
             head = f"override until {override['until']:%a %d %b %H:%M}"
@@ -237,9 +244,6 @@ def choose(accounts, model, preferred, now, override=None):
                if best.bottleneck else "unused capacity")
         if best.session_tight:
             why += " (every verified account's session is tight)"
-        if len(ok) > 1 and best.instance_id == preferred and any(
-                (c.session_tight, c.score) == (best.session_tight, best.score) for c in ok if c is not best):
-            why += ", tie → inherited account"
         return best.instance_id, why + (f" [{note}]" if note else ""), candidates
     if unknown:
         best = min(unknown, key=tie)
@@ -252,6 +256,8 @@ def choose(accounts, model, preferred, now, override=None):
 
 def explain(model, candidates, now, selected=None, reason=""):
     lines = [f"Profile routing for {model} (usage cached ≤90 s; --force-profile bypasses this):", PLAN_HINT]
+    if any(c.tier == "1x?" for c in candidates):
+        lines.append("WARNING: unknown plan tier counts as 1x and may demote an otherwise empty session; verify plan metadata.")
     width = max((len(c.instance_id) for c in candidates), default=8)
     for c in candidates:
         if c.status == "ok":
@@ -291,12 +297,6 @@ def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None, 
     ids = [p[0] for p in provider_profiles(settings_path, driver)]
     if not ids:
         return preferred, "", ""
-    if preferred not in ids:
-        # Driver switch (Claude thread → Codex): ties prefer the sibling account.
-        try:
-            preferred = compatible(instances, preferred, family)
-        except ValueError:
-            pass
     now = datetime.now(timezone.utc)
     accounts = (collect or accounts_for)(settings_path=settings_path,
                                          cache_path=settings_path.parent / "t3-limits-cache.json", now=now)
