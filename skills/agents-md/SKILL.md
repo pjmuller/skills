@@ -42,7 +42,7 @@ These are lenses, not a template or heading quota. Omit what adds no decision va
   every request into a coding workflow. Link maintained maps instead of copying trees.
 - **Domain vocabulary:** recurring ambiguous terms, useful aliases and crucial
   distinctions, briefly defined. Prefer the product's existing language. Link
-  shared terminology at its owner, especially Rootcause terms in connected repos;
+  shared terminology at its owner, especially ReplyPen terms in connected repos;
   define only local differences here. Do not make a generic dictionary, rename
   concepts, or enumerate every model. Term count is not a target.
 - **Verification:** actual commands and when they apply, required fixtures or
