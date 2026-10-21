@@ -267,3 +267,15 @@ def test_explicit_other_provider_account_survives(monkeypatch, model, resolved, 
     monkeypatch.setattr(relay.subprocess, "run", run)
     assert relay.pick((model,), instance) == (instance, resolved, "-")
     assert calls[-1] == [str(relay.HERE / "t3-pick-instance"), resolved]
+
+
+def test_project_lookup_follows_pagination():
+    """v0.5.6 read only the first page (20 of 146 projects): launches into later repos failed."""
+    pages = {None: {"projects": [{"id": f"p{i}", "workspaceRoot": f"/x{i}"} for i in range(20)], "nextCursor": 20},
+             20: {"projects": [{"id": "target", "workspaceRoot": "/r"}], "nextCursor": None}}
+    class Paged:
+        def call(self, tool, args):
+            return pages[args.get("cursor")]
+    assert relay.project_id(Paged(), "/r") == "target"
+    with pytest.raises(SystemExit):
+        relay.project_id(Paged(), "/elsewhere")

@@ -232,10 +232,15 @@ def connect(base: str) -> Mcp:
 
 def project_id(mcp: Mcp, path: str) -> str:
     root = str(Path(path).expanduser().resolve())
-    for p in mcp.call("t3_project_list", {}).get("projects", []):
-        if p.get("workspaceRoot") == root and not p.get("deletedAt"):
-            return p["id"]
-    die(f"no T3 project for {root}; add it in T3 first")
+    args: dict = {}
+    while True:  # paginated (20 per page by default)
+        page = mcp.call("t3_project_list", args)
+        for p in page.get("projects", []):
+            if p.get("workspaceRoot") == root and not p.get("deletedAt"):
+                return p["id"]
+        if page.get("nextCursor") is None:
+            die(f"no T3 project for {root}; add it in T3 first")
+        args = {"cursor": page["nextCursor"]}
 
 
 def completion_footer() -> str:
