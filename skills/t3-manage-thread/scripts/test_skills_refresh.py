@@ -441,6 +441,8 @@ def test_release_helper_only_pushes_verified_tags(env, tmp_path, unsigned):
     for name, source in [("skills-refresh", env["script"]), ("release", SCRIPT.with_name("release"))]:
         (scripts / name).write_text(source.read_text())
         (scripts / name).chmod(0o755)
+    (scripts / "t3-relay").write_text("#!/bin/sh\nexit 0\n")   # the launch probe (live in real releases)
+    (scripts / "t3-relay").chmod(0o755)
     commit(repo, "release tools")
     git(repo, "branch", "-M", "main")
     remote = tmp_path / "origin.git"
@@ -606,3 +608,44 @@ def test_publish_skips_user_files_and_reports_unresolvable_upstream(env, tmp_pat
     release(env["repo"], "v0.3.0", "3")
     out = run(env, "--job", "--quiet").stdout
     assert "is not fetched or does not exist" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")
+
+
+def stub_t3_schedule(env):
+    calls = env["bin"].parent / "t3-schedule.calls"
+    stub = env["bin"] / "t3-schedule"
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {calls}\n')
+    stub.chmod(0o755)
+    return calls
+
+
+def test_apply_installs_without_t3_and_the_job_thread_reports_it(env):
+    """--apply = the scheduler's pre-command: lands a release even when T3/t3-relay is broken."""
+    path = f"{env['bin']}:{env['env']['PATH']}"
+    stub_t3_schedule(env)
+    applied = run(env, "--apply", PATH=path)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert "applied v0.2.0" in applied.stdout and stamp(env) == "v0.2.0"
+    report = run(env, "--job", PATH=path)
+    assert report.returncode == 10 and "by the scheduler, before this thread started" in report.stdout
+    assert "second release" in report.stdout and report.stdout.rstrip().endswith("thread: KEEP OPEN (the user should see this)")
+    assert run(env, "--job", PATH=path).returncode == 0      # reported once
+
+
+def test_apply_failure_exits_1(env, tmp_path):
+    assert run(env, "--apply", SKILLS_REFRESH_REPO=str(tmp_path / "missing")).returncode == 1
+
+
+def test_old_schedule_gains_pre_command_once(env, tmp_path):
+    import json
+    calls = stub_t3_schedule(env)
+    spec = tmp_path / "setup/.agents/schedules/skills-refresh.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('{"at": "06:30"}\n')
+    pointer = tmp_path / "userhome/.t3/userdata/scheduled/t3-schedule/skills-refresh.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(json.dumps({"name": "skills-refresh", "source": str(spec)}))
+    path = f"{env['bin']}:{env['env']['PATH']}"
+    first = run(env, PATH=path)                               # a manual run migrates too
+    assert json.loads(spec.read_text()) == {"at": "06:30", "pre_command": "skills-refresh --apply"}
+    assert "refresh" in calls.read_text() and "commit " + str(spec) in first.stdout
+    assert "pre-command" not in run(env, PATH=path).stdout    # once

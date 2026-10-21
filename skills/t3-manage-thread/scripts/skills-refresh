@@ -19,6 +19,8 @@ Usage:
                                  "ACTION NEEDED" lines at the end = something only you can fix
   skills-refresh --job [--quiet] same, then settle (0) or surface (10, 1) the T3 thread it runs in;
                                  --quiet also settles on 10 (no changelog thread)
+  skills-refresh --apply         unattended, no T3 (the scheduled job's --pre-command): apply, save the
+                                 report for the next --job thread; exit 0 = fine, 1 = needs the user
   skills-refresh --version       installed tag + date
   skills-refresh --verify-tag REPO TAG   verify with this installed pin; print commit SHA
   skills-refresh schedule [--project DIR] [--at HH:MM] [--quiet]   daily job (idempotent)
@@ -344,7 +346,7 @@ template_hint() {
 manual() {
   local rc=0
   (refresh) || rc=$?
-  if [[ "$rc" == 0 || "$rc" == 10 ]]; then template_hint; publish_managed; health; fi
+  if [[ "$rc" == 0 || "$rc" == 10 ]]; then template_hint; publish_managed; migrate_schedule; health; fi
   actions_block || true
   return "$rc"
 }
@@ -454,12 +456,61 @@ BRIEF
 
 # The scheduled thread's lifecycle is decided here, not by the (cheap) model reading a prompt:
 # nothing new → settle silently; applied (unless --quiet), failed or a template re-sync → surface once.
+# Runs from the scheduler before T3 is even checked, so a release that repairs T3 tooling (t3-relay,
+# t3-schedule) still lands when that tooling is broken. Its report waits in LAST_APPLY for --job.
+LAST_APPLY="$STATE/last-apply"
+apply() {
+  local rc=0 out
+  out="$( (refresh) 2>&1 )" || rc=$?
+  printf '%s\n' "$out"
+  mkdir -p "$STATE"
+  [[ "$rc" == 10 ]] && { echo "installed $(date '+%F %H:%M') by the scheduler, before this thread started:"; printf '%s\n' "$out"; } > "$LAST_APPLY"
+  [[ "$rc" == 0 || "$rc" == 10 ]] || exit 1
+  publish_managed
+  t3_up && health  # T3 still starting (just woke): the job thread runs health later
+  actions_block && exit 1
+  exit 0
+}
+
+t3_up() {
+  local origin
+  origin="$(sed -n 's/.*"origin": *"\([^"]*\)".*/\1/p' "${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json" 2>/dev/null)"
+  [[ -n "$origin" ]] && curl -sf --max-time 5 "$origin/.well-known/t3/environment" >/dev/null
+}
+
+# Jobs armed before --apply existed install through their T3 thread only: add the pre-command once.
+migrate_schedule() {
+  local pointer="$HOME/.t3/userdata/scheduled/t3-schedule/skills-refresh.json" spec
+  local py=(python3); command -v python3 >/dev/null || py=(uv run -q --no-project python)
+  [[ -f "$pointer" ]] && command -v t3-schedule >/dev/null || return 0
+  spec="$("${py[@]}" - "$pointer" <<'PY'
+import json, sys
+pointer = sys.argv[1]
+target = json.load(open(pointer)).get("source") or pointer
+spec = json.load(open(target))
+if not spec.get("pre_command"):
+    spec["pre_command"] = "skills-refresh --apply"
+    open(target, "w").write(json.dumps(spec, indent=2, ensure_ascii=False) + "\n")
+    print(target)
+PY
+)" || return 0
+  [[ -n "$spec" ]] || return 0
+  t3-schedule refresh >/dev/null 2>&1 || true
+  echo "scheduled job now installs updates before (and without) T3: --pre-command 'skills-refresh --apply'"
+  [[ "$spec" == "$pointer" ]] || action "commit $spec in your setup repo (skills-refresh job gained its T3-independent pre-command)"
+}
+
 job() {
   local quiet=0 rc=0
   sync_line=""
   [[ "${1:-}" == --quiet ]] && quiet=1
   (refresh) || rc=$? # die exits the refresh, but the job must still print KEEP OPEN.
+  if [[ -s "$LAST_APPLY" ]]; then # the pre-command installed it; this thread reports it
+    [[ "$rc" == 0 ]] && { cat "$LAST_APPLY"; rc=10; }
+    rm -f "$LAST_APPLY"
+  fi
   if [[ "$rc" == 0 || "$rc" == 10 ]]; then
+    migrate_schedule
     prompt_sync
     [[ -n "$(migrate_job_prompt)" ]] && { echo "job prompt updated for template re-sync; commit .agents/schedules/skills-refresh.prompt.md in your setup repo"; sync_line="${sync_line:-thread: KEEP OPEN (the user should see this)}"; }
     publish_managed
@@ -523,7 +574,7 @@ schedule() {
   mkdir -p "$STATE"
   job_prompt "$quiet" > "$STATE/job-prompt.md"
   t3-schedule add --name skills-refresh --at "$at" --project "$project" --model haiku,luna --allow-small-model \
-    --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
+    --pre-command "skills-refresh --apply" --no-notify --title "⏰ skills-refresh {date}" --force --prompt-file "$STATE/job-prompt.md" || return $?
   # Retire only our legacy Linux entry, and only once its replacement is armed.
   local old_cron
   if command -v crontab >/dev/null && old_cron="$(crontab -l 2>/dev/null)" &&
@@ -541,6 +592,7 @@ main() {
   case "${1:-}" in
     "") manual ;;
     --job) shift; job "$@" ;;
+    --apply) apply ;;
     --version) version ;;
     --verify-tag) [[ $# == 3 ]] || die "--verify-tag needs REPO TAG"; verify_release "$2" "$3" ;;
     schedule) shift; schedule "$@" ;;

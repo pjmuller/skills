@@ -11,6 +11,10 @@ tag="${1:-}"
 git -C "$repo" fetch -q origin main
 [[ "$(git -C "$repo" rev-parse HEAD)" == "$(git -C "$repo" rev-parse origin/main)" ]] ||
   { echo "Release HEAD must equal pushed origin/main" >&2; exit 1; }
+# Consumers' scheduled jobs depend on it: prove a real launch, not just `t3-relay check` (2026-10-21).
+"$dir/t3-relay" launch --project "$repo" --title "release probe $tag" --model haiku --allow-small-model \
+  --effort low --settle-when-done --wait 90 -- 'Release probe: reply "ok".' >/dev/null ||
+  { echo "t3-relay launch probe failed: fix it before releasing (relay.md)" >&2; exit 1; }
 if ! git -C "$repo" rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
   git -C "$repo" -c gpg.format=ssh tag -s -m "$tag" "$tag"
 fi

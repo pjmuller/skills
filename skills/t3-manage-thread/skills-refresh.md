@@ -42,6 +42,11 @@ Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2
   `skills-refresh --version` and `scripts/install --check`
   (`source checkout <describe>` only when the skill dir is this repo's own
   `skills/t3-manage-thread`, see `version()`).
+- **Install before T3**: the job's `--pre-command 'skills-refresh --apply'` runs in the runner before
+  T3 is even checked, so a release that repairs `t3-relay`/`t3-schedule` lands while they are broken
+  (2026-10-21: T3 0.1.1 broke the relay that launched this job). Its report waits in
+  `~/.agents/pjmuller-skills/last-apply` for the thread; failure or ACTION NEEDED (checked once T3 is up)
+  = exit 1 → one OS notification per day. Older jobs gain the pre-command on their next `--job` or manual run.
 - **Job thread** (macOS and Linux/WSL, via [t3-schedule](../t3-schedule/SKILL.md), hidden,
   cheap model): the script, not the model, decides the thread's fate — settle
   when nothing changed, surface it with the changelog on an update or the error
