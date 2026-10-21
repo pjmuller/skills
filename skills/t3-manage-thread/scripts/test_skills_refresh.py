@@ -649,3 +649,26 @@ def test_old_schedule_gains_pre_command_once(env, tmp_path):
     assert json.loads(spec.read_text()) == {"at": "06:30", "pre_command": "skills-refresh --apply"}
     assert "refresh" in calls.read_text() and "commit " + str(spec) in first.stdout
     assert "pre-command" not in run(env, PATH=path).stdout    # once
+
+
+def test_apply_keeps_actions_and_a_failed_job_keeps_the_report(env, tmp_path):
+    """Sol review r2: actions found by --apply reach the thread; a failing --job run does not eat the report."""
+    import json
+    (tmp_path / "t3/userdata").mkdir(parents=True)
+    (tmp_path / "t3/userdata/server-runtime.json").write_text(json.dumps({"origin": "http://127.0.0.1:9"}))
+    (env["bin"] / "curl").write_text("#!/bin/sh\nexit 0\n")       # T3 answers: health runs
+    (env["bin"] / "curl").chmod(0o755)
+    sched = env["home"] / "skills/t3-schedule/scripts"
+    sched.mkdir(parents=True)
+    (sched / "install").write_text('#!/usr/bin/env bash\necho "t3-relay not ready" >&2; exit 1\n')
+    (sched / "install").chmod(0o755)
+    path = f"{env['bin']}:{env['env']['PATH']}"
+    applied = run(env, "--apply", PATH=path)
+    assert applied.returncode == 1 and "ACTION NEEDED" in applied.stdout     # → one OS alert
+    saved = (env["home"] / "pjmuller-skills/last-apply").read_text()
+    assert "applied v0.2.0" in saved and "cannot fire: t3-relay not ready" in saved
+    failed = run(env, "--job", PATH=path, SKILLS_REFRESH_REPO=str(tmp_path / "unreachable"))
+    assert failed.returncode == 1 and (env["home"] / "pjmuller-skills/last-apply").exists()
+    report = run(env, "--job", PATH=path)
+    assert report.returncode == 10 and "cannot fire: t3-relay not ready" in report.stdout
+    assert not (env["home"] / "pjmuller-skills/last-apply").exists()

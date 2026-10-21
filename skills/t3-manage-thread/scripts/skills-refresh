@@ -464,12 +464,16 @@ apply() {
   out="$( (refresh) 2>&1 )" || rc=$?
   printf '%s\n' "$out"
   mkdir -p "$STATE"
-  [[ "$rc" == 10 ]] && { echo "installed $(date '+%F %H:%M') by the scheduler, before this thread started:"; printf '%s\n' "$out"; } > "$LAST_APPLY"
   [[ "$rc" == 0 || "$rc" == 10 ]] || exit 1
   publish_managed
   t3_up && health  # T3 still starting (just woke): the job thread runs health later
-  actions_block && exit 1
-  exit 0
+  local acts
+  acts="$(actions_block)" || true
+  printf '%s' "$acts"
+  # The thread reports it later; release-specific actions (removed commands) would not recur there.
+  [[ "$rc" == 10 ]] && { echo "installed $(date '+%F %H:%M') by the scheduler, before this thread started:"
+                         printf '%s\n%s\n' "$out" "$acts"; } > "$LAST_APPLY"
+  [[ -z "$acts" ]]
 }
 
 t3_up() {
@@ -505,9 +509,8 @@ job() {
   sync_line=""
   [[ "${1:-}" == --quiet ]] && quiet=1
   (refresh) || rc=$? # die exits the refresh, but the job must still print KEEP OPEN.
-  if [[ -s "$LAST_APPLY" ]]; then # the pre-command installed it; this thread reports it
-    [[ "$rc" == 0 ]] && { cat "$LAST_APPLY"; rc=10; }
-    rm -f "$LAST_APPLY"
+  if [[ -s "$LAST_APPLY" && ( "$rc" == 0 || "$rc" == 10 ) ]]; then # the pre-command installed it; report once
+    cat "$LAST_APPLY" && rm -f "$LAST_APPLY" && rc=10
   fi
   if [[ "$rc" == 0 || "$rc" == 10 ]]; then
     migrate_schedule

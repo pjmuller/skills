@@ -56,7 +56,7 @@ def test_pre_command_runs_while_t3_is_down(tmp_path, monkeypatch):
         (bin_ / tool).chmod(0o755)
     p = mod.paths("job")
     body = mod.runner_script({"name": "job", "project": "/r", "title": "t", "wait_max": 0,
-                              "pre_command": "echo updater-ran; exit 4"}, p)
+                              "pre_command": 'echo updater-ran $(echo x >> "$HOME/effects"); exit 4'}, p)
     assert body.index("pre-command:") < body.index("until t3_up")
     p["sh"].parent.mkdir(parents=True)
     p["sh"].write_text(body)
@@ -66,6 +66,7 @@ def test_pre_command_runs_while_t3_is_down(tmp_path, monkeypatch):
     assert log.index("updater-ran") < log.index("NOT fired")
     notes = (tmp_path / "notes").read_text()
     assert notes.count("notified:") == 1 and "fire called" not in notes   # one alert per day, no fire without T3
+    assert (tmp_path / "effects").read_text() == "x\n"                   # logging the command never runs it
 
 
 def test_last_run(tmp_path):
