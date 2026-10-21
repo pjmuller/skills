@@ -40,6 +40,7 @@ class FakeMcp:
 def posted(monkeypatch, tmp_path):
     fake = FakeMcp()
     monkeypatch.setattr(relay, "REQUESTS", tmp_path)
+    monkeypatch.setattr(relay, "HOME", tmp_path)
     monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
     monkeypatch.setattr(relay, "connect", lambda base: fake)
     monkeypatch.setattr(relay, "project_id", lambda mcp, path: "proj-1")
@@ -279,3 +280,12 @@ def test_project_lookup_follows_pagination():
     assert relay.project_id(Paged(), "/r") == "target"
     with pytest.raises(SystemExit):
         relay.project_id(Paged(), "/elsewhere")
+
+
+def test_launch_follows_user_default_runtime_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(relay, "HOME", tmp_path)
+    assert relay.runtime_mode() == "full-access"
+    (tmp_path / "settings.json").write_text('{"defaultRuntimeMode": "auto"}')
+    assert relay.runtime_mode() == "auto"
+    (tmp_path / "settings.json").write_text('{"defaultRuntimeMode": "bogus"}')
+    assert relay.runtime_mode() == "full-access"
