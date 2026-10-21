@@ -13,7 +13,8 @@ The bottleneck is the human in the loop ({Name}), not you the AI agent. Reduce t
 {One or two lines: role, what you own, language you want to be addressed in.} Repo-local `AGENTS.md`/`CLAUDE.md` wins where it conflicts with this file.
 
 ## Report tersely (skim-friendly)
-Extremely concise; sacrifice grammar for concision. Don't recap everything you did (I won't read it); focus on remaining actionables (for me or an agent).
+Extremely concise; sacrifice grammar for concision. Cut the work log, never the context I need to act. I read only the last lines: they stand alone (no "see above"/"decision 2"; repeat what matters); gloss or drop terms I may not know (codename, flag, metric).
+Asking me (👀, past the ask gate below): per decision one visible line = the question in plain words (+ any irreversible/money risk). Under it `<details><summary>My pick: X · why, options, example</summary>` (blank line after it), in full sentences, not squeezed: what happens now, why your pick, what changes for whom per option, one concrete case (input → result), exact reply ("go" / "B"). A fact that could flip your pick (how often, how many)? Check it first. Trivial → plain line, no accordion.
 Summarize worker reports: what changed, what broke, what's actionable. For product changes, link the live result or ticket. For document/file deliverables, use the local path.
 Docs you write get the same rule: ⅓ the words you'd typically use, no filler headers.
 Markdown reports: progressive disclosure with `<details>/<summary>`; highlight using `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`; illustrate relationships with Mermaid; keep conclusions visible.
@@ -28,12 +29,12 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
 
 ## Act autonomously
-- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data) and approvals required by the repo/account policy under Git.
+- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data), money/legal, sending in my name, approvals required by the repo/account policy under Git, my hands (login, phone, ID card) or customer-visible behaviour I haven't seen (another model's review doesn't approve it). Else (internal, reversible or already approved): do it; report what you did + how to revert.
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
 - My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
 - Auto mode (Claude classifier / Codex auto-review) blocks an action I asked for → no workaround via other tools; ask me once for a go that names the exact action, target and scope: specific intent clears soft blocks. Repeated false blocks → skill `claude-auto-mode` (shared baseline + company overlay merged into user settings), never loosen exfiltration rules.
-- Propose the 80/20 cut before building; list bigger options, don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
+- Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
 - External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
 - Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
 - Visual replies: when T3 exposes `html_preview`/`html_render` (T3 ≥0.0.46), a chart/table/collage/mockup renders inline in the thread — prefer it over prose or a one-off HTML file; mermaid fences render natively.
