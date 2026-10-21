@@ -1,6 +1,6 @@
 ---
 name: t3-usage-windows
-description: Start provider usage windows with cheap turns and chain them through the day. Use for warming accounts, daytime top-ups, window status, or banked Codex resets. Rate-limited threads need nothing: T3 0.1 marks them Limited and auto-resumes at reset.
+description: "Start provider usage windows with cheap turns and chain them through the day. Use for warming accounts, daytime top-ups, window status, or banked Codex resets. Rate-limited threads need nothing: T3 0.1 marks them Limited and auto-resumes at reset."
 ---
 
 # T3 usage windows

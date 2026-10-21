@@ -1,6 +1,6 @@
 ---
 name: t3-maintenance
-description: Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for thread inventory across projects, monthly T3 cleanup, orchestrator fleet view (stuck or undelivered delegated tasks), purging old transcripts, unsent composer drafts, "mine my prompts", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or "/t3-maintenance". Not for launching, messaging, reading or settling one thread: use the native T3 tools (t3-manage-thread).
+description: "Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for thread inventory across projects, monthly T3 cleanup, orchestrator fleet view (stuck or undelivered delegated tasks), purging old transcripts, unsent composer drafts, \"mine my prompts\", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or \"/t3-maintenance\". Not for launching, messaging, reading or settling one thread: use the native T3 tools (t3-manage-thread)."
 ---
 
 # T3 Maintenance

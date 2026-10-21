@@ -15,6 +15,8 @@ pnpm for Node, mise for runtime versions. Test before tagging:
 checks, `t3-pick-instance <model>` / `t3-relay check`, and a launchd smoke job for scheduling changes.
 Verify Markdown relative links. Never exercise destructive purge/cleanup in tests.
 Commit logical changes to main; update CHANGELOG and tag only verified releases.
+CHANGELOG lines for `agents-md/global-template.md` edits carry the why: colleagues' re-sync merges
+adopt or skip each change by it. Removed commands/flags get a "Removed:" line with the replacement.
 
 Targets T3 Code ≥ 0.1.0 (Orchestrator V2) only: agents use its MCP tools, scripts `t3-relay`.
 Linux/WSL thread helpers are supported by code paths but not live-tested here.
