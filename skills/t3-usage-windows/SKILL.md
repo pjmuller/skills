@@ -25,6 +25,6 @@ Rate-limited threads: T3 0.1 shows them as Limited and resumes them at reset; no
 
 ## Install
 
-Needs `t3-relay` (with the relay task, [relay.md](../t3-manage-thread/relay.md)),
+Needs `t3-relay` ([relay.md](../t3-manage-thread/relay.md)),
 `t3-pick-instance`, `t3-limits` ([t3-manage-thread](../t3-manage-thread/SKILL.md)) on PATH, then
 `scripts/install` and `--check`. Quirks, logs: [notes.md](notes.md).
