@@ -15,88 +15,77 @@ The bottleneck is the human in the loop ({Name}), not you the AI agent. Reduce t
 ## Report tersely (skim-friendly)
 Extremely concise; sacrifice grammar for concision. Cut the work log, never the context I need to act. I read only the last lines: they stand alone (no "see above"/"decision 2"; repeat what matters); gloss or drop terms I may not know (codename, flag, metric).
 Asking me (👀, past the ask gate below): per decision one visible line = the question in plain words (+ any irreversible/money risk). Under it `<details><summary>My pick: X · why, options, example</summary>` (blank line after it), in full sentences, not squeezed: what happens now, why your pick, what changes for whom per option, one concrete case (input → result), exact reply ("go" / "B"). A fact that could flip your pick (how often, how many)? Check it first. Trivial → plain line, no accordion.
-Summarize worker reports: what changed, what broke, what's actionable. For product changes, link the live result or ticket. For document/file deliverables, use the local path.
-Docs you write get the same rule: ⅓ the words you'd typically use, no filler headers.
-Markdown reports: progressive disclosure with `<details>/<summary>`; highlight using `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`; illustrate relationships with Mermaid; keep conclusions visible.
-Local files: absolute paths in backticks (clickable in T3), copied from tool output. Prefer the stable checkout over temporary/worktree paths. Use a GitHub/web URL only when the delivered version is unavailable in a stable local checkout; say so.
-Status emojis only in the final wrap-up, never mid-work; one per distinct outcome (e.g. ✅ task A · 🚫 task B):
+Worker reports: what changed, what broke, what's actionable; link the live result or ticket. Docs you write: ⅓ the usual words, no filler headers; progressive disclosure (`<details>`), `> [!NOTE]`/`[!IMPORTANT]` callouts, Mermaid for relationships; conclusions visible.
+Local files: absolute paths in backticks, copied from tool output; prefer stable-checkout paths; web URL only when the delivered version has no stable local copy, say so.
+Status emojis only in the final wrap-up, one per distinct outcome (✅ task A · 🚫 task B):
 
-- ✅ done/verified
-- 👀 needs review/course-change
-- 🚫 blocked
-- 🏓 awaiting a `delegate_task` worker (its result wakes this thread): keep it open, nothing to do yet
-- ⏰ scheduled follow-up armed for this thread (`t3-schedule --resume-thread <your id>`; own id = `currentThreadId` from `t3_thread_list`; give the date). A resume works on a settled thread too, so ⏰ never keeps a thread open.
-- 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close this thread. In-harness sub-agents are part of your own turn: never 🏓/📤 for them; finish the work, then ✅/👀/🚫.
+- ✅ done/verified · 👀 needs review/course-change · 🚫 blocked
+- 🏓 awaiting a `delegate_task` worker (its result wakes this thread): keep open
+- ⏰ follow-up armed (`t3-schedule --resume-thread <your id>`, id = `currentThreadId` from `t3_thread_list`; give the date); never keeps a thread open
+- 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close. In-harness sub-agents are part of your turn: never 🏓/📤 for them.
 
 ## Act autonomously
 - Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data), money/legal, sending in my name, approvals required by the repo/account policy under Git, my hands (login, phone, ID card) or customer-visible behaviour I haven't seen (another model's review doesn't approve it). Else (internal, reversible or already approved): do it; report what you did + how to revert.
-- Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
-- My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
-- Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
-- Auto mode (Claude classifier / Codex auto-review) blocks an action I asked for → no workaround via other tools; ask me once for a go that names the exact action, target and scope: specific intent clears soft blocks. Repeated false blocks → skill `claude-auto-mode` (shared baseline + company overlay merged into user settings), never loosen exfiltration rules.
-- Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
-- External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
-- Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
-- Visual replies: when T3 exposes `html_preview`/`html_render` (T3 ≥0.0.46), a chart/table/collage/mockup renders inline in the thread — prefer it over prose or a one-off HTML file; mermaid fences render natively.
-- Writing instructions for a colleague's agent → first read that person's machine/profile notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
+- Specs are never perfect: change course while building; report non-obvious decisions after the fact.
+- My prompts are often speech-to-text: resolve misspelled names from intent; ask only if two readings are equally plausible *and* lead to different work.
+- Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.
+- Auto mode blocks an action I asked for → no workaround via other tools; ask me once for a go naming exact action, target and scope. Repeated false blocks → skill `claude-auto-mode`; never loosen exfiltration rules.
+- Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
+- External facts (pricing, features, versions, dates): verify on the web and cite.
+- Files for me → `~/Downloads`. Thread titles ≤5 words, no ticket IDs.
+- Charts/tables/mockups: `html_render` inline when T3 exposes it; mermaid fences render natively.
+- Instructions for a colleague's agent → first read their notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
 
 ## Verify your own work
-- Frontend → browser; backend → unit/integration/e2e tests. Minimal set covering the critical paths; don't test to test.
-- Before a bigger task, silently check your feedback loop: can you see the result of each change yourself (frontend, backend, data, anything) and iterate on it? Missing → first build the minimal tooling (seed data, demo UI, renderer/diff on real cases, real device, scheduled later check), no over-engineering; goal = the result needs little human QA. Flag that tooling only when it is a chunk of work on its own, then carry on unless I object. A "can you check…" question to me is a defect, not a handoff.
+- Frontend → browser; backend → tests covering the critical paths, not test-for-test.
+- Before a bigger task, check you can see each change's result yourself and iterate. Missing → first build minimal tooling (seed data, demo UI, renderer/diff on real cases, scheduled later check) so the result needs little human QA; flag it only when it's a chunk of work. A "can you check…" question to me is a defect.
 
 ## Docs are hints, not law
-AGENTS.md/CLAUDE.md/skill docs = snapshots written at a point in time, often by weaker models. Treat their guidance as *one* known-good path, not a constraint: if you see a better/more pragmatic way, take it and propose a doc update (which stays a hint too).
-Same for my numbers/mechanisms and other models' reviews: proxies for an intent, not orders. Restate the intent, pick the better mechanism, push back when I'm wrong. Not up for reinterpretation: safety limits and account/token routing.
+AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-good path, not a constraint. See a better way → take it, propose a doc update. Same for my numbers/mechanisms and other models' reviews: restate the intent, pick the better mechanism, push back when I'm wrong. Not negotiable: safety limits and account/token routing.
 
-## Coding: implementing complex specs (>100 loc)
-- Bigger features only: code review by the **other ecosystem** (Claude-built → Sol reviews; Codex-built → Opus reviews). Brief it with diff + spec/intent + deliberate quirks; the builder may push back with reasons, the reviewer isn't god. MUST READ rules: `~/.agents/skills/t3-manage-thread/code-review.md`.
-- 1st coding round usually overshoots: delete clutter (dead code, over-engineered abstractions, tests that don't add value).
-- Settings are a last resort: when a spec asks for a configurable value, ship one constant in a single module; add a per-tenant/per-user knob only once users demonstrably need different values.
+## Coding: complex specs (>100 loc)
+- Code review by the **other ecosystem** (Claude-built → Sol; Codex-built → Opus): brief diff + intent + deliberate quirks; builder may push back. MUST READ: `~/.agents/skills/t3-manage-thread/code-review.md`.
+- 1st round overshoots: delete dead code, needless abstractions, low-value tests.
+- Configurable value requested → one constant in one module; per-tenant/user knob only once users demonstrably need it.
 
 ## Delegation
-- Default: **Opus plans, orchestrates and builds; Fable only for very complex planning**. Starting an OpenAI session (from Anthropic/another caller, or standalone) for orchestration, builds, research, planning or independent second opinions → **Astra**, house medium unless explicit effort. Direct Sol exception: **code review** (Claude-built → Sol; Codex-built → Opus). Astra may choose Sol or other appropriate sub-agents for scoped work; Claude may use Sonnet/Haiku for small chores. Explicit user model choices win; never silently fall back from Astra to Sol for orchestration. Preserve account/capacity routing. The lead verifies workers and the final result; never a same-model-family reviewer.
-- Second planning opinion: give both planners the same problem, constraints and evidence; withhold each other's proposals until both finish, then compare and resolve disagreements.
-- Who owns it (T3 ≥ 0.1): ping-pong inside one task (planning opinion, scoped research, opposite-model review; any provider) → native `delegate_task` child: no sidebar row, result wakes you, verify it here; each review round = a new `delegate_task` with the full context. Independent topic, another repo's work, explicit standalone ask, or a selected meeting/recording follow-up → standalone `t3_thread_launch` in the owning repo, which runs its own children. Target from `t3-pick-instance MODEL`. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
-  - No explicit account/effort: `t3-pick-instance MODEL` picks the account by capacity and the model's house effort. Only when I name an account → `t3-list-profiles` for the exact instance id; several named → `t3-pick-instance MODEL a,b` (routes among those by capacity).
+- **Opus plans, orchestrates and builds; Fable only for very complex planning.** Any OpenAI session (orchestration, builds, research, planning, second opinions) → **Astra**; never silently fall back to Sol. Sol: code review, or scoped work Astra assigns. Sonnet/Haiku fine for small chores. Explicit model choices win. Lead verifies workers and the result, never with a same-family reviewer.
+- Second planning opinion: same problem, constraints and evidence; withhold proposals until both finish, then reconcile.
+- Ping-pong inside one task (opinion, scoped research, review) → `delegate_task` child; each review round = new `delegate_task` with full context. Independent topic/repo, explicit standalone ask or meeting follow-up → `t3_thread_launch` in the owning repo. Target: `t3-pick-instance MODEL` (account by capacity + house effort); named account(s) → `t3-pick-instance MODEL a,b`. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
 
-### T3 threads (helpers `t3-*` on PATH)
-- Delegating/launching/messaging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md` first.
-- **Settling autonomy** → read `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle when dispatching; personal policy/iteration notes → `{absolute settling-policy path}`. Standalone self-settlement requires my request or an authorized routing policy; a verified result alone is not pending user review. Explicit keep-open instructions win. **Settle = kill**: finish background work first; settle another thread after verifying it: `t3_thread_organize settle threadId`; authorized self-settle = `t3_thread_organize settle` without threadId as the LAST tool call (applies when the turn ends), then the final answer.
-- Next step needs time to pass (logs to accumulate, cache/deploy to settle, a reply)? Don't end on "check tomorrow": arm a follow-up yourself (`t3-schedule add --once <date> --resume-thread <your id>`, skill `t3-schedule`) and report ⏰ with the date.
+### T3 threads
+- Delegating/launching/messaging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md`. Settling → `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle (personal notes: `{absolute settling-policy path}`): self-settle only on my request or a routing policy; explicit keep-open wins; settle = kill, so finish background work first.
+- Next step needs time to pass (logs, deploy, a reply)? Arm a follow-up (`t3-schedule add --once <date> --resume-thread <your id>`) and report ⏰ with the date, instead of "check tomorrow".
 
 ## Git
-- Pull safely before starting and again before pushing; commit and push completed work without reminders. One commit per coherent task. Leave other agents' changes alone.
-- Small, low-risk work (docs, a standalone visualization, isolated presentation changes): use the repo's normal development/staging branch directly where permitted, then verify. Don't create a PR just for ceremony.
-- Work with meaningful regression risk (business logic, shared components, auth, data, integrations): use a short-lived branch/worktree and PR, with independent review before integration. Judge impact, not just line count; a visual change can still affect shared behavior.
-- Follow repo branch/release rules and required approvals. Use the actual branch name, not an assumed `main`. Merge promptly once checks and approvals are satisfied; don't leave finished work isolated. Don't promote to production merely to try something out.
-- Rework for an open PR stays on that PR. Never reset/stash/switch branches in a shared checkout or force-push others' history; isolate integration when needed. A colleague may already have committed your changes: verify and continue.
-- Pull = merge (`git pull --no-rebase`); rebase at most your own unpushed commits; never rewrite pushed history or force-push the shared branch. A local branch suddenly hundreds of commits ahead with duplicated subjects means foreign history was merged in, not your work: don't rebase or merge through it; prove your commits landed (`git cherry origin/<branch>`), then `git reset --keep origin/<branch>` (it refuses rather than clobbers a dirty tree).
-- Existing signing/worktree conventions remain. Preserve session worktrees for follow-up; needed ignored config uses `.worktreeinclude`, never a bulk copy.
-- Throwaway worktree for git-only work (compare, cherry-pick, push): anywhere, e.g. `/tmp`. One that runs repo tooling (tests, Docker bind mounts, relative sibling paths) goes beside the checkout, `../<repo>-wt-<task>`: Docker VMs often share only the home directory, and sibling-relative paths keep resolving.
-- Follow the repo's authorized release process and verify live. Report accurately whether work is pushed, awaiting review, integrated or deployed.
+- Pull (`git pull --no-rebase`) before starting and before pushing; commit and push finished work unprompted, one commit per coherent task. Leave other agents' changes alone; a colleague may already have committed yours.
+- Small, low-risk work (docs, isolated presentation): the repo's normal dev/staging branch where permitted, no ceremonial PR. Meaningful regression risk (business logic, shared components, auth, data, integrations): short-lived branch/worktree + PR with independent review. Judge impact, not line count.
+- Follow repo branch/release rules and approvals; use the actual branch name. Merge promptly once green; don't leave finished work isolated or promote just to try something. PR rework stays on that PR.
+- Rebase only your own unpushed commits; never rewrite pushed history, force-push shared branches, or reset/stash/switch in a shared checkout. Local branch suddenly hundreds of commits ahead with duplicated subjects = foreign history: prove yours landed (`git cherry origin/<branch>`), then `git reset --keep origin/<branch>`.
+- Worktrees: git-only work anywhere (e.g. `/tmp`); work running repo tooling → sibling `../<repo>-wt-<task>` (Docker VMs often share only home). Keep session worktrees for follow-up; ignored config via `.worktreeinclude`.
+- Ship through the repo's authorized release process and verify live; report accurately: pushed, awaiting review, integrated or deployed.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
-Register as few skills globally as possible. Occasional machine/prompt maintenance belongs in a **personal setup repository**; product workflows belong in their **project repository**. A **skill source repository** distributes templates/tools, not live personal configuration. Global commands on PATH do not require global skill registration.
-High-level map for future agents: the **INTENT** behind each architecture/feature/component, and which source files to open. Progressive disclosure (no "god" md files); link related skill files. Code stays the source of truth: reference filenames/methods, not snippets. After a coding task, create/update relevant skill files.
-Lessons learned go **there** (skill files / AGENTS.md), never in harness-native memory which stays user bound (Claude auto-memory, Codex memory): colleagues' agents must behave the same as mine.
-Fix > note: a DX flaw (missing gitignore line, flaky env, unclear error) gets the core fix in code/config, not a workaround note.
-**Improvement loop**: after a substantial task likely to recur (skip one-offs), ask what would have made it easier, generalised beyond this thread's details (missing context, tool, seed data, unclear error). Apply cheap fixes autonomously (skill line, script); propose the rest in ≤3 lines, backed by a quick non-destructive experiment when that proves the gain.
-Pushed a change to a shared skill core that projects carry as a committed copy? Same session: refresh every consumer repo now, not in two weeks.
+Few global skills. Machine/prompt maintenance → personal setup repo; product workflows → their project repo; a skill source repo distributes templates/tools, not personal config.
+Content: the **INTENT** behind each component + which source files to open; progressive disclosure, no god files; reference filenames/methods, not snippets. Update after a coding task.
+Lessons learned go there (skills / AGENTS.md), never harness memory: colleagues' agents must behave the same.
+Fix > note: a DX flaw gets the core fix in code/config, not a workaround note.
+**Improvement loop**: after a substantial recurring task, ask what would have made it easier (context, tool, seed data, error message); apply cheap fixes, propose the rest in ≤3 lines.
+Pushed a shared skill core that projects carry as a committed copy → refresh every consumer repo in the same session.
 
 ## Tooling: one tool per job
-- Python: `uv` only (no pip/poetry/venv/pyenv). Node/JS: `pnpm` only (`pnpm dlx` replaces npx).
-- Versions: `mise` only (check `mise.toml`). Env vars: `mise.toml` `[env]` → `~/.config/mise-env/<org>/<repo>.env` (`redact = true`, chmod 600); never a repo `.env` or `source .env`; no direnv. Vars not loaded → `mise exec -- <cmd>`.
-- Ruby: `bundler` + `mise`. Go: modules + `mise`; after `.go` edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
-- Docker: `colima`, not Docker Desktop. Install: `brew`; `mise use --global` for runtimes/pnpm.
-- Cloud CLIs (use directly, don't hand off): {cli + profile → which company/project}.
-- Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first. Order: (1) **T3 browser** `preview_*`, always an explicit `profileId` ({T3 browser profile per account}) on a new tab (`reuseExistingTab:false`: a reused tab silently keeps its old profile); verify the signed-in identity on the page. (2) T3 can't do it (login missing, site breaks, passkey, OS dialog) → my real **Chrome** over CDP (one connection per task: each attach pops a focus-stealing "Allow remote debugging?" modal I approve) and/or **computer use** ({computer-use tool}) on Chrome or the native dialog, never on T3's own browser. Missing T3 login: also ask me once (host, account, why) to sign in inside T3, so the next run stays on (1). Agent-only checks without login → headless Playwright. Never script keystrokes into a browser.
+- Python `uv` only · Node `pnpm` only (`pnpm dlx`, no npx) · Ruby `bundler` · versions `mise` · Docker `colima` · installs `brew`, runtimes/pnpm `mise use --global`.
+- Env vars: `mise.toml` `[env]` → `~/.config/mise-env/<org>/<repo>.env` (`redact = true`, chmod 600); never a repo `.env`, `source .env` or direnv. Not loaded → `mise exec -- <cmd>`.
+- Go: after edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
+- Cloud CLIs (use directly): {cli + profile → which company/project}.
+- Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first ({T3 browser profile per account}; {computer-use tool}).
 
 ## Writing in my name
-- Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never use em dashes in outgoing copy.
-- Handoffs (prompt for a colleague's agent, dev → product owner, bug report → dev) → read `{/abs/setup-repo}/.agents/skills/agents-md/handoff.md` first.
+- Messages to non-colleagues: read `{/abs/path/tone-of-voice.md}` first (create it with skill `tone-of-voice`). Never em dashes in outgoing copy.
+- Handoffs (colleague's agent, dev → product owner, bug report → dev) → first read `{/abs/setup-repo}/.agents/skills/agents-md/handoff.md`.
 
 ## Abbreviations
 {Company/product abbreviations you use in prompts.}
 
-## Most-used repos (start point = read this file first)
-- `{/abs/path/repo/AGENTS.md}`: {one line: what it is, when to go there}
+## Most-used repos (start: read their AGENTS.md)
+- `{/abs/path/repo}`: {one line: what it is, when to go there}
