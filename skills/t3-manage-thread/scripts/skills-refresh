@@ -278,7 +278,7 @@ publish_managed() {
     n="${n##*/}"
     [[ -d "$real/$n" && ! -L "$SKILLS/$n" ]] || continue
     [[ -z "$(edited_files "$n")" ]] || continue # the user's edits: never commit them as ours
-    git -C "$root" check-ignore -q "$real/$n" && continue
+    env -u GIT_LITERAL_PATHSPECS git -C "$root" check-ignore -q "$real/$n" && continue # no literal support
     while IFS= read -r f; do files+=("$real/$n/${f#./}"); done < <(cut -d' ' -f3- "$STATE/manifest/$n")
     while IFS= read -r f; do files+=("$root/$f"); done < <(git -C "$root" ls-files -d --full-name -- "$real/$n")
   done
