@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- agents-md template: auto-mode rule (ask once naming the exact action instead of working around a block; fix repeated false blocks via `autoMode.environment`, keeping `$defaults`).
+
 ## v0.5.9 (2026-10-21)
 
 - **t3-relay: launches into any project again.** v0.5.6 read only the first page of `t3_project_list` (20 projects), so launches into later repos failed with "no T3 project". Now follows the cursor.
