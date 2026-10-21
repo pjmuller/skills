@@ -169,7 +169,7 @@ Goal: agents run without permission clicks, and data protection stays as strict 
 secrets manager; Host containment incl. OS/WSL; no secrets). Company overlays = `.agents/claude-auto-mode.json` in
 each company repo cloned under `~/code` (pull first). Existing `autoMode` entries in a home → move them into the
 personal overlay, then run
-`uv run .agents/skills/claude-auto-mode/scripts/merge.py <company overlays> ai/claude-auto-mode.json --apply`
+`uv run .claude/skills/claude-auto-mode/scripts/merge.py <company overlays> ai/claude-auto-mode.json --apply`
 (all homes; record the command in SETUP.md, re-run when an overlay changes). T3 Settings: new threads default to
 Auto. Non-developers keep their deploy guard in the global prompt; the baseline deploy rule only fires when the
 user asks for that deploy. [Skill](../../skills/claude-auto-mode/SKILL.md).
