@@ -71,6 +71,7 @@ Same for my numbers/mechanisms and other models' reviews: proxies for an intent,
 - Rework for an open PR stays on that PR. Never reset/stash/switch branches in a shared checkout or force-push others' history; isolate integration when needed. A colleague may already have committed your changes: verify and continue.
 - Pull = merge (`git pull --no-rebase`); rebase at most your own unpushed commits; never rewrite pushed history or force-push the shared branch. A local branch suddenly hundreds of commits ahead with duplicated subjects means foreign history was merged in, not your work: don't rebase or merge through it; prove your commits landed (`git cherry origin/<branch>`), then `git reset --keep origin/<branch>` (it refuses rather than clobbers a dirty tree).
 - Existing signing/worktree conventions remain. Preserve session worktrees for follow-up; needed ignored config uses `.worktreeinclude`, never a bulk copy.
+- Throwaway worktree for git-only work (compare, cherry-pick, push): anywhere, e.g. `/tmp`. One that runs repo tooling (tests, Docker bind mounts, relative sibling paths) goes beside the checkout, `../<repo>-wt-<task>`: Docker VMs often share only the home directory, and sibling-relative paths keep resolving.
 - Follow the repo's authorized release process and verify live. Report accurately whether work is pushed, awaiting review, integrated or deployed.
 
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
