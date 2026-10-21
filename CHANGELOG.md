@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.5.7 (2026-10-21)
+
 - **skills-refresh: no more silent breakage on consumer machines** (feedback from a colleague's v0.5.0 → v0.5.4 upgrade). What only you can fix now ends the output as one `ACTION NEEDED` block and keeps the job thread open, also with `--quiet`, every day until fixed. Previously a missing relay was a warning above a long changelog, and the scheduler failed for 3 days with only a log and a once-a-day banner. Sources: the scheduler health check (`t3-schedule install --check`, every run, also when up to date; lists obsolete relay webhook tasks); commands a release removed that your global prompt or own skills still call (file:line); commit/push problems. Manual `skills-refresh` prints the same block plus a hint when your prompt's template marker is behind the installed tag (only `--job` merges).
 - **skills-refresh: owns its output in a git-tracked skills dir.** When `~/.agents/skills` lives in a setup repo, every run commits exactly the managed skill dirs whose release files are unedited. It pushes them to the branch's upstream only when every unpushed commit is its own. A failed commit or push is an action, retried daily. A managed copy whose release files you edited blocks the next apply and lists the files, instead of being replaced silently. Commit, edit guard and removed-command scan start with the release after this one: the old script runs this apply, so no release fingerprint exists yet.
 - skills-refresh template re-sync: the merge brief cites the CHANGELOG entries since the base as the why per change. At most one delegated merge per release per 24 h, so a catch-up run can't start a second one beside a running merge.
