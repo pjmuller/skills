@@ -13,7 +13,7 @@ the normal confirm rules. Personal profile → account map lives in the user's o
 
 ## Signing in inside T3 (v0.1.x)
 
-- Import: Settings → Integrations → Browser profiles → import from Chrome = cookies only, Chrome must be quit, re-run when a Chrome login is fresher. **Google sessions don't survive import** on recent Chrome (device-bound session credentials keep the key in Chrome): sign in to Google inside T3 instead.
+- Import: Settings → Integrations → Browser profiles → import from Chrome = cookies only, Chrome must be quit, re-run when a Chrome login is fresher. **Google sessions don't survive import** on recent Chrome (device-bound session credentials keep the key in Chrome): sign in to Google inside T3 instead. Several Google accounts in one profile: pick by email with `?authuser=<email>` (e.g. `mail.google.com/mail/?authuser=…`), not by `/u/<n>` slot. Only the agent session that opened a tab can close it.
 - Login page: default = ask the user once to log in inside the visible T3 tab with their password manager app (name host, account, profile, why). Agent-driven logins only when they ask for it.
 - Password/TOTP, agent-driven: a vault helper (e.g. [bitwarden](../bitwarden/SKILL.md) `bw-once copy`) puts one field on the clipboard; agent `preview_press Meta+V` lands only while that tab has keyboard focus (the user clicked into it). In-page clipboard reads are denied. Never `preview_type` a secret.
 - Passkeys: v0.1.0 has no macOS passkey sheet (password-manager passkeys unavailable); sign in in Chrome, then re-import cookies.
