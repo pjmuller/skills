@@ -50,8 +50,9 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this
 | `resume_thread` | `send --thread` (model/profile/title/settle refused) |
 
 Without `--settle-when-done` the prompt (or the helper it runs) owns the lifecycle.
-`--no-notify` drops the success notification. `run-now <name>` fires through the service
-manager and tails the log.
+`--no-notify` drops the success notification. `--pre-command CMD` runs CMD in the runner before
+the T3 wait (no T3 needed; nonzero exit → one notification per day, the fire still follows); the
+skills updater uses it. `run-now <name>` fires through the service manager and tails the log.
 
 ## Contract
 

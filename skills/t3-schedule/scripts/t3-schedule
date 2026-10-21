@@ -29,6 +29,7 @@ import os
 import plistlib
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -53,7 +54,8 @@ SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the pr
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
 REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
              "allow_small_model": False, "settle_when_done": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
-             "machines": "one", "adopted_by": None, "paused": False, "pause_until": None}  # [] = nobody (skips)
+             "machines": "one", "adopted_by": None, "paused": False, "pause_until": None,
+             "pre_command": None}  # [] = nobody (skips)
 # Armed before allow_small_model existed; refusing them would stop the updater that brings the fix.
 LEGACY_SMALL_JOBS = {"skills-refresh"}
 MACHINES = ("one", "many")             # one = a single primary machine (takeover needs confirmation)
@@ -75,6 +77,19 @@ def label_for(name: str) -> str:
 
 def systemd() -> bool:
     return sys.platform.startswith("linux")
+
+
+def os_notify(msg: str) -> None:
+    """macOS notification; under WSL a Windows tray balloon (no module needed); else nothing (the log stays)."""
+    if not systemd():
+        subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
+    elif ps := shutil.which("powershell.exe"):
+        text = msg.replace("'", "''")
+        script = ("Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; "
+                  "$n.Icon = [System.Drawing.SystemIcons]::Warning; $n.Visible = $true; "
+                  f"$n.ShowBalloonTip(15000, 't3-schedule', '{text}', 'Warning'); Start-Sleep 15; $n.Dispose()")
+        subprocess.Popen([ps, "-NoProfile", "-WindowStyle", "Hidden", "-Command", script], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def paths(name: str) -> dict[str, Path]:
@@ -210,7 +225,8 @@ def pause_label(spec: dict, today: date | None = None) -> str | None:
 def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
     src, prompt_file = repo_files(project, name)
     src.parent.mkdir(parents=True, exist_ok=True)
-    fields = {k: default if spec.get(k) is None else spec[k] for k, default in REPO_KEYS.items()}
+    fields = {k: default if spec.get(k) is None else spec[k] for k, default in REPO_KEYS.items()
+              if k != "pre_command" or spec.get(k)}  # optional: absent in jobs that never set it
     src.write_text(json.dumps(fields, indent=2, ensure_ascii=False) + "\n")
     prompt_file.write_text(prompt)
     return src
@@ -529,9 +545,9 @@ def runner_script(spec: dict, p: dict[str, Path]) -> str:
         checks_again = "  pause_check\n  owner_check\n"
     else:
         checks = checks_again = ""
-    linux_preamble = f"""# Linux notifications are optional; the durable log and T3 thread are the acknowledgement.
+    linux_preamble = f"""# Linux: notifications go to Windows under WSL (t3-schedule notify), else only the log.
 if [[ "$(uname -s)" == Linux ]]; then
-  osascript() {{ return 0; }}
+  osascript() {{ local m="${{2#display notification \\"}}"; t3-schedule notify "${{m%%\\" with title*}}"; }}
   exec 9> {shlex.quote(str(p["sh"].with_suffix(".lock")))}
   flock -n 9 || exit 0
 fi
@@ -540,6 +556,12 @@ if [[ "$T3_SCHEDULE_AUTOMATIC" == 1 && "$T3_SCHEDULE_FORCE" != 1 ]]; then
   t3-schedule due-check {qname} || exit 0
 fi
 """ if systemd() else ""
+    pre = f"""  # --pre-command runs without T3: the skills updater must still land when T3 or t3-relay is broken.
+  echo "-- pre-command: {spec['pre_command']}"
+  ( {spec['pre_command']} ) 2>&1 | sed 's/^/   /'
+  pre_rc=${{pipestatus[1]}}
+  (( pre_rc == 0 )) || alert "{name}: pre-command FAILED (exit $pre_rc) - see log"
+""" if spec.get("pre_command") else ""
     return f"""#!/bin/zsh
 # {'one-shot' if spec.get('once') else 'recurring'} T3 job armed by `t3-schedule add {qname}`; edit via t3-schedule, not here
 export PATH="{SCHEDULE_PATH}"
@@ -556,19 +578,19 @@ export PATH="{SCHEDULE_PATH}"
   }}
   # Failures notify once per day: the catch-up poller retries every {CATCH_UP_INTERVAL // 60} min until
   # slot+{CATCH_UP_GRACE_HOURS}h, so a flapping T3 must not spam the notification center.
-  fail() {{
+  alert() {{
     echo "-- $1"
     if [[ "$(cat {shlex.quote(str(p["failed"]))} 2>/dev/null)" != "$today" ]]; then
       echo "$today" > {shlex.quote(str(p["failed"]))}
       osascript -e "display notification \\"$1 (catch-up retries until {'23:00' if spec.get('once') else f'slot+{CATCH_UP_GRACE_HOURS}h'})\\" with title \\"t3-schedule\\"" || true
     fi
-    exit 1
   }}
+  fail() {{ alert "$1"; exit 1; }}
   notify() {{
     echo "-- $1"
     {'' if spec.get("notify", True) else '# --no-notify: the thread itself decides whether the user must look\n    : '}osascript -e "display notification \\"$1\\" with title \\"t3-schedule\\"" || true
   }}
-{checks}  waited=0
+{checks}{pre}  waited=0
   until t3_up; do
     if (( waited >= {spec["wait_max"]} )); then
       fail "{name}: T3 Code unreachable for ${{waited}}m, NOT fired"
@@ -908,6 +930,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         "once": once,
         "wait_max": args.wait_max,
         "resume_thread": resume,
+        "pre_command": args.pre_command,
         "created": datetime.now().astimezone().isoformat(timespec="minutes"),
     }
     versioned = versionable(spec)
@@ -1276,9 +1299,8 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
         paths(name)["sh"].unlink(missing_ok=True)
         spec["retired"] = status
         paths(name)["spec"].write_text(json.dumps(spec, indent=2) + "\n")
-        if status.startswith("expired") and not systemd():
-            msg = f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired"
-            subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'], capture_output=True)
+        if status.startswith("expired"):
+            os_notify(f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired")
     # An accepted-but-unconfirmed fire is re-checked here (a status read, no runner): landed →
     # mark fired; failed → due again below; still pending → never re-fired (could duplicate).
     for spec in specs():
@@ -1296,10 +1318,7 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
                 continue
             failed.write_text(f"{now:%Y-%m-%d}\n")
             kicked.append(f"{name} UNCONFIRMED")
-            if not systemd():
-                msg = f"{name}: relay accepted but launch unconfirmed for {PENDING_ALERT // 60}+ min"
-                subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "t3-schedule"'],
-                               capture_output=True)
+            os_notify(f"{name}: relay accepted but launch unconfirmed for {PENDING_ALERT // 60}+ min")
     # One job per tick, earliest slot first: after a long power-off several slots are due at
     # once, and firing them together would make every launch route to the same profile from
     # the same limits snapshot. Spacing them by one tick re-reads the limits between jobs.
@@ -1524,6 +1543,8 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--allow-small-model", action="store_true",
                      help="permit haiku/luna as the launched thread's model (refused by default)")
     add.add_argument("--settle-when-done", action="store_true", help="append the self-settle footer (clean outcome only)")
+    add.add_argument("--pre-command", metavar="CMD", help="shell command the runner runs first, without T3 "
+                     "(e.g. `skills-refresh --apply`); nonzero exit notifies once per day, the fire still follows")
     add.add_argument("--no-notify", action="store_true", help="no macOS notification on launch (failures still notify once per day)")
     add.add_argument("--title", help="thread title; {date} → YYYY-MM-DD. Default: '⏰ <name> {date}'")
     add.add_argument("--prompt-file", help="read the prompt from a file instead of the argument")
@@ -1611,6 +1632,10 @@ def build_parser() -> argparse.ArgumentParser:
     due = sub.add_parser("due-check", help="(runner-internal) check the bounded catch-up window")
     due.add_argument("name")
     due.set_defaults(func=cmd_due_check)
+
+    notify = sub.add_parser("notify", help="(runner-internal) OS notification: macOS, or Windows under WSL")
+    notify.add_argument("message")
+    notify.set_defaults(func=lambda a: os_notify(a.message) or 0)
 
     runner_path = sub.add_parser("runner-path", help="print the PATH scheduled runners get (used by install --check)")
     runner_path.set_defaults(func=cmd_runner_path)

@@ -20,7 +20,9 @@ t3-schedule run-now skills-refresh                                 # one real ru
 skills-refresh --version                                           # prints the applied release tag
 ```
 
-- Both platforms: T3 Code ≥ 0.1 must be running; the job is a T3 thread on a cheap model that settles itself.
+- Both platforms: the scheduler installs the release first, without T3 (`skills-refresh --apply`), so a
+  release that repairs broken T3 tooling still lands. Then a T3 thread on a cheap model reports and settles
+  itself (T3 Code ≥ 0.1). Jobs armed before v0.5.9 gain that step on their next run; nothing to redo.
 - macOS uses launchd; Linux/WSL uses persistent systemd user timers. Run the installer check
   to verify the service manager and runner PATH. Windows execution stays inside WSL.
 - Keep the computer awake and WSL running (T3 connected to its WSL backend). A systemd
@@ -39,10 +41,10 @@ skills-refresh --version                                           # prints the 
 - Something only you can fix: an `ACTION NEEDED` block at the end of the thread. A scheduler that
   can't fire or a pending commit/push is re-checked every day until fixed; a command a release removed
   but your prompt or own skills still use is listed in that release's update thread.
-- The scheduler itself can't start threads (T3 closed, relay broken): no thread can appear. You get
-  one macOS notification per job per day (`t3-schedule: … FAILED`) and the log
-  `~/.t3/userdata/logs/t3-schedule.<job>.log`. Run `skills-refresh` by hand: it applies any fix
-  and prints the same ACTION block.
+- The scheduler itself can't start threads (T3 closed, relay broken): updates still install, and the
+  report waits for the next thread. You get one notification per job per day (macOS; Windows tray under
+  WSL) and the log `~/.t3/userdata/logs/t3-schedule.<job>.log`. The next release usually fixes it by
+  itself; `skills-refresh` by hand applies it now and prints the same ACTION block.
 - Your skills dir lives in a git repo: each update is committed there (only the refreshed skills),
   and pushed unless you have unpushed commits of your own.
 

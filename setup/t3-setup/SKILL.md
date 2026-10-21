@@ -146,7 +146,7 @@ pnpm dlx skills add pjmuller/skills -s t3-manage-thread -g -y $A
 pnpm dlx skills add pjmuller/skills -s t3-schedule -g -y $A      # macOS or Linux/WSL
 ~/.agents/skills/t3-schedule/scripts/install                     # --relink if an older copy owns the command
 skills-refresh                                                   # pin to newest release tag
-skills-refresh schedule --project <setup-repo>                   # daily job (launchd on macOS, systemd user timer on Linux/WSL)
+skills-refresh schedule --project <setup-repo>                   # daily: installs without T3 (pre-command), a T3 thread reports
 # from the setup repo (repo-local):
 pnpm dlx skills add pjmuller/skills -s agents-md -y $A
 pnpm dlx skills add pjmuller/skills -s tone-of-voice -y $A       # when selected

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.5.9 (2026-10-21)
+
+- **skills-refresh installs without T3.** The daily job now runs `skills-refresh --apply` as a t3-schedule `--pre-command`, before T3 is even checked; the T3 thread only reports (changelog, template re-sync, ACTION NEEDED). A release that repairs broken T3 tooling therefore lands by itself (v0.5.6, the relay fix, could not reach machines already on T3 0.1.1: the job ran through the broken relay). Existing jobs gain the pre-command on their next run; commit the changed `.agents/schedules/skills-refresh.json` when the thread asks.
+- **t3-schedule `--pre-command CMD`**: runs in the runner without T3; nonzero exit notifies once per day, the fire still follows. Notifications under WSL now reach Windows (tray balloon via `powershell.exe`); `t3-schedule notify <msg>` tests it.
+- Maintainer `scripts/release` refuses to tag unless a real `t3-relay launch` probe succeeds.
 - **t3-preview-gc: no more window crash-reload.** Since T3 0.1, closing a preview tab frees its renderer (verified on v0.1.1), so `--apply` only closes the tabs of settled/archived threads idle past `--idle-hours` and logs renderers before → after. Removed: `--min-guests`, `--quiet-seconds`, `--wait-minutes` and the UI-renderer SIGSEGV + View → Reload fallback (no replacement needed).
 
 ## v0.5.8 (2026-10-21)

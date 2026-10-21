@@ -11,7 +11,8 @@ Scheduler bridge). Needs systemd, a running **user** manager and `/bin/zsh`; no 
 - **systemd does not keep WSL alive or wake a suspended Windows machine.** Keep it awake; an
   overdue one-shot catches up within its window or expires visibly in `list`.
   `loginctl enable-linger "$USER"` keeps the user manager up without a login (only when needed).
-- No notifications: evidence is the T3 thread, `list` and the log.
+- Notifications: a Windows tray balloon through `powershell.exe` (WSL interop) when available,
+  else none; evidence is then the T3 thread, `list` and the log. Test: `t3-schedule notify hello`.
   `systemctl --user list-timers`, `journalctl --user -u com.t3-skills.t3-schedule.<name>.service`.
 
 `scripts/smoke-native-scheduler` (both platforms) arms a marker-only timer/LaunchAgent, waits

@@ -44,6 +44,30 @@ def test_runner_fires_through_relay_step(tmp_path, monkeypatch):
     assert body.count("display notification") == 2  # once in fail(), once on success
 
 
+def test_pre_command_runs_while_t3_is_down(tmp_path, monkeypatch):
+    """The skills updater rides on --pre-command so it lands even when T3 / t3-relay is broken."""
+    import os, subprocess
+    monkeypatch.setenv("HOME", str(tmp_path))
+    bin_ = tmp_path / ".local/bin"
+    bin_.mkdir(parents=True)
+    for tool, body in {"curl": "exit 7", "osascript": 'echo "notified: $*" >> "$HOME/notes"',
+                       "t3-schedule": 'echo "fire called" >> "$HOME/notes"'}.items():
+        (bin_ / tool).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_ / tool).chmod(0o755)
+    p = mod.paths("job")
+    body = mod.runner_script({"name": "job", "project": "/r", "title": "t", "wait_max": 0,
+                              "pre_command": "echo updater-ran; exit 4"}, p)
+    assert body.index("pre-command:") < body.index("until t3_up")
+    p["sh"].parent.mkdir(parents=True)
+    p["sh"].write_text(body)
+    rc = subprocess.run(["zsh", str(p["sh"])], env={**os.environ, "HOME": str(tmp_path)}).returncode
+    log = p["log"].read_text()
+    assert rc == 1 and "   updater-ran" in log and "pre-command FAILED (exit 4)" in log and "NOT fired" in log
+    assert log.index("updater-ran") < log.index("NOT fired")
+    notes = (tmp_path / "notes").read_text()
+    assert notes.count("notified:") == 1 and "fire called" not in notes   # one alert per day, no fire without T3
+
+
 def test_last_run(tmp_path):
     log = tmp_path / "l.log"
     assert mod.last_run(log) == "never"
@@ -255,7 +279,8 @@ def test_add_continuation_validation(tmp_path, monkeypatch, capsys):
         "name": "fu", "at": "07:30", "once": None, "weekdays": False, "days": None, "project": None,
         "profile": None, "model": None, "thinking": None, "allow_small_model": False, "settle_when_done": False,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["go"], "wait_max": 1,
-        "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False, **kw}))
+        "force": False, "dry_run": True, "resume_thread": TID, "many_machines": False, "takeover": False,
+        "pre_command": None, **kw}))
     assert add() == 0 and "t3-schedule fire fu" in capsys.readouterr().out  # no project needed
     for kw, msg in (({"resume_thread": "self"}, "currentThreadId"), ({"settle_when_done": True}, "settle-when-done"),
                     ({"model": "opus"}, "drop"), ({"resume_thread": None}, "--project is required"),
@@ -283,7 +308,7 @@ def add_args(**kw):
         "name": "nightly", "at": "07:30", "once": None, "weekdays": True, "days": None, "project": None,
         "profile": "work", "model": "fable", "thinking": None, "allow_small_model": False, "settle_when_done": True,
         "no_notify": False, "title": None, "prompt_file": None, "prompt": ["Run the report."], "wait_max": 10,
-        "force": False, "dry_run": False, "resume_thread": None, "many_machines": False, "takeover": False, **kw})
+        "force": False, "dry_run": False, "resume_thread": None, "many_machines": False, "takeover": False, "pre_command": None, **kw})
 
 
 def test_add_recurring_writes_repo_spec_once_stays_local(tmp_path, monkeypatch):
