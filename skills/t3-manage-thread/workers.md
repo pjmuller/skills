@@ -1,82 +1,41 @@
 # Workers: 🏓 `delegate_task` · 📤 `t3_thread_launch`
 
-Verified on T3 0.1.0 (2026-10-16; evidence: macbook_setup `decissions/t3_native_workers.md`).
+Verified T3 0.1.0 (2026-10).
 
 ## Which one
 
-- **🏓 native child** (`delegate_task`): ping-pong inside **this thread's task**: second planning
-  opinion, scoped research, sub-step, opposite-model code review. Any provider/model (cross-provider
-  is native). Runs in this thread's project/checkout. Unclear sub-step → 🏓.
-- **📤 standalone** (`t3_thread_launch`): independent topic the user follows on its own, work owned
-  by another repo, the user said "separate / own thread / hand off", or a **selected** recording or
-  meeting follow-up. Each standalone thread delegates its own 🏓 children. Test: would this
-  thread's answer change when the result lands? No → 📤.
-- A distinct outcome gets a new standalone even within the same topic/repo. For an independent
-  opinion, give a fresh `delegate_task` the original problem, constraints and evidence, withholding
-  the lead's reasoning. Never switch the lead's model for a second opinion; model replacement
-  remains available for an explicit user switch or authorized recovery.
-- One task + several models = one lead (this thread) with 🏓 children. Never standalone peers the
-  user must combine.
+- **🏓 child** (`delegate_task`): ping-pong inside **this task** (opinion, scoped research, sub-step, opposite-model review); any provider, this checkout. Unclear → 🏓.
+- **📤 standalone** (`t3_thread_launch`): independent topic, another repo's work, user said "separate / own thread / hand off", or a **selected** recording/meeting follow-up; runs its own 🏓 children. Test: result lands, does this thread's answer change? No → 📤. Distinct outcome → own standalone, even same repo.
+- Independent opinion: fresh `delegate_task` with original problem, constraints, evidence, minus the lead's reasoning; don't switch the lead's model for it (only user request or authorized recovery). Several models on one task = one lead + 🏓 children, never peers the user must combine.
 
 ## 🏓 `delegate_task`
 
 ```text
-read instance model effort <<< "$(t3-pick-instance sol)"     # e.g. codex_dentai gpt-6.1-sol high
+read instance model effort <<< "$(t3-pick-instance sol)"     # e.g. codex_work gpt-6.1-sol high
 delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mode: "async",
   role: "review", clientRequestId: "<stable per round>",
   target: {providerInstanceId: instance, model: model, options: {reasoningEffort|effort: effort}}}
 → end your turn. The completion wakes you (batched); read it with task_status.
 ```
 
-- **No sidebar row** (`relationshipToParent: "subagent"`, visible in the parent's lineage). Questions
-  and approvals show as **Input / Approval on the parent row**. Answer questions with
-  `t3_pending_request_*` (`threadId` = `childThreadId`). Only the user can approve, so leave `runtimeMode` unset.
-- The result is the child's **final answer**, after its background and nested work. Brief it to put
-  the report there. No footer, no settle.
-- The child gets **only the task text** and shares your checkout (`isolation: "worktree"` for its own).
-  Nesting works.
-- **Every review round = a new `delegate_task`** (new `clientRequestId`, stable across retries of
-  that round) whose task carries the original brief, prior findings, your responses and open
-  objections. `childThreadId` is storage, not the target of a new round. `t3_thread_send` to it only
-  for a short clarification that needs that child's own conversation (new `taskId`, result wakes you).
-- `task_cancel` stops it. Stopping the parent stops its tasks. Settling the parent does not: a later
-  child result wakes and unsettles it.
-- Reading a terminal result acknowledges it. Don't poll, and use `mode: "wait"` only for seconds-long tasks.
-- Unverified: recovery when parent or child is limited, stopped or restarted. Keep the task ids and
-  check `task_status` if a wake seems overdue.
+- **No sidebar row** (`relationshipToParent: "subagent"`); questions/approvals show as **Input / Approval on the parent row**. Answer questions via `t3_pending_request_*` (`threadId` = `childThreadId`); only the user approves (leave `runtimeMode` unset).
+- Result = its **final answer** (after background/nested work): brief it to report there; no footer, no settle. It gets **only the task text**, shares your checkout (`isolation: "worktree"` for its own); nesting works.
+- **Every review round = a new `delegate_task`** (new `clientRequestId`, stable across that round's retries) carrying original brief, prior findings, your responses, open objections. `childThreadId` is storage: `t3_thread_send` to it only for a short clarification needing its conversation (new `taskId`, wakes you).
+- `task_cancel` or stopping the parent stops it; settling doesn't (a later result wakes and unsettles the parent).
+- Reading a terminal result acknowledges it. Don't poll; `mode: "wait"` only for seconds-long tasks. Recovery after parent/child limit/stop/restart is unverified: keep task ids, `task_status` if a wake is overdue.
 
 ### Provider unavailable or failed
 
-`orchestrator_capabilities` reports cached health; `t3-pick-instance` reports capacity.
-Neither proves execution. A Codex **status-probe timeout** does not prove expired auth:
-with an explicit `providerInstanceId`, `delegate_task` re-probes an unavailable instance
-once before refusing (verified T3 0.1.0). Keep the selected account; let that recheck run.
-If dispatch refuses for a transient timeout, retry once after 30 s with the same
-`clientRequestId`. An accepted task is different: inspect its `taskId`, never blindly resend.
-
-For a failed run, read the concrete provider error first: `ENOTFOUND` means DNS failed;
-“model at capacity” is model availability, not subscription quota; only an authentication
-error warrants investigating credentials. Recheck connectivity/status before reauth.
-Resume a failed standalone owner only when authorized and still failed/inactive; preserve
-its prompt and never duplicate a launch or restart active/completed work.
+- `orchestrator_capabilities` (cached health) and `t3-pick-instance` (capacity) don't prove execution. Codex **status-probe timeout** ≠ expired auth: with explicit `providerInstanceId`, `delegate_task` re-probes once before refusing, so keep the account. Transient-timeout refusal → one retry after 30 s, same `clientRequestId`; accepted → inspect its `taskId`, never resend blindly.
+- Failed run → read the provider error: `ENOTFOUND` = DNS; "model at capacity" = model availability, not quota; only an auth error warrants checking credentials, after rechecking connectivity/status.
+- Resume a failed standalone owner only if authorized and still failed/inactive; keep its prompt, never duplicate a launch or restart active/completed work.
 
 ### Recover a limit-interrupted owner
 
-Use `t3-fleet list --limited` ([maintenance](../t3-maintenance/SKILL.md)) across the fleet,
-including children and suspected terminal limit text on a completed run. Read the owner
-and its parent before recovery: a replacement worker may already own the remaining work.
-Check live capacity in the authorized account pool; preserve thread ID, model/options and
-permissions. Re-read immediately before mutation; never restart active or completed work.
-
-For an inactive owner, `t3_thread_configure` with the new instance and original selection,
-then one idempotent `t3_thread_send` to resume unfinished work. T3 owns context transfer;
-same-provider account switches can use a summary handoff, not necessarily native-session
-resume. Verify actual execution and retained context, not just configure acceptance.
-
-Inspect `t3_queue_list` first: a queued child-result delivery can retain the old account.
-If so, preserve its full text, cancel only that unstarted delivery with `t3_queue_cancel`,
-and include it once in the new continuation. Never discard user messages or attachments.
-Old `limitRecovery` metadata alone is not a current failure; never replay superseded children.
+1. `t3-fleet list --limited` ([maintenance](../t3-maintenance/SKILL.md)), incl. children and terminal limit text on completed runs; old `limitRecovery` metadata alone isn't a current failure.
+2. Read owner and parent (a replacement may own the rest; never replay superseded children). Check live capacity in the authorized pool; keep thread ID, model/options, permissions.
+3. `t3_queue_list`: a queued child-result delivery may keep the old account → save its text, `t3_queue_cancel` only that unstarted delivery, include it once in the continuation; never discard user messages/attachments.
+4. Re-read right before mutating. Inactive owner → `t3_thread_configure` (new instance, original selection), one idempotent `t3_thread_send` to resume (T3 transfers context; same-provider switches may get a summary). Verify real execution and kept context, not configure acceptance.
 
 ## 📤 `t3_thread_launch`
 
@@ -86,17 +45,12 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
   workspaceStrategy: {type: "root"}}            # or worktree / existing_worktree
 ```
 
-- Visible top-level thread. Fire-and-forget only with the user's go or a routing policy: append the
-  [completion footer](settle-thread.md#completion-footer-for-t3_thread_launch).
-- `projectId` = the repo that owns the work. Another project than yours → say so in the brief.
-  Default workspace = project **root**, not your worktree.
-- **No retry key**: after an error or lost response, check `t3_thread_list` before launching again.
-- Report the id as a link: `[title](t3-thread://v1/<threadId>)`, the `threadId` verbatim as the tool returned it, prefix included (`t3-thread://v1/mcp:287f…`); never strip `mcp:` or URL-encode it.
+- Visible thread. Fire-and-forget only on the user's go or a routing policy: append the [completion footer](settle-thread.md#completion-footer-for-t3_thread_launch).
+- `projectId` = repo owning the work (not yours → say so in the brief). Default workspace: project **root**, not your worktree.
+- **No retry key**: error or lost response → check `t3_thread_list` before relaunching.
+- Report `[title](t3-thread://v1/<threadId>)`, `threadId` verbatim incl. prefix (`t3-thread://v1/mcp:287f…`): never strip `mcp:` or URL-encode.
 
 ## Briefs and titles
 
-- Brief = a markdown file, path in the task/message ([dispatch-workers.md](dispatch-workers.md)).
-  Images: copy to a stable path and name it in the brief.
-- Title: `<emoji> <3-6 words>` in the user's language, no ticket ids.
-- Model and account: [routing.md](routing.md). Pick again immediately before each spawn,
-  never reuse a selection across a batch. Model choice implies no account/repository affinity.
+- Brief: markdown file, path in task/message ([dispatch-workers.md](dispatch-workers.md)); images at a stable path named in it. Title `<emoji> <3-6 words>`, user's language, no ticket ids.
+- Model/account: [routing.md](routing.md); re-pick before each spawn, never reuse across a batch; model implies no account/repo affinity.
