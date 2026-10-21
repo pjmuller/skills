@@ -5,7 +5,7 @@ for all companies. Draft with the google-workspace-personal CLI (`gmail-draft` /
 send); PJ reviews in Gmail. PJ may edit the draft himself: read it back (`gmail-draft-get`) before every update.
 
 ## Format (PJ's rules, 2026-10-13)
-- Subject `BTW Q<n> - <year>: KampAdmin - Momentum Tools - ProBackup`. Dutch, informal: "Dag Jona," … "Toy toy toy :)", signature once.
+- Subject `BTW Q<n> - <year>: KampAdmin - Momentum Tools - ProBackup`. Dutch, informal: "Dag Jona," … signature once. No sign-off line ("Toy toy toy :)" fit one mail where Jona still had work ahead; never a fixed closer).
 - One section per company: header **bold + underlined** (`<b><u>Pro Backup</u></b>`), so pass `--html-file` with the
   HTML alternative next to the plain `--body-file` (plain text cannot underline). Order: Pro Backup, Momentum Tools, KampAdmin.
 - Anomalies only, as `-` bullets, one row per bullet: `DD-MM € -bedrag Leverancier: waarom + what Jona should do`
