@@ -37,5 +37,5 @@ A send never changes the target's mode.
    one `t3_thread_send` with the same `clientRequestId`. Lost answer = unknown delivery: read the
    owner before any retry.
 
-Still denied after C → report the read-back modes; don't loop. Server-side fix proposed upstream:
+Still denied after C → report the read-back modes; don't loop. Server-side fix proposed upstream ([t3code discussion 22975](https://github.com/pingdotgg/t3code/discussions/22975)):
 a user-approved continuation request (Auto caller submits; the user approves that one delivery).
