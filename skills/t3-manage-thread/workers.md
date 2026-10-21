@@ -60,6 +60,24 @@ error warrants investigating credentials. Recheck connectivity/status before rea
 Resume a failed standalone owner only when authorized and still failed/inactive; preserve
 its prompt and never duplicate a launch or restart active/completed work.
 
+### Recover a limit-interrupted owner
+
+Use `t3-fleet list --limited` ([maintenance](../t3-maintenance/SKILL.md)) across the fleet,
+including children and suspected terminal limit text on a completed run. Read the owner
+and its parent before recovery: a replacement worker may already own the remaining work.
+Check live capacity in the authorized account pool; preserve thread ID, model/options and
+permissions. Re-read immediately before mutation; never restart active or completed work.
+
+For an inactive owner, `t3_thread_configure` with the new instance and original selection,
+then one idempotent `t3_thread_send` to resume unfinished work. T3 owns context transfer;
+same-provider account switches can use a summary handoff, not necessarily native-session
+resume. Verify actual execution and retained context, not just configure acceptance.
+
+Inspect `t3_queue_list` first: a queued child-result delivery can retain the old account.
+If so, preserve its full text, cancel only that unstarted delivery with `t3_queue_cancel`,
+and include it once in the new continuation. Never discard user messages or attachments.
+Old `limitRecovery` metadata alone is not a current failure; never replay superseded children.
+
 ## 📤 `t3_thread_launch`
 
 ```text
@@ -80,4 +98,5 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 - Brief = a markdown file, path in the task/message ([dispatch-workers.md](dispatch-workers.md)).
   Images: copy to a stable path and name it in the brief.
 - Title: `<emoji> <3-6 words>` in the user's language, no ticket ids.
-- Model and account: [routing.md](routing.md). No explicit account/effort unless the user names one.
+- Model and account: [routing.md](routing.md). Pick again immediately before each spawn,
+  never reuse a selection across a batch. Model choice implies no account/repository affinity.

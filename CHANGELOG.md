@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-21 — account routing and recovery
+
+- Route away from half-spent sessions burning ahead of pace; remove inherited-account
+  tie preference. Generic model requests never imply repository/account affinity.
+- Support identity-bound, operator-confirmed size metadata for profiles with no plan
+  label; warn when unknown tiers demote available capacity. No credential changes.
+- Extend `t3-fleet list` with compact limit/lineage diagnostics, including queued and
+  misleadingly completed failures. Document native continuation and per-spawn picks.
+
+
 ## Unreleased
 
 - t3-setup: new "Auto mode (Claude)" step (install `claude-auto-mode` repo-local, personal + company overlays, T3 default Auto) plus verification. Why: new colleagues get the auto-mode setup in the one bootstrap prompt, no separate prompt.

@@ -8,7 +8,8 @@ description: "Audit and maintain the user's T3 Code thread fleet, or mine their 
 T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`). Flags: `--help`.
 
 - `t3-fleet` — one line per thread across projects; kinds `top` / `launched` / `task` /
-  `subagent` from V2 lineage; `--stalled` = delegated tasks stuck or never delivered.
+  `subagent` from V2 lineage; `--stalled` = delegated tasks stuck or never delivered;
+  `--limited` / `--lineage` = compact quota/launch diagnostics ([below](#fleet-diagnostics)).
 - `t3-drafts` — unsent composer text per thread (the user's sticky notes: "DONE", "TODO read").
 - `t3-my-prompts` — the user's own prompts, compacted for recurring-instruction mining.
 - `t3-purge-threads` — hard-delete old threads + transcripts (secrets); `drop-v1` frees the frozen
@@ -32,6 +33,32 @@ refuse unless T3 Code is fully closed.
 
 Short ids: a thread's own UUID prefix (`c811b689`), else 8 hex of a sha1 of the opaque id;
 every helper accepts the full id or ≥ 8 chars of that key.
+
+## Fleet diagnostics
+
+`t3-fleet list --limited [--json]` includes tasks/native children. Structured root
+`usage_limit` on the latest **executed** failed run of a top-level/launched owner = actionable; queued/unstarted
+cancelled submissions cannot hide it. Active/later successful work and settled threads
+are excluded. `limitRecovery` alone is historical, never proof of a current limit.
+Terminal assistant limit text (even on a completed run) = suspected, never actionable.
+Delegated-task and native-child failures = `review_needed`: their parent (`recovery_owner_id`) may already
+have recovered/replaced them. Includes runless failed children with rate-limit/HTTP429
+terminal text (any role). Never resume those children blindly.
+
+<details><summary>Selection, ancestry and evidence</summary>
+
+`list --lineage` includes all child kinds; `list --descendants ID` restricts to recursive
+children. Parent evidence comes from structured subagents/lineage or the first user
+message's sender, never project/time proximity. Missing sender stays unknown. Actual
+launch/delegate tool results corroborate known edges when structured output is available.
+JSON adds current instance/model/options, first-run selection, parent evidence and limit
+time/reset/status; existing keys retain their meanings. No raw tool payloads/transcripts.
+
+Diagnostic modes default unbounded; ordinary `list` keeps 50. Any explicit/default
+truncation warns on stderr, including `--json` (stdout remains a JSON array).
+These commands only read; recovery/launch decisions stay with the caller/native tools.
+
+</details>
 
 ## Git leftovers (`t3-git-leftovers`)
 

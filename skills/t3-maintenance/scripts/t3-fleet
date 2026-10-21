@@ -43,6 +43,11 @@ STUCK_AFTER = timedelta(minutes=10)
 PREVIEW_CHARS = 80
 TITLE_CHARS = 40
 PROJECT_CHARS = 18
+LIMIT_TEXT = re.compile(
+    r"(?:you(?:['’]ve| have) (?:hit|reached) (?:your |the )?(?:usage |rate |session )?limit|"
+    r"(?:usage|rate)[ _-]limit(?:[ _-](?:reached|exceeded)|\s*[:·]|$)|"
+    r"you(?:['’]re| are) out of (?:extra )?usage)", re.I
+)
 
 
 def parse_duration(value: str) -> timedelta:
@@ -91,6 +96,7 @@ class Thread:
     task_status: str | None = None
     stall_state: str | None = None
     children: list[str] = field(default_factory=list)
+    diagnostics: dict = field(default_factory=dict)
 
     @property
     def live(self) -> bool:
@@ -122,16 +128,117 @@ class Thread:
             "children": self.children,
             "deleted": self.deleted,
             "archived": self.archived,
+            **self.diagnostics,
         }
 
 
-def load_fleet(store: Path, now: datetime) -> dict[str, Thread]:
+def run_diagnostics(db) -> dict:
+    """Keep latest submitted, latest executed, and first-run selection distinct."""
+    result = {}
+    for row in db.execute("""
+        SELECT * FROM (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ordinal DESC) AS newest,
+            ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ordinal) AS first,
+            ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY
+              CASE WHEN status = 'queued' OR (status = 'cancelled' AND
+                json_extract(payload_json, '$.startedAt') IS NULL) THEN 1 ELSE 0 END,
+              completed_at IS NULL DESC, completed_at DESC, ordinal DESC, run_id DESC) AS executed
+          FROM orchestration_v2_projection_runs
+        ) WHERE newest = 1 OR first = 1 OR executed = 1
+    """):
+        data = dict(row)
+        data["payload"] = json.loads(row["payload_json"])
+        info = result.setdefault(row["thread_id"], {})
+        if row["first"] == 1:
+            info["first_run_selection"] = data["payload"].get("modelSelection")
+        if row["executed"] == 1 and row["status"] != "queued" and not (
+            row["status"] == "cancelled" and not data["payload"].get("startedAt")
+        ):
+            info["executed"] = data
+    return result
+
+
+def limit_diagnostic(db, thread, run, terminal, now) -> dict | None:
+    if thread.settled or thread.deleted or thread.archived:
+        return None
+    # Queued submissions are held behind the failure; any executing run supersedes it.
+    if run and run["status"] in LIVE_RUN:
+        return None
+    error = db.execute("""
+        SELECT payload_json, updated_at FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ? AND run_id = ? AND type = 'error' AND status = 'failed'
+          AND node_id IS ? ORDER BY updated_at DESC, ordinal DESC, turn_item_id DESC LIMIT 1
+    """, (thread.thread_id, run["run_id"], run["payload"].get("rootNodeId"))).fetchone() if run else None
+    failure = (json.loads(error["payload_json"]).get("failure") or {}) if error else {}
+    if run and run["status"] == "failed" and failure.get("class") == "usage_limit":
+        reset = failure.get("resetAt")
+        reset_time = maybe_time(reset)
+        child = thread.kind in {"task", "subagent"}
+        return {"status": "review_needed" if child else "actionable", "actionable": not child, "confidence": "high",
+                **({"recovery_owner_id": thread.parent_id} if child else {}),
+                "source": "root_error.failure.class", "run_id": run["run_id"],
+                "limited_at": run["completed_at"] or error["updated_at"], "reset_at": reset,
+                "reset_status": "unknown" if not reset_time else "due" if reset_time <= now else "waiting"}
+    if terminal:
+        at, role, text, run_id = terminal
+        if (thread.kind == "subagent" and thread.task_status == "failed"
+                and (not run or run["status"] == "failed")
+                and (LIMIT_TEXT.search(text) or re.search(r"\brate[_ -]limit\b|\bHTTP\s*429\b", text, re.I))):
+            return {"status": "review_needed", "actionable": False, "confidence": "low",
+                    "source": "native_failed_child_text", "recovery_owner_id": thread.parent_id,
+                    "run_id": run["run_id"] if run else None, "limited_at": at,
+                    "reset_at": None, "reset_status": "unknown"}
+        if not run:
+            return None
+        started = run["payload"].get("startedAt") or run["payload"].get("requestedAt")
+        if (role == "assistant" and LIMIT_TEXT.search(text)
+                and (run_id == run["run_id"] or (not run_id and started and at >= started))):
+            return {"status": "suspected", "actionable": False, "confidence": "low",
+                    "source": "terminal_assistant_text", "run_id": run["run_id"],
+                    "limited_at": at, "reset_at": None, "reset_status": "unknown"}
+    return None
+
+
+def launch_evidence(db, parent_ids: set[str]) -> dict:
+    """Corroborate known edges only, using actual tool results, never prompt text."""
+    evidence = {}
+    for row in db.execute("""
+        SELECT thread_id, json_extract(payload_json, '$.toolName') AS tool,
+          COALESCE(json_extract(payload_json, '$.output.structuredContent'),
+                   json_extract(payload_json, '$.output')) AS output,
+          COALESCE(json_extract(payload_json, '$.input.target'),
+                   json_extract(payload_json, '$.input.modelSelection')) AS target
+        FROM orchestration_v2_projection_turn_items WHERE type = 'dynamic_tool'
+          AND thread_id IN (SELECT value FROM json_each(?))
+          AND (payload_json LIKE '%t3_thread_launch%' OR payload_json LIKE '%delegate_task%')
+          AND status = 'completed' AND (json_extract(payload_json, '$.toolName') LIKE '%t3_thread_launch'
+            OR json_extract(payload_json, '$.toolName') LIKE '%delegate_task')
+        ORDER BY updated_at, turn_item_id
+    """, (json.dumps(sorted(parent_ids)),)):
+        output = json.loads(row["output"] or "{}")
+        if not isinstance(output, dict):
+            continue
+        child = output.get("childThreadId") or output.get("threadId")
+        if child:
+            selected = output.get("modelSelection") or {}
+            requested = json.loads(row["target"] or "null")
+            evidence.setdefault((row["thread_id"], child), {
+                "source": row["tool"], "instance_id": selected.get("instanceId") or output.get("providerInstanceId") or output.get("instanceId"),
+                "model": selected.get("model") or output.get("model"), "options": selected.get("options", output.get("options")),
+                "requested_target": {k: requested[k] for k in ("providerInstanceId", "instanceId", "model", "options")
+                                     if k in requested} if isinstance(requested, dict) else None})
+    return evidence
+
+
+def load_fleet(store: Path, now: datetime, *, corroborate: bool = False) -> dict[str, Thread]:
     with connect_readonly(store) as db:
         rows = db.execute("""
             SELECT t.thread_id, t.title, t.created_at, t.updated_at, t.deleted_at, t.archived_at,
                    json_extract(t.payload_json, '$.settledOverride') AS settled_override,
                    json_extract(t.payload_json, '$.pinnedAt') AS pinned_at,
                    json_extract(t.payload_json, '$.lineage.parentThreadId') AS lineage_parent,
+                   t.provider_instance_id,
+                   json_extract(t.payload_json, '$.modelSelection') AS model_selection,
                    p.title AS project, p.workspace_root
             FROM orchestration_v2_projection_threads t
             LEFT JOIN projection_projects p ON p.project_id = t.project_id
@@ -146,16 +253,19 @@ def load_fleet(store: Path, now: datetime) -> dict[str, Thread]:
             """)
         }
         last: dict[str, tuple[str, str, str]] = {}
+        terminal = {}
         first: dict[str, str | None] = {}
         for row in db.execute("""
             SELECT thread_id, role, created_at,
                    substr(json_extract(payload_json, '$.text'), 1, 400) AS text,
+                   substr(json_extract(payload_json, '$.text'), -400) AS tail, run_id,
                    json_extract(payload_json, '$.senderThreadId') AS sender
             FROM orchestration_v2_projection_messages
             ORDER BY thread_id, created_at, message_id
         """):
             tid = row["thread_id"]
             last[tid] = (row["created_at"], row["role"], row["text"] or "")
+            terminal[tid] = (row["created_at"], row["role"], row["tail"] or "", row["run_id"])
             if row["role"] == "user":
                 first.setdefault(tid, row["sender"])
         tasks = {
@@ -167,43 +277,63 @@ def load_fleet(store: Path, now: datetime) -> dict[str, Thread]:
             """)
         }
 
-    threads: dict[str, Thread] = {}
-    for row in rows:
-        tid = row["thread_id"]
-        last_at, last_role, last_text = last.get(tid, (row["created_at"], None, ""))
-        moment = maybe_time(last_at) or maybe_time(row["updated_at"]) or now
-        task = tasks.get(tid)
-        sender = first.get(tid)
-        if task is not None:
-            kind = "task" if task["origin"] == "app_owned" else "subagent"
-            parent = task["parent"]
-        elif row["lineage_parent"]:
-            kind, parent = "subagent", row["lineage_parent"]
-        elif sender and sender != tid:
-            kind, parent = "launched", sender
-        else:
-            kind, parent = "top", None
-        thread = Thread(
-            thread_id=tid,
-            project=row["project"] or "?",
-            workspace_root=row["workspace_root"] or "",
-            title=row["title"],
-            kind=kind,
-            parent_id=parent,
-            settled=row["settled_override"] == "settled",
-            pinned=row["pinned_at"] is not None,
-            run_status=runs.get(tid),
-            deleted=row["deleted_at"] is not None,
-            archived=row["archived_at"] is not None,
-            created_at=row["created_at"],
-            last_activity_at=iso(moment),
-            age_seconds=(now - moment).total_seconds(),
-            last_role=last_role,
-            last_text=last_text,
-            task_status=task["status"] if task is not None else None,
-        )
-        thread.stall_state = stall_state(thread, task)
-        threads[tid] = thread
+        run_info = run_diagnostics(db)
+        parents = {p for p in [*first.values(), *(r["lineage_parent"] for r in rows),
+                               *(t["parent"] for t in tasks.values())] if p}
+        launches = launch_evidence(db, parents) if corroborate else {}
+        threads: dict[str, Thread] = {}
+        for row in rows:
+            tid = row["thread_id"]
+            last_at, last_role, last_text = last.get(tid, (row["created_at"], None, ""))
+            moment = maybe_time(last_at) or maybe_time(row["updated_at"]) or now
+            task = tasks.get(tid)
+            sender = first.get(tid)
+            if task is not None:
+                kind = "task" if task["origin"] == "app_owned" else "subagent"
+                parent = task["parent"]
+            elif row["lineage_parent"]:
+                kind, parent = "subagent", row["lineage_parent"]
+            elif sender and sender != tid:
+                kind, parent = "launched", sender
+            else:
+                kind, parent = "top", None
+            thread = Thread(
+                thread_id=tid,
+                project=row["project"] or "?",
+                workspace_root=row["workspace_root"] or "",
+                title=row["title"],
+                kind=kind,
+                parent_id=parent,
+                settled=row["settled_override"] == "settled",
+                pinned=row["pinned_at"] is not None,
+                run_status=runs.get(tid),
+                deleted=row["deleted_at"] is not None,
+                archived=row["archived_at"] is not None,
+                created_at=row["created_at"],
+                last_activity_at=iso(moment),
+                age_seconds=(now - moment).total_seconds(),
+                last_role=last_role,
+                last_text=last_text,
+                task_status=task["status"] if task is not None else None,
+            )
+            thread.stall_state = stall_state(thread, task)
+            info = run_info.get(tid, {})
+            executed = info.get("executed")
+            selection = json.loads(row["model_selection"] or "{}")
+            source = ("projection_subagents" if task is not None else "thread.lineage" if row["lineage_parent"]
+                      else "first_user_message.senderThreadId" if parent else None)
+            corroboration = launches.get((parent, tid))
+            thread.diagnostics = {
+                "provider_instance_id": selection.get("instanceId") or row["provider_instance_id"],
+                "model": selection.get("model"), "options": selection.get("options", []),
+                "first_run_selection": info.get("first_run_selection"),
+                "parent_evidence": {"source": source, "confidence": "high" if parent else "unknown",
+                                    "corroboration": corroboration},
+                "latest_executed_run_id": executed["run_id"] if executed else None,
+                "latest_executed_status": executed["status"] if executed else None,
+                "limit": limit_diagnostic(db, thread, executed, terminal.get(tid), now),
+            }
+            threads[tid] = thread
     for thread in threads.values():
         if thread.parent_id in threads:
             threads[thread.parent_id].children.append(thread.thread_id)
@@ -238,7 +368,7 @@ def select(args: argparse.Namespace, threads: dict[str, Thread]) -> list[Thread]
     rows = list(threads.values())
     if not args.all:
         rows = [t for t in rows if not t.deleted and not t.archived]
-    if not (args.subagents or args.parent or args.stalled):
+    if not (args.subagents or args.parent or args.stalled or args.limited or args.lineage or args.descendants):
         rows = [t for t in rows if t.kind in ("top", "launched")]
     if args.recent is not None:
         rows = [t for t in rows if t.age_seconds <= args.recent.total_seconds()]
@@ -257,18 +387,33 @@ def select(args: argparse.Namespace, threads: dict[str, Thread]) -> list[Thread]
     if args.parent:
         parent = resolve_id(threads, args.parent)
         rows = [t for t in rows if t.parent_id == parent]
+    if args.descendants:
+        root = resolve_id(threads, args.descendants)
+        descendants, pending = set(), list(threads[root].children)
+        while pending:
+            child = pending.pop()
+            if child == root or child in descendants:
+                continue
+            descendants.add(child)
+            pending.extend(threads[child].children)
+        rows = [t for t in rows if t.thread_id in descendants]
     if args.status:
         rows = [t for t in rows if (t.run_status or "idle") == args.status]
     if args.settled is not None:
         rows = [t for t in rows if t.settled is args.settled]
     if args.stalled:
         rows = [t for t in rows if t.stall_state]
+    if args.limited:
+        rows = [t for t in rows if t.diagnostics.get("limit")]
     return sorted(rows, key=lambda t: (t.age_seconds, t.thread_id))
 
 
 def cmd_list(args: argparse.Namespace, threads: dict[str, Thread]) -> int:
     rows = select(args, threads)
-    shown = rows[: args.limit]
+    limit = args.limit if args.limit is not None else (None if args.limited or args.lineage or args.descendants else 50)
+    shown = rows[:limit]
+    if len(rows) > len(shown):
+        print(f"WARNING: truncated: showing {len(shown)} of {len(rows)} threads (raise --limit)", file=sys.stderr)
     if args.json:
         print(json.dumps([t.as_dict() for t in shown], ensure_ascii=False, indent=2))
         return 0
@@ -276,6 +421,20 @@ def cmd_list(args: argparse.Namespace, threads: dict[str, Thread]) -> int:
         print("No matching threads.")
         return 0
     for t in shown:
+        if args.limited or args.lineage or args.descendants:
+            d = t.diagnostics
+            selection = f"{d['provider_instance_id']}/{d['model']} {json.dumps(d['options'], separators=(',', ':'))}"
+            evidence = d["parent_evidence"]
+            edge = f"parent={t.parent_id or '?'} ({evidence['confidence']}:{evidence['source'] or 'none'})"
+            limited = d["limit"]
+            detail = (f"limit={limited['status']} at={limited['limited_at']} reset={limited['reset_at'] or '?'} "
+                      f"({limited['reset_status']}; {limited['confidence']}:{limited['source']})") if limited else ""
+            if limited and limited.get("recovery_owner_id"):
+                detail += f" recovery_owner={limited['recovery_owner_id']}"
+            print(f"{short_id(t.thread_id)} {t.kind} {one_line(t.title, TITLE_CHARS)} "
+                  f"created={t.created_at} run={t.run_status or 'idle'} executed={d['latest_executed_status'] or 'none'} "
+                  f"{selection} {edge} {detail}".rstrip())
+            continue
         state = t.stall_state or t.run_status or "idle"
         print(
             f"{short_id(t.thread_id)}  {t.kind[:8]:<8}  {one_line(t.project, PROJECT_CHARS):<{PROJECT_CHARS}}  "
@@ -283,8 +442,6 @@ def cmd_list(args: argparse.Namespace, threads: dict[str, Thread]) -> int:
             f"{'✓' if t.settled else '·'}  {fmt_age(t.age_seconds):>7}  "
             f"{(t.last_role or '-')[:9]}: {one_line(t.last_text, PREVIEW_CHARS)}"
         )
-    if len(rows) > len(shown):
-        print(f"... {len(rows) - len(shown)} more (raise --limit)")
     return 0
 
 
@@ -309,6 +466,9 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument(
         "--parent", help="children (tasks, sub-agents, launches) of this id"
     )
+    listing.add_argument("--descendants", help="all descendants of this id; compact lineage output")
+    listing.add_argument("--lineage", action="store_true", help="compact selection/parent evidence; includes children")
+    listing.add_argument("--limited", action="store_true", help="structured usage limits and suspected terminal limit text; includes children")
     listing.add_argument(
         "--subagents", action="store_true", help="include tasks and sub-agents"
     )
@@ -323,14 +483,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="stuck or undelivered delegate_task children",
     )
     listing.add_argument("--all", action="store_true", help="include deleted/archived")
-    listing.add_argument("--limit", type=int, default=50)
+    listing.add_argument("--limit", type=int, help="row cap (default 50; diagnostics unbounded); warns on stderr")
     listing.add_argument("--json", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return cmd_list(args, load_fleet(args.store, datetime.now(UTC)))
+    return cmd_list(args, load_fleet(args.store, datetime.now(UTC),
+                                   corroborate=bool(args.lineage or args.descendants or args.limited)))
 
 
 if __name__ == "__main__":
