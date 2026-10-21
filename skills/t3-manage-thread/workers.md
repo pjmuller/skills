@@ -33,7 +33,7 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
 ### Recover a limit-interrupted owner
 
 1. `t3-fleet list --limited` ([maintenance](../t3-maintenance/SKILL.md)), incl. children and terminal limit text on completed runs; old `limitRecovery` metadata alone isn't a current failure.
-2. Read owner and parent (a replacement may own the rest; never replay superseded children). Check live capacity in the authorized pool; keep thread ID, model/options, permissions.
+2. Read owner and parent (a replacement may own the rest; never replay superseded children). Check live capacity in the authorized pool; keep thread ID, model/options, permissions ([broader-mode owner](permission-ceiling.md)).
 3. `t3_queue_list`: a queued child-result delivery may keep the old account → save its text, `t3_queue_cancel` only that unstarted delivery, include it once in the continuation; never discard user messages/attachments.
 4. Re-read right before mutating. Inactive owner → `t3_thread_configure` (new instance, original selection), one idempotent `t3_thread_send` to resume (T3 transfers context; same-provider switches may get a summary). Verify real execution and kept context, not configure acceptance.
 
