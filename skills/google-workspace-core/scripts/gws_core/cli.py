@@ -12,6 +12,7 @@ from . import auth as auth_module
 from .config import load_config
 from .drive import EXPORT_MIME
 from .errors import WorkspaceError
+from .gmail import thread_id_from, thread_url
 from .inputs import (extract_id, parse_json_arg, parse_values, protected_write, read_json,
                      read_requests, read_text)
 from .render import out, table, trunc, write_out
@@ -390,13 +391,15 @@ def cmd_gmail_export(a, ws):
 def cmd_gmail_get(a, ws):
     message = ws.gmail.get(a.id)
     out(message, a.json, format_message(ws.gmail.view(message, trim=not a.full), a.max_chars))
+    print_open_url(ws, message.get("threadId"), a.json)
 
 
 def cmd_gmail_thread(a, ws):
-    thread = ws.gmail.thread(a.id)
+    thread = ws.gmail.thread(thread_id_from(a.id))
     views = [ws.gmail.view(message, trim=not a.full) for message in thread.get("messages", [])]
     human = "\n\n---\n\n".join(format_message(view, a.max_chars, heading=True) for view in views)
     out(thread, a.json, human or "(empty thread)")
+    print_open_url(ws, thread.get("id"), a.json)
 
 
 def cmd_gmail_recent(a, ws):
@@ -410,6 +413,19 @@ def print_mail_ref(ws, thread_id: str | None, as_json: bool) -> None:
     owns the mail case for t3-mail-link (t3-manage-thread/mail-link.md). stderr keeps --json parseable."""
     if thread_id:
         print(f"Mail-ref: gmail:{thread_id} {ws.config.account.lower()}", file=sys.stderr if as_json else sys.stdout)
+        print_open_url(ws, thread_id, as_json)
+
+
+def print_open_url(ws, thread_id: str | None, as_json: bool) -> None:
+    """Clickable thread link for the human reading the report; stderr keeps --json parseable."""
+    if thread_id:
+        print(f"Open: {thread_url(ws.config.account, thread_id)}", file=sys.stderr if as_json else sys.stdout)
+
+
+def cmd_gmail_url(a, ws):
+    thread_id = thread_id_from(a.ref)
+    url = thread_url(ws.config.account, thread_id)
+    out({"threadId": thread_id, "url": url}, a.json, url)
 
 
 def cmd_gmail_draft(a, ws):
@@ -926,7 +942,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--full", action="store_true", help="keep quoted chains and signatures")
 
     command = add("gmail-thread", cmd_gmail_thread, "all messages in a thread")
-    command.add_argument("id", help="thread id")
+    command.add_argument("id", help="thread id, Mail-ref or Gmail/print link")
+
+    command = add("gmail-url", cmd_gmail_url,
+                  "normal Gmail link for a thread id, Mail-ref or print link (offline)")
+    command.add_argument("ref", help="e.g. a view=pt print link with permthid=thread-f:…")
     command.add_argument("--max-chars", type=int, default=12000)
     command.add_argument("--full", action="store_true")
 

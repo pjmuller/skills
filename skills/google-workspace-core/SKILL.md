@@ -28,6 +28,10 @@ Hard rules:
 Gmail draft/send commands print `Mail-ref: gmail:<thread id> <account>` on their own line: in T3
 that claims the mail case for the running thread, so replies wake it ([mail cases](../t3-manage-thread/mail-link.md)).
 Don't filter that line away; never put it in the mail itself.
+They, plus `gmail-get`/`gmail-thread`, also print `Open: <normal Gmail link>`: put it in every
+report about a mail so the human can click straight to the thread. A pasted print link
+(`view=pt&permthid=thread-f:…`) or Mail-ref → `gmail-url <ref>` gives that link; `gmail-thread`
+accepts the same refs. Link shape `mail/?authuser=<account>#all/<hex id>` (`/mail/u/<email>/` 404s).
 
 Conventions: compact text output, `--json` for the raw payload (machine callers always pass it).
 Commands take a Google URL or bare id. Slide arguments take a 1-based number, an objectId or a
