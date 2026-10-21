@@ -18,6 +18,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote, urlparse
 
 from .errors import ApiError, WorkspaceError
 from .session import GMAIL, Session
@@ -27,6 +28,33 @@ KEPT_HEADERS = ("From", "To", "Cc", "Bcc", "Subject", "In-Reply-To", "References
 MAX_ATTACH_BYTES = 20 * 1024 * 1024  # total of --attach files; Gmail caps a message at 25 MB
 # A 4-10 character run of letters+digits containing at least one digit: 123456, A1B2C3, 9F4K2.
 CODE_RE = re.compile(r"\b(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{4,10}\b")
+HEX_ID_RE = re.compile(r"[0-9a-f]{15,16}")
+
+
+def thread_url(account: str, thread_id: str) -> str:
+    """Normal Gmail view of a thread. authuser=<email> picks the mailbox whatever its /u/N slot;
+    /mail/u/<email>/ answers 404 and the print view (view=pt) is not what humans want to open."""
+    return f"https://mail.google.com/mail/?authuser={quote(account.lower(), safe='@')}#all/{thread_id}"
+
+
+def thread_id_from(value: str) -> str:
+    """Hex API thread id from a bare id, `gmail:<id>` Mail-ref, print link (permthid=thread-f:<decimal>)
+    or a Gmail URL ending in /<hex id>. The API id is the hex form of the thread-f decimal."""
+    value = value.strip().removeprefix("gmail:").split()[0]
+    if HEX_ID_RE.fullmatch(value.lower()):
+        return value.lower()
+    if match := re.search(r"thread-f:(\d+)", value):
+        return format(int(match.group(1)), "x")
+    url = urlparse(value)
+    if th := parse_qs(url.query).get("th"):
+        return th[0].lower()
+    last = url.fragment.rsplit("/", 1)[-1]
+    if HEX_ID_RE.fullmatch(last.lower()):
+        return last.lower()
+    raise WorkspaceError(f"no Gmail thread id in {value!r}: pass a hex id, a print link (permthid=thread-f:…) "
+                         "or a #all/<hex id> URL; the new-UI FMfcg… tokens cannot be decoded")
+
+
 QUOTE_MARKERS = (
     r"^On [^\n]{1,400}?(?:\n[^\n]{0,120})?\s*wrote:\s*$",
     r"^Op .{1,400}? schreef.{0,200}?:\s*$",

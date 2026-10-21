@@ -16,7 +16,7 @@ EXPECTED_COMMANDS = {
     "sheet-batch-write", "sheet-batch", "sheet-add-tab", "sheet-delete-rows", "sheet-freeze-rows",
     "sheet-format-rows", "sheet-named-ranges", "sheet-add-named-range", "sheet-tables",
     "table-read", "table-append", "table-rename",
-    "gmail-search", "gmail-export", "gmail-recent", "gmail-get", "gmail-thread", "gmail-send", "gmail-draft",
+    "gmail-search", "gmail-export", "gmail-recent", "gmail-get", "gmail-thread", "gmail-url", "gmail-send", "gmail-draft",
     "gmail-draft-list", "gmail-draft-get", "gmail-draft-update", "gmail-draft-send", "gmail-draft-delete",
     "gmail-labels", "gmail-label", "gmail-attachments", "gmail-save-text",
     "slides-resolve", "slides-outline", "slides-slide", "slides-text", "slides-replace", "slides-set-text",
@@ -148,4 +148,41 @@ def test_draft_prints_a_mail_ref_line_t3_mail_link_can_claim(capsys):
     args.json = True
     cmd_gmail_draft(args, ws)
     captured = capsys.readouterr()
-    assert captured.err == "Mail-ref: gmail:19e875318442de06 operator@example.com\n"
+    assert captured.err.startswith("Mail-ref: gmail:19e875318442de06 operator@example.com\nOpen: ")
+
+
+def test_draft_also_prints_a_clickable_gmail_link(capsys):
+    from gws_core.cli import cmd_gmail_draft
+    draft = {"id": "r-1", "message": {"id": "m1", "threadId": "19e875318442de06"}, "verified": {"files": 0}}
+    ws = SimpleNamespace(config=SimpleNamespace(account="Operator@Example.com"),
+                         gmail=SimpleNamespace(create_draft=lambda *a, **k: draft))
+    args = build_parser().parse_args(["gmail-draft", "--to", "a@b.c", "--subject", "s", "--body", "b"])
+    args.json = False
+    cmd_gmail_draft(args, ws)
+    assert ("\nOpen: https://mail.google.com/mail/?authuser=operator@example.com#all/19e875318442de06\n"
+            in capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("ref", [
+    ("https://mail.google.com/mail/u/1/?ik=85be6e80b2&view=pt&search=all"
+     "&permthid=thread-f:1879530680048795886&simpl=msg-f:1879530680048795886"),
+    "gmail:1a156f3200c1c0ee info@probackup.io",
+    "1A156F3200C1C0EE",
+    "https://mail.google.com/mail/u/0/#inbox/1a156f3200c1c0ee",
+    "https://mail.google.com/mail/u/0/?ui=2&view=pt&th=1a156f3200c1c0ee",
+])
+def test_gmail_url_turns_any_thread_reference_into_the_normal_view(ref, capsys):
+    from gws_core.cli import cmd_gmail_url
+    ws = SimpleNamespace(config=SimpleNamespace(account="info@probackup.io"))
+    args = build_parser().parse_args(["gmail-url", ref])
+    args.json = False
+    cmd_gmail_url(args, ws)
+    assert capsys.readouterr().out.strip() == \
+        "https://mail.google.com/mail/?authuser=info@probackup.io#all/1a156f3200c1c0ee"
+
+
+def test_gmail_url_refuses_new_ui_tokens():
+    from gws_core.errors import WorkspaceError
+    from gws_core.gmail import thread_id_from
+    with pytest.raises(WorkspaceError, match="FMfcg"):
+        thread_id_from("https://mail.google.com/mail/u/1/#all/FMfcgzQhWxXfGRwBsRKGdvFDwQGJbQrS")
