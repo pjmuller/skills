@@ -4,12 +4,17 @@ import sqlite3
 import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent / "t3-relay"
-relay = SourceFileLoader("t3_relay", str(SCRIPT)).load_module()
+loader = SourceFileLoader("t3_relay", str(SCRIPT))
+spec = spec_from_loader(loader.name, loader)
+relay = module_from_spec(spec)
+sys.modules[loader.name] = relay
+loader.exec_module(relay)
 
 
 def test_effort_without_model_or_instance_is_refused():

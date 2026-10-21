@@ -17,6 +17,7 @@ Scheduler bridge). Needs systemd, a running **user** manager and `/bin/zsh`; no 
 
 `scripts/smoke-native-scheduler` (both platforms) arms a marker-only timer/LaunchAgent, waits
 for it to fire, removes only its own artefacts; no T3 needed.
+Test and smoke loaders use `exec_module()`; `load_module()` was removed in Python 3.15.
 
 Refs: [WSL systemd](https://learn.microsoft.com/en-us/windows/wsl/systemd),
 [systemd.timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html),

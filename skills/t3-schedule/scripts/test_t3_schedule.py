@@ -1,11 +1,18 @@
 """uv run pytest .agents/skills/t3-schedule/scripts — pure functions only, no launchctl."""
 import json
 import plistlib
-import pytest
+import sys
 from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
-mod = SourceFileLoader("t3_schedule", str(Path(__file__).with_name("t3-schedule"))).load_module()
+import pytest
+
+loader = SourceFileLoader("t3_schedule", str(Path(__file__).with_name("t3-schedule")))
+spec = spec_from_loader(loader.name, loader)
+mod = module_from_spec(spec)
+sys.modules[loader.name] = mod
+loader.exec_module(mod)
 
 
 @pytest.fixture(autouse=True)

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **New skill `claude-auto-mode`**: shared Claude Code auto-mode baseline (deploy via the repo's listed channel after tests + prod diff, code edits are not the deletion they implement, reads after an unrelated denial, vendor cleanup with export + ID file + dry run + `--max N`, force-push hard deny) plus `scripts/merge.py`, which merges it with private company overlays (`.agents/claude-auto-mode.json`) into every Claude home. Why: Claude Code ignores `autoMode` in repo settings, so each machine needs it in user settings; one baseline keeps colleagues' agents as autonomous as PJ's without per-person research.
+- agents-md template: the auto-mode line now points to `claude-auto-mode`. Why: one place for the rules instead of hand-written `autoMode.environment`.
+
+- Tests: replace removed `load_module()` imports with `exec_module()` so Python 3.15 can collect relay, scheduler and top-up tests and run the native scheduler smoke check.
+
 - t3-relay: launches use the user's new-thread permission default (`defaultRuntimeMode`, e.g. Auto) instead of always `full-access`; unset keeps `full-access`.
 
 - agents-md template: auto-mode rule (ask once naming the exact action instead of working around a block; fix repeated false blocks via `autoMode.environment`, keeping `$defaults`).
