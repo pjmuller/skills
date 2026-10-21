@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * +*)",
+      "Bash(git -C * push * --force*)",
+      "Bash(git -C * push * +*)"
+    ]
+  },
+  "autoMode": {
+    "environment": [
+      "Trusted working repos: a repo under ~/code whose origin belongs to a GitHub owner named in a Source control entry, and git worktrees of exactly those repos (under /tmp/, ~/.t3/worktrees/ or .claude/worktrees/), is a trusted working repo: reading, editing, committing and pushing to its default branch is routine, also from a session that started in a sibling trusted repo. Third-party clones are not trusted."
+    ],
+    "allow": [
+      "Deliberate exception to Production Deploy (the user's standing 'done = live' policy): shipping a trusted repo through its own production channel listed under CI/CD deploy targets is allowed when the transcript shows, earlier in this session, (1) the user's request for the change being shipped or for the deploy, (2) that change's test or build command run on the commit being shipped, after its last code edit, and (3) shortly before the deploy, a command comparing production with exactly the ref being shipped (e.g. `git log origin/stable..HEAD`, `git diff --stat origin/stable HEAD`, or the promote script's own preflight). Covered: a non-force push of that repo's commits to its production branch, also from a worktree of the same repo (`git -C /tmp/x push origin HEAD:stable`), and the repo's own unmodified deploy or promote script. Not covered: force or `+refspec` pushes, a remote added or changed this session, bypass flags (--force, --skip-*, --no-verify, a --yes that skips a prompt the script would otherwise show), and hand-run production migrations or data backfills the user did not name.",
+      "Ordinary implementation work (writing or editing source code, tests, docs, runbooks or scripts) inside a trusted repo or one of its worktrees is not External System Writes, Unverifiable Deletion Scope, Irreversible Deletion or Production Deploy merely because the code deletes or writes external data once it runs or ships; running or deploying it is judged separately. Edits that arm credential leakage or exfiltration (Credential Leakage, Code That Leaks When Run, Data Exfiltration) stay blocked immediately, as does Instruction Poisoning.",
+      "Task-relevant read-only inspection (ls, cat, head, sed -n, grep, find without -delete/-exec, git status/log/diff/show) is not Self-Modification, Interfere With Workloads or Modify Shared Resources, also when it reads Claude Code settings, CLAUDE.md or skill files and also after an unrelated or resolved denial, as long as it does not itself attempt the blocked action. PREEMPTIVE BLOCK, Credential Exploration, Credential Materialization, PII Data Handling and Data Exfiltration still apply; judge actual effects, not command names or HTTP methods.",
+      "Deliberate exception to Unverifiable Deletion Scope and External System Writes for record cleanups in the organization's own SaaS accounts (CRM, mail provider, task tracker): a batch delete or update through that vendor's API is allowed when (1) the user's own message in this session names the system, the kind of records and a maximum count, (2) earlier in this session a command exported those records to a restorable CSV/JSON under ~/Downloads or the repo and a command wrote an explicit target-ID file, (3) a dry run of the same command and ID file ran first, and (4) the destructive command reads targets only from that ID file (never a live filter, search or 'all' query) and carries a literal count limit no larger than the user's maximum (e.g. `--max 6200`) that the script enforces before its first write. Not covered: payments, refunds or charges, messages to customers, deleting a whole list, account, bucket or table, and production database rows.",
+      "File operations (create, edit, copy, move, delete) on files the agent created this session inside git worktrees of trusted repos, its own /tmp scratch dirs and ~/Downloads are Local Operations, not scope escalation. This does not override Irreversible Local Destruction: removing a worktree or directory requires that pre-existing untracked and ignored files and other agents' changes are absent or backed up first."
+    ],
+    "hard_deny": [
+      "Forced Git ref updates on a shared branch: force push, `+refspec` push, or ref deletion of main, master, stable, staging, production or release in any trusted repo, by any command, script or API. Other people and agents build on those branches."
+    ]
+  }
+}

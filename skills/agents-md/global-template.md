@@ -32,7 +32,7 @@ Status emojis only in the final wrap-up, never mid-work; one per distinct outcom
 - Specs are never perfect: you learn while building and may change course. Report non-obvious decisions/course-changes concisely, after the fact.
 - My prompts are often speech-to-text: expect misspelled names. Resolve from intent, don't stall. Ask only if two readings are equally plausible *and* lead to different work.
 - Secret tokens may pass through the LLM: run the commands yourself, don't hand off CLI snippets for me to paste.
-- Auto mode (Claude classifier / Codex auto-review) blocks an action I asked for → no workaround via other tools; ask me once for a go that names the exact action, target and scope: specific intent clears soft blocks. Repeated false blocks → describe my trusted repos/accounts in `autoMode.environment` (`~/.claude/settings.json`, keep `"$defaults"`), never loosen exfiltration rules.
+- Auto mode (Claude classifier / Codex auto-review) blocks an action I asked for → no workaround via other tools; ask me once for a go that names the exact action, target and scope: specific intent clears soft blocks. Repeated false blocks → skill `claude-auto-mode` (shared baseline + company overlay merged into user settings), never loosen exfiltration rules.
 - Propose the 80/20 cut before building; list bigger options, don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation, not only large code reviews.
 - External facts (pricing, product features, versions, dates): verify on the web and cite; never from memory.
 - Files meant for me → `~/Downloads`, never Desktop. Thread titles ≤5 words, no ticket IDs.
