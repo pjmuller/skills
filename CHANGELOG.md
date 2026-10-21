@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- t3-setup: new "Auto mode (Claude)" step (install `claude-auto-mode` repo-local, personal + company overlays, T3 default Auto) plus verification. Why: new colleagues get the auto-mode setup in the one bootstrap prompt, no separate prompt.
 - **New skill `claude-auto-mode`**: shared Claude Code auto-mode baseline (deploy via the repo's listed channel after tests + prod diff, code edits are not the deletion they implement, reads after an unrelated denial, vendor cleanup with export + ID file + dry run + `--max N`, force-push hard deny) plus `scripts/merge.py`, which merges it with private company overlays (`.agents/claude-auto-mode.json`) into every Claude home. Why: Claude Code ignores `autoMode` in repo settings, so each machine needs it in user settings; one baseline keeps colleagues' agents as autonomous as PJ's without per-person research.
 - agents-md template: the auto-mode line now points to `claude-auto-mode`. Why: one place for the rules instead of hand-written `autoMode.environment`.
 
