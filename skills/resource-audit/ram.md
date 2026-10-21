@@ -41,15 +41,11 @@ thresholds, protected ports, and installation paths in local operator docs.
 ## T3 Code renderer swarm
 
 Every T3 browser-preview tab (any thread, settled or not) is a `<webview>` guest of the
-UI renderer, one `T3 Code Helper (Renderer)` each; agents have no `preview_close`, so they
-pile up (80 = ~5 GB on 2026-10-14). Verified 2026-10-14 on v0.0.45:
-- Killing a guest renderer: T3 respawns it. Server RPC `preview.close {threadId, tabId}`
-  (WS `/ws`, Effect RPC JSON, bearer from `t3 auth session issue`; `preview.list` per
-  thread) only drops the server session; the guest keeps running.
-- View → Reload hits the *focused webContents*, which may be a guest
-  ([t3code #13897](https://github.com/pingdotgg/t3code/issues/13897) root cause), not the window.
-- `t3-preview-gc --apply` deliberately crashes the UI renderer; not a blank-window
-  repair. Prefer its default dry-run for unattended monitoring.
+UI renderer, one `T3 Code Helper (Renderer)` each. On T3 < 0.1 they piled up (80 = ~5 GB on
+2026-10-14) because nothing freed them. Since 0.1, closing a tab (`t3_preview_close`, or the
+server RPC `preview.close`) frees its renderer within seconds (verified 2026-10-21, v0.1.1).
+Tabs of settled threads still stay until closed ([t3code #15579](https://github.com/pingdotgg/t3code/issues/15579)):
+`t3-preview-gc --apply` closes them. Killing a guest renderer doesn't help: T3 respawns it.
 
 ## Blank T3 window (macOS)
 

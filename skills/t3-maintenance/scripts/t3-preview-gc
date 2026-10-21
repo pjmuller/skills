@@ -5,25 +5,13 @@
 # ///
 """Free the RAM held by T3 Code browser-preview tabs (macOS desktop app).
 
-Every preview tab is a <webview> guest of the T3 window's UI renderer, one
-`T3 Code Helper (Renderer)` process each, and tabs of settled threads stay mounted
-(agents rarely call t3_preview_close). Verified on v0.0.45: killing a guest makes T3
-respawn it; the server RPC `preview.close` only drops the server session; View ->
-Reload may hit a guest instead of the window. What works:
-
-1. `preview.close` every tab of a settled/archived thread idle past --idle-hours,
-   so the window does not remount it.
-2. When guests >= --min-guests, SIGSEGV the UI renderer. T3's own crash recovery
-   (reason "crashed") reloads the window in ~2 s; every guest dies with it. The T3
-   server (parent of the claude/codex CLIs) and composer drafts (localStorage)
-   survive. Not SIGHUP/SIGTERM: those count as "killed", T3 does not recover and the
-   window stays dead until refocused + View -> Reload (the fallback below).
-
-Guards before step 2: a running (unsettled) thread owns a preview tab -> skip (tab
-timestamps miss clicks/typing/snapshots, so age proves nothing); the user touched
-keyboard/mouse in the last --quiet-seconds -> wait up to --wait-minutes for a pause,
-else skip. Both re-checked right before the signal. Dry-run unless --apply.
-Log: ~/.local/state/t3-maintenance/preview-gc.log
+Every preview tab is a <webview> guest of the T3 window, one `T3 Code Helper
+(Renderer)` process each. Tabs of settled threads stay mounted until closed
+(t3code #15579), and agents don't always call `t3_preview_close`. With --apply this
+closes every tab of a settled/archived thread idle past --idle-hours through the
+server RPC `preview.close`: the same path as `t3_preview_close`, and since T3 0.1 it
+frees the renderer (verified 2026-10-21 on v0.1.1). Tabs of active threads are never
+touched. Dry-run unless --apply. Log: ~/.local/state/t3-maintenance/preview-gc.log
 """
 
 from __future__ import annotations
@@ -31,10 +19,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -58,11 +44,6 @@ def log(line: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as handle:
         handle.write(f"{stamp} {line}\n")
-
-
-def notify(message: str) -> None:
-    subprocess.run(["osascript", "-e", f'display notification "{message}" with title "t3-preview-gc"'],
-                   check=False, capture_output=True)
 
 
 # --- processes ---------------------------------------------------------------
@@ -109,12 +90,6 @@ def footprint_mb(pids: list[int]) -> int:
                 value, unit = float(match.group(1)), match.group(2)
                 total += value / 1024 if unit == "K" else value * 1024 if unit == "G" else value
     return round(total)
-
-
-def user_idle_seconds() -> int:
-    out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True).stdout
-    match = re.search(r'"HIDIdleTime" = (\d+)', out)
-    return int(match.group(1)) // 1_000_000_000 if match else 0
 
 
 # --- T3 server ---------------------------------------------------------------
@@ -186,12 +161,6 @@ def load_threads() -> dict[str, dict]:
             for row in rows}
 
 
-def app_name() -> str:
-    table = subprocess.run(["ps", "-ax", "-ww", "-o", "args="], capture_output=True, text=True).stdout
-    return next((m.group(1) for line in table.splitlines() if (m := APP_BINARY.fullmatch(line.strip()))),
-                "T3 Code (Beta)")
-
-
 def survey(session: Session, idle_hours: float) -> tuple[list[dict], list[dict], list[dict]]:
     """(all tabs, closable tabs, tabs a running agent may be using).
 
@@ -207,30 +176,10 @@ def survey(session: Session, idle_hours: float) -> tuple[list[dict], list[dict],
     return tabs, stale, busy
 
 
-def busy_now(idle_hours: float) -> list[dict]:
-    session = Session()
-    try:
-        return survey(session, idle_hours)[2]
-    finally:
-        session.close()
-
-
-def click_menu(menu: str, item: str) -> None:
-    try:
-        subprocess.run(["osascript", "-e", f'tell application "System Events" to click menu item "{item}" '
-                        f'of menu "{menu}" of menu bar 1 of process "{app_name()}"'],
-                       capture_output=True, timeout=30, check=False)
-    except (subprocess.TimeoutExpired, OSError) as error:
-        log(f"apply menu {menu} > {item} failed: {error}")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--apply", action="store_true", help="act; default is a dry run")
+    parser.add_argument("--apply", action="store_true", help="close the tabs; default is a dry run")
     parser.add_argument("--idle-hours", type=float, default=1.0, help="close settled threads' tabs idle this long")
-    parser.add_argument("--min-guests", type=int, default=15, help="reload the window only at this many tab renderers")
-    parser.add_argument("--quiet-seconds", type=int, default=60, help="required keyboard/mouse pause before reloading")
-    parser.add_argument("--wait-minutes", type=float, default=15, help="how long to wait for that pause")
     args = parser.parse_args()
     mode = "apply" if args.apply else "dry-run"
 
@@ -243,61 +192,19 @@ def main() -> int:
     try:
         tabs, stale, busy = survey(session, args.idle_hours)
         closed = 0
-        if args.apply:
+        if args.apply and stale:
             exits = session.rpc("preview.close", [{"threadId": t["threadId"], "tabId": t["tabId"]} for t in stale])
             closed = sum(exit_.get("_tag") == "Success" for exit_ in exits)
-        log(f"{mode} sessions={len(tabs)} stale={len(stale)} closed={closed} busy={len(busy)} "
-            f"guests={len(guests)} guest_mb={footprint_mb(guests)}")
     finally:
         session.close()
-
-    if len(guests) < args.min_guests:
-        return 0
-    if busy:
-        log(f"{mode} SKIP reload: running agents with tabs {sorted({t['threadId'][:8] for t in busy})}")
-        return 0
-    deadline = time.monotonic() + args.wait_minutes * 60
-    while user_idle_seconds() < args.quiet_seconds:
-        if not args.apply or time.monotonic() > deadline:
-            log(f"{mode} SKIP reload: user active (idle {user_idle_seconds()}s < {args.quiet_seconds}s)")
-            return 0
-        time.sleep(15)
-    if not args.apply:
-        log(f"dry-run would reload the T3 window: {len(guests)} tab renderers")
-        return 0
-
-    # The idle wait can take minutes: re-check agents and renderer identity right before the signal.
-    busy = busy_now(args.idle_hours)
-    ui, guests = renderers()
-    if busy or ui is None or len(guests) < args.min_guests:
-        log(f"apply SKIP reload after wait: busy={len(busy)} ui={ui} guests={len(guests)}")
-        return 0
-    before_mb = footprint_mb([ui, *guests])
-    if user_idle_seconds() < args.quiet_seconds:  # the re-check above takes seconds; PJ may be back
-        log("apply SKIP reload: user became active during the final checks")
-        return 0
-    try:
-        os.kill(ui, signal.SIGSEGV)
-    except ProcessLookupError:
-        log(f"apply SKIP reload: UI renderer {ui} exited before the signal")
-        return 0
-    for attempt in ("crash recovery", "menu reload"):
-        if attempt == "menu reload":  # View -> Reload acts on the focused window: focus it first
-            click_menu("Window", app_name())
-            click_menu("View", "Reload")
-        for _ in range(30):
-            time.sleep(1)
-            new_ui, _new_guests = renderers()
-            if new_ui and new_ui != ui:
-                time.sleep(5)
-                new_ui, new_guests = renderers()
-                if new_ui and new_ui != ui:
-                    log(f"apply RELOADED window via {attempt}: renderers {len(guests) + 1}->{len(new_guests) + 1}, "
-                        f"footprint {before_mb}->{footprint_mb([new_ui, *new_guests])} MB")
-                    return 0
-    log("apply ERROR window did not come back; Window menu -> T3 Code, then View -> Reload")
-    notify("T3 window did not reload: Window menu > T3 Code, then View > Reload")
-    return 1
+    before = len(guests)
+    if closed:
+        time.sleep(5)  # close does not wait for the renderer to exit
+        guests = renderers()[1]
+    after = f" -> {len(guests)}" if closed else ""
+    log(f"{mode} sessions={len(tabs)} stale={len(stale)} closed={closed} busy={len(busy)} "
+        f"guests={before}{after} guest_mb={footprint_mb(guests)}")
+    return 0
 
 
 if __name__ == "__main__":

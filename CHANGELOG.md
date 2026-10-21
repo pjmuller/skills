@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **t3-preview-gc: no more window crash-reload.** Since T3 0.1, closing a preview tab frees its renderer (verified on v0.1.1), so `--apply` only closes the tabs of settled/archived threads idle past `--idle-hours` and logs renderers before → after. Removed: `--min-guests`, `--quiet-seconds`, `--wait-minutes` and the UI-renderer SIGSEGV + View → Reload fallback (no replacement needed).
+
 ## v0.5.8 (2026-10-21)
 
 - skills-refresh: `git check-ignore` runs without literal pathspecs (v0.5.7 printed a `fatal:` line on every commit and could misjudge an ignored skills dir).
