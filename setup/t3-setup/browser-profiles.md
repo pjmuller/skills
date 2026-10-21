@@ -14,9 +14,11 @@ Browser profiles are separate from AI provider/billing profiles.
 3. Open one tab per selected T3 profile. Visit a user-chosen service (Gmail, for example);
    inspect only the visible account identity. A successful import count isn't proof of
    login. Record pass / needs sign-in; let the user complete login or MFA when needed.
-4. Test native `preview_status` → `preview_open {profileId}` → focused snapshot/DOM read in each
+4. Test native `preview_status` → `preview_open {profileId, reuseExistingTab:false}` (a reused tab keeps its old profile) → focused snapshot/DOM read in each
    installed harness (T3 ≥ 0.1.0: `profileId` works; the Settings default profile may be empty, so
    agents always pass it). Profile cookies are shared by every thread; `incognito` is isolated.
+   Google accounts: imported Google sessions die on recent Chrome (device-bound session
+   credentials) → sign in to Google inside each T3 profile once.
    Windows: Chromium browsers can't be imported (app-bound encryption) → sign in inside T3 once.
    Login page later → the agent asks the user to log in inside the visible T3 tab with their
    password manager app. Passkey-only sites: sign in in the normal browser, then re-import.
