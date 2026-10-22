@@ -432,7 +432,7 @@ def cmd_gmail_draft(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     draft = ws.gmail.create_draft(a.to, a.subject, body, cc=a.cc, html=a.html,
                                   html_body=html_body, reply_to_message=a.reply_to_message,
-                                  attach=a.attach)
+                                  attach=a.attach, from_=a.from_addr)
     message = draft.get("message") or {}
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
@@ -442,7 +442,8 @@ def cmd_gmail_draft(a, ws):
 def cmd_gmail_send(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     sent = ws.gmail.send(a.to, a.subject, body, cc=a.cc, html=a.html,
-                         html_body=html_body, reply_to_message=a.reply_to_message, attach=a.attach)
+                         html_body=html_body, reply_to_message=a.reply_to_message, attach=a.attach,
+                         from_=a.from_addr)
     out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})  "
                       f"files={sent['verified']['files']}")
     print_mail_ref(ws, sent.get("threadId"), a.json)
@@ -943,12 +944,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     command = add("gmail-thread", cmd_gmail_thread, "all messages in a thread")
     command.add_argument("id", help="thread id, Mail-ref or Gmail/print link")
+    command.add_argument("--max-chars", type=int, default=12000)
+    command.add_argument("--full", action="store_true")
 
     command = add("gmail-url", cmd_gmail_url,
                   "normal Gmail link for a thread id, Mail-ref or print link (offline)")
     command.add_argument("ref", help="e.g. a view=pt print link with permthid=thread-f:…")
-    command.add_argument("--max-chars", type=int, default=12000)
-    command.add_argument("--full", action="store_true")
 
     command = add("gmail-recent", cmd_gmail_recent,
                   "mail containing WORD in the last N minutes, with extracted one-time codes")
@@ -976,6 +977,9 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="keep the body as plain text and attach this HTML alternative")
         command.add_argument("--reply-to-message",
                              help="message id to thread and quote; subject must match")
+        command.add_argument("--from", dest="from_addr",
+                             help="send-as alias or 'Name <alias>' (default: the mailbox's "
+                                  "default send-as identity)")
         attach_argument(command)
         return command
 

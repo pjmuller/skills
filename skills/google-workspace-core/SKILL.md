@@ -44,7 +44,8 @@ contract in [integration](references/integration.md#importable-api)).
 - [Wrapper configuration and migration](references/integration.md): `workspace.json`, install
   contract, credential resolution, importable API.
 - [REST details](references/rest.md): read order, Slides/Docs/Sheets/Drive API gotchas.
-- [Drafts and access checks](references/drafts.md): plain-text vs HTML composition, `--attach`
+- [Drafts and access checks](references/drafts.md): why every draft carries an HTML twin
+  (Gmail web hard-wraps plain-only drafts on Send), From = default send-as, `--attach`
   files (invoice PDFs), editing existing drafts, what an access check proves.
 - [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` → local `grep`;
   query cheat sheet.

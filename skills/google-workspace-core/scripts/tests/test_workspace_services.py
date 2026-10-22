@@ -104,9 +104,10 @@ def test_gmail_reply_threads_quotes_and_guards_the_subject():
     gmail.create_draft("her@example.com", "Re: Offerte", "Hier is ze.", reply_to_message="m1")
     payload = session.calls[-1][2]["json"]["message"]
     assert payload["threadId"] == "t1"
-    message = message_from_bytes(base64.urlsafe_b64decode(payload["raw"]))
+    message = message_from_bytes(base64.urlsafe_b64decode(payload["raw"]), policy=default)
     assert message["In-Reply-To"] == "<abc@mail>" and message["From"] == ACCOUNT
-    assert "> Graag een offerte." in message.get_payload(decode=True).decode()
+    assert "> Graag een offerte." in message.get_body(("plain",)).get_content()
+    assert '<div class="gmail_quote">' in message.get_body(("html",)).get_content()
 
     session = FakeSession([Recorded(original)])
     with pytest.raises(WorkspaceError, match="reply subject must match"):
@@ -136,11 +137,23 @@ def test_gmail_plain_draft_preserves_authored_paragraphs_and_bullets():
     session = FakeSession([Recorded({"id": "draft", "message": {"id": "message"}})])
     GmailClient(session, sender=ACCOUNT).create_draft("reader@example.com", "Onderwerp", body)
     raw = session.calls[0][2]["json"]["message"]["raw"]
-    message = message_from_bytes(base64.urlsafe_b64decode(raw))
-    assert not message.is_multipart()
-    assert message.get_content_type() == "text/plain"
-    assert message.get_content_charset() == "utf-8"
-    assert message.get_payload(decode=True).decode("utf-8").replace("\r\n", "\n") == body + "\n"
+    message = message_from_bytes(base64.urlsafe_b64decode(raw), policy=default)
+    plain = message.get_body(("plain",))
+    assert plain.get_content_charset() == "utf-8"
+    assert plain.get_content().replace("\r\n", "\n") == body + "\n"
+
+
+def test_gmail_plain_body_gets_an_html_twin_so_gmail_web_does_not_hard_wrap_on_send():
+    """A text/plain-only draft opens in Gmail web's plain-text mode, which hard-wraps every
+    paragraph at ~70 characters on Send (verified 2026-10-22); an HTML part keeps rich mode."""
+    body = "Dag Ann,\n\n" + "Een lange alinea zonder harde regeleinden & <tags>. " * 6 + "\n\n- punt\nNaam"
+    raw, _ = GmailClient(FakeSession(), sender=ACCOUNT).build("a@b.c", "Onderwerp", body)
+    message = message_from_bytes(decode_websafe(raw), policy=default)
+    assert message.get_content_type() == "multipart/alternative"
+    assert message.get_body(("plain",)).get_content().replace("\r\n", "\n").rstrip("\n") == body
+    html = message.get_body(("html",)).get_content().replace("\r\n", "\n")
+    assert "&amp; &lt;tags&gt;" in html and "\n" not in html.rstrip("\n")
+    assert html.count("<br>") == body.count("\n")
 
 
 def test_gmail_keeps_an_authored_plain_text_body_beside_an_html_alternative():
@@ -212,7 +225,27 @@ def test_gmail_without_attach_is_unchanged_and_skips_the_read_back():
     draft = GmailClient(session, sender=ACCOUNT).create_draft("a@b.c", "s", "Plain")
     assert len(session.calls) == 1 and draft["verified"] == {"files": 0}
     message = message_from_bytes(decode_websafe(session.calls[0][2]["json"]["message"]["raw"]))
-    assert message.get_content_type() == "text/plain"
+    assert message.get_content_type() == "multipart/alternative"
+
+
+SEND_AS = {"sendAs": [{"sendAsEmail": ACCOUNT, "isDefault": False},
+                      {"sendAsEmail": "ann@example.com", "displayName": "Ann Peeters", "isDefault": True},
+                      {"sendAsEmail": "sales@example.com", "displayName": "Sales"}]}
+
+
+def from_header(session, **kw):
+    raw, _ = GmailClient(session, account=ACCOUNT).build("a@b.c", "s", "x", **kw)
+    return message_from_bytes(decode_websafe(raw), policy=default)["From"]
+
+
+def test_gmail_from_defaults_to_the_default_send_as_identity():
+    assert from_header(FakeSession([Recorded(SEND_AS)])) == "Ann Peeters <ann@example.com>"
+    assert from_header(FakeSession([Recorded(SEND_AS)]), from_="SALES@example.com") == "Sales <SALES@example.com>"
+    assert from_header(FakeSession([Recorded(SEND_AS)]), from_="Team <sales@example.com>") == "Team <sales@example.com>"
+    with pytest.raises(WorkspaceError, match="not a send-as alias"):
+        from_header(FakeSession([Recorded(SEND_AS)]), from_="other@example.com")
+    # A token that may not read settings keeps the account address.
+    assert from_header(FakeSession([Recorded({}, status=403)])) == ACCOUNT
 
 
 class DraftSession(FakeSession):

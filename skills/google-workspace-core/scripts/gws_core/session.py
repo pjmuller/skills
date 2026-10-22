@@ -113,7 +113,7 @@ class Workspace:
             from . import docs, drive, gmail, sheets, slides
 
             if name == "gmail":
-                self._services[name] = gmail.GmailClient(self.session, sender=self.config.account)
+                self._services[name] = gmail.GmailClient(self.session, account=self.config.account)
             else:
                 factory = {"drive": drive.DriveClient, "docs": docs.DocsClient,
                            "sheets": sheets.SheetsClient, "slides": slides.SlidesClient}[name]

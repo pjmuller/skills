@@ -186,3 +186,17 @@ def test_gmail_url_refuses_new_ui_tokens():
     from gws_core.gmail import thread_id_from
     with pytest.raises(WorkspaceError, match="FMfcg"):
         thread_id_from("https://mail.google.com/mail/u/1/#all/FMfcgzQhWxXfGRwBsRKGdvFDwQGJbQrS")
+
+
+def test_gmail_thread_runs_with_its_own_display_flags(capsys):
+    from gws_core.cli import cmd_gmail_thread
+    seen = {}
+    gmail = SimpleNamespace(thread=lambda tid: {"id": tid, "messages": [{"id": "m1"}]},
+                            view=lambda message, trim: seen.update(trim=trim) or {
+                                "id": "m1", "threadId": "t1", "headers": {}, "attachments": [],
+                                "body": "x" * 80})
+    ws = SimpleNamespace(config=SimpleNamespace(account="info@probackup.io"), gmail=gmail)
+    args = build_parser().parse_args(["gmail-thread", "1a156f3200c1c0ee", "--full", "--max-chars", "50"])
+    args.json = False
+    cmd_gmail_thread(args, ws)
+    assert seen["trim"] is False and "x" * 50 + "\n…[truncated]" in capsys.readouterr().out

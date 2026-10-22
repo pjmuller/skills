@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from email import message_from_bytes
 from email.message import EmailMessage, MIMEPart
 from email.policy import SMTP, default
-from email.utils import parsedate_to_datetime
+from email.utils import formataddr, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -207,9 +207,44 @@ def _decode_text(raw: bytes, content_type: str) -> str:
 
 
 class GmailClient:
-    def __init__(self, session: Session, *, sender: str) -> None:
+    def __init__(self, session: Session, *, sender: str | None = None, account: str = "") -> None:
+        """`sender` pins the From header; without it, From is the mailbox's default send-as
+        identity (`Name <alias>`, read once), falling back to `account`."""
         self.session = session
-        self.sender = sender
+        self.account = account
+        self._sender = sender
+        self._send_as: list[dict] | None = None
+
+    def send_as(self) -> list[dict]:
+        """The mailbox's send-as identities; empty when the token may not read settings."""
+        if self._send_as is None:
+            try:
+                self._send_as = self.session.api("GET", f"{GMAIL}/settings/sendAs").get("sendAs", [])
+            except ApiError:
+                self._send_as = []
+        return self._send_as
+
+    def sender(self, override: str | None = None) -> str:
+        """From header: `override` (a bare alias gets its send-as display name), else the pinned
+        sender, else the default send-as identity, else the account address."""
+        if override:
+            name, address = parseaddr(override)
+            if not address:
+                raise WorkspaceError(f"--from {override!r} is not an email address")
+            if self._sender is not None:
+                return override
+            identities = self.send_as()
+            match = next((i for i in identities if i.get("sendAsEmail", "").lower() == address.lower()), None)
+            if identities and match is None:
+                raise WorkspaceError(f"--from {address} is not a send-as alias of this mailbox; "
+                                     "choose one of " + ", ".join(i["sendAsEmail"] for i in identities))
+            return formataddr((name or (match or {}).get("displayName", ""), address))
+        if self._sender is not None:
+            return self._sender
+        default = next((i for i in self.send_as() if i.get("isDefault")), None)
+        if default:
+            return formataddr((default.get("displayName", ""), default["sendAsEmail"]))
+        return self.account
 
     # --- reading ------------------------------------------------------------
 
@@ -466,17 +501,20 @@ class GmailClient:
 
     def build(self, to: str, subject: str, body: str, *, cc: str | None = None,
               html: bool = False, html_body: str | None = None,
-              reply_to_message: str | None = None,
-              attach: list[str] | None = None) -> tuple[str, str | None]:
+              reply_to_message: str | None = None, attach: list[str] | None = None,
+              from_: str | None = None) -> tuple[str, str | None]:
         """Build the base64url MIME payload; replies thread, quote and keep the subject.
 
+        Always multipart/alternative. Plain `body` gets an escaped HTML twin: Gmail web opens a
+        text/plain-only draft in plain-text mode and hard-wraps it at ~70 characters on Send;
+        with an HTML part it opens in rich mode and the paragraphs reflow (references/drafts.md).
         `html=True` means `body` is HTML and the plain-text alternative is derived from it;
         `html_body` instead keeps `body` as the authored plain text and adds that HTML
         alternative beside it. `attach` files follow the text part(s) in a multipart/mixed.
         """
         files = read_attachments(attach)
         message = EmailMessage()
-        message["From"] = self.sender
+        message["From"] = self.sender(from_)
         message["To"] = to
         if cc:
             message["Cc"] = cc
@@ -509,11 +547,9 @@ class GmailClient:
         if html:
             message.set_content(html_to_text(body) + quote_plain)
             message.add_alternative(body + quote_html, subtype="html")
-        elif html_body:
-            message.set_content(body + quote_plain)
-            message.add_alternative(html_body + quote_html, subtype="html")
         else:
             message.set_content(body + quote_plain)
+            message.add_alternative((html_body or _text_html(body)) + quote_html, subtype="html")
         add_attachments(message, files)
         raw = base64.urlsafe_b64encode(message.as_bytes(policy=SMTP)).decode("ascii")
         return raw, thread_id
