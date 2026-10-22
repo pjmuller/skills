@@ -17,7 +17,8 @@ Thresholds sit at the bottom of the script; tune them there, not in ad-hoc comma
 
 A process at 100% uses roughly one core. Load average decays slowly after work stops,
 so judge recovery by idle percentage. High `kernel_task` or WindowServer means
-thermal/device/display activity: investigate, never kill. Low CPU and low pressure but
+thermal/device/display activity: investigate, never kill. Sustained WindowServer load: look for
+live screen capture (menu-bar sharing indicator, computer-use or recording apps left running) and end the idle one. Low CPU and low pressure but
 still slow → disk activity (`iostat -w 1 -c 3`); storage capacity belongs to `disk-audit`.
 
 ## RAM
