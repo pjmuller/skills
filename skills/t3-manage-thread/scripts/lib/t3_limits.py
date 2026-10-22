@@ -573,8 +573,10 @@ def collect(
             if entry and not fresh and age < FRESH_SECONDS:
                 debug(f"{instance_id}: cache hit ({age:.0f}s old)")
                 payload = entry["payload"]
+                account.fetched_at = now - timedelta(seconds=age)
             else:
                 payload = fetch_with_retry(credentials, fetch)
+                account.fetched_at = now
                 cache[instance_id] = {"payload": payload, "fetched_at": now.timestamp(),
                                       "identity": identity}
                 dirty = True

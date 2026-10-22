@@ -53,4 +53,5 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 ## Briefs and titles
 
 - Brief: markdown file, path in task/message ([dispatch-workers.md](dispatch-workers.md)); images at a stable path named in it. Title `<emoji> <3-6 words>`, user's language, no ticket ids.
+- Sustained build (hours of tool-heavy work)? Put `routing-load: heavy` as its own line in the `task`/`message` text itself (not only the brief file, not quoted or fenced): routing counts that owner as 3 instead of 1. Default 1; never infer it from project or title.
 - Model/account: [routing.md](routing.md); re-pick before each spawn, never reuse across a batch; model implies no account/repo affinity.

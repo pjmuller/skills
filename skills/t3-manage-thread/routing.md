@@ -56,9 +56,24 @@ active fleet, and stage it on small-tier accounts one at a time.
   only — the routing output says so). Excluded or unknown accounts do not set
   the bar. Also tight: a session at least 50% used and ahead of its elapsed-window
   pace. This protects running work before the 90% cliff; it does not reserve quota.
+- **Load** (2026-10-22): rank by `score × session left / (1 + live load)`; session
+  left = tightest relevant short window's headroom fraction (1 without one). Load per
+  instance from T3's store (`lib/fleet_load.py`, read-only): each owner thread with a
+  live run counts once on the account its run uses (not the composer), weight 1 or 3
+  with `routing-load: heavy` ([workers.md](workers.md#briefs-and-titles)); queued
+  runs behind it add nothing, a queue held behind a failed run doesn't count;
+  native sub-agents fold into their owner as `max(weight, live natives)`; quiet
+  runs still count (flagged); `delegate_task` children count on their own account.
+  Starts/30 min are shown, never added. Store missing/unreadable → quota-only,
+  with a warning. Only new picks move: running threads keep their account.
+  `T3_ROUTING_LOAD=shadow` keeps the quota-only pick and prints the adjusted one.
 - **Ties** go to the instance id order (`claudeAgent` preferred).
 - Paid overage is never capacity. Every automatic route prints its reasoning on
-  stderr.
+  stderr, with each reading's actual age (`seen`; cached readings can be minutes
+  old) and an **observation gap** when runs ended after that reading (their final
+  usage may be missing). It also appends inputs + quota-only and adjusted pick (no
+  prompts, titles, tokens) to `t3-routing-decisions.jsonl` beside `settings.json`
+  (≤ 256 KB, private, locked against concurrent spawns) for replay, e.g. `jq -c 'select(.quota_pick != .adjusted_pick)'`.
 
 
 ## Temporary override
@@ -79,7 +94,9 @@ preference cutoff, not a ceiling: running threads keep burning, ordinary routing
 account above it. Top-level `until` (UTC offsets required) is mandatory; expired or invalid → ordinary routing,
 noted in the reason. Dry runs print why each entry was taken or skipped. Disable: delete the file.
 
-Accepted trade-offs: weekly ranking ignores a strong second window, and
-near-simultaneous spawns are not spread across equal accounts (the next read,
-≤ 90 s later, sees real consumption). No reservation or prediction of in-flight work.
+Accepted trade-offs: weekly ranking ignores a strong second window. Load is a
+coarse count, not a token forecast. Sequential spawns spread because each accepted
+launch is a live run before the next pick; truly simultaneous picks can still
+collide (no reservation ledger). Usage that finished after a reading is only
+warned about, not re-probed.
 

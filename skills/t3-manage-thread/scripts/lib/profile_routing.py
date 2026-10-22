@@ -4,7 +4,7 @@
 # ///
 """Automatic account routing for T3 spawns: one policy for Claude and Codex.
 
-Three rules (routing.md §Accounts):
+Rules (routing.md §Accounts):
 
 1. Exclude an account with an exhausted relevant window until it resets; an
    unreachable/stale/malformed reading makes it "unknown" (ranked after every
@@ -23,8 +23,16 @@ Three rules (routing.md §Accounts):
    verified plan's full session (20x only: the old ≥ 90 % rule; 5x beside 20x:
    ≥ 60 % used; 1x beside 20x: always tight, i.e. overflow only). Sessions
    at least half spent and ahead of elapsed-window pace are also tight.
-3. Ties use instance id order, never the inherited account or business name.
+3. Live workload (fleet_load.py) then divides: adjusted = score × remaining
+   short-session fraction (1 without a session window) / (1 + load). It changes
+   only new picks; running threads keep their account. Unreadable store →
+   quota-only ranking, said so. T3_ROUTING_LOAD=shadow keeps the quota-only
+   pick and only logs/prints the adjusted one.
+4. Ties use instance id order, never the inherited account or business name.
    Paid overage is never capacity.
+
+Each automatic pick appends one line (inputs, quota-only and adjusted pick; no
+prompts, titles or tokens) to the bounded t3-routing-decisions.jsonl for replay.
 
 A private, expiring override (t3-routing-override.json beside settings.json)
 may put an ordered account preference on top of rule 2 for a while, e.g. to
@@ -37,8 +45,10 @@ session guard and every explicit choice still win over it.
         explicit single account: exit 0 when usable or unverified (warning on
         stderr), exit 2 printing the best alternative id when it is excluded
 """
+import fcntl
 import json
 import math
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -48,6 +58,7 @@ from pathlib import Path
 from t3_limits import (PLAN_HINT, SETTINGS, claude_accounts, codex_accounts, plan_label, plan_multiplier,
                        provider_profiles, relative, tier_text)
 from profile_registry import registry, compatible
+from fleet_load import read_fleet
 
 SESSION_PACE_GUARD_USED = 50  # once half spent, avoid a session burning ahead of its reset pace
 SESSION_TIGHT_SHARE = 0.10  # session room below this share of the largest verified plan's session demotes
@@ -56,6 +67,8 @@ MIN_HOURS = 1.0  # smoothing floor: priority stops growing inside the last hour
 FAMILIES = {"fable", "opus", "sonnet", "haiku"}
 DRIVERS = {"claude": ("claudeAgent", claude_accounts), "codex": ("codex", codex_accounts)}
 OVERRIDE = SETTINGS.parent / "t3-routing-override.json"  # private and temporary, see routing.md
+DECISIONS = "t3-routing-decisions.jsonl"  # beside settings.json; local replay log
+DECISIONS_MAX_BYTES = 256 * 1024  # trimmed to its newer half beyond this
 
 
 def model_family(model):
@@ -95,6 +108,9 @@ class Candidate:
     weekly_window: str = "weekly"  # the window holding weekly_used
     session_room: float | None = None  # weight × tightest session headroom %, None without a session window
     session_tight: bool = False
+    session_left: float = 1.0  # tightest relevant short-session headroom fraction, 1 without one
+    load: object = None        # fleet_load.Load on this instance, None when the fleet is unknown
+    adjusted: float = 0.0      # score × session_left / (1 + load)
 
 
 def hourly_headroom(row, now):
@@ -146,6 +162,8 @@ def assess(account, model, now):
     sessions = [100 - r.used_percent for r in rows if (r.length_seconds or 0) < WEEKLY_CLASS_SECONDS]
     if sessions:
         candidate.session_room = candidate.weight * min(sessions)
+        candidate.session_left = min(sessions) / 100
+    candidate.adjusted = candidate.score * candidate.session_left
     return candidate
 
 
@@ -165,7 +183,11 @@ def mark_session_tight(ok, now):
 
 
 def relative_age(account, now):
-    seconds = (now - account.fetched_at).total_seconds() if account.fetched_at else 0
+    return relative_age_at(account.fetched_at or now, now)
+
+
+def relative_age_at(moment, now):
+    seconds = max(0.0, (now - moment).total_seconds())
     return relative(seconds).removeprefix("in ") if seconds >= 60 else f"{int(seconds)}s"
 
 
@@ -219,10 +241,15 @@ def override_pick(candidates, override, now):
     return None, notes
 
 
-def choose(accounts, model, preferred, now, override=None):
+def choose(accounts, model, preferred, now, override=None, fleet=None):
     """(instance_id, reason, candidates) — raises ValueError with the candidates
-    attached when every account is exhausted."""
+    attached when every account is exhausted. `fleet` (fleet_load.Fleet without
+    error) ranks by load-adjusted score; None ranks quota-only."""
     candidates = [assess(a, model, now) for a in accounts]
+    loaded = fleet is not None and not fleet.error
+    for c in candidates if loaded else ():
+        c.load = fleet.get(c.instance_id)
+        c.adjusted /= 1 + c.load.load
     ok = [c for c in candidates if c.status == "ok"]
     unknown = [c for c in candidates if c.status == "unknown"]
     tie = lambda c: (c.instance_id,)  # automatic routing has no inherited account/business affinity
@@ -238,10 +265,13 @@ def choose(accounts, model, preferred, now, override=None):
                 return pick.instance_id, why + "".join(f"; skipped {s}" for s in skipped), candidates
             if skipped:
                 note = f"{head}: no preferred account eligible ({'; '.join(skipped)})"
-        best = min(ok, key=lambda c: (c.session_tight, -c.score, *tie(c)))
+        best = min(ok, key=lambda c: (c.session_tight, -(c.adjusted if loaded else c.score), *tie(c)))
         why = (f"{best.bottleneck} {best.rate:.1f} %/h × {best.weight}x = {best.score:.1f} — "
                "highest plan-weighted headroom per hour to reset"
                if best.bottleneck else "unused capacity")
+        if loaded and best.bottleneck:
+            why = (f"{best.score:.1f} × {best.session_left:.0%} session left / (1 + load {best.load.load:g}) = "
+                   f"{best.adjusted:.1f} — highest load-adjusted plan headroom per hour to reset")
         if best.session_tight:
             why += " (every verified account's session is tight)"
         return best.instance_id, why + (f" [{note}]" if note else ""), candidates
@@ -254,10 +284,14 @@ def choose(accounts, model, preferred, now, override=None):
     raise error
 
 
-def explain(model, candidates, now, selected=None, reason=""):
-    lines = [f"Profile routing for {model} (usage cached ≤90 s; --force-profile bypasses this):", PLAN_HINT]
+def explain(model, candidates, now, selected=None, reason="", fleet=None, accounts=()):
+    lines = [f"Profile routing for {model} (cached readings, `seen` = each one's actual age; "
+             "--force-profile bypasses this):", PLAN_HINT]
     if any(c.tier == "1x?" for c in candidates):
         lines.append("WARNING: unknown plan tier counts as 1x and may demote an otherwise empty session; verify plan metadata.")
+    if fleet is not None and fleet.error:
+        lines.append(f"WARNING: live workload unknown ({fleet.error}): quota-only ranking.")
+    observed = {a.instance_id: a.fetched_at for a in accounts}
     width = max((len(c.instance_id) for c in candidates), default=8)
     for c in candidates:
         if c.status == "ok":
@@ -265,7 +299,15 @@ def explain(model, candidates, now, selected=None, reason=""):
                                  (f" (room {r.pace(now)[1]:+.0f})" if r.pace(now) else "")
                                  for r in c.rows)
             if c.bottleneck:
-                windows += f"  [{c.bottleneck} {c.rate:.1f} %/h × {c.weight}x = {c.score:.1f}]"
+                windows += f"  [{c.bottleneck} {c.rate:.1f} %/h × {c.weight}x = {c.score:.1f}"
+                windows += (f" × {c.session_left:.0%} session left / (1 + {c.load.summary()}) = {c.adjusted:.1f}]"
+                            if c.load is not None else "]")
+            seen = observed.get(c.instance_id)
+            if seen:
+                windows += f"  seen {relative_age_at(seen, now)} ago"
+                gap = c.load.ended_after(seen) if c.load is not None else 0
+                if gap:
+                    windows += f"  [observation gap: {gap} run(s) ended after this reading; it may not include their final usage]"
             tag = f"  [{c.detail}]" if c.session_tight else ""
         else:
             windows = f"{c.status}: {c.detail}"
@@ -277,7 +319,8 @@ def explain(model, candidates, now, selected=None, reason=""):
     return "\n".join(lines)
 
 
-def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None, override_path=None):
+def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None, override_path=None,
+          fleet_reader=None):
     """(instance_id, reason, explanation). Drivers without per-instance usage keep
     the inherited account (sibling on a driver switch). `allowed` (ids) narrows
     the candidates to the accounts the user named."""
@@ -303,12 +346,49 @@ def route(model, preferred, settings_path=SETTINGS, collect=None, allowed=None, 
     if allowed:
         accounts = [a for a in accounts if a.instance_id in allowed]
     override = load_override(now, override_path or settings_path.parent / OVERRIDE.name)
+    fleet = (fleet_reader or read_fleet)(settings_path.parent / "statev2.sqlite", now)
+    shadow = os.environ.get("T3_ROUTING_LOAD") == "shadow"
     try:
-        selected, reason, candidates = choose(accounts, model, preferred, now, override)
+        quota_pick = choose(accounts, model, preferred, now, override)[0]
+        adjusted_pick, reason, candidates = choose(accounts, model, preferred, now, override, fleet)
     except ValueError as error:
-        error.explanation = explain(model, error.candidates, now)
+        error.explanation = explain(model, error.candidates, now, fleet=fleet, accounts=accounts)
         raise
-    return selected, reason, explain(model, candidates, now, selected, reason)
+    selected = quota_pick if shadow else adjusted_pick
+    if shadow:
+        reason = f"quota-only (T3_ROUTING_LOAD=shadow; load-adjusted pick: {adjusted_pick})"
+    log_decision(settings_path.parent / DECISIONS, now, model, allowed, candidates, accounts, fleet,
+                 quota_pick, adjusted_pick, selected, "shadow" if shadow else "on")
+    return selected, reason, explain(model, candidates, now, selected, reason, fleet, accounts)
+
+
+def log_decision(path, now, model, allowed, candidates, accounts, fleet, quota_pick, adjusted_pick, selected, mode):
+    """One JSONL line per automatic pick, without prompts, titles or tokens; never breaks routing."""
+    seen = {a.instance_id: a.fetched_at for a in accounts}
+    entry = {"at": now.isoformat(timespec="seconds"), "model": model, "allowed": allowed or None, "mode": mode,
+             "fleet_error": fleet.error or None, "quota_pick": quota_pick, "adjusted_pick": adjusted_pick,
+             "selected": selected, "candidates": [{
+                 "id": c.instance_id, "status": c.status, "tier": c.weight,
+                 "observed_at": seen[c.instance_id].isoformat(timespec="seconds") if seen.get(c.instance_id) else None,
+                 "windows": {r.window: r.used_percent for r in c.rows if math.isfinite(r.used_percent)},
+                 "score": round(c.score, 3), "session_left": round(c.session_left, 3),
+                 "session_tight": c.session_tight, "adjusted": round(c.adjusted, 3),
+                 "load": c.load.as_dict(seen.get(c.instance_id)) if c.load is not None else None}
+                 for c in candidates]}
+    line = json.dumps(entry, separators=(",", ":")) + "\n"
+    try:  # trim + append under one exclusive lock on the log itself (concurrent spawns)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "r+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            os.fchmod(handle.fileno(), 0o600)
+            if os.fstat(handle.fileno()).st_size > DECISIONS_MAX_BYTES:
+                kept = handle.read().splitlines(keepends=True)
+                handle.seek(0)
+                handle.truncate()
+                handle.write("".join(kept[len(kept) // 2:]))
+            handle.write(line)
+    except OSError:
+        pass
 
 
 def check(model, instance_id, settings_path=SETTINGS, collect=None):

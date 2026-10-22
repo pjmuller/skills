@@ -1,6 +1,8 @@
 """Routing contracts: no network, Keychain, or live thread mutations."""
+import fcntl
 import json
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
@@ -11,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 from profile_routing import check, choose, explain, load_override, relevant, route
 from t3_limits import Account, Row, claude_profiles, claude_rows, plan_multiplier, tier_text
+from fleet_load import Fleet, Load
 
 NOW = datetime.now(timezone.utc)
 
@@ -400,3 +403,123 @@ def test_missing_tier_incident_replay(tmp_path, monkeypatch):
     selected, reason, candidates = choose([busy, empty], "claude-opus-5-5", "empty", NOW)
     assert selected == "busy"
     assert "WARNING: unknown plan tier" in explain("claude-opus-5-5", candidates, NOW)
+
+
+def fleet(**loads):
+    return Fleet(loads={id: Load(load=n, owners=int(n)) for id, n in loads.items()})
+
+
+def incident_accounts():
+    """2026-10-22 10:31 UTC replay, sanitized: weekly scores 20.6 / 17.3 / 14.1 on 20x plans."""
+    rows = lambda used, session, hours: [Row("session", session, NOW + timedelta(hours=3), 18000),
+                                         Row("weekly", used, NOW + timedelta(hours=hours), 604800)]
+    hot, mid, idle = (Account(id, id, plan="max_20x") for id in ("hot", "mid", "idle"))
+    hot.rows, mid.rows, idle.rows = rows(48.5, 26, 50), rows(1, 3, 114.5), rows(42, 0, 82.3)
+    return [hot, mid, idle]
+
+
+def test_incident_replay_load_divides_score_and_spreads_sequential_picks():
+    accounts = incident_accounts()
+    assert choose(accounts, "claude-opus-5-5", "x", NOW)[0] == "hot"  # quota-only: all six launches went here
+    loads = {"hot": 7, "mid": 1, "idle": 0}
+    selected, reason, candidates = choose(accounts, "claude-opus-5-5", "x", NOW, fleet=fleet(**loads))
+    assert [round(c.score, 1) for c in candidates] == [20.6, 17.3, 14.1]
+    assert [round(c.adjusted, 1) for c in candidates] == [1.9, 8.4, 14.1]
+    assert selected == "idle" and "(1 + load 0)" in reason
+    picks = []
+    for _ in range(6):  # each accepted launch is a live run before the next pick reads the store
+        pick = choose(accounts, "claude-opus-5-5", "x", NOW, fleet=fleet(**loads))[0]
+        picks.append(pick)
+        loads[pick] += 1
+    assert picks == ["idle", "mid"] * 3  # the busy account (1.9) gets none
+
+
+def test_lower_tier_and_missing_session_window():
+    big = Account("big", "big", plan="max_20x", rows=[Row("session", 0, None, 18000),
+                                                      Row("weekly", 40, NOW + timedelta(days=3), 604800)])
+    small = Account("small", "small", plan="max_5x", rows=[Row("weekly", 40, NOW + timedelta(days=3), 604800)])
+    _, _, (b, s) = choose([big, small], "claude-opus-5-5", "x", NOW, fleet=fleet(big=3))
+    assert s.session_left == 1 and round(b.adjusted / s.adjusted, 2) == 1.0  # 20x/(1+3) vs 5x/(1+0)
+    assert choose([big, small], "claude-opus-5-5", "x", NOW, fleet=fleet(big=4))[0] == "small"
+    assert choose([big, small], "claude-opus-5-5", "x", NOW, fleet=fleet(big=2))[0] == "big"
+
+
+def test_load_never_beats_exclusion_session_guard_or_override(tmp_path):
+    tight, busy = account("tight", plan="max_20x"), account("busy", plan="max_20x")
+    tight.rows[0].used_percent = 95
+    assert choose([tight, busy], "claude-opus-5-5", "x", NOW, fleet=fleet(busy=50))[0] == "busy"
+    gone = account("gone", 100)
+    assert choose([gone, busy], "claude-opus-5-5", "x", NOW, fleet=fleet(busy=50))[0] == "busy"
+    path = write_override(tmp_path / "o.json", prefer=["busy"])
+    idle = account("idle", plan="max_20x")
+    selected, reason, _ = choose([busy, idle], "claude-opus-5-5", "x", NOW, load_override(NOW, path),
+                                 fleet(busy=9))
+    assert selected == "busy" and reason.startswith("override")
+
+
+def route_settings(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"providerInstances": {
+        id: {"driver": "claudeAgent", "enabled": True} for id in ("hot", "mid", "idle")}}))
+    return settings
+
+
+def test_route_pools_fallback_shadow_and_bounded_log(tmp_path, monkeypatch):
+    settings, collect = route_settings(tmp_path), Mock(return_value=incident_accounts())
+    reader = lambda store, now: fleet(hot=7, mid=1, idle=0)
+    assert route("claude-opus-5-5", "x", settings, collect, fleet_reader=reader)[0] == "idle"
+    assert route("claude-opus-5-5", "x", settings, collect, ["hot", "mid"], fleet_reader=reader)[0] == "mid"
+    # No store beside settings.json: quota-only, said so, never a fake zero load.
+    selected, _, explanation = route("claude-opus-5-5", "x", settings, collect)
+    assert selected == "hot" and "live workload unknown (T3 store not found" in explanation
+    monkeypatch.setenv("T3_ROUTING_LOAD", "shadow")
+    selected, reason, _ = route("claude-opus-5-5", "x", settings, collect, fleet_reader=reader)
+    assert selected == "hot" and "load-adjusted pick: idle" in reason
+    log = [json.loads(line) for line in (tmp_path / "t3-routing-decisions.jsonl").read_text().splitlines()]
+    assert [(e["quota_pick"], e["adjusted_pick"], e["selected"], e["mode"]) for e in log] == [
+        ("hot", "idle", "idle", "on"), ("hot", "mid", "mid", "on"), ("hot", "hot", "hot", "on"),
+        ("hot", "idle", "hot", "shadow")]
+    assert log[2]["fleet_error"] and log[2]["candidates"][0]["load"] is None
+    assert log[0]["candidates"][0]["load"]["load"] == 7 and log[0]["candidates"][0]["windows"]["weekly"] == 48.5
+    assert set(log[0]) == {"at", "model", "allowed", "mode", "fleet_error", "quota_pick", "adjusted_pick",
+                           "selected", "candidates"}  # inputs and picks only: no prompts, titles or tokens
+    assert oct((tmp_path / "t3-routing-decisions.jsonl").stat().st_mode & 0o777) == "0o600"
+    monkeypatch.setitem(route.__globals__, "DECISIONS_MAX_BYTES", 2000)
+    for _ in range(20):
+        route("claude-opus-5-5", "x", settings, collect, fleet_reader=reader)
+    assert (tmp_path / "t3-routing-decisions.jsonl").stat().st_size < 2000 + 2 * len(json.dumps(log[0]))
+
+
+def test_explanation_shows_actual_reading_age_and_observation_gap():
+    accounts = incident_accounts()
+    accounts[2].fetched_at = NOW - timedelta(minutes=4)  # a reused setup-token probe, not ≤ 90 s
+    loads = fleet(hot=7, mid=1)
+    loads.loads["idle"] = Load(ended=[NOW - timedelta(minutes=2), NOW - timedelta(minutes=6)])
+    selected, reason, candidates = choose(accounts, "claude-opus-5-5", "x", NOW, fleet=loads)
+    text = explain("claude-opus-5-5", candidates, NOW, selected, reason, loads, accounts)
+    assert "seen 4m ago" in text and "usage cached ≤90 s" not in text
+    assert "observation gap: 1 run(s) ended after this reading; it may not include their final usage" in text
+
+
+def test_decision_log_trims_and_appends_under_one_lock(tmp_path, monkeypatch):
+    settings, collect = route_settings(tmp_path), Mock(return_value=incident_accounts())
+    reader = lambda store, now: fleet(hot=7, mid=1, idle=0)
+    log = tmp_path / "t3-routing-decisions.jsonl"
+    log.write_text("".join(json.dumps({"n": i}) + "\n" for i in range(100)))
+    log.chmod(0o644)
+    monkeypatch.setitem(route.__globals__, "DECISIONS_MAX_BYTES", 500)
+    with open(log, "a") as other:
+        fcntl.flock(other, fcntl.LOCK_EX)  # another spawn is mid-append
+        worker = threading.Thread(target=route, args=("claude-opus-5-5", "x", settings, collect),
+                                  kwargs={"fleet_reader": reader})
+        worker.start()
+        worker.join(0.3)
+        assert worker.is_alive()  # waits for the lock instead of trimming underneath it
+        other.write(json.dumps({"n": "other"}) + "\n")
+    worker.join(5)
+    lines = [json.loads(line) for line in log.read_text().splitlines()]
+    assert {"n": "other"} in lines and lines[-1]["selected"] == "idle" and len(lines) < 60
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    log.unlink()
+    log.mkdir()  # unwritable log: routing still answers
+    assert route("claude-opus-5-5", "x", settings, collect, fleet_reader=reader)[0] == "idle"

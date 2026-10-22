@@ -57,7 +57,7 @@ Source per enabled T3 provider instance, so each row is the account T3 would run
   reading (session 0 %, weekly kept until its reset); turns since the last reading with the
   window state unprovable → error until the last turn is 5 h old. Turns elsewhere (claude.ai,
   another machine) show at the next probe; a window opened there is invisible locally, so a probe
-  can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min, stored per config dir + account
+  can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min (routing shows the actual age as `seen`, not the 90 s cache), stored per config dir + account
   in `$T3CODE_HOME/userdata/t3-limits-probe.json`. At most every 2 h (`FABLE_PROBE_SECONDS`) the
   probe runs on Fable instead: only a Fable turn reports the Fable weekly cap
   (`seven_day_overage_included` → `Fable only`), at ~100x a Haiku turn's quota. No reading yet → error until the first turn
