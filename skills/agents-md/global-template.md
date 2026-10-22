@@ -54,6 +54,7 @@ AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-
 - Ping-pong inside one task (opinion, scoped research, review) → `delegate_task` child; each review round = new `delegate_task` with full context. Independent topic/repo, explicit standalone ask or meeting follow-up → `t3_thread_launch` in the owning repo. Target: `t3-pick-instance MODEL` (account by capacity + house effort); named account(s) → `t3-pick-instance MODEL a,b`. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
 
 ### T3 threads
+- Explicit “auto-settle” (dictated “auto subtle”) means: finish and verify, then T3-settle by default. Keep open only for a material finding, risk or decision that needs my attention; routine results do not. Never settle unfinished work.
 - Delegating/launching/messaging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md`. Settling → `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle (personal notes: `{absolute settling-policy path}`): self-settle only on my request or a routing policy; explicit keep-open wins; settle = kill, so finish background work first.
 - Next step needs time to pass (logs, deploy, a reply)? Arm a follow-up (`t3-schedule add --once <date> --resume-thread <your id>`) and report ⏰ with the date, instead of "check tomorrow".
 
