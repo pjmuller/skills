@@ -16,8 +16,8 @@ T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`)
   0.0.x `state.sqlite`.
 - `t3-thread-archive` — the searchable backup archive purged threads live on in
   ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups.
-- `t3-preview-gc` — free browser-preview renderers (macOS): `--apply` closes the tabs of settled/archived
-  threads idle past `--idle-hours` (same path as `t3_preview_close`; frees the renderer since T3 0.1).
+- `t3-preview-gc` — free browser-preview renderers (macOS): `--apply` closes tabs idle past `--idle-hours`
+  whose thread has no running turn (same path as `t3_preview_close`; frees the renderer since T3 0.1).
 - `t3-git-leftovers` — repos with uncommitted/unpushed work, one worker per repo ([below](#git-leftovers-t3-git-leftovers)).
 - `scripts/t3_store.py` — shared read-only store access, schema notes, short ids.
 
