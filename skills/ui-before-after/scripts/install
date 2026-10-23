@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_dir="${HOME}/.local/bin"
+[[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
+[[ "${1:-}" != --check ]] || echo "source $script_dir"
+if [[ "${1:-}" == "--check" ]]; then
+  command -v uv >/dev/null || { echo "missing uv; install it (https://docs.astral.sh/uv/), then rerun scripts/install --check" >&2; exit 1; }
+  echo "ok      uv ($(command -v uv))"
+  if command -v sips >/dev/null; then echo "ok      sips (compact thumbnails)"; else echo "note    sips missing: compact.html embeds full-size images"; fi
+  for helper in ui-shoot ui-compare; do
+    [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
+    echo "ok      $helper"
+  done
+  # Report only: the Chromium download is ~150 MB, so installing it stays an explicit step.
+  if uv run --no-project --quiet --with playwright python -c 'from playwright.sync_api import sync_playwright
+with sync_playwright() as p: p.chromium.launch().close()' >/dev/null 2>&1; then
+    echo "ok      playwright chromium"
+  else
+    echo "note    playwright chromium missing; ui-shoot needs: uv run --with playwright playwright install chromium"
+  fi
+  exit 0
+fi
+# Preflight every link before changing any command.
+project_copy=false
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+esac
+warn_project=false
+[[ ! -d "$HOME/.agents/skills/ui-before-after" ]] || warn_project=true
+for command_name in ui-shoot ui-compare; do
+  existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    warn_project=true
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+  fi
+done
+if $project_copy && $warn_project; then
+  echo "warning: project copy $script_dir is being made global" >&2
+fi
+
+mkdir -p "$install_dir"
+for helper in ui-shoot ui-compare; do
+  ln -sfn "$script_dir/$helper" "$install_dir/$helper"
+  echo "installed $install_dir/$helper"
+done

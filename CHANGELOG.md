@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-23 — ui-before-after; feedback rounds; Codex sandbox note
+
+- New skill `ui-before-after`: `ui-shoot` (Playwright scenes → screenshots) and `ui-compare` (manifest →
+  self-contained before/after HTML for a ticket, a tiny `compact.html` for T3 `html_render`, ClickUp table
+  + matching attachments). Why: a taste reviewer judges a shipped UI change by looking, same state twice.
+- recording-followups: `feedback-round.md`, the playbook for implementing a narrated product walk-through
+  in one thread (triage, parallel root-cause workers, BEFORE shots before edits, taste-owner ticket).
+- video-shrink-for-gemini: feedback-walkthrough block in the prompt template (feedback items with
+  wall-clock, the speaker's diagnosis is not "what was visible"); pass the app's UI copy as context.
+- t3-manage-thread workers: Codex `delegate_task` children have no network and no Docker; brief them so.
+- global template, Delegation: many items or deep topics → fan out read-only investigation in parallel (one
+  sub-agent or `delegate_task` child per cluster) before building. Why: a 19-item feedback round was
+  root-caused serially in the lead; the parallel version is faster and goes deeper per item.
+
 ## 2026-10-23 — bitwarden: agent picks among several logins, one touch
 
 - `copy` without `--username`/`--id` on a host with several logins no longer fails after the touch: the vaults lock,

@@ -1,0 +1,209 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Build a before/after review page from screenshot pairs described in MANIFEST.json.
+
+Writes into --out: before/ after/ (renamed copies), attachments/ (copies named for the ticket
+table), index.html (relative links), before-after.html (self-contained, base64 PNGs),
+compact.html (JPEG thumbnails, themed by the host's CSS variables) and ticket-table.md.
+Thumbnails use macOS `sips`; without it compact.html points at the full PNGs.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import html
+import json
+import re
+import shutil
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+# compact.html is for inline renderers (T3 html_render) that cap the HTML they accept but inline
+# local images themselves: it stays tiny and points at absolute paths of JPEG thumbnails in compact/.
+THUMB_WIDTH = 760
+THUMB_QUALITY = 60
+
+FULL_CSS = """
+body { margin: 0; background: #f6f6f7; color: #1d1d1f;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.ba { max-width: 1400px; margin: 0 auto; padding: 32px 24px 64px; }
+.ba .muted, .ba figcaption { color: #6e6e73; }
+.ba .row, .ba .extra { border-top: 1px solid #d9d9de; }
+.ba .tag { border: 1px solid #d9d9de; }
+.ba img { border: 1px solid #d9d9de; background: #fff; }
+"""
+
+# No page background: an inline renderer injects these variables and its own surface.
+COMPACT_CSS = """
+.ba { color: var(--foreground); font-family: var(--font-sans); font-size: 14px; line-height: 1.5; }
+.ba .muted, .ba figcaption { color: var(--muted-foreground); }
+.ba .row, .ba .extra { border-top: 1px solid var(--border); }
+.ba .tag { border: 1px solid var(--border); }
+.ba img { border: 1px solid var(--border); }
+"""
+
+LAYOUT_CSS = """
+.ba h1 { font-size: 1.5em; margin: 0 0 .3em; }
+.ba h2 { font-size: 1.1em; margin: 0 0 .3em; display: flex; align-items: center; gap: .5em; }
+.ba .row, .ba .extra { padding: 1.2em 0; }
+.ba .tag { font-size: .7em; font-weight: 500; text-transform: uppercase; letter-spacing: .04em;
+  padding: .1em .55em; border-radius: 999px; }
+.ba .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin-top: .8em; }
+.ba figure { margin: 0; }
+.ba figure + figure { margin-top: .6em; }
+.ba figcaption { font-size: .8em; font-weight: 600; margin-bottom: .3em; }
+.ba img { display: block; width: 100%; height: auto; border-radius: 6px; }
+.ba p { margin: .2em 0; }
+"""
+
+
+def slug(title: str) -> str:
+    # The row number is already the filename prefix: "1 · Inbox" -> "inbox".
+    return re.sub(r'[^a-z0-9]+', '-', re.sub(r'^[\d\W_]+', '', title.lower())).strip('-')[:40] or 'screen'
+
+
+def as_list(value) -> list[str]:
+    if not value:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def png_width(path: Path) -> int | None:
+    head = path.read_bytes()[:24]
+    if head[:8] != b'\x89PNG\r\n\x1a\n':
+        return None
+    return struct.unpack('>I', head[16:20])[0]
+
+
+def data_uri(path: Path) -> str:
+    mime = 'image/jpeg' if path.suffix.lower() in ('.jpg', '.jpeg') else 'image/png'
+    return f'data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}'
+
+
+def thumbnail(src: Path, dst_dir: Path) -> Path:
+    dst = dst_dir / f'{src.parent.name}-{src.stem}.jpg'
+    cmd = ['sips', '-s', 'format', 'jpeg', '-s', 'formatOptions', str(THUMB_QUALITY)]
+    width = png_width(src)
+    if width is None or width > THUMB_WIDTH:
+        cmd += ['--resampleWidth', str(THUMB_WIDTH)]
+    subprocess.run([*cmd, str(src), '--out', str(dst)], check=True, capture_output=True)
+    return dst
+
+
+def text_html(text: str) -> str:
+    return ''.join(f'<p>{html.escape(p).replace(chr(10), "<br>")}</p>'
+                   for p in re.split(r'\n\s*\n', text.strip()) if p)
+
+
+def render(manifest: dict, rows: list[dict], extras: list[dict], css: str, src, standalone: bool) -> str:
+    def figures(label: str, paths: list[Path]) -> str:
+        if not paths:
+            return f'<figure><figcaption>{label}</figcaption><p class="muted">(none)</p></figure>'
+        caption = f'<figcaption>{label}</figcaption>' if label else ''
+        return ''.join(f'<figure>{caption}<img src="{html.escape(src(p))}" alt="{html.escape(p.name)}" loading="lazy"></figure>'
+                       for p in paths)
+
+    parts = []
+    if manifest.get('title'):
+        parts.append(f'<h1>{html.escape(manifest["title"])}</h1>')
+    if manifest.get('intro'):
+        parts.append(f'<div class="muted">{text_html(manifest["intro"])}</div>')
+    for row in rows:
+        tag = f'<span class="tag">{html.escape(row["kind"])}</span>' if row.get('kind') else ''
+        parts.append(
+            f'<section class="row"><h2>{html.escape(row["title"])}{tag}</h2>{text_html(row.get("text", ""))}'
+            f'<div class="grid"><div>{figures("Before", row["before"])}</div>'
+            f'<div>{figures("After", row["after"])}</div></div></section>')
+    for extra in extras:
+        parts.append(f'<section class="extra"><h2>{html.escape(extra["title"])}</h2>'
+                     f'{text_html(extra.get("text", ""))}{figures("", [extra["image"]])}</section>')
+    body = f'<style>{css}{LAYOUT_CSS}</style><div class="ba">{"".join(parts)}</div>'
+    if not standalone:
+        return f'<!doctype html><meta charset="utf-8">{body}\n'
+    title = html.escape(manifest.get('title') or 'Before / after')
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title>'
+            f'</head><body>{body}</body></html>\n')
+
+
+def md_cell(text: str) -> str:
+    return text.replace('|', '\\|').replace('\n', ' ')
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument('manifest', type=Path)
+    ap.add_argument('--out', type=Path, required=True)
+    args = ap.parse_args()
+
+    manifest = json.loads(args.manifest.read_text())
+    base = args.manifest.resolve().parent
+    before_dir = base / manifest.get('before_dir', '.')
+    after_dir = base / manifest.get('after_dir', '.')
+    out = args.out.resolve()
+    owned = [out / sub for sub in ('before', 'after', 'extras', 'attachments', 'compact')]
+    inputs = [(d / f).resolve() for row in manifest.get('rows', []) for side, d in (('before', before_dir), ('after', after_dir))
+              for f in as_list(row.get(side))] + [(base / e['image']).resolve() for e in manifest.get('extras', [])]
+    for src in inputs:
+        for sub in owned:
+            if sub in src.parents:
+                sys.exit(f'input {src} lies inside {sub}, which this run rewrites; pick another --out')
+    for sub in owned[:4]:
+        shutil.rmtree(sub, ignore_errors=True)
+        sub.mkdir(parents=True)
+
+    def place(src: Path, side: str, name: str) -> Path:
+        if not src.is_file():
+            sys.exit(f'missing image: {src}')
+        dst = out / side / name
+        shutil.copyfile(src, dst)
+        if side != 'extras':
+            shutil.copyfile(src, out / 'attachments' / f'{side}-{name}')
+        return dst
+
+    rows = []
+    for n, row in enumerate(manifest.get('rows', []), 1):
+        placed = {}
+        for side, src_dir in (('before', before_dir), ('after', after_dir)):
+            files = as_list(row.get(side))
+            placed[side] = [
+                place(src_dir / f, side, f'{n}-{slug(row["title"])}{f"-{k}" if len(files) > 1 else ""}{Path(f).suffix or ".png"}')
+                for k, f in enumerate(files, 1)]
+        rows.append({**row, **placed})
+    extras = [{**e, 'image': place(base / e['image'], 'extras', f'{n}-{slug(e["title"])}{Path(e["image"]).suffix}')}
+              for n, e in enumerate(manifest.get('extras', []), 1)]
+
+    (out / 'index.html').write_text(
+        render(manifest, rows, extras, FULL_CSS, lambda p: p.relative_to(out).as_posix(), True))
+    (out / 'before-after.html').write_text(render(manifest, rows, extras, FULL_CSS, data_uri, True))
+
+    thumbs = out / 'compact'
+    shutil.rmtree(thumbs, ignore_errors=True)
+    thumbs.mkdir()
+    if shutil.which('sips'):
+        thumb = lambda p: str(thumbnail(p, thumbs).resolve())
+    else:
+        print('warning: sips not found; compact.html points at the full-size images', file=sys.stderr)
+        thumb = lambda p: str(p.resolve())
+    (out / 'compact.html').write_text(render(manifest, rows, extras, COMPACT_CSS, thumb, False))
+
+    lines = ['| Screen | Before | After |', '| --- | --- | --- |']
+    for row in rows:
+        cells = [' '.join(f'[[file:{side}-{p.name}]]' for p in row[side]) or '-' for side in ('before', 'after')]
+        lines.append(f'| {md_cell(row["title"])} | {cells[0]} | {cells[1]} |')
+    (out / 'ticket-table.md').write_text('\n'.join(lines) + '\n')
+
+    for name in ('index.html', 'before-after.html', 'compact.html', 'ticket-table.md'):
+        path = out / name
+        print(f'{path}  {path.stat().st_size // 1024} KB')
+    print(f'{out / "attachments"}/  (upload these for the ticket table)')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

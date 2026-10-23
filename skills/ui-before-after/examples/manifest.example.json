@@ -1,0 +1,25 @@
+{
+  "title": "Acme dashboard: navigation refresh",
+  "intro": "Same screens, same seeded data, before and after the refresh. Taste rows need a yes/no; bug rows are fixes to confirm.",
+  "before_dir": "shots/before",
+  "after_dir": "shots/after",
+  "rows": [
+    {
+      "title": "1 · Inbox",
+      "kind": "taste",
+      "text": "Rows are denser and the unread dot moved left of the sender, so more messages fit above the fold.",
+      "before": "01-inbox.png",
+      "after": "01-inbox.png"
+    },
+    {
+      "title": "2 · Settings",
+      "kind": "bug",
+      "text": "The billing panel no longer hides the Save button on narrow windows.",
+      "before": "02-settings-top.png",
+      "after": ["02-settings-top.png", "02-settings-invoices.png"]
+    }
+  ],
+  "extras": [
+    {"title": "New icon set", "text": "For reference, not a before/after.", "image": "shots/icons.png"}
+  ]
+}

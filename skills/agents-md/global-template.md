@@ -53,6 +53,7 @@ AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-
 ## Delegation
 - **Opus plans, orchestrates and builds; Fable only for very complex planning.** Any OpenAI session (orchestration, builds, research, planning, second opinions) → **Astra**; never silently fall back to Sol. Sol: code review, or scoped work Astra assigns. Sonnet/Haiku fine for small chores. Explicit model choices win. Lead verifies workers and the result, never with a same-family reviewer.
 - Second planning opinion: same problem, constraints and evidence; withhold proposals until both finish, then reconcile.
+- Many items or deep topics (a feedback round, a multi-part spec): fan out read-only investigation first, in parallel, one native sub-agent or `delegate_task` child per cluster, each briefed with its evidence and asked for root cause + smallest change; the lead keeps core changes and integration. Never root-cause ten items serially in the lead.
 - Ping-pong inside one task (opinion, scoped research, review) → `delegate_task` child; each review round = new `delegate_task` with full context. Independent topic/repo, explicit standalone ask or meeting follow-up → `t3_thread_launch` in the owning repo. Target: `t3-pick-instance MODEL` (account by capacity + house effort); named account(s) → `t3-pick-instance MODEL a,b`. Recipe: `~/.agents/skills/t3-manage-thread/workers.md`.
 
 ### T3 threads

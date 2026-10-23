@@ -33,6 +33,15 @@ In transcript-first mode, add brief `[screen: app / page / record]` context only
 when it clarifies speech. Mixed mode also gets the full visual section above.
 Spell names/product terms as in the context; do not replace visible wording.
 
+## Feedback walkthrough rules (only when someone narrates feedback on a product screen)
+
+Recording started at {{WALLCLOCK}} (local time); add the absolute time next to every feedback item so
+it can be matched to server logs. End with `## Feedback items`: one numbered entry per complaint, bug,
+wish, praise or "leave it like this", each with timestamp, screen/URL, element, the speaker's words
+close to verbatim, and what was visible. The speaker's diagnosis is a claim, not a fact: under "what
+was visible" give the raw on-screen values (counts, order, labels) and never restate the claim as
+something you saw. No solutions.
+
 ## Vocabulary (spell these exactly; ASR and speech both get them wrong)
 
 {{VOCABULARY}}

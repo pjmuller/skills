@@ -1,0 +1,38 @@
+{
+  "viewport": "1280x800",
+  "scenes": [
+    {
+      "name": "00-login",
+      "title": "Sign in (sets the session cookie for later scenes)",
+      "steps": [
+        {"goto": "/login"},
+        {"fill": ["input[name=email]", "demo@acme.example"]},
+        {"fill": ["input[name=password]", "demo-password"]},
+        {"press": ["input[name=password]", "Enter"]},
+        {"wait_for": "nav"}
+      ]
+    },
+    {
+      "name": "01-inbox",
+      "title": "Inbox",
+      "steps": [
+        {"goto": "/inbox"},
+        {"wait_for": ".message-list"},
+        {"shot": ""}
+      ]
+    },
+    {
+      "name": "02-settings",
+      "title": "Settings, with the billing panel open",
+      "steps": [
+        {"goto": "/settings"},
+        {"click": "text=Billing"},
+        {"wait": 300},
+        {"shot": "top"},
+        {"scroll_into_view": "#invoices"},
+        {"eval": "document.querySelectorAll('.toast').forEach(t => t.remove())"},
+        {"shot": "invoices", "full_page": true}
+      ]
+    }
+  ]
+}

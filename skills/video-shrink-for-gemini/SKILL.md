@@ -70,6 +70,12 @@ Claude Design export, a ticket, a mockup), pass it as a context file: the pass s
 video to know what is on screen at which second, but names slides, frames and labels by their real
 titles/ids instead of guessing from pixels. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
 
+**Product feedback walkthrough** (someone clicks through an app and narrates what to change): keep
+the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
+carry it) so item times line up with server logs, and pass as context the owning screen's skill doc
+plus the app's UI copy (its i18n/strings file or the relevant templates): Gemini then quotes real
+labels and step names. Then follow [feedback-round](../recording-followups/feedback-round.md).
+
 ## Execute and verify
 
 `transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` writes
@@ -97,6 +103,10 @@ Read the file; check speech, visual changes, timestamps and coverage against the
 report gaps. The file opens with a provenance header (source video, pass settings, prompt path,
 "work from this text, do not re-run the video pass"): downstream briefs point at **this** file, never
 at the raw vendor ASR beside it, so no later thread watches the video again.
+
+Feedback walkthroughs: check every count and every "X is sorted/broken by Y" line against a source
+frame or the data. A flash pass once restated the speaker's misreading ("sorted by volume") as
+visible fact while its own numbers showed the opposite, and misread one count (31 → 51).
 
 Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
 screen names on a 29-minute 720p share at low resolution (2026-09-24); crop + high resolution read 0.88

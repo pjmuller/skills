@@ -10,6 +10,8 @@ Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKI
 transcript is on disk. Project skills (ReplyPen `fathom-interviews`, redcell's Fathom wrapper) own
 where the note lives and its frontmatter; they link here for the prompt step.
 
+**Product feedback walkthrough to implement here** (not prompts): [feedback-round.md](feedback-round.md).
+
 **Spoken cues** ("James, please spawn…" / "James, create a ClickUp ticket…") are commands, not
 proposals: [spoken-cues.md](spoken-cues.md). Automatic per-call entry point (one teammate machine per
 call): [recording-watcher](../recording-watcher/SKILL.md).

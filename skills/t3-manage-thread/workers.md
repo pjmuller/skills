@@ -24,6 +24,13 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
 - `task_cancel` or stopping the parent stops it; settling doesn't (a later result wakes and unsettles the parent).
 - Reading a terminal result acknowledges it. Don't poll; `mode: "wait"` only for seconds-long tasks. Recovery after parent/child limit/stop/restart is unverified: keep task ids, `task_status` if a wake is overdue.
 
+### Codex sandbox limits
+
+Observed 2026-10-23 on Codex `delegate_task` children in `auto` mode: no outbound network (asset
+downloads, AWS/log CLIs failed) and no Docker (a testcontainer test hung; the worker polled for 5+
+minutes). Brief Codex workers accordingly: pre-fetch inputs to a local path, run only tests that need
+neither, and report "not run: needs network/Docker" instead of waiting. The lead runs the rest.
+
 ### Provider unavailable or failed
 
 - `orchestrator_capabilities` (cached health) and `t3-pick-instance` (capacity) don't prove execution. Codex **status-probe timeout** ≠ expired auth: with explicit `providerInstanceId`, `delegate_task` re-probes once before refusing, so keep the account. Transient-timeout refusal → one retry after 30 s, same `clientRequestId`; accepted → inspect its `taskId`, never resend blindly.

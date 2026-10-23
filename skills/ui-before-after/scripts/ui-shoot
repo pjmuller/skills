@@ -1,0 +1,127 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["playwright>=1.45"]
+# ///
+"""Screenshot the same screens in the same state, scripted by a SCENES.json file.
+
+Run once on the old build and once on the new one (same scenes, different --out) to get
+before/after pairs for ui-compare. One browser context for all scenes, so a login scene
+first keeps its cookies; each scene gets a fresh page.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urljoin
+
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
+
+INSTALL_HINT = 'uv run --with playwright playwright install chromium'
+
+
+def parse_viewport(value: str) -> dict:
+    try:
+        w, h = value.lower().split('x')
+        return {'width': int(w), 'height': int(h)}
+    except ValueError:
+        sys.exit(f'bad viewport {value!r}; use WIDTHxHEIGHT, e.g. 1280x800')
+
+
+def shoot(page, out: Path, scene: str, suffix: str, full_page: bool) -> None:
+    path = out / (f'{scene}-{suffix}.png' if suffix else f'{scene}.png')
+    page.screenshot(path=str(path), full_page=full_page, animations='disabled')
+    print(path, flush=True)
+
+
+def run_step(page, step: dict, base_url: str, out: Path, scene: str) -> bool:
+    """Run one step; return True when it took a screenshot."""
+    if 'goto' in step:
+        page.goto(urljoin(base_url.rstrip('/') + '/', step['goto'].lstrip('/')), wait_until='networkidle')
+    elif 'click' in step:
+        page.click(step['click'])
+    elif 'fill' in step:
+        page.fill(*step['fill'])
+    elif 'press' in step:
+        page.press(*step['press'])
+    elif 'wait' in step:
+        page.wait_for_timeout(step['wait'])
+    elif 'wait_for' in step:
+        page.wait_for_selector(step['wait_for'])
+    elif 'eval' in step:
+        page.evaluate(step['eval'])
+    elif 'scroll_into_view' in step:
+        page.locator(step['scroll_into_view']).first.scroll_into_view_if_needed()
+    elif 'shot' in step:
+        shoot(page, out, scene, step['shot'] or '', bool(step.get('full_page')))
+        return True
+    else:
+        raise ValueError(f'unknown step {step!r}')
+    return False
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument('scenes', type=Path)
+    ap.add_argument('--base-url', required=True)
+    ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--only', help='comma-separated scene names')
+    ap.add_argument('--viewport', help='WIDTHxHEIGHT (default: SCENES.json viewport or 1280x800)')
+    ap.add_argument('--scale', type=float, default=2, help='device scale factor (default 2)')
+    args = ap.parse_args()
+
+    spec = json.loads(args.scenes.read_text())
+    scenes = spec['scenes']
+    if args.only:
+        wanted = set(args.only.split(','))
+        unknown = wanted - {s['name'] for s in scenes}
+        if unknown:
+            sys.exit(f'unknown scene(s): {", ".join(sorted(unknown))}')
+        scenes = [s for s in scenes if s['name'] in wanted]
+    viewport = parse_viewport(args.viewport or spec.get('viewport') or '1280x800')
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    page_errors: list[str] = []
+    failures = 0
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except PlaywrightError as e:
+            if "Executable doesn't exist" in str(e):
+                print(f'Chromium is not installed for Playwright. Run:\n  {INSTALL_HINT}', file=sys.stderr)
+                return 1
+            raise
+        context = browser.new_context(viewport=viewport, device_scale_factor=args.scale)
+        context.set_default_timeout(10_000)  # a missing selector fails fast; navigation keeps 30 s
+        context.set_default_navigation_timeout(30_000)
+        for scene in scenes:
+            name = scene['name']
+            # A failed re-run must not leave last run's PNG looking like this run's evidence.
+            suffixes = {step['shot'] for step in scene.get('steps', []) if 'shot' in step} or {''}
+            for suffix in suffixes:
+                (args.out / (f'{name}-{suffix}.png' if suffix else f'{name}.png')).unlink(missing_ok=True)
+            page = context.new_page()
+            page.on('pageerror', lambda err, name=name: page_errors.append(f'{name}: {err}'))
+            shot_taken = False
+            for i, step in enumerate(scene.get('steps', [])):
+                try:
+                    shot_taken |= run_step(page, step, args.base_url, args.out, name)
+                except Exception as e:  # report and move on to the next scene
+                    print(f'FAIL {name} step {i} {json.dumps(step)}: {str(e).splitlines()[0]}', file=sys.stderr)
+                    failures += 1
+                    break
+            else:
+                if not shot_taken:
+                    shoot(page, args.out, name, '', False)
+            page.close()
+        browser.close()
+
+    for err in page_errors:
+        print(f'pageerror {err}', file=sys.stderr)
+    return 1 if failures else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
