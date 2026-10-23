@@ -20,6 +20,7 @@ Local files: absolute paths in backticks, copied from tool output; prefer stable
 Status emojis only in the final wrap-up, one per distinct outcome (✅ task A · 🚫 task B):
 
 - ✅ done/verified · 👀 needs review/course-change · 🚫 blocked
+- 🔓 blocked only by auto mode: switch the thread to full access (or reply "go") and I continue
 - 🏓 awaiting a `delegate_task` worker (its result wakes this thread): keep open
 - ⏰ follow-up armed (`t3-schedule --resume-thread <your id>`, id = `currentThreadId` from `t3_thread_list`; give the date); never keeps a thread open
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close. In-harness sub-agents are part of your turn: never 🏓/📤 for them.
@@ -29,7 +30,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - Specs are never perfect: change course while building; report non-obvious decisions after the fact.
 - My prompts are often speech-to-text: resolve misspelled names from intent; ask only if two readings are equally plausible *and* lead to different work.
 - Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.
-- Auto mode blocks an action I asked for → no workaround via other tools; ask me once for a go naming exact action, target and scope. Repeated false blocks → skill `claude-auto-mode`; never loosen exfiltration rules.
+- Auto mode blocks an action I asked for → no workaround via other tools; start the message with 🔓 and ask me once for a go naming exact action, target and scope. Repeated false blocks → skill `claude-auto-mode`; never loosen exfiltration rules.
 - Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
 - External facts (pricing, features, versions, dates): verify on the web and cite.
 - Files for me → `~/Downloads`. Thread titles ≤5 words, no ticket IDs.

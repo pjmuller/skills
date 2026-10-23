@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-23 — global template: 🔓 for auto-mode blocks
+
+- New status emoji 🔓 = blocked only by auto mode; the ask starts with it. Why: an auto-mode block looked like any
+  other question, so the human missed that one click (switch the thread to full access) unblocks the agent.
+
 ## 2026-10-23 — bitwarden: broker owns the clipboard; stable builds
 
 - The broker writes released secrets to the clipboard itself (previously piped to the separate, unverified
