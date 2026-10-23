@@ -18,9 +18,11 @@ provider's own transcript files. T3 has no hard delete, so:
               once; all history now lives in statev2). Dry run unless --yes.
 
 Candidates are top-level threads; their sub-agent and delegated-task
-descendants (lineage 'subagent' edges only, never forks) go with them. Never purged: pinned, running, or awaiting approval,
-and threads a wake-up still targets (enabled native scheduled task,
-`t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`). A failing
+descendants (lineage 'subagent' edges only, never forks) go with them. Never purged:
+touched in the last 7 days (`--older-than`), pinned, running, or awaiting approval,
+threads a wake-up still targets (enabled native scheduled task,
+`t3-schedule pending-resumes`, `t3-mail-link list --thread-ids`), an open pull
+request, or a real conversation (KEEP_USER_MESSAGES / KEEP_USER_DAYS). A failing
 helper aborts: no protected set, no purge.
 """
 
@@ -77,6 +79,12 @@ EXTRA_THREAD_COLUMNS = {
     "orchestration_v2_projection_subagents": ("child_thread_id",),
 }
 KEEP_TABLES = {"scheduled_tasks"}
+# Real conversations (this many typed messages, or typed on 2+ days) are the threads that get
+# revived; one-shot briefs, scheduled runs and delegated tasks almost never come back. 2026-10
+# history (two independent analyses): keeps ~13% of the cohort older than a week, which covered
+# about half of the (rare, ~3%) revivals after 3+ idle days.
+KEEP_USER_MESSAGES = 8
+KEEP_USER_DAYS = 2
 TITLE_CHARS = 44
 PROJECT_CHARS = 16
 
@@ -113,7 +121,10 @@ class Thread:
     pinned: bool
     busy: bool
     instance_id: str | None
+    open_pr: bool = False
     messages: int = 0
+    user_messages: int = 0
+    user_days: int = 0
     descendants: list[str] = field(default_factory=list)
     session_ids: set[str] = field(default_factory=set)
     attachment_ids: set[str] = field(default_factory=set)
@@ -173,6 +184,10 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
                 deleted=row["deleted_at"] is not None,
                 settled=payload.get("settledOverride") == "settled",
                 pinned=payload.get("pinnedAt") is not None,
+                open_pr=any(
+                    ((pr or {}).get("snapshot") or {}).get("state") == "open"
+                    for pr in payload.get("pullRequests") or []
+                ),
                 busy=False,
                 instance_id=row["provider_instance_id"],
             )
@@ -184,7 +199,11 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
             if row["thread_id"] in threads:
                 threads[row["thread_id"]].busy = True
         for row in db.execute("""
-            SELECT m.thread_id, COUNT(*) AS n,
+            SELECT m.thread_id, COUNT(DISTINCT m.message_id) AS n,
+                   COUNT(DISTINCT CASE WHEN m.role = 'user' AND m.payload_json ->> '$.createdBy' = 'user'
+                                       THEN m.message_id END) AS typed,
+                   COUNT(DISTINCT CASE WHEN m.role = 'user' AND m.payload_json ->> '$.createdBy' = 'user'
+                                       THEN substr(m.created_at, 1, 10) END) AS typed_days,
                    group_concat(a.value ->> '$.id', ' ') AS attachments
             FROM orchestration_v2_projection_messages m
             LEFT JOIN json_each(m.payload_json, '$.attachments') a
@@ -192,6 +211,8 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
         """):
             if thread := threads.get(row["thread_id"]):
                 thread.messages = row["n"]
+                thread.user_messages = row["typed"]
+                thread.user_days = row["typed_days"]
                 thread.attachment_ids |= set((row["attachments"] or "").split())
         # Provider-native session ids: V2 provider threads, plus the resume cursor of
         # history imported from 0.0.x (legacy table copied into statev2).
@@ -317,7 +338,7 @@ def pending_wakes(store: Path) -> dict[str, str]:
 def select(
     args: argparse.Namespace, threads: dict[str, Thread], wakes: dict[str, str]
 ) -> tuple[list[Thread], list[tuple[Thread, str]]]:
-    """(purge cohort, matching threads a wake-up keeps). A family goes as one."""
+    """(purge cohort, matching threads a keep rule saves, with why). A family goes as one."""
     cohorts = [name for name in ("archived", "settled", "deleted") if getattr(args, name)]
     if not cohorts:
         raise SystemExit("pick at least one cohort: --archived / --settled / --deleted")
@@ -332,9 +353,13 @@ def select(
         family = [thread] + [threads[tid] for tid in thread.descendants]
         if any(member.pinned or member.busy for member in family):
             continue
-        woken = [wakes[m.thread_id] for m in family if m.thread_id in wakes]
-        if woken:
-            kept.append((thread, "; ".join(woken)))
+        reasons = [wakes[m.thread_id] for m in family if m.thread_id in wakes]
+        if any(member.open_pr for member in family):
+            reasons.append("open pull request")
+        if thread.user_messages >= KEEP_USER_MESSAGES or thread.user_days >= KEEP_USER_DAYS:
+            reasons.append(f"conversation ({thread.user_messages} typed messages, {thread.user_days} days)")
+        if reasons:
+            kept.append((thread, "; ".join(reasons)))
         else:
             rows.append(thread)
     return sorted(rows, key=lambda t: t.updated_at), kept
@@ -352,7 +377,7 @@ def cmd_list(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thre
         print(json.dumps(
             {
                 "threads": [t.as_dict() for t in rows],
-                "kept_pending_wake": [
+                "kept": [
                     {"thread_id": t.thread_id, "title": t.title, "reason": r} for t, r in kept
                 ],
             },
@@ -372,7 +397,7 @@ def cmd_list(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thre
         print(f"kept {short_id(t.thread_id)} {one_line(t.title, TITLE_CHARS)}: {reason}")
     unresolved = sum(1 for t in rows if not t.session_ids)
     print(
-        f"\n{len(rows)} threads (+{len(family_ids(rows)) - len(rows)} descendants) · "
+        f"\n{len(rows)} threads (+{len(family_ids(rows)) - len(rows)} descendants) · {len(kept)} kept · "
         f"{sum(len(t.files) for t in rows)} files · {unresolved} without a known transcript\n"
         "Dry run. `apply --yes` with T3 Code fully closed purges rows and files."
     )
@@ -496,7 +521,7 @@ def refuse_while_running(yes: bool) -> None:
 
 def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thread, str]]) -> int:
     if kept:
-        print(f"Keeping {len(kept)} matching threads with a pending wake-up (see `list`).")
+        print(f"Keeping {len(kept)} matching threads a keep rule saves (see `list`).")
     if not rows:
         print("No matching threads.")
         return 0
@@ -584,8 +609,8 @@ def add_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--settled", action="store_true", help="cohort: settled")
     parser.add_argument("--deleted", action="store_true", help="cohort: soft-deleted")
     parser.add_argument(
-        "--older-than", type=parse_duration, default=parse_duration("3d"),
-        help="minimum age of updated_at, e.g. 3d or 12h (default 3d)",
+        "--older-than", type=parse_duration, default=parse_duration("7d"),
+        help="minimum age of updated_at (settling bumps it), e.g. 7d or 12h (default 7d)",
     )
     parser.add_argument("--project", help="project name or workspace-root substring")
 

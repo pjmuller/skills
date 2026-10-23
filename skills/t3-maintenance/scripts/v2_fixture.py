@@ -55,9 +55,10 @@ class Store:
     def thread(self, tid: str, title: str, *, project: str = "p", minutes: float = 0,
                parent: str | None = None, fork: bool = False, settled: bool = False, pinned: bool = False,
                archived: bool = False, deleted: bool = False, run: str | None = None,
-               instance: str = "claudeAgent") -> None:
+               instance: str = "claudeAgent", pr_state: str | None = None) -> None:
         payload = {
             "settledOverride": "settled" if settled else None,
+            "pullRequests": [{"number": 1, "snapshot": {"state": pr_state}}] if pr_state else [],
             "pinnedAt": ago(1) if pinned else None,
             "lineage": {"parentThreadId": parent,
                         "relationshipToParent": ("fork" if fork else "subagent") if parent else None,

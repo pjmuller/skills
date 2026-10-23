@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-23 — t3-purge-threads: fast, verified, smarter keep
+
+- Set-based deletes (one per table, one transaction): a 2,100-thread purge went from ~11 h to
+  under 4 min end to end; per-phase/table progress.
+- `--full-backup` verifies the copy (integrity + per-table row counts) before deleting anything.
+- Keep rules: default `--older-than 7d`; open PRs and real conversations (8+ typed messages or
+  typed on 2+ days) are kept with a reason. `--json` key `kept_pending_wake` is now `kept`.
+
 ## 2026-10-21 — account routing and recovery
 
 - Route away from half-spent sessions burning ahead of pace; remove inherited-account

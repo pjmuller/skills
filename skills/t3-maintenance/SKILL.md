@@ -91,9 +91,11 @@ the global instruction file and repo AGENTS.md files. Propose; edit only when as
 Manual request only.
 
 - Cohorts `--archived` / `--settled` / `--deleted`, top-level threads; sub-agent and delegated-task
-  descendants go with their root. Never: pinned, live run, pending approval, or a thread a wake-up
-  targets (enabled native scheduled task, `t3-schedule pending-resumes`, `t3-mail-link`); `list`
-  shows those as `kept`. A failing helper = refuse.
+  descendants go with their root. Never: touched in the last 7 days, pinned, live run, pending
+  approval, a thread a wake-up targets (enabled native scheduled task, `t3-schedule
+  pending-resumes`, `t3-mail-link`), an open PR, or a real conversation (8+ typed messages or typed
+  on 2+ days: the threads that get revived; one-shot briefs, scheduled runs and delegated tasks
+  almost never are). `list` shows those as `kept` with the reason. A failing helper = refuse.
 - `apply` first copies the cohort into the [archive](#archive-t3-thread-archive) (a failure or a
   missing thread aborts), then deletes from every thread-keyed table (V2 and the copied 0.0.x tables).
   `--full-backup` adds a `VACUUM INTO` store copy (GBs, never offered for deletion), verified
@@ -112,7 +114,7 @@ Manual request only.
 - Transcripts resolve by provider session id (V2 `nativeThreadRef`, imported resume cursors) across
   every Claude home and `~/.codex/sessions`, never by cwd slug. Attachments by id, provider log by
   T3's sanitized file name.
-- `--older-than` uses `updated_at`, which settling bumps: conservative.
+- `--older-than` (default 7d) uses `updated_at`, which settling bumps: conservative.
 
 ## Archive (`t3-thread-archive`)
 

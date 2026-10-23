@@ -93,6 +93,29 @@ def test_family_goes_together(store: Path) -> None:
     assert threads["archold"].attachment_ids == {"archold-att"}
 
 
+def test_keep_rules_save_conversations_and_open_prs(tmp_path: Path) -> None:
+    s = Store(tmp_path / "statev2.sqlite")
+    for tid, kwargs in {"chat": {}, "twodays": {}, "almost": {}, "brief": {}, "relayed": {}, "openpr": {"pr_state": "open"},
+                        "mergedpr": {"pr_state": "merged"}, "recent": {}}.items():
+        s.thread(tid, tid, settled=True, minutes=(5 if tid == "recent" else 10) * DAY, **kwargs)
+    for n in range(cli.KEEP_USER_MESSAGES):
+        s.message("chat", "user", f"q{n}", 10 * DAY)
+        if n:  # one short of the threshold; two attachments each must not double-count
+            s.message("almost", "user", f"q{n}", 10 * DAY, attachments=["a1", "a2"])
+        s.message("relayed", "user", f"brief{n}", 10 * DAY, by="agent")  # agent-sent briefs are no conversation
+    s.message("brief", "user", "one-shot", 10 * DAY)
+    s.message("twodays", "user", "start", 12 * DAY)
+    s.message("twodays", "user", "back", 10 * DAY)
+    store = s.close()
+    parsed = cli.build_parser().parse_args(["list", "--settled"])  # default --older-than 7d drops "recent"
+    rows, kept = cli.select(parsed, cli.load_threads(store, datetime.now(UTC)), {})
+    assert {r.thread_id for r in rows} == {"almost", "brief", "relayed", "mergedpr"}
+    assert dict((t.thread_id, why) for t, why in kept) == {
+        "chat": f"conversation ({cli.KEEP_USER_MESSAGES} typed messages, 1 days)",
+        "twodays": "conversation (2 typed messages, 2 days)", "openpr": "open pull request",
+    }
+
+
 def test_wakes_keep_threads(store: Path, monkeypatch) -> None:
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     wakes = cli.pending_wakes(store)
