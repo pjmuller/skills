@@ -171,10 +171,11 @@ def t3db(tmp_path, monkeypatch):
     (tmp_path / "userdata").mkdir()
     db = sqlite3.connect(tmp_path / "userdata/statev2.sqlite")
     db.execute("CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY, title TEXT, "
-               "deleted_at TEXT, archived_at TEXT)")
+               "deleted_at TEXT, archived_at TEXT, payload_json TEXT DEFAULT '{}')")
     db.execute("CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT, "
                "type TEXT, status TEXT, payload_json TEXT)")
-    db.executemany("INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?, ?)", [
+    db.executemany("INSERT INTO orchestration_v2_projection_threads (thread_id, title, deleted_at, archived_at) "
+                   "VALUES (?, ?, ?, ?)", [
         ("aaaaaaaa-0000-0000-0000-000000000001", "Offer case", None, None),
         ("mcp:bbbbbbbb-0000-0000-0000-000000000002", "Mail dispatch", None, None),
         ("cccccccc-0000-0000-0000-000000000003", "Old case", "2026-10-01", None),
@@ -205,6 +206,44 @@ def test_scan_events_starts_at_the_end_and_holds_before_a_running_claim(t3db):
                        at="2026-01-01T00:00:00Z")
     events, cursor = ml.scan_events(running)  # a stale "running" row never pins the cursor
     assert [e["row"] for e in events] == [running + 1] and cursor == old_running
+
+
+TASK = "thread:delegated-task:command%3Amcp%3Ab6678c96-9ecb-442f-a578-4aadfab12538%3Adelegate-task%3Ac811-e2-haiku"
+
+
+def add_child(tmp_path, child, root):
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "userdata/statev2.sqlite")
+    db.execute("INSERT INTO orchestration_v2_projection_threads (thread_id, title, payload_json) VALUES (?, 'child', ?)",
+               (child, json.dumps({"lineage": {"rootThreadId": root, "relationshipToParent": "subagent"}})))
+    db.commit()
+    db.close()
+
+
+def test_delegated_child_claims_for_its_recorded_root(t3db, tmp_path):
+    """A delegated-task id embeds a command id, not its parent: T3's lineage decides who owns the case."""
+    add_child(tmp_path, TASK, "aaaaaaaa-0000-0000-0000-000000000001")
+    assert ml.root_thread(TASK) == "aaaaaaaa-0000-0000-0000-000000000001"
+    assert ml.root_thread("thread:delegated-task:gone") == "thread:delegated-task:gone"  # no lineage, no embedded id
+    t3db(TASK, "gws gmail-draft --reply-to-message m1", f"Mail-ref: gmail:{GMAIL} a@x")
+    events, _ = ml.scan_events(0)
+    assert [e["owner"] for e in events] == ["aaaaaaaa-0000-0000-0000-000000000001"]
+
+
+def test_recorded_claim_reads_t3_without_a_watch(t3db, tmp_path):
+    add_child(tmp_path, TASK, "aaaaaaaa-0000-0000-0000-000000000001")
+    assert ml.recorded_claim("a@x", GMAIL) is None
+    t3db("dddddddd-0000-0000-0000-000000000004", "cat brief.md", f"Mail-ref: gmail:{GMAIL} a@x")  # quoted: no claim
+    assert ml.recorded_claim("a@x", GMAIL) is None
+    t3db(TASK, "gws gmail-send", f"Mail-ref: gmail:{GMAIL} a@x")
+    t3db("dddddddd-0000-0000-0000-000000000004", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} other@x")  # other mailbox
+    assert ml.recorded_claim("a@x", GMAIL) == "aaaaaaaa-0000-0000-0000-000000000001"
+    t3db("x", "t3-mail-link claim g --for d", f"Mail-ref: gmail:{GMAIL} a@x owner=dddddddd-0000-0000-0000-000000000004")
+    assert ml.recorded_claim("a@x", GMAIL) == "dddddddd-0000-0000-0000-000000000004"
+    t3db("mcp:bbbbbbbb-0000-0000-0000-000000000002", "gws gmail-draft-update", f"Mail-ref: gmail:{GMAIL} a@x")
+    assert ml.recorded_claim("a@x", GMAIL) == "dddddddd-0000-0000-0000-000000000004"  # routing thread never owns
+    t3db("x", "t3-mail-link release g", f"Mail-release: gmail:{GMAIL} a@x")
+    assert ml.recorded_claim("a@x", GMAIL) is None
 
 
 def test_scan_events_canary_on_schema_change(t3db, tmp_path):
@@ -402,14 +441,42 @@ def test_find_is_read_only_and_falls_back_to_subject(resolver, monkeypatch, caps
         return {"snippets": []}
 
     monkeypatch.setattr(ml, "find_thread", fake_find)
+    monkeypatch.setattr(ml, "recorded_claim", lambda account, gmail: None)
 
     assert ml.main(["find", "thread-f:1866870901077892614", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["owners"] == [] and [t["evidence"] for t in report["topic"]] == ["topic"]
+    assert report["owners"] == [] and [t["evidence"] for t in report["topic"]] == ["topic"] and report["history"] == []
     assert [x["why"] for x in report["excluded"]] == ["routing"]
     topic_search = next(c for c in calls if "--all" in c)
     assert topic_search[-3:] == ("offer", "renewal", "2027")
     assert all(c[1:3] == ("--backup", "on") or c[2:4] == ("--backup", "on") for c in calls if c[0] == "search")
+
+
+def test_find_ranks_a_recorded_claim_as_owner_and_lists_children_as_history(resolver, monkeypatch, capsys):
+    resolver.api.return_value = {"id": "19e875318442de06", "messages": [
+        {"id": "19e875318442de06", "payload": {"headers": [{"name": "Subject", "value": "Offer"}]}}]}
+    child = "thread:provider:claudeAgent:native-thread:x"
+    mine = "thread:provider:claudeAgent:native-thread:mine"
+
+    def fake_find(*argv):
+        if argv[0] == "search":
+            if "--subagents" in argv:
+                return {"results": [hit("aaaaaaaa-1"), {**hit(child, "Review offer"), "backup": False},
+                                    hit(mine, "My reviewer")]}
+            return {"results": [hit("aaaaaaaa-1")]}
+        if argv[0] == "peek":
+            return [{"thread_id": i, "prompts": [], "short_id": i[:8], "title": "Case", "project": "p",
+                     "updated_at": "2026-01-02T00:00:00Z", "link": None} for i in argv[1].split(",")]
+        return {"snippets": []}
+
+    monkeypatch.setattr(ml, "find_thread", fake_find)
+    monkeypatch.setattr(ml, "recorded_claim", lambda account, gmail: "bbbbbbbb-2")
+    monkeypatch.setattr(ml, "t3_lookup", lambda tid: ("mcp:" + tid, {"title": "Case"}))
+    monkeypatch.setattr(ml, "root_thread", lambda tid, db=None: {child: "mcp:cccccccc-3", mine: "mcp:me"}[tid])
+    assert ml.main(["find", "19e875318442de06", "--exclude", "me", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [(o["thread_id"], o["evidence"]) for o in report["owners"]] == [("mcp:bbbbbbbb-2", "owner"), ("aaaaaaaa-1", "id")]
+    assert [(h["thread_id"], h["parent"]) for h in report["history"]] == [(child, "mcp:cccccccc-3")]
 
 
 def test_marker_grep_uses_full_line(monkeypatch):

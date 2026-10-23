@@ -285,6 +285,133 @@ def detail(args):
                       'fingerprint': body['fingerprint'], 'run_id': (shown or {}).get('run_id')}))
 
 
+def review_bundles(paths, today):
+    """Earlier review bundles (config + index + findings.json) under the given paths, one level deep."""
+    found = []
+    for raw in paths:
+        root = Path(raw).expanduser().resolve()
+        for candidate in [root, *(sorted(root.iterdir()) if root.is_dir() else [])]:
+            if (candidate.is_dir() and candidate != today and (candidate / 'findings.json').is_file()
+                    and (candidate / 'index.json').is_file() and (candidate / 'config.json').is_file()):
+                found.append(candidate)
+    return list(dict.fromkeys(found))
+
+
+def prior_findings(bundles, config, index):
+    """Latest earlier finding per Gmail thread from bundles of the same account, project and mailbox."""
+    latest, incompatible = {}, 0
+    for bundle in bundles:
+        try:
+            prior_config, prior_index = read(bundle / 'config.json'), read(bundle / 'index.json')
+            items = read(bundle / 'findings.json')
+        except (ValueError, OSError):
+            incompatible += 1
+            continue
+        if ((prior_config.get('project'), prior_config.get('mailbox_id'), prior_index.get('account')) !=
+                (config['project'], config['mailbox_id'], index['account']) or not isinstance(items, list)
+                or not prior_index.get('collected_at', '') < index['collected_at']):
+            incompatible += 1
+            continue
+        for item in items:
+            tid = str(item.get('thread_id', '')) if isinstance(item, dict) else ''
+            if not re.fullmatch(r'[0-9a-f]+', tid):
+                continue
+            detail_path = bundle / 'details' / f'{tid}.json'
+            snapshot = read(detail_path) if detail_path.exists() else None
+            if snapshot is None and (bundle / 'threads' / f'{tid}.json').exists():
+                snapshot = read(bundle / 'threads' / f'{tid}.json')
+            reviewed_at = (snapshot or {}).get('collected_at') or prior_index['collected_at']
+            if tid not in latest or reviewed_at > latest[tid]['reviewed_at']:
+                latest[tid] = {'bundle': str(bundle), 'reviewed_at': reviewed_at, 'finding': item,
+                               'gmail': (snapshot or {}).get('gmail')}
+    return latest, incompatible
+
+
+def mail_delta(before, after):
+    """What changed in a Gmail thread between two snapshots: message ids decide (a draft save mints a new id)."""
+    def split(thread):
+        sent, other, drafts = {}, {}, set()
+        for m in thread.get('messages', []):
+            labels = m.get('labelIds', [])
+            if 'DRAFT' in labels:
+                drafts.add(m['id'])
+            else:
+                (sent if 'SENT' in labels else other)[m['id']] = m
+        return sent, other, drafts
+    sent0, in0, drafts0 = split(before)
+    sent1, in1, drafts1 = split(after)
+    new_in = [m for mid, m in in1.items() if mid not in in0]
+    changes = [name for name, hit in (
+        ('inbound', new_in), ('sent', set(sent1) - set(sent0)), ('drafts', drafts0 != drafts1),
+        ('removed', (set(sent0) | set(in0)) - set(sent1) - set(in1))) if hit]
+    return changes, sorted(new_in, key=stamp)
+
+
+def continuation(args):
+    """Join today's bundle with earlier reviews: per thread new / unchanged / changed / unknown. An earlier
+    case holding no draft today joins the index (so it can be detailed and rendered) only when new inbound
+    arrived or its old snapshot is missing; the rest stay listed as `in_index: false`."""
+    out = Path(args.bundle).resolve()
+    config, index = read(out / 'config.json'), read(out / 'index.json')
+    client = Client(config)
+    account = verify_mailbox(client)
+    if account != index['account']:
+        raise Refused('Bundle account does not match the authenticated mailbox')
+    prior, incompatible = prior_findings(review_bundles(args.history, out), config, index)
+    scoped = {t['thread_id'] for t in index['threads']}
+    entries = list(index['threads'])
+    for tid in sorted(set(prior) - scoped):
+        try:
+            thread = client.gws('gmail-thread', tid)
+            evidence = google_evidence(client.rc('run', 'thread', tid), tid)
+        except Refused:
+            index['coverage'].setdefault('failed_thread_ids', []).append(tid)
+            continue
+        save(out / 'threads' / f'{tid}.json', {'gmail': thread, 'rc': evidence, 'draft_stubs': [],
+             'fingerprint': fingerprint(thread), 'collected_at': now(), 'carried': True})
+        entry = {**summary(thread, evidence, account, []), 'carried': True}
+        if entry['state'] == 'draft_ready':  # the run drafted, but no Gmail draft is left
+            entry['state'] = 'no_draft'
+        snapshot = prior[tid]['gmail']
+        entry['in_index'] = not snapshot or 'inbound' in mail_delta(snapshot, thread)[0]
+        if entry['in_index']:
+            index['threads'].append(entry)
+        entries.append(entry)
+    rows = []
+    for entry in entries:
+        tid = entry['thread_id']
+        current = read(out / 'threads' / f'{tid}.json')['gmail']
+        row = {'thread_id': tid, 'subject': entry['subject'], 'state': entry['state'],
+               'carried': entry.get('carried', False), 'in_index': entry.get('in_index', True),
+               'gmail_url': entry['gmail_url'],
+               'mail_ref': f'Mail-ref: gmail:{tid} {account}', 'run_id': entry.get('run_id')}
+        earlier = prior.get(tid)
+        if not earlier:
+            rows.append({**row, 'status': 'new'})
+            continue
+        finding = earlier['finding']
+        row['prior'] = {'bundle': earlier['bundle'], 'reviewed_at': earlier['reviewed_at'],
+                        **{k: finding.get(k) for k in ('verdict', 'priority', 'action', 'draft_id', 'run_id')}}
+        if not earlier['gmail']:
+            rows.append({**row, 'status': 'unknown', 'why': 'earlier bundle kept no snapshot of this thread'})
+            continue
+        changes, new_in = mail_delta(earlier['gmail'], current)
+        if finding.get('run_id') != entry.get('run_id'):
+            changes.append('run')
+        row['new_inbound'] = [{'id': m['id'], 'from': safe_text(headers(m).get('from', ''), 120),
+                               'at': m.get('internalDate'), 'preview': safe_text(m.get('snippet', ''), 240)}
+                              for m in new_in]
+        rows.append({**row, 'status': 'changed' if changes else 'unchanged', 'changes': changes})
+    counts = {s: sum(r['status'] == s for r in rows) for s in ('new', 'unchanged', 'changed', 'unknown')}
+    index['coverage']['carried_threads'] = sum(r['carried'] and r['in_index'] for r in rows)
+    save(out / 'index.json', index)
+    save(out / 'continuation.json', {'collected_at': now(), 'account': account, 'counts': counts,
+                                     'incompatible_bundles': incompatible, 'threads': rows})
+    print(json.dumps({'continuation': str(out / 'continuation.json'), 'counts': counts,
+                      'carried_threads': index['coverage']['carried_threads'],
+                      'incompatible_bundles': incompatible}))
+
+
 def plain_body(message):
     return inline_body(message, 'text/plain')
 
@@ -434,6 +561,8 @@ def check_finding(item, detail_data, require_fresh=True):
             and all(isinstance(g, dict) and all(isinstance(g.get(k), str) and g[k].strip() and len(g[k]) <= 200
                                                 for k in ('gap', 'unblock')) for g in item['dx_gaps'])):
         raise Refused('DX gaps need one to five {gap, unblock} short strings')
+    if 'case_thread' in item and not (isinstance(item['case_thread'], str) and 0 < len(item['case_thread']) <= 300):
+        raise Refused('Case thread must be a short T3 thread link or id')
     if item['draft_id'] is not None and item['draft_id'] not in [
             d['id'] for d in detail_data.get('drafts', [])]:
         raise Refused('Finding references an unknown Gmail draft')
@@ -498,6 +627,8 @@ def render(args):
         read(bundle / 'details' / f'{item["thread_id"]}.json')) for item in items)
     freshness_note = '<p><strong>Refresh evidence before acting.</strong> This report contains evidence older than four hours.</p>' if expired else ''
     rank = {'today': 0, 'soon': 1, 'waiting': 2}
+    continuity = ({r['thread_id']: r for r in read(bundle / 'continuation.json')['threads']}
+                  if (bundle / 'continuation.json').exists() else {})
     rows = []
     for item in sorted(items, key=lambda i: rank[i['priority']]):
         if not item['actionable']:
@@ -525,10 +656,18 @@ def render(args):
                            + '</h3>' + location + '<ul>' + points + '</ul></section>')
         if 'technical_evidence' not in item:
             sources.append('<p>Since run: ' + html.escape(safe_text(item['changed_since_run'], None)) + '</p>')
+        # The marker lets a later T3 search (t3-mail-link find) tie this case back to its Gmail thread.
+        case_line = f'Mail-ref: gmail:{tid} {index["account"]}'
+        if item.get('case_thread'):
+            case_line += '\nCase thread: ' + safe_text(item['case_thread'], 300)
+        sources.append('<pre><code>' + html.escape(case_line) + '</code></pre>')
+        link = continuity.get(tid)
+        case = ('' if not link else ' · new case' if link['status'] == 'new' else
+                ' · reused case, ' + html.escape(link['status']) + ' since ' + html.escape(link['prior']['reviewed_at'][:10]))
         owner_points = item.get('owner_evidence', [item['why']])
         owner_evidence = ''.join(f'<li>{html.escape(safe_text(fact, 420))}</li>' for fact in owner_points)
         rows.append(f'<article><header class="action-header"><div><a href="{html.escape(gmail_url(index["account"], tid), quote=True)}">'
-                    f'{html.escape(entry["subject"])}</a><small>{html.escape(item["priority"])}</small>'
+                    f'{html.escape(entry["subject"])}</a><small>{html.escape(item["priority"])}{case}</small>'
                     f'</div><div>{corrected}<strong>{html.escape(safe_text(item["action"], 280))}</strong></div></header>'
                     '<details><summary>Product owner evidence</summary><ul>'
                     + owner_evidence + '</ul></details>'
@@ -598,7 +737,8 @@ def render(args):
               + f'Draft threads {c["checked_threads"]}/{c["discovered_threads"]} checked · '
               + f'{c["uncovered_threads"]} discovered threads uncovered'
               + ('; additional unlisted threads unknown (pagination capped)' if c['list_truncated'] else '')
-              + f' · {unresolved} unresolved threads not reviewed · {c["standalone_drafts_excluded"]} standalone drafts excluded.'
+              + f' · {unresolved} unresolved threads not reviewed · {c["standalone_drafts_excluded"]} standalone drafts excluded'
+              + (f' · {c["carried_threads"]} earlier cases carried in' if c.get('carried_threads') else '') + '.'
               + '</p></html>')
     output = Path(args.out).expanduser()
     output.write_text(report)
@@ -684,6 +824,11 @@ def main():
     c.add_argument('--max-threads', type=int, default=200)
     c.add_argument('--max-pages', type=int, default=20)
     c.set_defaults(func=collect)
+    k = subs.add_parser('continuation')
+    k.add_argument('--bundle', required=True)
+    k.add_argument('--history', action='extend', nargs='+', required=True,
+                   help='earlier review bundles or directories holding them (a shell glob works)')
+    k.set_defaults(func=continuation)
     for name, func in (('detail', detail), ('validate', None), ('render', render), ('apply', apply)):
         p = subs.add_parser(name)
         p.add_argument('--bundle', required=True)

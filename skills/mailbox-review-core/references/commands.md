@@ -7,6 +7,7 @@ cockpit.py collect --project <project> --mailbox-id <google-uuid> \
   --gws-script <google-workspace-core>/scripts/gws.py \
   --gws-config <account-wrapper>/workspace.json \
   --out <new-private-directory> --max-threads 200
+cockpit.py continuation --bundle <directory> --history <earlier-bundles-or-their-parent>...
 cockpit.py detail --bundle <directory> --thread-id <gmail-hex-id>
 cockpit.py validate --bundle <directory> --findings <findings.json>
 cockpit.py apply --bundle <directory> --findings <findings.json> \
@@ -22,6 +23,9 @@ A non-DRAFT inbound followed by a non-self SENT reply is answered. SENT self-add
 - `index.json`: bounded snippets, subjects, state, health, IDs, Gmail links, coverage. Read first.
 - `threads/<id>.json`: Gmail + provider-filtered rp lineage. Read only selected threads.
 - `details/<id>.json`: refreshed thread, latest run body/notes, full MIME drafts, fingerprint. Read before review/correction; correction eligibility expires after four hours. Stale findings can still render with a single refresh-before-acting notice.
+- `continuation.json`: per thread new / unchanged / changed / unknown against earlier bundles of the same
+  mailbox, with the prior finding and `Mail-ref` ([continuity](continuity.md)). Adds `carried` rows to `index.json`.
+- `findings.json`: the merged final findings; the next run's history. Keep it in the bundle.
 - `config.json`: machine-local adapter/project target. Do not publish.
 - `corrections/<id>.json`: original draft, hash, evidence, write/readback state; `.txt` is the full replacement body.
 

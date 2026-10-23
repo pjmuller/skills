@@ -139,7 +139,8 @@ def mail_events(command: str, output: str) -> list[tuple[str, str, str, str | No
 
 
 def top_thread(thread_id: str) -> str:
-    """Sub-agent and delegated-task threads embed their parent's id (URL-encoded, nested): that one owns."""
+    """Fallback for a child gone from T3: native sub-agent ids embed their parent's id (URL-encoded, nested).
+    Delegated-task ids embed a command id instead, so `root_thread` reads T3's recorded lineage first."""
     if not thread_id.startswith("thread:"):
         return thread_id
     decoded = thread_id
@@ -430,6 +431,23 @@ def t3_thread(thread_id: str) -> dict | None:
 
 
 ITEMS = "orchestration_v2_projection_turn_items"  # T3 internal schema: scan_events fails loudly if it changes
+
+
+def root_thread(thread_id: str, db: sqlite3.Connection | None = None) -> str:
+    """The top-level thread a sub-agent / delegated-task child belongs to (T3 lineage), else the id itself."""
+    if not thread_id.startswith("thread:"):
+        return thread_id
+    own = db is None
+    try:
+        db = db or t3_db()
+        row = db.execute("SELECT json_extract(payload_json, '$.lineage.rootThreadId') "
+                         "FROM orchestration_v2_projection_threads WHERE thread_id = ?", (thread_id,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        if own and db:
+            db.close()
+    return row[0] if row and row[0] else top_thread(thread_id)
 OPEN_STATUSES = ("pending", "running", "waiting")
 
 
@@ -437,7 +455,8 @@ def scan_events(cursor: int | None) -> tuple[list[dict], int]:
     """Mail-ref/Mail-release events in command output recorded after `cursor` (rowid), and the next cursor.
     A claiming command still running keeps the cursor before it (its output lands on completion);
     first run starts at the end: older text predates the markers."""
-    with t3_db() as db:
+    db = t3_db()
+    with db:
         top = db.execute(f"SELECT COALESCE(MAX(rowid), 0) FROM {ITEMS}").fetchone()[0]
         if cursor is None:
             return [], top
@@ -458,8 +477,35 @@ def scan_events(cursor: int | None) -> tuple[list[dict], int]:
             continue
         for kind, gmail, account, owner in mail_events(item["input"], item.get("output") or ""):
             events.append({"row": rowid, "kind": kind, "gmail_thread": gmail, "account": account,
-                           "owner": owner or top_thread(thread_id), "at": item.get("completedAt") or item.get("updatedAt")})
+                           "owner": owner or root_thread(thread_id, db), "at": item.get("completedAt") or item.get("updatedAt")})
+    db.close()
     return [e for e in events if e["row"] <= hold], hold
+
+
+def recorded_claim(account: str, gmail_thread: str) -> str | None:
+    """Latest claim of this case in T3's recorded command output, watched account or not (None if released).
+    Same rules as the poller: claiming command + own line, explicit owner= wins, children map to their root,
+    routing threads (e.g. a 🧭 multi-case review that corrected drafts) never take ownership."""
+    db = t3_db()
+    with db:
+        rows = db.execute(f"SELECT thread_id, payload_json FROM {ITEMS} WHERE type = 'command_execution' "
+                          "AND (payload_json LIKE ? OR payload_json LIKE ?) ORDER BY rowid",
+                          (f"%Mail-ref: gmail:{gmail_thread}%", f"%Mail-release: gmail:{gmail_thread}%")).fetchall()
+        owner = None
+        for thread_id, payload in rows:
+            item = json.loads(payload)
+            for kind, gmail, acct, explicit in mail_events(item.get("input") or "", item.get("output") or ""):
+                if gmail != gmail_thread or acct != account:
+                    continue
+                if kind == "release":
+                    owner = None
+                    continue
+                claimant = explicit or root_thread(thread_id, db)
+                found = t3_lookup(claimant)
+                if not (found and ROUTING_TITLE.search(found[1]["title"] or "")):
+                    owner = claimant
+    db.close()
+    return owner
 
 
 # --- find: which T3 threads already own a Gmail thread --------------------------
@@ -638,6 +684,21 @@ def verified_account(ws) -> str:
     return account
 
 
+def child_history(terms: list[str], exclude: list[str]) -> list[dict]:
+    """Sub-agent / delegated-task children that recorded these ids: read-only history of a past review, never owners."""
+    hits = find_thread("search", "--subagents", "--backup", "on", "--limit", str(FIND_LIMIT), *terms)["results"]
+    history = []
+    for hit in hits:
+        if not hit["thread_id"].startswith("thread:"):
+            continue
+        parent = root_thread(hit["thread_id"])
+        if any(parent.startswith(x) or parent.removeprefix("mcp:").startswith(x) for x in exclude):
+            continue
+        history.append({**{k: hit.get(k) for k in ("thread_id", "short_id", "title", "updated_at", "backup")},
+                        "parent": parent})
+    return history
+
+
 def cmd_find(args) -> int:
     """Resolve, then rank T3 threads that recorded this Gmail thread (owner > Mail-ref > any id > subject)."""
     ws = workspace(config_arg(args))
@@ -647,7 +708,9 @@ def cmd_find(args) -> int:
     messages = thread.get("messages", [])
     subject = header(messages[0], "Subject") if messages else ""
     terms = id_terms(thread, thread_draft_ids(ws, args.ref, gmail_id))
-    linked = owner_threads(account, gmail_id)
+    linked = owner_threads(account, gmail_id)  # watched case, else the latest claim T3 recorded (unwatched account)
+    if not linked and (claimed := recorded_claim(account, gmail_id)) and (found := t3_lookup(claimed)):
+        linked = [found[0]]
     hits = find_thread("search", "--backup", "on", "--limit", str(FIND_LIMIT), *terms)["results"]
     extra = [t for t in linked if t not in {h["thread_id"] for h in hits}]
     owners, excluded = classify_owners(*inspect(hits, extra, account, gmail_id), linked, args.exclude, "id")
@@ -656,8 +719,9 @@ def cmd_find(args) -> int:
         weak = find_thread("search", "--all", "--backup", "on", "--limit", "5", *words)["results"]
         topic, more = classify_owners(*inspect(weak, [], account, gmail_id), [], args.exclude, "topic")
         excluded += [x for x in more if x["thread_id"] not in {e["thread_id"] for e in excluded}]
+    history = child_history(terms, args.exclude)
     report = {"account": account, "gmail_thread": gmail_id, "subject": subject, "marker": mail_ref(account, gmail_id),
-              "terms": terms, "owners": owners, "topic": topic, "excluded": excluded}
+              "terms": terms, "owners": owners, "topic": topic, "history": history, "excluded": excluded}
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
@@ -669,10 +733,14 @@ def cmd_find(args) -> int:
             title = o.get("link") or f"{o['title']} (backup)"
             print(f"| {o['evidence']} | {title} `{o['short_id']}` | {o['project']} | {o['updated_at'][:10]} "
                   f"| {'yes' if o['execution'] else 'no'} | {'yes' if o['account_seen'] else 'no'} |")
+    elif history:
+        print("No owner thread; earlier reviewer children below are history (read, never resume).")
     else:
         print("No T3 thread recorded this Gmail thread or its subject: spawn, or search other topic words.")
     for x in excluded:
         print(f"excluded ({x['why']}): {x['title']} `{x['short_id']}`")
+    for h in history:
+        print(f"history (child of {h['parent']}): {h['title']} `{h['short_id']}` {h['updated_at'][:10]}")
     if topic:
         print("\nSubject match only: weak, verify sender/date/scope.")
     print("\nNext: t3_thread_read the pick before pinging. A match is evidence, not permission to draft, send or monitor.")

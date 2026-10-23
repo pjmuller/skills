@@ -9,3 +9,5 @@ Only for a demonstrably incorrect **unmodified unsent AI draft**, include `repla
 For a **confirmed** product bug (evidence: code path, rows/logs or a reproduction), add `bug`: `{"title", "evidence": ["1-6 short lines: file:line, ids, counts"], "affected": "how many customers, how counted", "fix_direction", "owner": "role from the wrapper", "thread": "optional fix thread or PR link"}`. Suspicions stay in `why`/`sources`. Renders under "Confirmed product bugs".
 
 When something kept you from going deeper, add `dx_gaps`: 1-5 `{"gap": "what was missing (env var, credential, CLI, repo, access, timed-out query)", "unblock": "who grants it or what fixes it"}`. Renders under "What limited this review" so the operator can ask for it.
+
+`case_thread`: the T3 thread that owns this case (a standalone fix/action thread, or the owner `t3-mail-link find` returned), as `t3-thread://v1/<threadId>` or the bare id, ≤300 characters. Renders beside the row's `Mail-ref` line ([continuity](continuity.md)).

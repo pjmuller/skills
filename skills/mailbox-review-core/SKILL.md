@@ -27,25 +27,31 @@ flowchart LR
 
 1. `scripts/cockpit.py collect`; read **only `index.json`** first ([commands](references/commands.md):
    inputs, bounds, artifacts). It verifies mailbox UUID/provider/email against the GWS identity.
-2. Leave answered, no-inbound and confident simple drafts alone. Pick uncertain or consequential ones,
+   Title the coordinating T3 thread `🧭 <mailbox> review <date>`: it touches many cases, owns none.
+2. **Continue earlier cases before researching anew** ([continuity](references/continuity.md)):
+   `continuation --history <earlier bundles>` says per Gmail thread new / unchanged / changed and
+   carries back earlier cases that got new mail; `t3-mail-link find` names an existing case owner.
+   Read before resuming, never duplicate running work, never resume a reviewer child.
+3. Leave answered, no-inbound and confident simple drafts alone. Pick uncertain or consequential ones,
    stale ones included; a draft without a run is low priority (stale/discard unless consequential).
    Health flags help prioritize; keywords or a green run never decide answer quality.
-3. `detail` for every thread you will write a finding for. One **Opus, high effort, in-harness
+4. `detail` for every thread you will write a finding for. One **Opus, high effort, in-harness
    subagent** per customer (group that customer's threads) with [the reviewer recipe](references/reviewer.md)
    plus the wrapper's grounding brief. A Codex coordinator hands the set to a Claude worker; never
    silently substitute a model. Opus unavailable → report it, leave corrections pending.
-4. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
+5. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
    A bug needs evidence (logs, rows, a live reproduction) and a count of affected customers. A
    confirmed bug, above all one hitting several customers, gets its own T3 thread (`t3_thread_launch`
-   in the owning repo; second opinion inside it via `delegate_task`) that finds the fix; shipping per
+   in the owning repo, its brief carrying the case's `Mail-ref` line; second opinion inside it via
+   `delegate_task`) that finds the fix; shipping per
    "Go deep" below. Explain at the operator's level (the wrapper says who is who).
-5. Merge evidence-supported findings, `validate`, then `apply --allow-draft-corrections` for wrong or
+6. Save the merged findings as `<bundle>/findings.json` (the next run's history), `validate`, then `apply --allow-draft-corrections` for wrong or
    obsolete drafts **when the wrapper (or this request) authorizes corrections**. Render the page to
    the operator's artifact dir (normally `~/Downloads`): seven prioritized rows, rest collapsed;
    subject + one action; closed accordions for owner and technical evidence; brain proposals in their
    own section ([optional fields](references/optional-fields.md)), landed per "Teach the brain"
    below. No raw mail or tokenized URLs.
-6. End with a fresh `collect` and a ≤10-bullet ledger: send · decide · discard. Sending and deleting
+7. End with a fresh `collect` and a ≤10-bullet ledger: send · decide · discard. Sending and deleting
    need the operator's explicit go in that conversation; verify in Gmail afterwards. Brain lessons
    waiting for a publish go are a "decide" bullet. A new reply where no draft is left: GWS
    `gmail-draft --reply-to-message <last id> --from "<Name> <mailbox>"` (without `--from` the display

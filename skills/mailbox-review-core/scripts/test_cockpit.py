@@ -512,6 +512,103 @@ class Tests(unittest.TestCase):
                 c.apply(argparse.Namespace(allow_draft_corrections=False))
             client.assert_not_called()
 
+    def test_continuation_joins_earlier_reviews_of_the_same_mailbox_only(self):
+        def thread(tid, *messages):
+            return {'id': tid, 'messages': list(messages)}
+        same = thread('a1', message('in1'), message('d1', ACCOUNT, draft=True, at=2))
+        moved = thread('b2', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
+        carried = thread('c3', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
+        quiet = thread('d4', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
+        live = {'a1': same, 'b2': copy.deepcopy(moved), 'c3': copy.deepcopy(carried), 'd4': quiet}
+        live['b2']['messages'].append(message('in2', at=3, text='new question'))
+        live['c3']['messages'].append(message('in2', at=3, text='thanks'))
+
+        class Fake:
+            def __init__(self, config):
+                self.config = config
+            def gws(self, *args):
+                return {'email': ACCOUNT} if args[0] == 'whoami' else live[args[1]]
+            def rc(self, *args):
+                if args[:3] == ('project', 'mailbox', 'ls'):
+                    return {'mailboxes': [{'id': 'one', 'provider': 'google', 'email_address': ACCOUNT}]}
+                return {'runs': [], 'threads': []}
+
+        def bundle(path, at, mailbox, snapshots, items):
+            c.save(path / 'config.json', {'project': 'test', 'mailbox_id': mailbox})
+            c.save(path / 'index.json', {'account': ACCOUNT, 'collected_at': at, 'threads': []})
+            for tid, snap in snapshots.items():
+                c.save(path / 'details' / f'{tid}.json', {'gmail': snap, 'collected_at': at})
+            c.save(path / 'findings.json', [{'thread_id': t, 'run_id': None, 'verdict': 'confirmed',
+                                             'priority': 'soon', 'action': f'Act on {t}', 'draft_id': None}
+                                            for t in items])
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake):
+            root = Path(temp)
+            bundle(root / 'mo-2026-10-21', '2026-10-21T10:00:00+00:00', 'one', {'a1': same}, ['a1'])
+            bundle(root / 'mo-2026-10-22', '2026-10-22T10:00:00+00:00', 'one',
+                   {'b2': moved, 'c3': carried, 'd4': quiet}, ['b2', 'c3', 'd4', 'f9'])
+            bundle(root / 'other-2026-10-22', '2026-10-22T11:00:00+00:00', 'two', {'a1': moved}, ['a1'])
+            today = root / 'mo-2026-10-23'
+            c.save(today / 'config.json', {'project': 'test', 'mailbox_id': 'one'})
+            rows = [c.summary(live[t], {}, ACCOUNT, []) for t in ('a1', 'b2')]
+            rows.append(c.summary(thread('e4', message('in1')), {}, ACCOUNT, []))
+            live['e4'] = thread('e4', message('in1'))
+            for t in ('a1', 'b2', 'e4'):
+                c.save(today / 'threads' / f'{t}.json', {'gmail': live[t]})
+            c.save(today / 'index.json', {'account': ACCOUNT, 'collected_at': '2026-10-23T10:00:00+00:00',
+                                          'threads': rows, 'coverage': {}})
+            live['f9'] = None  # gone from Gmail: the carry fails closed, the run goes on
+            real_gws = Fake.gws
+            def gws(self, *args):
+                if args[:2] == ('gmail-thread', 'f9'):
+                    raise c.Refused('gone')
+                return real_gws(self, *args)
+            Fake.gws = gws
+            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)]))
+            result = c.read(today / 'continuation.json')
+            status = {r['thread_id']: (r['status'], r.get('changes')) for r in result['threads']}
+            self.assertEqual(status, {'a1': ('unchanged', []), 'b2': ('changed', ['inbound']),
+                                      'e4': ('new', None), 'c3': ('changed', ['inbound']),
+                                      'd4': ('unchanged', [])})
+            in_index = {r['thread_id']: r['in_index'] for r in result['threads']}
+            self.assertFalse(in_index['d4'])  # earlier case, no new inbound: listed, not re-reviewed
+            self.assertEqual(result['incompatible_bundles'], 1)  # the other mailbox never leaks in
+            rows = {r['thread_id']: r for r in result['threads']}
+            self.assertEqual(rows['a1']['prior']['reviewed_at'][:10], '2026-10-21')
+            self.assertEqual([m['id'] for m in rows['b2']['new_inbound']], ['in2'])
+            self.assertEqual(rows['c3']['mail_ref'], f'Mail-ref: gmail:c3 {ACCOUNT}')
+            index = c.read(today / 'index.json')
+            self.assertEqual([t['thread_id'] for t in index['threads'] if t.get('carried')], ['c3'])
+            self.assertEqual(index['coverage']['carried_threads'], 1)
+            self.assertIn('f9', index['coverage']['failed_thread_ids'])
+            self.assertTrue((today / 'threads' / 'c3.json').exists())
+
+    def test_draft_save_and_removed_mail_count_as_changes(self):
+        before = {'id': 't', 'messages': [message('in'), message('d1', ACCOUNT, draft=True, at=2)]}
+        after = {'id': 't', 'messages': [message('d2', ACCOUNT, draft=True, at=2)]}
+        self.assertEqual(c.mail_delta(before, after), (['drafts', 'removed'], []))
+
+    def test_render_marks_reused_cases_and_prints_the_mail_ref(self):
+        detail, finding = fixture()
+        del finding['replacement_body']
+        finding['case_thread'] = 't3-thread://v1/mcp:aaaa'
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            c.save(bundle / 'details/abc.json', detail)
+            c.save(bundle / 'findings.json', [finding])
+            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
+                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'draft_ready'}],
+                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
+                             'list_truncated': False, 'standalone_drafts_excluded': 0, 'carried_threads': 1}})
+            c.save(bundle / 'continuation.json', {'threads': [
+                {'thread_id': 'abc', 'status': 'changed', 'prior': {'reviewed_at': '2026-10-22T10:00:00'}}]})
+            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                        out=str(bundle / 'report.html')))
+            report = (bundle / 'report.html').read_text()
+            self.assertIn('reused case, changed since 2026-10-22', report)
+            self.assertIn(f'Mail-ref: gmail:abc {ACCOUNT}\nCase thread: t3-thread://v1/mcp:aaaa', report)
+            self.assertIn('1 earlier cases carried in', report)
+
 
 if __name__ == '__main__':
     unittest.main()

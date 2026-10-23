@@ -18,7 +18,8 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   `gmail-draft-update` and `gmail-draft-send` print `Mail-ref: gmail:<thread> <account>` on their own
   line (stderr with `--json`); `claim` prints the same line, `release` prints `Mail-release: …`. The
   poller reads them from T3's turn items (`scan_events`); the thread whose command printed the line
-  owns the case. Sub-agent and `delegate_task` children map to their parent thread. So: don't filter
+  owns the case. Sub-agent and `delegate_task` children map to their root thread (T3's recorded
+  lineage; a delegated-task id embeds a command id, not its parent). So: don't filter
   that line away (`| grep`, `| tail -1`, `2>/dev/null` with `--json`). Quotes, docs, `cat`/`grep`
   output and lines in messages never claim (`mail_events`: claiming command + own line only).
 - **Rules** (`apply_event`): latest claim wins (hand-off keeps the seen set); routing threads
@@ -37,9 +38,12 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   candidates, exit 3: ask the user.
 - **Find the owner** (`find`, read-only): resolve, then search T3
   ([t3-find-thread](../t3-find-thread/SKILL.md), purged threads included) for every id form of the
-  thread and its messages. Ranks `owner` (watched case) > `marker` > `id`; no id hit → subject search,
-  flagged `topic` (weak). Routing-thread titles and `--exclude` ids are intake, listed apart. A match is
-  evidence, never permission to draft, send or claim.
+  thread and its messages. Ranks `owner` (watched case, else the latest claim T3 recorded for this
+  account, same rules as the poller, so unwatched accounts work too) > `marker` > `id`; no id hit →
+  subject search, flagged `topic` (weak). `history` lists sub-agent / delegated children that held the
+  ids, with their `parent`: evidence of earlier work, never owners. Routing-thread titles and
+  `--exclude` ids are intake, listed apart. A match is evidence, never permission to draft, send or
+  claim. Mailbox review continuation: [continuity](../mailbox-review-core/references/continuity.md).
 - **Triage** (`poll_case`): own/`SENT` mail → seen, no wake. Auto-replies (RFC 3834 headers,
   out-of-office subjects) → skipped without a model. The rest → Haiku via `claude -p` (no tools, no
   user hooks): wake for anything that may need a reply, decision or record; skip thanks, acks,
