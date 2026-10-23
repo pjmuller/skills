@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: Touch ID unlock
+
+- `bw-once touchid enroll` (human Terminal, once per 30 days): the master password, verified by a real unlock,
+  is sealed to a Secure Enclave key that only works after Touch ID (`.biometryCurrentSet`, hardware-enforced,
+  no signing certificate needed). Enrolled `list`/`copy` then run without a Terminal: one fingerprint per
+  request, dialog text built from the request, password piped to the Homebrew `bw` (`--passwordfile /dev/fd/N`),
+  vault relocked before delivery. Sessions/Sends keep their Terminal review with Touch ID instead of the password.
+  `touchid status|forget`; `doctor` shows enrolment. Design, rejected alternatives, boundary: `touchid.md`.
+
 ## 2026-10-23 — t3-route: one term, "routing"
 
 - Why: "dispatch" and "routing" named the same thing (the skill is `t3-route`, its docs said dispatch). Now

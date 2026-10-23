@@ -119,7 +119,7 @@ without sync logs the CLI out during the pre-unlock sync, and only PJ can `bw lo
 
 `bw export`, `bw list items` output (the helper reads it unfiltered internally and emits only exact-host metadata), `bw get item` dumps, `bw get password` to stdout, reading
 `pbpaste`/the clipboard, passing a secret to `preview_type`/`fill`/any text-entry tool, screenshotting a
-revealed password field, TOTP seeds or notes, `--passwordenv`/`--passwordfile`, copying `data.json`, setting
+revealed password field, TOTP seeds or notes, `--passwordenv`, a `--passwordfile` other than bw-once's own Touch ID pipe, copying `data.json`, setting
 `BW_SESSION` in any shell/env file/repo, or asking PJ to paste a key into the chat. A session is exposure
 reduction with consent, not containment against malicious same-user code (it can still read process memory
 or the clipboard).

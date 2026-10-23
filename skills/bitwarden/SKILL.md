@@ -1,10 +1,12 @@
 ---
 name: bitwarden
-description: Discover exact-host Bitwarden logins, copy one approved credential, or create a text/file Send through a fresh human Terminal unlock. Use when the user requests Bitwarden access or secure sharing.
+description: Discover exact-host Bitwarden logins, copy one approved credential, or create a text/file Send through a Touch ID or fresh human Terminal unlock. Use when the user requests Bitwarden access or secure sharing.
 ---
 
-Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. Two modes: a fresh human
-unlock per request (default), or a time-boxed **session holder** PJ unlocks once
+Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** once enrolled
+(`bw-once touchid enroll`, master password typed once per 30 days, sealed in the Secure Enclave; each request =
+one fingerprint, no Terminal: [touchid.md](touchid.md)). Otherwise a fresh human Terminal
+unlock per request, or a time-boxed **session holder** PJ unlocks once
 (`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
 commands serve from it; design, paste mechanics and never-list: [session.md](session.md)). Install with
 `scripts/install`; `scripts/install --check` checks dependencies and the installed
@@ -30,17 +32,17 @@ bw-once send-text --input-file /path/to/message.txt --name 'Account details'
 bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1
 ```
 
-Without a session, each request opens **real macOS Terminal** through a POSIX-compatible shell
+Without a session or Touch ID enrolment, each request opens **real macOS Terminal** through a POSIX-compatible shell
 (zsh/bash; fish unsupported), locks the CLI, verifies locked, refreshes the locked
 cache for login requests, shows
 the request with a Terminal bell, and asks the human to press Return (input hidden; a password typed there
 too early is discarded and cancels) and type the master password into official `bw unlock`. Locked, it waits 6 minutes for that approval, then gives the unlock 180 s: tell
 the human first and run the command with a 10-minute tool timeout (or in the background). **Never send approval/password keystrokes or read that
-Terminal while authentication is in progress.** No agent PTY fallback. Current
+Terminal while authentication is in progress.** No agent PTY fallback. Native
 Touch ID: CLI ≥ 2026.10.0 unlocks through Bitwarden Desktop biometrics ([PR #22448](https://github.com/bitwarden/clients/pull/22448))
 only while the server flag `biometrics-sdk-ipc` is on (`doctor` → `touch_id_flag`; `false` on EU and US clouds
 2026-10-18), with Desktop ≥ 2026.9.0 running and Touch ID enabled for the same account ([README](https://github.com/bitwarden/clients/blob/cli-v2026.10.0/apps/cli/README.md#unlock-with-desktop-biometrics)). When it flips, the same Terminal shows Touch ID instead
-of the password prompt; no code change. Don't invent an authentication shim. `--worker` is internal, not a bypass to use from tools.
+of the password prompt; prefer it then (`touchid forget`). Until then the enclave-sealed enrolment is the Touch ID path. `--worker` is internal, not a bypass to use from tools.
 
 Metadata contains only item UUID/name/username and exact matched DNS host.
 `copy` without `--id` picks the only exact-host login (narrowed by `--username`) inside the same unlock
@@ -75,7 +77,7 @@ environments; lock cleanup does not erase already copied keys/data. Our mutex
 does not govern other `bw` clients. CLI locking does not lock desktop/extensions.
 Cleanup handles normal errors, timeout, SIGINT/SIGTERM; SIGKILL/power loss can
 prevent cleanup. A lock failure withholds delivery and requires a manual lock.
-No logout, password/session injection or vault database copies. The session holder is the only long-lived process: it keeps the key
+No logout, caller-supplied password/session (only the enclave-unsealed enrolment reaches `--passwordfile`, via a pipe) or vault database copies. The session holder is the only long-lived process: it keeps the key
 in memory, serves exact-host list/copy over a 0600 Unix socket, logs each request in
 PJ's Terminal and runs `bw lock` at the deadline (`bw lock` anywhere revokes it).
 Status/doctor remain read-only.

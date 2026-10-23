@@ -39,6 +39,9 @@ if args[0]=='lock':
  state['locked']=True
  if config.get('cleanup_signal') and state['locks']==2:os.kill(os.getppid(),config['cleanup_signal'])
 elif args[0]=='unlock':
+ if '--passwordfile' in args:
+  typed=open(args[args.index('--passwordfile')+1]).readline().rstrip('\n')
+  if typed!=config.get('master'):sys.exit(1)
  if config.get('deny'):
   print(config['secret']);sys.exit(1)
  state['locked']=False
@@ -581,3 +584,119 @@ def test_send_days_default_and_bounds(tmp_path):
     for days in (0, bw.SEND_DAYS_MAX + 1, "14"):
         with pytest.raises(bw.Failure):
             bw.validate({**base, "days": days})
+
+
+MASTER = "fixture-master-password"
+TOUCHID = r"""
+import base64,json,pathlib,sys
+root=pathlib.Path(__file__).parent
+if sys.argv[1]=='seal':print(json.dumps({'v':'1','fake':base64.b64encode(sys.stdin.buffer.read()).decode(),'ctx':sys.argv[2]}))
+else:
+ sealed=json.loads(sys.stdin.read())
+ (root/'reasons').open('a').write(sys.argv[3]+'\n')
+ if (root/'cancel').exists():sys.exit(3)
+ if sealed['ctx']!=sys.argv[2]:sys.exit(1)
+ sys.stdout.buffer.write(base64.b64decode(sealed['fake']))
+"""
+
+
+@pytest.fixture
+def touchid(fake, monkeypatch, tmp_path):
+    directory, update, events = fake
+    update(master=MASTER)
+    helpers = tmp_path / "helpers"
+    helpers.mkdir()
+    (helpers / "touchid").write_text(f"#!{sys.executable}\n" + TOUCHID)
+    (helpers / "touchid").chmod(0o700)
+    monkeypatch.setattr(bw, "ROOT", helpers)
+    monkeypatch.setattr(bw, "TRUSTED_BW_DIRS", (os.path.realpath(directory) + "/",))
+    return helpers
+
+
+def enroll():
+    return bw.touchid_enroll(bw.Vault(), {"op": "touchid-enroll", "vault": "default"}, ask=lambda *_: True,
+                             read_password=lambda _: MASTER)
+
+
+def test_touchid_enroll_verifies_seals_and_stores_privately(fake, touchid):
+    directory, _, events = fake
+    result = enroll()
+    path = bw.touchid_path("default")
+    assert result["enrolled"] and path.stat().st_mode & 0o777 == 0o600
+    assert MASTER not in path.read_text()
+    assert json.loads((directory / "state").read_text())["locked"]
+    unlock = [event for event in events() if event["args"][0] == "unlock"]
+    assert len(unlock) == 1 and unlock[0]["args"][-2] == "--passwordfile"
+    assert all(MASTER not in json.dumps(event) for event in events())
+
+
+def test_touchid_enroll_refuses_wrong_password(fake, touchid):
+    _, update, _ = fake
+    update(master="something-else")
+    with pytest.raises(bw.Failure, match="rejected"):
+        enroll()
+    assert not bw.touchid_path("default").exists()
+
+
+def test_touchid_copy_needs_no_terminal_prompt_and_relocks_before_delivery(fake, touchid):
+    directory, _, events = fake
+    enroll()
+    delivered = []
+
+    def deliver(secret):
+        assert json.loads((directory / "state").read_text())["locked"]
+        delivered.append(secret)
+
+    result = bw.transaction(bw.Vault(), request(id=None, username="user"), ask=lambda *_: True, deliver=deliver)
+    assert delivered == [SECRET] and result["username"] == "user"
+    assert (touchid / "reasons").read_text().splitlines() == [
+        "use Bitwarden (default) to copy the password of user on admin.example.com"]
+    unlock = [event for event in events() if event["args"][0] == "unlock"]
+    assert all(event["noninteractive"] == "true" and "--passwordfile" in event["args"] for event in unlock)
+    assert all(MASTER not in json.dumps(event) for event in events())
+
+
+def test_touchid_cancel_never_unlocks(fake, touchid):
+    directory, _, events = fake
+    enroll()
+    (touchid / "cancel").write_text("")
+    before = sum(event["args"][0] == "unlock" for event in events())
+    with pytest.raises(bw.Failure, match="cancelled"):
+        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert sum(event["args"][0] == "unlock" for event in events()) == before
+    assert json.loads((directory / "state").read_text())["locked"]
+
+
+def test_touchid_changed_master_password_or_expiry(fake, touchid):
+    _, update, _ = fake
+    enroll()
+    update(master="changed-on-the-web")
+    with pytest.raises(bw.Failure, match="touchid forget"):
+        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    path = bw.touchid_path("default")
+    enrolment = json.loads(path.read_text())
+    enrolment["expires"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(enrolment))
+    assert bw.touchid_enrolment(bw.vault_config()) is None and not path.exists()
+
+
+def test_touchid_sealed_file_is_bound_to_its_vault(fake, touchid):
+    enroll()
+    with pytest.raises(bw.Failure, match="Touch ID unlock failed"):
+        bw.touchid_open({"name": "other", "email": "x@example.com"}, bw.touchid_enrolment(bw.vault_config()), "r")
+
+
+def test_touchid_refuses_untrusted_bw_before_any_prompt(fake, touchid, monkeypatch):
+    enroll()
+    monkeypatch.setattr(bw, "TRUSTED_BW_DIRS", ("/opt/homebrew/",))
+    with pytest.raises(bw.Failure, match="Homebrew bw"):
+        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert not (touchid / "reasons").exists()
+
+
+def test_inline_request_never_falls_back_to_an_agent_side_password_prompt(fake, touchid):
+    _, _, events = fake
+    with pytest.raises(bw.Failure, match="enrolment expired"):
+        bw.transaction(bw.inline_vault("default"), request(), ask=lambda *_: True,
+                       deliver=lambda _: pytest.fail("delivered"))
+    assert not any(event["args"][0] == "unlock" for event in events())

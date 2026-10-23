@@ -18,10 +18,10 @@ for dependency in uv bw xcrun; do
 done
 [ "$(uname -s)" = Darwin ] || { echo "macOS Terminal and AppKit required" >&2; exit 1; }
 if [ "$check" = true ]; then
-  [ -x "$target/clipboard" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target/bw-once" ] || {
+  [ -x "$target/clipboard" ] && [ -x "$target/touchid" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target/bw-once" ] || {
     echo "bw-once installation missing" >&2; exit 1;
   }
-  for name in bw-once bw_once.py clipboard.swift; do
+  for name in bw-once bw_once.py clipboard.swift touchid.swift; do
     cmp -s "$source_dir/$name" "$target/$name" || { echo "Installed $name differs; rerun installer" >&2; exit 1; }
   done
   echo "bw-once ready; helper on PATH, skill not globally registered"
@@ -34,11 +34,16 @@ if [ -e "$command_path" ] || [ -L "$command_path" ]; then
 fi
 mkdir -p "$target" "$prefix/bin"
 chmod 700 "$target"
-for name in bw-once bw_once.py clipboard.swift; do
+for name in bw-once bw_once.py clipboard.swift touchid.swift; do
   cp "$source_dir/$name" "$target/$name"
 done
 xcrun swiftc "$target/clipboard.swift" -o "$target/clipboard.new"
 chmod 700 "$target/clipboard.new" "$target/bw-once"
 mv "$target/clipboard.new" "$target/clipboard"
+# Hardened runtime: no injected dylibs in the process that briefly holds the unsealed master password.
+xcrun swiftc "$target/touchid.swift" -o "$target/touchid.new"
+codesign -s - -f -o runtime "$target/touchid.new" 2>/dev/null
+chmod 700 "$target/touchid.new"
+mv "$target/touchid.new" "$target/touchid"
 ln -sf "$target/bw-once" "$command_path"
 echo "Installed $command_path; skill not globally registered"
