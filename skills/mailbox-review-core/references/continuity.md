@@ -20,9 +20,10 @@ flowchart LR
    names them). Only bundles of the same account + project + mailbox UUID count (`incompatible_bundles`
    says how many were skipped). Per thread in `continuation.json`: `status` new / unchanged / changed /
    unknown, `changes` (inbound, sent, drafts, removed, run), `new_inbound` previews, the `prior`
-   finding (bundle, date, verdict, action) and its `mail_ref`. Earlier cases without a draft today
-   join the index (`carried`) only when new inbound arrived or their snapshot is missing; the rest are
-   listed with `in_index: false`. Missing evidence is `unknown`, never `unchanged`.
+   finding (bundle, date, verdict, action) and its `mail_ref`. Earlier cases outside today's index
+   join it (`carried`) when they still hold a draft, got new inbound, or lack an old snapshot; the
+   rest are listed with `in_index: false`. Missing evidence or a failed fetch is `unknown` (and
+   counted uncovered), never `unchanged`.
 2. Every thread you will look at (new, changed, unknown):
    `t3-mail-link --config <gws wrapper> find <thread id> --exclude <own T3 id> --json`.
    - `owners[].evidence == "owner"`: the case owner (watched case, else the latest claim T3 recorded:

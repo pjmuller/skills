@@ -519,7 +519,9 @@ class Tests(unittest.TestCase):
         moved = thread('b2', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
         carried = thread('c3', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
         quiet = thread('d4', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
-        live = {'a1': same, 'b2': copy.deepcopy(moved), 'c3': copy.deepcopy(carried), 'd4': quiet}
+        skipped = thread('c5', message('in1'), message('d5', ACCOUNT, draft=True, at=2))
+        live = {'a1': same, 'b2': copy.deepcopy(moved), 'c3': copy.deepcopy(carried), 'd4': quiet,
+                'c5': skipped}
         live['b2']['messages'].append(message('in2', at=3, text='new question'))
         live['c3']['messages'].append(message('in2', at=3, text='thanks'))
 
@@ -546,7 +548,7 @@ class Tests(unittest.TestCase):
             root = Path(temp)
             bundle(root / 'mo-2026-10-21', '2026-10-21T10:00:00+00:00', 'one', {'a1': same}, ['a1'])
             bundle(root / 'mo-2026-10-22', '2026-10-22T10:00:00+00:00', 'one',
-                   {'b2': moved, 'c3': carried, 'd4': quiet}, ['b2', 'c3', 'd4', 'f9'])
+                   {'b2': moved, 'c3': carried, 'd4': quiet, 'c5': skipped}, ['b2', 'c3', 'd4', 'c5', 'f9'])
             bundle(root / 'other-2026-10-22', '2026-10-22T11:00:00+00:00', 'two', {'a1': moved}, ['a1'])
             today = root / 'mo-2026-10-23'
             c.save(today / 'config.json', {'project': 'test', 'mailbox_id': 'one'})
@@ -569,18 +571,23 @@ class Tests(unittest.TestCase):
             status = {r['thread_id']: (r['status'], r.get('changes')) for r in result['threads']}
             self.assertEqual(status, {'a1': ('unchanged', []), 'b2': ('changed', ['inbound']),
                                       'e4': ('new', None), 'c3': ('changed', ['inbound']),
-                                      'd4': ('unchanged', [])})
+                                      'd4': ('unchanged', []), 'f9': ('unknown', None), 'c5': ('unchanged', [])})
             in_index = {r['thread_id']: r['in_index'] for r in result['threads']}
             self.assertFalse(in_index['d4'])  # earlier case, no new inbound: listed, not re-reviewed
+            self.assertTrue(in_index['c5'])  # still holds a draft collect never read: never reported absent
+            c5 = next(t for t in c.read(today / 'index.json')['threads'] if t['thread_id'] == 'c5')
+            self.assertEqual((c5['draft_count'], c5['state'] != 'no_draft'), (1, True))
             self.assertEqual(result['incompatible_bundles'], 1)  # the other mailbox never leaks in
             rows = {r['thread_id']: r for r in result['threads']}
             self.assertEqual(rows['a1']['prior']['reviewed_at'][:10], '2026-10-21')
             self.assertEqual([m['id'] for m in rows['b2']['new_inbound']], ['in2'])
             self.assertEqual(rows['c3']['mail_ref'], f'Mail-ref: gmail:c3 {ACCOUNT}')
             index = c.read(today / 'index.json')
-            self.assertEqual([t['thread_id'] for t in index['threads'] if t.get('carried')], ['c3'])
-            self.assertEqual(index['coverage']['carried_threads'], 1)
+            self.assertEqual([t['thread_id'] for t in index['threads'] if t.get('carried')], ['c3', 'c5'])
+            self.assertEqual(index['coverage']['carried_threads'], 2)
             self.assertIn('f9', index['coverage']['failed_thread_ids'])
+            self.assertEqual(index['coverage']['uncovered_threads'], 1)  # a failed carry stays visible
+            self.assertEqual(result['counts']['unknown'], 1)
             self.assertTrue((today / 'threads' / 'c3.json').exists())
 
     def test_draft_save_and_removed_mail_count_as_changes(self):

@@ -360,24 +360,37 @@ def continuation(args):
     prior, incompatible = prior_findings(review_bundles(args.history, out), config, index)
     scoped = {t['thread_id'] for t in index['threads']}
     entries = list(index['threads'])
+    failed = []
     for tid in sorted(set(prior) - scoped):
         try:
             thread = client.gws('gmail-thread', tid)
             evidence = google_evidence(client.rc('run', 'thread', tid), tid)
         except Refused:
-            index['coverage'].setdefault('failed_thread_ids', []).append(tid)
+            failed.append(tid)
             continue
-        save(out / 'threads' / f'{tid}.json', {'gmail': thread, 'rc': evidence, 'draft_stubs': [],
+        # Drafts collect never read (its bound, a fetch failure) stay visible: never report them absent.
+        stubs = [{'id': None, 'message': {'id': m['id'], 'threadId': tid}} for m in thread.get('messages', [])
+                 if 'DRAFT' in m.get('labelIds', [])]
+        save(out / 'threads' / f'{tid}.json', {'gmail': thread, 'rc': evidence, 'draft_stubs': stubs,
              'fingerprint': fingerprint(thread), 'collected_at': now(), 'carried': True})
-        entry = {**summary(thread, evidence, account, []), 'carried': True}
-        if entry['state'] == 'draft_ready':  # the run drafted, but no Gmail draft is left
+        entry = {**summary(thread, evidence, account, stubs), 'carried': True}
+        if entry['state'] == 'draft_ready' and not stubs:  # the run drafted, but no Gmail draft is left
             entry['state'] = 'no_draft'
         snapshot = prior[tid]['gmail']
-        entry['in_index'] = not snapshot or 'inbound' in mail_delta(snapshot, thread)[0]
+        entry['in_index'] = bool(stubs) or not snapshot or 'inbound' in mail_delta(snapshot, thread)[0]
         if entry['in_index']:
             index['threads'].append(entry)
         entries.append(entry)
-    rows = []
+    if failed:
+        coverage = index['coverage']
+        coverage['failed_thread_ids'] = coverage.get('failed_thread_ids', []) + failed
+        coverage['uncovered_threads'] = coverage.get('uncovered_threads', 0) + len(failed)
+    rows = [{'thread_id': tid, 'subject': '', 'state': 'unknown', 'carried': True, 'in_index': False,
+             'gmail_url': gmail_url(account, tid), 'mail_ref': f'Mail-ref: gmail:{tid} {account}',
+             'run_id': None, 'status': 'unknown', 'why': 'Gmail or rp fetch failed; recheck this earlier case',
+             'prior': {'bundle': prior[tid]['bundle'], 'reviewed_at': prior[tid]['reviewed_at'],
+                       **{k: prior[tid]['finding'].get(k) for k in ('verdict', 'priority', 'action', 'draft_id', 'run_id')}}}
+            for tid in failed]
     for entry in entries:
         tid = entry['thread_id']
         current = read(out / 'threads' / f'{tid}.json')['gmail']
