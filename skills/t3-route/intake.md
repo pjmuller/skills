@@ -51,7 +51,7 @@ Preserve the image/path and exact user text. Mark extracted text as agent
 transcription; do not invent cropped IDs, dates or account identity. A URL visible
 in an image can guide a read-only lookup under the same integration checks. When
 the image is unavailable to the worker, arrange accessible local attachment context
-or identify the gap before dispatch. Use the catalog and recent relevant conversation
+or identify the gap before launch. Use the catalog and recent relevant conversation
 to distinguish an investigation, explanation, implementation or reply request.
 
 ## Existing task
@@ -60,7 +60,7 @@ For mail, `t3-mail-link --config <wrapper>/workspace.json find '<url>' --exclude
 covers watched-case owners, `Mail-ref:` markers, every thread/message id form and a subject fallback
 in one read-only call. Otherwise use `t3-find-thread` on exact ticket/thread IDs
 or URLs, followed by topic search if needed. Follow its search/peek/read guidance.
-Exclude the current dispatch conversation and other intake-only mentions.
+Exclude the current routing thread and other intake-only mentions.
 
 Read the candidate's initial task and recent progress: verify artifact, account,
 project and intended outcome. A keyword hit or recent timestamp is not proof.

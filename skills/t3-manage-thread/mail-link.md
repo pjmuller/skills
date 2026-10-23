@@ -21,8 +21,8 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   owns the case. Sub-agent and `delegate_task` children map to their parent thread. So: don't filter
   that line away (`| grep`, `| tail -1`, `2>/dev/null` with `--json`). Quotes, docs, `cat`/`grep`
   output and lines in messages never claim (`mail_events`: claiming command + own line only).
-- **Rules** (`apply_event`): latest claim wins (hand-off keeps the seen set); threads titled
-  "dispatch" never own; deleted owner → case dropped; unwatched account or a Gmail id the
+- **Rules** (`apply_event`): latest claim wins (hand-off keeps the seen set); routing threads
+  (title starts with 🧭; legacy titles containing "dispatch") never own; deleted owner → case dropped; unwatched account or a Gmail id the
   account doesn't have → ignored. Baseline = messages up to the claim; later inbound wakes.
   Settling does not release. No claim or wake for 60 days → no longer watched.
 - **Claim without drafting** (watch a mail before replying): run `claim` in the owning thread.
@@ -38,7 +38,7 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
 - **Find the owner** (`find`, read-only): resolve, then search T3
   ([t3-find-thread](../t3-find-thread/SKILL.md), purged threads included) for every id form of the
   thread and its messages. Ranks `owner` (watched case) > `marker` > `id`; no id hit → subject search,
-  flagged `topic` (weak). "dispatch" titles and `--exclude` ids are intake, listed apart. A match is
+  flagged `topic` (weak). Routing-thread titles and `--exclude` ids are intake, listed apart. A match is
   evidence, never permission to draft, send or claim.
 - **Triage** (`poll_case`): own/`SENT` mail → seen, no wake. Auto-replies (RFC 3834 headers,
   out-of-office subjects) → skipped without a model. The rest → Haiku via `claude -p` (no tools, no

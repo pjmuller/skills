@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-23 — t3-route: one term, "routing"
+
+- Why: "dispatch" and "routing" named the same thing (the skill is `t3-route`, its docs said dispatch). Now
+  **routing** everywhere; the conversation is the **routing thread**; placing a task is "launch" or "continue".
+  Rename your wrapper's wording and the thread title (onboarding suggests `🧭 Routing`); behaviour is unchanged.
+  `dispatch-workers.md` keeps its name: batch worker launches, a different concept.
+- t3-mail-link: routing threads are recognised by a leading 🧭 in the title (legacy "dispatch" titles still
+  match); the excluded reason prints `routing` (was `dispatcher`). "routing" alone is not matched, so a
+  "Fix Rails routing" thread can still own mail.
+
 ## 2026-10-23 — bitwarden: one unlock per login
 
 - `bw-once copy --host H --username U --field password` picks the only exact-host login in the same unlock

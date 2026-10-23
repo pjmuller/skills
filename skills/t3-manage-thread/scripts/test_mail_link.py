@@ -235,7 +235,7 @@ def test_apply_event_claims_hands_off_and_releases(t3db, monkeypatch, capsys):
         return {"row": 9, "kind": kind, "gmail_thread": gmail, "account": account, "owner": owner,
                 "at": "2026-10-20T10:00:00.000Z"}
 
-    for ignored in (event(owner="mcp:bbbbbbbb-0000-0000-0000-000000000002"),  # dispatch never owns
+    for ignored in (event(owner="mcp:bbbbbbbb-0000-0000-0000-000000000002"),  # legacy dispatch title never owns
                     event(owner="cccccccc-0000-0000-0000-000000000003"),      # deleted thread
                     event(account="other@x"),                                 # account not watched
                     event(gmail="1111111111111111")):                         # not a thread of this account
@@ -376,14 +376,16 @@ def hit(tid, title="Offer follow-up"):
 
 def test_classify_owners_ranks_and_excludes_intake():
     legacy = {**hit("thread:project:p1:dddddddd-4"), "short_id": "dddddddd"}
-    hits = [hit("aaaaaaaa-1"), hit("bbbbbbbb-2"), hit("mcp:cccccccc-3", "Team dispatch"), legacy, hit("eeeeeeee-5")]
+    hits = [hit("aaaaaaaa-1"), hit("bbbbbbbb-2"), hit("mcp:cccccccc-3", "Team dispatch"), legacy, hit("eeeeeeee-5"),
+            hit("mcp:ffffffff-7", "🧭 PJ routing"), hit("gggggggg-8", "Fix Rails routing")]
     peeks = {"bbbbbbbb-2": {"prompts": [{"text": "Execution thread: perform the task here."}]}}
     greps = {"aaaaaaaa-1": (False, True), "bbbbbbbb-2": (True, True)}
     owners, excluded = ml.classify_owners(hits, peeks, greps, ["eeeeeeee-5"], ["dddd"], "id")
     assert [(o["thread_id"], o["evidence"]) for o in owners] == [
-        ("eeeeeeee-5", "owner"), ("bbbbbbbb-2", "marker"), ("aaaaaaaa-1", "id")]
+        ("eeeeeeee-5", "owner"), ("bbbbbbbb-2", "marker"), ("aaaaaaaa-1", "id"), ("gggggggg-8", "id")]
     assert owners[1]["execution"] and owners[1]["account_seen"] and not owners[0]["account_seen"]
-    assert [(x["thread_id"], x["why"]) for x in excluded] == [("mcp:cccccccc-3", "dispatcher"), ("thread:project:p1:dddddddd-4", "excluded")]
+    assert [(x["thread_id"], x["why"]) for x in excluded] == [
+        ("mcp:cccccccc-3", "routing"), ("thread:project:p1:dddddddd-4", "excluded"), ("mcp:ffffffff-7", "routing")]
 
 
 def test_find_is_read_only_and_falls_back_to_subject(resolver, monkeypatch, capsys):
@@ -394,7 +396,7 @@ def test_find_is_read_only_and_falls_back_to_subject(resolver, monkeypatch, caps
     def fake_find(*argv):
         calls.append(argv)
         if argv[0] == "search":
-            return {"results": [hit("mcp:cccccccc-3", "PJ dispatch")] if "--all" not in argv else [hit("ffffffff-6")]}
+            return {"results": [hit("mcp:cccccccc-3", "🧭 PJ routing")] if "--all" not in argv else [hit("ffffffff-6")]}
         if argv[0] == "peek":
             return [{"thread_id": i, "prompts": []} for i in argv[1].split(",")]
         return {"snippets": []}
@@ -404,7 +406,7 @@ def test_find_is_read_only_and_falls_back_to_subject(resolver, monkeypatch, caps
     assert ml.main(["find", "thread-f:1866870901077892614", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["owners"] == [] and [t["evidence"] for t in report["topic"]] == ["topic"]
-    assert [x["why"] for x in report["excluded"]] == ["dispatcher"]
+    assert [x["why"] for x in report["excluded"]] == ["routing"]
     topic_search = next(c for c in calls if "--all" in c)
     assert topic_search[-3:] == ("offer", "renewal", "2027")
     assert all(c[1:3] == ("--backup", "on") or c[2:4] == ("--backup", "on") for c in calls if c[0] == "search")

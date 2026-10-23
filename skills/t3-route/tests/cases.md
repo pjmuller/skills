@@ -6,13 +6,13 @@ All names, paths, IDs and messages below are fictional. Each case is independent
 
 ## Shared discovered setup
 
-- Dispatch thread `dispatch-01`, personal setup repository `/fixture/operator-setup`.
+- Routing thread `routing-01`, personal setup repository `/fixture/operator-setup`.
 - Operator Alex Reed; Workspace wrapper account `alex@harbor.example`, Gmail read access granted; sends require Alex's explicit instruction.
 - Project catalog: Harbor product `/fixture/harbor-app`; Harbor operations `/fixture/harbor-ops`; Beacon product `/fixture/beacon-app`.
 - Harbor project ClickUp wrapper: workspace `support-ws`, support list `harbor-support`; Beacon wrapper: workspace `support-ws`, list `beacon-support`. Harbor operations owns subscription investigation. Harbor product owns reproducible application defects.
 - Wrapper defaults: visible standalone task threads; model Fable; helper selects provider profile by capacity. Explicit model/account instructions override defaults.
 - T3 MCP tools (`t3_thread_launch`, `t3_thread_read`, `t3_thread_send`) available; `t3-pick-instance --help` and `t3-find-thread --help` succeed. `t3-manage-thread/scripts/install --check` succeeds.
-- Public core registration is repo-local at `/fixture/operator-setup/.agents/skills/t3-route`. Private wrapper is `/fixture/operator-setup/.agents/skills/dispatch`; its routes and lessons are committed there.
+- Public core registration is repo-local at `/fixture/operator-setup/.agents/skills/t3-route`. Private wrapper is `/fixture/operator-setup/.agents/skills/routing`; its routes and lessons are committed there.
 
 ## 1. Bare support link
 
@@ -62,15 +62,15 @@ Thread search: `work-17`, Harbor product, title “Missing CSV attendee”, acti
 
 ## 9. Execution-thread arrival
 
-Current thread: `work-18`, Harbor product, title “Missing CSV attendee”. Initial brief: “Execution thread: perform the task here. The requested thread has already been created; do not re-dispatch this same task. Original user message: start a thread to investigate https://app.clickup.com/t/fixture-h01.”
+Current thread: `work-18`, Harbor product, title “Missing CSV attendee”. Initial brief: “Execution thread: perform the task here. The requested thread has already been created; do not re-route this same task. Original user message: start a thread to investigate https://app.clickup.com/t/fixture-h01.”
 
-Current user message: “Here is the second export. Continue.” Attachment: synthetic CSV evidence, 9 participant rows. This thread is not the dispatch thread.
+Current user message: “Here is the second export. Continue.” Attachment: synthetic CSV evidence, 9 participant rows. This thread is not the routing thread.
 
 ## 10. Correction followed by related case
 
-Turn A user: “Route cancellation and invoice-date checks to Harbor operations from now on. Keep export defects in the app. That's a general rule.” Earlier dispatch had placed a cancellation-date investigation in Harbor product. No external customer action requested.
+Turn A user: “Route cancellation and invoice-date checks to Harbor operations from now on. Keep export defects in the app. That's a general rule.” Earlier routing had placed a cancellation-date investigation in Harbor product. No external customer action requested.
 
-Turn B user, later in the same dispatch thread: `https://app.clickup.com/t/fixture-h03`
+Turn B user, later in the same routing thread: `https://app.clickup.com/t/fixture-h03`
 
 Ticket read: Harbor support; title “Canceled seats on upcoming invoice”; description asks to investigate dates. Private wrapper before Turn A has only the shared setup above; no cancellation-specific lesson.
 
@@ -90,7 +90,7 @@ Profile listing: unique display name “Beacon”, provider instance `beacon-cod
 
 User: “Set up the router here.”
 
-Local discovery: Windows WSL2; personal setup repo `/home/alex/setup`; two registered T3 projects Harbor app and Beacon app; T3 MCP tools and `t3-pick-instance` available; ClickUp wrappers installed and identity probes pass; Workspace wrapper documented but absent. Existing private dispatch wrapper has project paths and a cancellation-routing lesson. Rerun user message: “Run onboarding again; I now have a Workspace wrapper.” New wrapper identity passes for `alex@harbor.example`; token grants Gmail read-only access. No other account facts changed.
+Local discovery: Windows WSL2; personal setup repo `/home/alex/setup`; two registered T3 projects Harbor app and Beacon app; T3 MCP tools and `t3-pick-instance` available; ClickUp wrappers installed and identity probes pass; Workspace wrapper documented but absent. Existing private routing wrapper has project paths and a cancellation-routing lesson. Rerun user message: “Run onboarding again; I now have a Workspace wrapper.” New wrapper identity passes for `alex@harbor.example`; token grants Gmail read-only access. No other account facts changed.
 
 ## 14. Core refresh
 
@@ -100,28 +100,28 @@ Before update: installed public core revision `fixture-core-a`; separate private
 
 ## 15. Lifecycle decisions
 
-Evaluate dispatch flags and later completion behavior separately. No live tools.
+Evaluate launch flags and later completion behavior separately. No live tools.
 The synthetic wrapper adopts the core's conditional lifecycle policy, except video
 ingestion uses its established completion-footer playbook. Each case is independent.
 
 ### a. Specific bug, production delivery
 
 User: “Fix duplicate invoice button ISSUE-101, deploy it, and update the ticket.”
-Dispatch: precise reproduction; deployment and ticket writes authorized; repository
+Launch: precise reproduction; deployment and ticket writes authorized; repository
 permits the deployment. No lifecycle preference or request to inspect the result.
 End: root cause matched; tests passed; pushed fix deployed and browser-verified.
 Ticket evidence and requested final status verified. No pending work or unexpected findings.
 
 ### b. Failed verification
 
-User and dispatch: same bounded task and authorization as a, for ISSUE-102.
+User and launch: same bounded task and authorization as a, for ISSUE-102.
 End: candidate fix committed locally; regression test still reproduces duplicate
 invoices. No deployment. Ticket records failure; diagnosis remains.
 
 ### c. Deployment approval outstanding
 
 User: “Fix the search regression, ship under repository rules, and finish ISSUE-103.”
-Dispatch: bounded task; repository requires approval if production-to-main contains
+Launch: bounded task; repository requires approval if production-to-main contains
 unrelated behavior changes. No lifecycle preference.
 End: fix and tests passed; production comparison found unrelated functional changes.
 Approval unanswered; no deployment or live verification. Ticket records pending delivery.
@@ -129,7 +129,7 @@ Approval unanswered; no deployment or live verification. Ticket records pending 
 ### d. Material finding beyond scope
 
 User: “Correct the mislabeled retention setting and finish ISSUE-104.”
-Dispatch: label change and normal release authorized; no lifecycle preference.
+Launch: label change and normal release authorized; no lifecycle preference.
 End: pushed label fix deployed, verified, recorded in completed ticket. Also found
 one retention option deletes records earlier than displayed. Evidence attached;
 deciding the response lies outside the requested label change.
@@ -138,7 +138,7 @@ deciding the response lies outside the requested label change.
 
 User: “Compare Vendor Blue with our product; create a short HTML report and a
 product ticket, attach it, and assign it to Casey.”
-Dispatch: research and specified writes authorized; Casey is recipient; no user review requested.
+Launch: research and specified writes authorized; Casey is recipient; no user review requested.
 End A: sources checked; assigned ticket, report attachment and link reopen correctly;
 no material surprises or questions. End B (alternative): report and ticket exist,
 but attachment failed and no accessible artifact link or alternative delivery exists.
@@ -146,23 +146,23 @@ but attachment failed and no accessible artifact link or alternative delivery ex
 ### f. User conversation or inspection
 
 Request A: “Review my last two weeks, coach my schedule, and ask what I want to change.”
-Dispatch: journal access authorized. End: assessment and questions presented; user
+Launch: journal access authorized. End: assessment and questions presented; user
 has not answered or agreed a schedule.
 Request B (independent): “Research subscription options for me to inspect before deciding.”
-Dispatch: read-only research and local report authorized. End: sources verified,
+Launch: read-only research and local report authorized. End: sources verified,
 report presented with working link; user has not inspected it or chosen an option.
 
 ### g. Explicit keep-open
 
 User: “Fix the export filename, deploy it, update the ticket, and keep the thread open.”
-Dispatch: precise issue; ticket writes and permitted deployment authorized.
+Launch: precise issue; ticket writes and permitted deployment authorized.
 End: pushed fix passes tests, deployed export manually verified, ticket updated;
 no pending work or unexpected findings.
 
 ### h. Video ingestion
 
 User: “Ingest this tutorial into the learning library using the usual video workflow.”
-Dispatch: ingestion and library writes authorized; workflow produces verified
+Launch: ingestion and library writes authorized; workflow produces verified
 transcript and library entry. No discussion or review requested.
 End: verified transcript on disk; saved entry/source link and transcript reopened
 successfully. No errors, unresolved findings or pending workers.
@@ -170,7 +170,7 @@ successfully. No errors, unresolved findings or pending workers.
 ### i. Round-trip review worker
 
 Parent task: “Implement the billing change and obtain independent review before shipping.”
-Dispatch: the parent runs the review as a `delegate_task` child; parent owns release.
+Launch: the parent runs the review as a `delegate_task` child; parent owns release.
 End: review finished; findings are the child's final answer to the parent. Parent has not assessed findings
 or confirmed closure; no review activity remains running.
 
@@ -178,7 +178,7 @@ or confirmed closure; no review activity remains running.
 
 User: “I upgraded my subscription; check discovery, correct stale routing metadata
 if needed, and push verified fixes.” No request for user review or keep-open.
-Dispatch: read-only authenticated metadata and bounded helper/docs fixes authorized;
+Launch: read-only authenticated metadata and bounded helper/docs fixes authorized;
 delivery is pushed source plus independently verified live routing.
 End: live tier confirmed, stale-label defect fixed, tests pass, pushed/tagged helper
 and docs verified; independent agent review finished, worker settled. No pending
@@ -189,8 +189,8 @@ the final report is available to read. This qualifies for conditional self-settl
 
 User: “That export bug has a third example; continue it there.” + `https://app.clickup.com/t/fixture-h01`
 
-Thread search: `work-17` as in case 7, now settled, no queued messages. `t3_thread_configuration`: `dispatch-01` runtime `auto`; `work-17` runtime `full-access`, chosen by Alex. A `t3_thread_send` attempt returns `runtime_mode_escalation_denied` (“Child runtime mode full-access is broader than parent mode auto.”). Alex has not said which thread may change mode. `t3-relay` is installed with a full-access client.
+Thread search: `work-17` as in case 7, now settled, no queued messages. `t3_thread_configuration`: `routing-01` runtime `auto`; `work-17` runtime `full-access`, chosen by Alex. A `t3_thread_send` attempt returns `runtime_mode_escalation_denied` (“Child runtime mode full-access is broader than parent mode auto.”). Alex has not said which thread may change mode. `t3-relay` is installed with a full-access client.
 
-Variant B (independent): Alex replies in `dispatch-01`: “Make that thread Auto from now on.” Owner runs Claude; its session has a background test command running.
+Variant B (independent): Alex replies in `routing-01`: “Make that thread Auto from now on.” Owner runs Claude; its session has a background test command running.
 
-Variant C (independent): Alex switches `dispatch-01` to Full Access and replies “go”. `t3_thread_configuration` now reads `dispatch-01` runtime `full-access`; `work-17` unchanged and idle; `t3_queue_list` empty.
+Variant C (independent): Alex switches `routing-01` to Full Access and replies “go”. `t3_thread_configuration` now reads `routing-01` runtime `full-access`; `work-17` unchanged and idle; `t3_queue_list` empty.

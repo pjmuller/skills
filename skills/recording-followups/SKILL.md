@@ -72,7 +72,7 @@ a model chosen only to interpret or synthesize the recording does not. Never inh
 thread's model as the launch default. Resolve the account with `t3-pick-instance opus`, pass its
 provider/model explicitly and set `modelSelection.options.effort` to `high`; verify the returned
 selection. This default does not constrain scoped research/review children inside a task.
-Apply the operator’s wrapper dispatch policy and [spoken cues](spoken-cues.md).
+Apply the operator’s wrapper launch policy and [spoken cues](spoken-cues.md).
 An explicit prepare-only / do-not-execute instruction holds that action. Otherwise a wrapper may
 authorize immediate standalone launch of clear, grounded actions; absent that policy or a direct
 execution request, the files are the deliverable. Always deduplicate existing work before launch.

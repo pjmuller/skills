@@ -123,7 +123,7 @@ def agent_thread_signal(msg: Message) -> str | None:
     """Classify an agent-spawned thread once; all its later user-role rows go too.
 
     T3 >= 0.1 records every row's author (`createdBy`): a thread an agent opened
-    (dispatcher launch, scheduled job) is not dropped, its agent-written rows go
+    (routing-thread launch, scheduled job) is not dropped, its agent-written rows go
     row by row and the user's own replies stay. History imported from 0.0.x marks
     every row as the user's, so the 🏓 title and spawn-helper opener heuristics
     stay for that era (drop them after 2026-12).

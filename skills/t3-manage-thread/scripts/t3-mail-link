@@ -465,7 +465,8 @@ def scan_events(cursor: int | None) -> tuple[list[dict], int]:
 # --- find: which T3 threads already own a Gmail thread --------------------------
 FIND_LIMIT = 8  # T3 candidates inspected (one peek + one grep each)
 EXECUTION_SENTINEL = "Execution thread:"
-DISPATCHER_TITLE = re.compile(r"\bdispatch", re.IGNORECASE)
+# Routing thread (intake, never a case owner): title starts with 🧭; "dispatch" = its legacy name.
+ROUTING_TITLE = re.compile(r"^\s*🧭|\bdispatch", re.IGNORECASE)
 EVIDENCE_RANK = {"owner": 0, "marker": 1, "id": 2, "topic": 3}
 
 
@@ -512,7 +513,7 @@ def owner_threads(account: str, gmail_thread: str) -> list[str]:
 
 def classify_owners(hits: list[dict], peeks: dict[str, dict], greps: dict[str, tuple[bool, bool]], linked: list[str],
                     exclude: list[str], evidence: str) -> tuple[list[dict], list[dict]]:
-    """(owners best first, excluded). Dispatchers and caller-excluded threads are intake, not owners.
+    """(owners best first, excluded). Routing threads and caller-excluded threads are intake, not owners.
     greps: thread id -> (full Mail-ref line seen, account seen)."""
     owners, excluded = [], []
     for hit in hits:
@@ -521,8 +522,8 @@ def classify_owners(hits: list[dict], peeks: dict[str, dict], greps: dict[str, t
                for x in exclude):
             excluded.append({**hit, "why": "excluded"})
             continue
-        if DISPATCHER_TITLE.search(hit["title"]):
-            excluded.append({**hit, "why": "dispatcher"})
+        if ROUTING_TITLE.search(hit["title"]):
+            excluded.append({**hit, "why": "routing"})
             continue
         first = ((peeks.get(tid) or {}).get("prompts") or [{"text": ""}])[0]["text"]
         marker, account_seen = greps.get(tid, (False, False))
@@ -734,7 +735,7 @@ def apply_event(state: dict, event: dict) -> bool:
     account = state["accounts"].get(event["account"])
     found = t3_lookup(event["owner"])
     why = ("account not watched" if not account else "owner thread gone" if not found
-           else "dispatch threads never own" if DISPATCHER_TITLE.search(found[1]["title"]) else None)
+           else "routing threads never own" if ROUTING_TITLE.search(found[1]["title"]) else None)
     if why:
         print(f"{tag}: claim by {event['owner']} ignored: {why}")
         return True

@@ -27,10 +27,10 @@ A send never changes the target's mode.
      replay it from here.
    - **B: owner should run in Auto** (user's call): same as A, after switching the owner's picker
      to Auto. Its mode stays Auto from then on.
-   - **C: dispatcher in Full Access** (user's call, never your suggestion as default): user switches
+   - **C: routing thread in Full Access** (user's call, never your suggestion as default): user switches
      *this* thread's picker to Full Access and replies "go". It stays Full Access until the user
      switches back and sends here again; say so.
-   - Claude thread whose mode changes (owner in B, dispatcher in C) restarts its session and loses
+   - Claude thread whose mode changes (owner in B, routing thread in C) restarts its session and loses
      in-session background work ([t3code#16000](https://github.com/pingdotgg/t3code/issues/16000)):
      check for it first and warn.
 4. **Retry once after C:** re-read both configurations, the owner's runs and `t3_queue_list`, then

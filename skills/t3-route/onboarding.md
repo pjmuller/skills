@@ -3,9 +3,9 @@
 Inspect relevant local setup only: current repository entrypoint/registered skills,
 known personal setup repo, registered T3 projects and referenced workflow wrappers.
 Do not scan arbitrary personal files or copy someone else's credentials/policy.
-Discover facts first; ask only for the dispatch location, intended accounts or
+Discover facts first; ask only for the routing-thread location, intended accounts or
 ownership boundaries that cannot be established. Cloud-only agents without a local
-T3 session cannot dispatch; report that limit, not readiness.
+T3 session cannot route; report that limit, not readiness.
 
 ## Register and check
 
@@ -50,21 +50,21 @@ Gmail or browser access means partial readiness, not failure of all routing.
 
 Create or refine a committed sibling skill, outside `t3-route`, with:
 
-- A precise local trigger: explicit command plus the designated dispatch conversation.
-- A link to this core, dispatch identity/location and model/lifecycle defaults.
+- A precise local trigger: explicit command plus the designated routing thread.
+- A link to this core, routing-thread identity/location and model/lifecycle defaults.
   Lifecycle defaults tailor the core's eligibility decision, not authorization or explicit keep-open choices.
 - A small project catalog: roots, ownership and sibling boundaries.
 - Links to the user's own integration wrappers and relevant triage/playbooks.
 - For recurring short requests, a private trigger lookup (below), explicitly loaded
-  by the wrapper on first invocation and used for later dispatch messages.
+  by the wrapper on first invocation and used for later routing messages.
 
 Reuse existing owning references rather than another rulebook. Add a narrow setup-repo
-entrypoint note: "In the designated dispatch conversation, invoke `<private-wrapper>`;
-an execution brief must not redispatch its same task (see `t3-route`)." Establish the
-actual designation as a dedicated setup thread (for example, "Dispatch"): discover
+entrypoint note: "In the designated routing thread, invoke `<private-wrapper>`;
+an execution brief must not re-route its same task (see `t3-route`)." Establish the
+actual designation as a dedicated setup thread titled with a leading 🧭 (for example, "🧭 Routing"; `t3-mail-link` keeps 🧭 threads from owning mail cases): discover
 and record its title + exact T3 ID privately using supported helpers/native tools,
 never invent an ID or infer it from cwd. An onboarding request can authorize creating
-that dedicated conversation; it does not redispatch this execution task.
+that dedicated conversation; it does not re-route this execution task.
 Link global rules instead of duplicating them. Keep account and personal policy in
 the wrapper. Reruns preserve custom policy; propose only evidence-backed changes.
 
@@ -82,13 +82,13 @@ real requests and verified local files. Example (replace with the user's own tar
 ```
 
 Wrapper instruction: “Read `trigger-lookup.md` on first invocation; use it for later
-dispatch messages and reread after compaction or edits.” Link the file explicitly.
+routing messages and reread after compaction or edits.” Link the file explicitly.
 Keep repo placement/account policy in their existing references. Matches select
 context, not permissions; diagnosis does not itself authorize stopping active work.
 
 After a user correction or verified routing miss, add missing triggers, correct
 faulty rows, merge aliases or remove obsolete targets. Read the owning policy first,
-verify paths and replay the corrected prompt without dispatch or external writes.
+verify paths and replay the corrected prompt without launching or external writes.
 Distinguish recent evidence from useful catalog entries; retain bounded references,
 not sensitive source text. Maintain this private file through [corrections.md](corrections.md).
 
@@ -98,12 +98,12 @@ Run `t3-pick-instance <chosen model>`: inspect actual account routing without
 creating a thread. Then rehearse a ticket/mail/screenshot
 route supported by this user's integrations, without external writes: show fetched
 evidence, inferred intent, destination and whether a verified thread would be reused.
-Check that execution context cannot redispatch the same task. Apply one neutral user
+Check that execution context cannot re-route the same task. Apply one neutral user
 correction to its owning private reference and read it back. Report readiness and
 specific gaps; never claim another person's account was tested from this machine.
 For isolated forward-evaluation, use the neutral [cases and screenshot](tests/cases.md)
 without live tools; judge decisions rather than matching instruction wording.
 
-Daily use: paste tasks/links/images in the dispatch conversation; correct misrouting
+Daily use: paste tasks/links/images in the routing thread; correct misrouting
 there. Public-core updates replace only the core: compare the sibling wrapper's
 before/after hash or diff to verify policy preservation, and recheck its core links.
