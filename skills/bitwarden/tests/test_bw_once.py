@@ -39,9 +39,6 @@ if args[0]=='lock':
  state['locked']=True
  if config.get('cleanup_signal') and state['locks']==2:os.kill(os.getppid(),config['cleanup_signal'])
 elif args[0]=='unlock':
- if '--passwordfile' in args:
-  typed=open(args[args.index('--passwordfile')+1]).readline().rstrip('\n')
-  if typed!=config.get('master'):sys.exit(1)
  if config.get('deny'):
   print(config['secret']);sys.exit(1)
  state['locked']=False
@@ -402,9 +399,10 @@ def test_installer_copy_link_and_help_without_vault_access(fake, tmp_path):
         script.chmod(0o700)
     installer = str(SCRIPTS / "install")
     prefix = tmp_path / "install"
-    subprocess.run([installer, "--prefix", str(prefix)], check=True, capture_output=True)
-    subprocess.run([installer, "--prefix", str(prefix)], check=True, capture_output=True)
-    subprocess.run([installer, "--check", "--prefix", str(prefix)], check=True, capture_output=True)
+    environment = {**os.environ, "BW_ONCE_SKIP_CLI_DOWNLOAD": "1"}
+    subprocess.run([installer, "--prefix", str(prefix)], check=True, capture_output=True, env=environment)
+    subprocess.run([installer, "--prefix", str(prefix)], check=True, capture_output=True, env=environment)
+    subprocess.run([installer, "--check", "--prefix", str(prefix)], check=True, capture_output=True, env=environment)
     command = prefix / "bin/bw-once"
     assert command.is_symlink()
     result = subprocess.run([str(command), "--help"], env=dict(os.environ, UV_PYTHON=sys.executable), capture_output=True)
@@ -586,191 +584,57 @@ def test_send_days_default_and_bounds(tmp_path):
             bw.validate({**base, "days": days})
 
 
-MASTER = "fixture-master-password"
-TOUCHID = r"""
-import base64,json,pathlib,sys
-root=pathlib.Path(__file__).parent
-if sys.argv[1]=='seal':print(json.dumps({'v':'1','fake':base64.b64encode(sys.stdin.buffer.read()).decode(),'ctx':sys.argv[2]}))
-else:
- sealed=json.loads(sys.stdin.read())
- (root/'reasons').open('a').write(sys.argv[3]+'\n')
- if (root/'cancel').exists():sys.exit(3)
- if sealed['ctx']!=sys.argv[2]:sys.exit(1)
- sys.stdout.buffer.write(base64.b64decode(sealed['fake']))
+BROKER = """#!/bin/sh
+cat > "$(dirname "$0")/broker-request.json"
+cat "$(dirname "$0")/broker-reply.json"
 """
 
 
 @pytest.fixture
-def touchid(fake, monkeypatch, tmp_path):
-    directory, update, events = fake
-    update(master=MASTER)
+def front(fake, monkeypatch, tmp_path):
     helpers = tmp_path / "helpers"
     helpers.mkdir()
-    (helpers / "touchid").write_text(f"#!{sys.executable}\n" + TOUCHID)
-    (helpers / "touchid").chmod(0o700)
-    (helpers / "clipboard").write_text("#!/bin/sh\ncat >/dev/null\necho ready\n")
-    (helpers / "clipboard").chmod(0o700)
+    (helpers / "bw-broker").write_text(BROKER)
+    (helpers / "bw-broker").chmod(0o700)
     monkeypatch.setattr(bw, "ROOT", helpers)
-    monkeypatch.setattr(bw, "TRUSTED_BW_DIRS", (os.path.realpath(directory) + "/",))
-    return helpers
-
-
-def renew_marker():
-    bw.touchid_write(bw.vault_config(), {"renew": True})
-
-
-def enroll():
-    return bw.touchid_enroll(bw.Vault(), {"op": "touchid-enroll", "vault": "default"}, ask=lambda *_: True,
-                             read_password=lambda _: MASTER)
-
-
-def test_touchid_enroll_verifies_seals_and_stores_privately(fake, touchid):
-    directory, _, events = fake
-    result = enroll()
-    path = bw.touchid_path("default")
-    assert result["enrolled"] and path.stat().st_mode & 0o777 == 0o600
-    assert MASTER not in path.read_text()
-    assert json.loads((directory / "state").read_text())["locked"]
-    unlock = [event for event in events() if event["args"][0] == "unlock"]
-    assert len(unlock) == 1 and unlock[0]["args"][-2] == "--passwordfile"
-    assert all(MASTER not in json.dumps(event) for event in events())
-
-
-def test_touchid_enroll_refuses_wrong_password(fake, touchid):
-    _, update, _ = fake
-    update(master="something-else")
-    with pytest.raises(bw.Failure, match="rejected"):
-        enroll()
-    assert not bw.touchid_path("default").exists()
-
-
-def test_touchid_copy_needs_no_terminal_prompt_and_relocks_before_delivery(fake, touchid):
-    directory, _, events = fake
-    enroll()
-    delivered = []
-
-    def deliver(secret):
-        assert json.loads((directory / "state").read_text())["locked"]
-        delivered.append(secret)
-
-    result = bw.transaction(bw.Vault(), request(id=None, username="user"), ask=lambda *_: True, deliver=deliver)
-    assert delivered == [SECRET] and result["username"] == "user"
-    assert (touchid / "reasons").read_text().splitlines() == [
-        "use Bitwarden (default) to copy the password of user on admin.example.com"]
-    unlock = [event for event in events() if event["args"][0] == "unlock"]
-    assert all(event["noninteractive"] == "true" and "--passwordfile" in event["args"] for event in unlock)
-    assert all(MASTER not in json.dumps(event) for event in events())
-
-
-def test_touchid_cancel_never_unlocks(fake, touchid):
-    directory, _, events = fake
-    enroll()
-    (touchid / "cancel").write_text("")
-    before = sum(event["args"][0] == "unlock" for event in events())
-    with pytest.raises(bw.Failure, match="cancelled"):
-        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
-    assert sum(event["args"][0] == "unlock" for event in events()) == before
-    assert json.loads((directory / "state").read_text())["locked"]
-
-
-def test_touchid_changed_master_password_marks_renewal_and_expiry_keeps_the_marker(fake, touchid):
-    _, update, _ = fake
-    enroll()
-    update(master="changed-on-the-web")
-    with pytest.raises(bw.EnrolmentGone, match="master password changed"):
-        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
-    assert bw.touchid_status(bw.vault_config())["renewal_due"]
-    update(master=MASTER)
-    enroll()
-    path = bw.touchid_path("default")
-    enrolment = json.loads(path.read_text())
-    enrolment["expires"] = "2000-01-01T00:00:00+00:00"
-    path.write_text(json.dumps(enrolment))
-    assert bw.touchid_status(bw.vault_config()) == {"enrolled": False, "expires": None, "renewal_due": True}
-    assert "sealed" not in path.read_text()  # Expired ciphertext dropped; only the renewal wish stays.
-
-
-def test_terminal_unlock_due_for_renewal_serves_request_and_reseals(fake, touchid):
-    _, _, events = fake
-    renew_marker()
-    vault = bw.Vault()
-    vault.read_password = lambda prompt: MASTER
-    delivered = []
-    bw.transaction(vault, request(), ask=lambda *_: True, deliver=delivered.append)
-    assert delivered == [SECRET]
-    assert bw.touchid_status(bw.vault_config())["enrolled"]
-    assert all(MASTER not in json.dumps(event) for event in events())
-    delivered.clear()
-    bw.transaction(bw.inline_vault("default"), request(), ask=lambda *_: True, deliver=delivered.append)
-    assert delivered == [SECRET]  # Next request: Touch ID again, no Terminal.
-
-
-def test_inline_request_due_for_renewal_hands_over_to_the_terminal(fake, touchid, monkeypatch, capsys):
-    renew_marker()
+    config = tmp_path / "home" / ".config" / "bw-once"
+    config.mkdir(parents=True)
+    (config / "vaults.json").write_text(json.dumps({"work": {"email": "a@example.com", "default": True},
+                                                    "other": {"email": "b@example.com", "appdata": "/tmp/x"}}))
     launched = []
-    monkeypatch.setattr(bw, "launch", lambda args: launched.append(args["op"]) or {"ok": True, "via": "terminal"})
-    monkeypatch.setattr(sys, "argv", ["bw-once", "copy", "--host", "admin.example.com", "--id", ID, "--field", "password"])
-    bw.main()
-    assert launched == ["copy"] and json.loads(capsys.readouterr().out)["via"] == "terminal"
+    monkeypatch.setattr(bw, "launch", lambda args: launched.append(args) or {"ok": True, "via": "terminal"})
+
+    def run(*argv, enrolled=True):
+        (helpers / "broker-reply.json").write_text(json.dumps({"ok": True, "enrolled": enrolled, "copied": "password"}))
+        monkeypatch.setattr(sys, "argv", ["bw-once", *argv])
+        try:
+            bw.main()
+        except SystemExit:
+            pass
+        sent = helpers / "broker-request.json"
+        return json.loads(sent.read_text()) if sent.exists() else None
+
+    return run, launched
 
 
-def test_forget_turns_touchid_off_without_renewal(fake, touchid):
-    enroll()
-    bw.touchid_path("default").unlink()
-    assert bw.touchid_status(bw.vault_config()) == {"enrolled": False, "expires": None, "renewal_due": False}
+def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
+    run, launched = front
+    sent = run("copy", "--host", "admin.example.com", "--username", "user", "--field", "password",
+               "--thread", "Invoice run", "--why", "download invoices")
+    assert sent == {"op": "copy", "host": "admin.example.com", "username": "user", "field": "password",
+                    "thread": "Invoice run", "why": "download invoices",
+                    "vaults": [{"name": "other", "email": "b@example.com", "appdata": os.path.realpath("/tmp/x")},
+                               {"name": "work", "email": "a@example.com"}]}
+    assert launched == []
 
 
-def test_touchid_refuses_untrusted_bw_before_any_prompt(fake, touchid, monkeypatch):
-    enroll()
-    monkeypatch.setattr(bw, "TRUSTED_BW_DIRS", ("/opt/homebrew/",))
-    with pytest.raises(bw.Failure, match="Homebrew bw"):
-        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
-    assert not (touchid / "reasons").exists()
+def test_explicit_vault_restricts_the_broker_search(front):
+    run, _ = front
+    sent = run("--vault", "work", "list", "--host", "admin.example.com")
+    assert sent["vaults"] == [{"name": "work", "email": "a@example.com"}] and sent["op"] == "list"
 
 
-def test_inline_request_never_falls_back_to_an_agent_side_password_prompt(fake, touchid):
-    _, _, events = fake
-    with pytest.raises(bw.Failure, match="enrolment expired"):
-        bw.transaction(bw.inline_vault("default"), request(), ask=lambda *_: True,
-                       deliver=lambda _: pytest.fail("delivered"))
-    assert not any(event["args"][0] == "unlock" for event in events())
-
-
-@pytest.mark.parametrize("breakage,relaunched", [("master", True), ("cancel", False)])
-def test_inline_breakage_relaunches_terminal_but_cancel_does_not(fake, touchid, monkeypatch, capsys, breakage, relaunched):
-    _, update, _ = fake
-    enroll()
-    if breakage == "master":
-        update(master="changed-on-the-web")
-    else:
-        (touchid / "cancel").write_text("")
-    launched = []
-    monkeypatch.setattr(bw, "launch", lambda args: launched.append(args["op"]) or {"ok": True, "via": "terminal"})
-    monkeypatch.setattr(sys, "argv", ["bw-once", "copy", "--host", "admin.example.com", "--id", ID, "--field", "password"])
-    try:
-        bw.main()
-    except SystemExit:
-        pass
-    assert bool(launched) is relaunched
-    assert ("cancelled" in capsys.readouterr().out) is (not relaunched)
-
-
-def test_forget_during_renewal_prompt_stays_forgotten(fake, touchid):
-    renew_marker()
-    vault = bw.Vault()
-
-    def forget_while_typing(prompt):
-        bw.touchid_forget(bw.vault_config())
-        return MASTER
-
-    vault.read_password = forget_while_typing
-    bw.transaction(vault, request(), ask=lambda *_: True, deliver=lambda _: None)
-    assert bw.touchid_status(bw.vault_config())["enrolled"] is False and not bw.touchid_path("default").exists()
-
-
-def test_stale_expiry_reader_never_overwrites_a_fresh_enrolment(fake, touchid):
-    enroll()
-    stale = json.loads(bw.touchid_path("default").read_text())
-    enroll()  # Another Terminal re-enrolled meanwhile.
-    bw.touchid_mark_renew(bw.vault_config(), stale)
-    assert bw.touchid_status(bw.vault_config())["enrolled"]
+def test_not_enrolled_falls_back_to_the_terminal_without_claim_fields(front):
+    run, launched = front
+    run("copy", "--host", "admin.example.com", "--field", "password", "--why", "x", enrolled=False)
+    assert len(launched) == 1 and "why" not in launched[0] and "thread" not in launched[0]

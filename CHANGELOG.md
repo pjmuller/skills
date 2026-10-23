@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: compiled Touch ID broker
+
+- New `scripts/broker.swift` (built by the installer, hardened runtime) owns the whole Touch ID path: a native
+  window with the human's 3-word phrase, the agent's claim (`list`/`copy` `--thread`, `--why`, marked
+  unverified) and the checked request; Touch ID; master passwords of **all** enrolled accounts in one
+  Keychain item (ACL = the broker) sealed to a Secure Enclave key; Bitwarden's signed CLI (downloaded by the
+  installer, Team ID checked on the file and the running process) as one `bw serve` per vault over a
+  socketpair (~1.5 s instead of ~20 s of CLI starts); exact-host search across accounts; lock + verify every
+  vault before the clipboard. Renewal inline (setup window with the phrase) only when fingerprints or a master
+  password change; no expiry.
+- Removed: `scripts/touchid.swift`, the per-vault `~/.config/bw-once/touchid-*.json` enrolment, the Terminal
+  renewal prompt and the 30-day expiry. Replacement: `bw-once touchid enroll` once (old files are deleted).
+
 ## 2026-10-23 — bitwarden: Touch ID renews itself
 
 - Expired enrolment, changed fingerprints or a changed master password no longer need `touchid forget` +

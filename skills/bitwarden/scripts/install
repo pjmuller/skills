@@ -13,18 +13,21 @@ case "$prefix" in /*) ;; *) echo "Install prefix must be absolute" >&2; exit 2;;
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 target="$prefix/lib/bw-once"
 command_path="$prefix/bin/bw-once"
-for dependency in uv bw xcrun; do
+# Only Bitwarden Inc's notarized CLI may receive a master password (the broker re-checks before every use).
+requirement='anchor apple generic and identifier "bw" and certificate leaf[subject.OU] = "LTZ2PFU5D6"'
+for dependency in uv xcrun curl codesign; do
   command -v "$dependency" >/dev/null || { echo "Missing $dependency; install it separately" >&2; exit 1; }
 done
 [ "$(uname -s)" = Darwin ] || { echo "macOS Terminal and AppKit required" >&2; exit 1; }
 if [ "$check" = true ]; then
-  [ -x "$target/clipboard" ] && [ -x "$target/touchid" ] && [ -L "$command_path" ] && [ "$(readlink "$command_path")" = "$target/bw-once" ] || {
-    echo "bw-once installation missing" >&2; exit 1;
-  }
-  for name in bw-once bw_once.py clipboard.swift touchid.swift; do
+  [ -x "$target/clipboard" ] && [ -x "$target/bw-broker" ] && [ -L "$command_path" ] \
+    && [ "$(readlink "$command_path")" = "$target/bw-once" ] || { echo "bw-once installation missing" >&2; exit 1; }
+  for name in bw-once bw_once.py clipboard.swift broker.swift; do
     cmp -s "$source_dir/$name" "$target/$name" || { echo "Installed $name differs; rerun installer" >&2; exit 1; }
   done
-  echo "bw-once ready; helper on PATH, skill not globally registered"
+  [ "${BW_ONCE_SKIP_CLI_DOWNLOAD:-}" = 1 ] || codesign --verify -R="$requirement" "$target/bw" 2>/dev/null || {
+    echo "Bitwarden CLI missing or unsigned; rerun installer" >&2; exit 1; }
+  echo "bw-once ready ($("$target/bw" --version 2>/dev/null) signed Bitwarden CLI); helper on PATH, skill not globally registered"
   exit 0
 fi
 if [ -e "$command_path" ] || [ -L "$command_path" ]; then
@@ -34,16 +37,35 @@ if [ -e "$command_path" ] || [ -L "$command_path" ]; then
 fi
 mkdir -p "$target" "$prefix/bin"
 chmod 700 "$target"
-for name in bw-once bw_once.py clipboard.swift touchid.swift; do
+for name in bw-once bw_once.py clipboard.swift broker.swift; do
   cp "$source_dir/$name" "$target/$name"
 done
+rm -f "$target/touchid" "$target/touchid.swift"  # Replaced by bw-broker.
 xcrun swiftc "$target/clipboard.swift" -o "$target/clipboard.new"
 chmod 700 "$target/clipboard.new" "$target/bw-once"
 mv "$target/clipboard.new" "$target/clipboard"
-# Hardened runtime: no injected dylibs in the process that briefly holds the unsealed master password.
-xcrun swiftc "$target/touchid.swift" -o "$target/touchid.new"
-codesign -s - -f -o runtime "$target/touchid.new" 2>/dev/null
-chmod 700 "$target/touchid.new"
-mv "$target/touchid.new" "$target/touchid"
+# Hardened runtime: no injected libraries in the process that holds unsealed master passwords. A changed binary
+# makes macOS ask once (login password, "Always Allow") before it may read its Keychain item.
+xcrun swiftc "$target/broker.swift" -o "$target/bw-broker.new" -O
+codesign -s - -f -o runtime "$target/bw-broker.new" 2>/dev/null
+chmod 700 "$target/bw-broker.new"
+mv "$target/bw-broker.new" "$target/bw-broker"
+# Bitwarden's signed CLI from its official GitHub release (latest cli-v*), replaced only when the version changes.
+case "$(uname -m)" in arm64) flavour=macos-arm64;; *) flavour=macos;; esac
+release=cli-vskipped
+[ "${BW_ONCE_SKIP_CLI_DOWNLOAD:-}" = 1 ] || release=$(curl -fsSL "https://api.github.com/repos/bitwarden/clients/releases?per_page=40" \
+  | /usr/bin/python3 -c 'import json,sys; print(next(r["tag_name"] for r in json.load(sys.stdin) if r["tag_name"].startswith("cli-v") and not r["prerelease"]))')
+version=${release#cli-v}
+if [ "${BW_ONCE_SKIP_CLI_DOWNLOAD:-}" = 1 ]; then
+  :  # Tests only: no 40 MB download; the broker still refuses an unsigned or missing CLI.
+elif [ ! -x "$target/bw" ] || [ "$("$target/bw" --version 2>/dev/null)" != "$version" ]; then
+  download=$(mktemp -d)
+  curl -fsSL -o "$download/bw.zip" "https://github.com/bitwarden/clients/releases/download/$release/bw-$flavour-$version.zip"
+  (cd "$download" && unzip -q bw.zip bw)
+  codesign --verify -R="$requirement" "$download/bw" || { rm -rf "$download"; echo "Downloaded bw is not signed by Bitwarden Inc" >&2; exit 1; }
+  chmod 700 "$download/bw"
+  mv "$download/bw" "$target/bw"
+  rm -rf "$download"
+fi
 ln -sf "$target/bw-once" "$command_path"
-echo "Installed $command_path; skill not globally registered"
+echo "Installed $command_path with Bitwarden CLI $version; skill not globally registered"

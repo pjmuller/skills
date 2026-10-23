@@ -1,50 +1,54 @@
-# Touch ID unlock (`bw-once touchid`)
+# Touch ID broker (`bw-once touchid`, `scripts/broker.swift`)
 
-Intent: the human types the master password once a month instead of per request, and never somewhere an agent
-or another app can see it; every later unlock needs a fingerprint that the hardware, not our code, checks.
+Intent: an agent asks for one login by host; the human sees one window, checks it in a second and touches the
+sensor. No master password typing after setup, nothing the agent could read, and a core that editing scripts
+can't subvert. Fast (~2 s of vault work), every account searched, generic for any colleague's Bitwarden.
 
 ```sh
-bw-once [--vault work] touchid enroll    # human Terminal: Return, master password (hidden), verified by a real unlock
-bw-once touchid status                   # {enrolled, expires, renewal_due}; also in `doctor`
-bw-once touchid forget                   # delete the file: Touch ID off, no automatic renewal
+bw-once touchid enroll [--vault work]    # native window: your phrase + master password per vault (once)
+bw-once copy --host example.com --username me@example.com --field password \
+  --thread "<T3 thread title>" --why "<one line: why this login>"
+bw-once touchid status | bw-once touchid forget
 ```
 
-## How
+## The window
 
-- `scripts/touchid.swift` creates a P-256 key **inside the Secure Enclave** with `.biometryCurrentSet` and seals the
-  master password to it (ephemeral ECDH → HKDF → AES-GCM, vault name + email bound in). The file
-  `~/.config/bw-once/touchid-<vault>.json` (0600) holds only the enclave's wrapped key and the ciphertext: useless on
-  another Mac, and on this one only after Touch ID. Adding or removing a fingerprint invalidates it.
-- Enrolled `list`/`copy` run **without a Terminal**: lock, sync, Touch ID dialog, unseal into the helper,
-  `bw unlock --passwordfile /dev/fd/N` (a pipe: never argv, env or disk), operation, lock + verify, then clipboard.
-  One touch per request; a session (`session start`) = one touch for many requests. Sends and sessions keep their
-  Terminal review, with Touch ID instead of the password prompt. `login` (new device: password + 2FA) is unchanged.
-- The dialog text comes from the validated request ("use Bitwarden (work) to copy the password of … on …"), not
-  from caller prose. Touch only when an agent just told you that exact request.
-- **Renewal is automatic.** Expiry (`TOUCHID_DAYS` = 30), changed fingerprints or a changed master password
-  turn the file into a renewal marker (ciphertext dropped). The next request skips the Touch ID dialog and
-  opens the Terminal, which says so; the master password typed there serves the request **and** re-seals it
-  for 30 days. A failure detected only at unlock (enclave refuses, bw rejects the sealed password) relaunches
-  that Terminal in the same call; a cancelled dialog does not. `renewal_due: true` in `touchid status` →
-  tell the human the next request asks the master password once.
+- **Your phrase** (3 words, generated at setup, kept in the Keychain item): every genuine bw-once window shows
+  it, setup included. No phrase → don't type, don't touch. A recognition cue, not proof (screen recording could
+  copy it); the real protection is that only the broker can open the stored secrets.
+- **Agent says (unverified)**, orange: `--thread`, `--why` as the agent wrote them (plain text, ≤120/200 chars).
+- **bw-once will (checked)**, green, built by the broker from the validated request: field, login filter, exact
+  host, vaults searched, destination. Touch ID approves exactly that; afterwards the window shows what was
+  released ("Copied password of … (user, vault) · vault locked"). Cancel/Esc/close or 5 minutes → nothing.
 
-## Why not
+## How (all inside the compiled broker; the Python front end only forwards the request)
 
-- **Keychain item with biometry ACL**: needs the data-protection keychain, i.e. a signed binary with entitlements
-  (`-34018` ad-hoc, no Developer ID here). The enclave key needs neither and is hardware-enforced.
-- **Software `LAContext` check in front of a stored password**: same-user code reads the stored password directly
-  or patches the check out.
-- **Keeping a `bw unlock` session key for a week**: bw-once relocks after every request and any `bw lock` kills
-  session keys, and a vault left unlocked for days is the larger exposure. The master password stays sealed and
-  the CLI stays locked between requests.
-- **Bitwarden's own CLI→Desktop Touch ID** (server flag `biometrics-sdk-ipc`): the clean answer once Bitwarden
-  enables it (`doctor` → `touch_id_flag`); then `touchid forget` and use the native path.
+- **Secrets**: one legacy Keychain item, default ACL = the broker binary that created it. Another or a modified
+  binary gets a visible macOS prompt (after a bw-once update: once, Mac login password, Always Allow). It holds
+  the phrase and a bundle `{vault: {email, password}}` sealed to a **Secure Enclave** key (`.biometryCurrentSet`):
+  the enclave refuses without a fingerprint, and new or removed fingerprints invalidate it.
+- **Bitwarden**: the installer downloads Bitwarden's signed CLI from its GitHub release; the broker checks Apple's
+  signature for Team `LTZ2PFU5D6` on the file and again on the running process. One `bw serve --hostname
+  fd+connected://3` per vault over a socketpair (no TCP, no socket file, fixed environment): status (locked, right
+  account), sync, unlock, list all items, exact-host filter, lock, verify locked, stop. Each `bw` CLI start costs
+  ~2.4 s; one serve per vault does the whole request in ~1.5 s.
+- **Release**: only a unique match across all searched vaults (else metadata `vault/name/username` to narrow with
+  `--username`/`--id`); clipboard only after **every** vault is verified locked; a cancel after the touch still
+  releases nothing.
+- **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
+  a saved password (changed) → setup window for that vault; then the request continues (second touch). Both show
+  the phrase.
 
 ## Boundary
 
-Raises the bar from "any process reads it" to "needs PJ's finger on this Mac". The unsealed password only goes to
-a `bw` resolving under `/opt/homebrew` or `/usr/local` with a fixed `PATH` (a fake `bw` first on an agent's `PATH`
-gets nothing). Same-user code can still: copy the
-sealed file and show its **own** Touch ID dialog with misleading text (still needs a touch), patch `bw_once.py`
-so a genuine touch leaks the password (the installed copy is user-writable; `scripts/install --check` detects
-drift from the repo), or read the clipboard. Real separation needs another OS user or a signed app.
+Raises the bar from "any process reads it" to "needs this Mac's enclave, your finger, and the genuine broker".
+Same-user malware can still: ask for a real login (you see an honest window: read it), fake a whole window
+(no phrase), read the clipboard during its 30 s, or record the screen. Apple Developer ID signing would bind the
+Keychain item to a team instead of one binary (no prompt after updates, a ready-signed app for colleagues): an
+option at $99/yr. Without a session or enrolment, `bw-once` falls back to the human Terminal flow in [SKILL.md](SKILL.md).
+
+## Not built
+
+A second "copy" click after the touch (the green box already binds the release), a metadata cache to show the
+exact item before the touch, routine expiry (more password prompts = more phishing practice), Bitwarden's own
+CLI→Desktop Touch ID (server flag `biometrics-sdk-ipc` still off; `doctor` → `touch_id_flag`).

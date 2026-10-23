@@ -34,20 +34,13 @@ TTL_DEFAULT_MINUTES = 60
 TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
 TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit.
-# The unsealed master password only goes to a bw installed by Homebrew, never one an agent put first on PATH.
-TRUSTED_BW_DIRS = ("/opt/homebrew/", "/usr/local/")
-TRUSTED_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-TOUCHID_DAYS = 30  # Master password re-typed monthly; every use still needs the finger (Secure Enclave).
+BROKER_SECONDS = 330  # The broker's own watchdog closes its panel after 300 s.
 SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
 
 
 class Failure(Exception):
     pass
-
-
-class EnrolmentGone(Failure):
-    """Touch ID can't serve this request (expired, fingerprints or master password changed): the Terminal renews it."""
 
 
 @contextmanager
@@ -153,7 +146,7 @@ def validate(request):
                "send-text": {"op", "input_file", "name", "views", "days"},
                "send-file": {"op", "input_file", "name", "views", "days"},
                "session-start": {"op", "ttl", "hosts", "reason"}, "session-stop": {"op"}, "session-status": {"op"},
-               "login": {"op"}, "touchid-enroll": {"op"}}
+               "login": {"op"}}
     if op not in allowed or set(request) != allowed[op] | {"vault"}:
         raise Failure("Invalid request")
     request = dict(request)
@@ -194,7 +187,8 @@ def validate(request):
 
 class Vault:
     def __init__(self, name=None):
-        self.binary = shutil.which("bw")
+        # The installer's verified copy of Bitwarden's signed CLI (the broker checks the signature); else PATH.
+        self.binary = str(ROOT / "bw") if (ROOT / "bw").is_file() else shutil.which("bw")
         if not self.binary:
             raise Failure("Bitwarden CLI is missing")
         self.config = vault_config(name)
@@ -206,36 +200,23 @@ class Vault:
                 raise Failure("Unsafe vault data directory")
             self.env["BITWARDENCLI_APPDATA_DIR"] = str(appdata)
         self.session = None
-        self.touchid_only = False  # In-process (no Terminal) requests: never fall back to an interactive prompt.
-        self.read_password = getpass.getpass
 
-    def call(self, *args, data=None, unlock=False, password=None):
-        """`password` reaches bw through a pipe (`--passwordfile /dev/fd/N`): never argv, env or disk."""
+    def call(self, *args, data=None, unlock=False):
         env = dict(self.env, BW_NOINTERACTION="true")
         if self.session:
             env["BW_SESSION"] = self.session
         if unlock:
             env.pop("BW_NOINTERACTION")
         terminal = termios.tcgetattr(sys.stdin.fileno()) if unlock and sys.stdin.isatty() else None
-        reader = None
-        if password is not None:
-            env["PATH"] = TRUSTED_PATH
-            reader, writer = os.pipe()
-            with os.fdopen(writer, "wb") as stream:
-                stream.write(password.encode() + b"\n")
-            args = (*args, "--passwordfile", f"/dev/fd/{reader}")
         try:
             result = subprocess.run([self.binary, *args], input=data,
                                     stdin=None if unlock or data is not None else subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
                                     stderr=None if unlock else subprocess.DEVNULL,
-                                    pass_fds=(reader,) if reader is not None else (),
                                     env=env, timeout=AUTH_SECONDS if unlock else 60)
         except subprocess.TimeoutExpired:
             raise Failure("Bitwarden operation timed out") from None
         finally:
-            if reader is not None:
-                os.close(reader)
             if terminal is not None:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, terminal)
         if result.returncode:
@@ -262,35 +243,9 @@ class Vault:
         if expected and str(status.get("userEmail") or "").lower() != expected:
             raise Failure(f"Vault '{self.config['name']}' CLI context is signed in as another account")
 
-    def trusted_binary(self):
-        if not os.path.realpath(self.binary).startswith(TRUSTED_BW_DIRS):
-            raise Failure("Touch ID unlock needs the Homebrew bw (/opt/homebrew or /usr/local), not " + self.binary)
-
     def unlock(self, request):
-        """Touch ID when enrolled; due for renewal → master password once in the Terminal, which also re-seals it;
-        not enrolled → official interactive `bw unlock`."""
-        state, enrolment = touchid_read(self.config)
-        if state == "enrolled":
-            self.trusted_binary()
-            password = touchid_open(self.config, enrolment, touchid_reason(request))
-            try:
-                key = self.call("unlock", "--raw", password=password)
-            except Failure:
-                touchid_mark_renew(self.config, enrolment)
-                raise EnrolmentGone("bw rejected the Touch ID password (master password changed?)") from None
-        elif self.touchid_only:
-            raise EnrolmentGone("Touch ID enrolment expired")
-        elif state == "renew":
-            self.trusted_binary()
-            password = self.read_password(f"Master password for {self.config.get('email') or 'this vault'} "
-                                          f"(also renews Touch ID for {TOUCHID_DAYS} days): ")
-            key = self.call("unlock", "--raw", password=password)
-            try:
-                touchid_store(self.config, password, renewal=True)
-            except Failure:
-                pass  # Renewal never blocks the request; the marker stays, the next Terminal request retries.
-        else:
-            key = self.call("unlock", "--raw", unlock=True)
+        """Official interactive `bw unlock` in the human Terminal (Touch ID requests go to the broker instead)."""
+        key = self.call("unlock", "--raw", unlock=True)
         key = key.decode().strip()
         if not key or not re.fullmatch(r"[A-Za-z0-9+/=]+", key):
             raise Failure("Unlock did not return a session")
@@ -383,13 +338,6 @@ def snapshot(request):
 def confirm(request, payload, account=None):
     print(f"\aBitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}):", flush=True)
     print(json.dumps(request, ensure_ascii=True), flush=True)
-    try:
-        renew = request.get("op") != "touchid-enroll" and touchid_read(vault_config(request["vault"]))[0] == "renew"
-    except Failure:
-        renew = False
-    if renew:
-        print(f"Touch ID expired or no longer valid: the master password asked next serves this request and "
-              f"renews Touch ID for {TOUCHID_DAYS} days.", flush=True)
     if payload:
         review = {key: payload[key] for key in ("name", "maxAccessCount", "deletionDate", "expirationDate")}
         review.update(payload.get("_review", {"exact_text": payload.get("text", {}).get("text")}))
@@ -559,171 +507,34 @@ def transaction(vault, request, ask=confirm, deliver=clipboard):
         return result
 
 
-def touchid_path(vault):
-    return Path.home() / ".config" / "bw-once" / f"touchid-{vault_name(vault)}.json"
-
-
-def touchid_context(config):
-    # Bound into the encryption: a sealed file copied to another vault's name or account does not open.
-    return f"{config['name']} {config.get('email') or '-'}"
-
-
-@contextmanager
-def touchid_lock(vault):
-    """Serialises enrolment writes (enrol, renew, expiry, forget); held only around a read-check-write."""
-    fd = os.open(cache_dir() / f"touchid-{vault_name(vault)}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
-
-
-def touchid_file(config):
-    """The enrolment file's content (enrolment or renewal marker), or None when Touch ID is off."""
-    path = touchid_path(config["name"])
-    try:
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise Failure(f"Unsafe Touch ID enrolment file {path}; run `bw-once touchid forget`")
-        content = json.loads(path.read_text())
-        if content.get("renew") is not True:
-            datetime.fromisoformat(content["expires"]), content["sealed"]
-        return content
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        raise Failure(f"Invalid Touch ID enrolment {path}; run `bw-once touchid forget`") from None
-
-
-def touchid_read(config):
-    """("enrolled", sealed enrolment) | ("renew", None) | ("off", None). Expiry or a broken seal leaves a renewal
-    marker, so the next Terminal unlock re-seals; only `touchid forget` (file gone) turns Touch ID off."""
-    content = touchid_file(config)
-    if content is None:
-        return "off", None
-    if content.get("renew") is True:
-        return "renew", None
-    if datetime.now(timezone.utc) >= datetime.fromisoformat(content["expires"]):
-        touchid_mark_renew(config, content)
-        return "renew", None
-    return "enrolled", content
-
-
-def touchid_enrolment(config):
-    state, enrolment = touchid_read(config)
-    return enrolment if state == "enrolled" else None
-
-
-def touchid_write(config, value):
-    path = touchid_path(config["name"])
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}")  # Unique: concurrent writers never collide.
-    private_json(temporary, value)
-    os.rename(temporary, path)
-
-
-def touchid_mark_renew(config, seen):
-    """Replace exactly the enrolment `seen` by a renewal marker; a newer enrolment or a `forget` wins."""
-    with touchid_lock(config["name"]):
-        current = touchid_file(config)
-        if current is not None and current.get("id") == seen.get("id"):
-            touchid_write(config, {"renew": True, "since": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-
-
-def touchid_store(config, password, renewal=False):
-    """Seal a master password bw just accepted; valid TOUCHID_DAYS. A renewal stores only while still due, so a
-    `forget` during the Terminal prompt stays a forget."""
-    sealed = json.loads(touchid_helper("seal", touchid_context(config), data=password.encode(), timeout=30))
-    now = datetime.now(timezone.utc)
-    enrolment = {"id": uuid.uuid4().hex, "sealed": sealed, "created": now.isoformat(timespec="seconds"),
-                 "expires": (now + timedelta(days=TOUCHID_DAYS)).isoformat(timespec="seconds")}
-    with touchid_lock(config["name"]):
-        current = touchid_file(config)
-        if renewal and not (current and current.get("renew") is True):
-            return None
-        touchid_write(config, enrolment)
-    return enrolment
-
-
-def touchid_forget(config):
-    with touchid_lock(config["name"]):
-        touchid_path(config["name"]).unlink(missing_ok=True)
-
-
-def touchid_helper(*args, data, timeout):
-    helper = ROOT / "touchid"
+def broker(request):
+    """The compiled Touch ID broker (scripts/broker.swift): panel, Touch ID, Bitwarden, filter, lock, clipboard."""
+    helper = ROOT / "bw-broker"
     if sys.platform != "darwin" or not helper.is_file():
-        raise Failure("Touch ID helper missing; run installer first")
+        raise Failure("Touch ID broker missing; run installer first")
     try:
-        done = subprocess.run([str(helper), *args], input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              env=clean_env(), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise Failure("Touch ID timed out") from None
-    if done.returncode == 3:
-        raise Failure("Touch ID cancelled")
-    if done.returncode or not done.stdout:
-        raise Failure("Touch ID helper failed")
-    return done.stdout
+        done = subprocess.run([str(helper)], input=json.dumps(request).encode(), stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, env=clean_env(), timeout=BROKER_SECONDS)
+        return json.loads(done.stdout)
+    except (subprocess.TimeoutExpired, ValueError):
+        raise Failure("Touch ID broker failed; nothing released") from None
 
 
-def touchid_open(config, enrolment, reason):
-    sealed = json.dumps(enrolment["sealed"]).encode()
-    try:
-        return touchid_helper("open", touchid_context(config), reason, data=sealed, timeout=AUTH_SECONDS).decode()
-    except (UnicodeError, Failure) as error:
-        if str(error) in ("Touch ID cancelled", "Touch ID timed out"):
-            raise
-        touchid_mark_renew(config, enrolment)  # Enclave refused (fingerprints changed) or the seal is damaged.
-        raise EnrolmentGone("Touch ID enrolment no longer opens (fingerprints changed?)") from None
+def broker_vaults(name=None):
+    """An explicit --vault → that one; otherwise every configured vault (the broker searches all enrolled ones)."""
+    path = Path.home() / ".config" / "bw-once" / "vaults.json"
+    names = [name] if name else sorted(json.loads(path.read_text())) if path.is_file() else []
+    vaults = []
+    for entry in names:
+        config = vault_config(entry)
+        if config.get("email"):
+            vaults.append({key: config[key] for key in ("name", "email", "appdata") if key in config})
+    return vaults
 
 
-def touchid_reason(request):
-    """The Touch ID dialog's text, built from the validated request, never from caller prose."""
-    op, vault = request["op"], request["vault"]
-    if op == "list":
-        what = f"list {request['host']} logins"
-    elif op == "copy":
-        who = request.get("username") or request.get("id") or "the only login"
-        what = f"copy the {request['field']} of {who} on {request['host']}"
-    elif op == "session-start":
-        what = f"start a {request['ttl']}-minute session for {', '.join(request['hosts'])}"
-    else:
-        what = f"create the Send '{request.get('name')}'"
-    return f"use Bitwarden ({vault}) to {what}"
-
-
-def touchid_enroll(vault, request, ask=confirm, read_password=getpass.getpass):
-    """Human Terminal: master password typed once (hidden), verified by a real unlock, sealed to the enclave."""
-    request = validate(request)
-    same_vault(vault, request)
-    with mutex(request["vault"]):
-        vault.relock()
-        if not ask(request, None, vault.config.get("email")):
-            raise Failure("Request cancelled")
-        vault.trusted_binary()
-        password = read_password(f"Master password for {vault.config.get('email') or 'this vault'} "
-                                 f"(sealed behind Touch ID for {TOUCHID_DAYS} days): ")
-        try:
-            vault.session = vault.call("unlock", "--raw", password=password).decode().strip() or None
-        except Failure:
-            raise Failure("bw rejected that master password; nothing stored") from None
-        finally:
-            vault.relock()
-        enrolment = touchid_store(vault.config, password)
-    return {"enrolled": True, "vault": request["vault"], "expires": enrolment["expires"]}
-
-
-def inline_vault(name):
-    vault = Vault(name)
-    vault.touchid_only = True
-    return vault
-
-
-def touchid_status(config):
-    state, enrolment = touchid_read(config)
-    return {"enrolled": state == "enrolled", "expires": enrolment and enrolment["expires"],
-            "renewal_due": state == "renew"}
+def broker_enrolled(vaults):
+    return bool(vaults) and sys.platform == "darwin" and (ROOT / "bw-broker").is_file() and \
+        broker({"op": "status", "vaults": vaults}).get("enrolled") is True
 
 
 class Stop(Exception):
@@ -956,8 +767,6 @@ def worker(directory):
                       "Each request is logged below; Ctrl-C or `bw-once session stop` locks earlier.", flush=True)
             result = {"ok": True, **session_transaction(Vault(request["vault"]), request, ask=timed_confirm, announce=announce,
                                                         audit=lambda line: print(json.dumps(line), flush=True))}
-        elif isinstance(request, dict) and request.get("op") == "touchid-enroll":
-            result = {"ok": True, **touchid_enroll(Vault(request["vault"]), request, ask=timed_confirm)}
         elif isinstance(request, dict) and request.get("op") == "login":
             result = {"ok": True, **login_transaction(Vault(request["vault"]), request, ask=timed_confirm)}
         else:
@@ -1034,12 +843,16 @@ def main():
     commands.add_parser("doctor")
     commands.add_parser("login", help="first login of a vault's CLI context in a human Terminal")
     commands.add_parser("clear", help="clear the clipboard now if it still holds a bw-once copy")
-    commands.add_parser("list").add_argument("--host", required=True)
+    listing = commands.add_parser("list")
+    listing.add_argument("--host", required=True)
     copy = commands.add_parser("copy")
     copy.add_argument("--host", required=True)
     copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
     copy.add_argument("--username", help="pick the exact-host login with this username (no --id needed)")
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
+    for command in (listing, copy):
+        command.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
+        command.add_argument("--why", help="one line: why this login is needed (shown as the agent's claim)")
     for op in ("send-text", "send-file"):
         send = commands.add_parser(op)
         send.add_argument("--input-file", required=True)
@@ -1053,7 +866,7 @@ def main():
     start.add_argument("--reason", help="one line shown to the human in the Terminal and in session status")
     session.add_parser("stop")
     session.add_parser("status")
-    touchid = commands.add_parser("touchid", help="seal the master password behind Touch ID (enroll|status|forget)")
+    touchid = commands.add_parser("touchid", help="Touch ID broker: enroll (native window) | status | forget")
     touchid.add_argument("action", choices=("enroll", "status", "forget"))
     args = vars(parser.parse_args())
     if args["op"] in ("session", "touchid"):
@@ -1070,6 +883,7 @@ def main():
         if args["op"] == "clear":
             print(json.dumps(clear_clipboard()))
             return
+        explicit_vault = args["vault"]
         args["vault"] = vault_config(args["vault"])["name"]
         if args["op"] in ("status", "doctor"):
             vault = Vault(args["vault"])
@@ -1086,26 +900,30 @@ def main():
                       "bw_version": version, "touch_id_flag": touch_id_flag(vault),
                       "ready": state == "locked" and sys.platform == "darwin" and result_ok(status, expected),
                       "clipboard_ready": (ROOT / "clipboard").is_file(),
-                      "touchid": touchid_status(vault.config),
+                      "touchid": broker({"op": "status", "vaults": broker_vaults(args["vault"])})
+                      if broker_vaults(args["vault"]) and (ROOT / "bw-broker").is_file() else {"enrolled": False},
                       "session": via_session({"op": "session-status", "vault": args["vault"]}) or {"active": False}}
         elif args["op"] == "session-start":
             args["ttl"] = ttl_minutes(args["ttl"])
             result = launch(args)
         elif args["op"] in ("session-stop", "session-status"):
             result = via_session(args) or {"ok": True, "active": False}
-        elif args["op"] == "touchid-status":
-            result = {"ok": True, **touchid_status(vault_config(args["vault"]))}
-        elif args["op"] == "touchid-forget":
-            touchid_forget(vault_config(args["vault"]))
-            result = {"ok": True, "enrolled": False}
+        elif args["op"] in ("touchid-enroll", "touchid-status", "touchid-forget"):
+            vaults = broker_vaults(explicit_vault)
+            if not vaults:
+                raise Failure("Touch ID needs vaults with an account email in ~/.config/bw-once/vaults.json")
+            result = broker({"op": args["op"].removeprefix("touchid-"), "vaults": vaults})
+            if args["op"] != "touchid-status" and result.get("ok"):
+                for legacy in (Path.home() / ".config" / "bw-once").glob("touchid-*.json"):
+                    legacy.unlink()  # Superseded per-vault enrolment files (pre-broker).
         elif args["op"] in ("list", "copy"):
-            # Enrolled: the Touch ID dialog is the consent, so no Terminal; the vault still relocks before delivery.
+            claim = {"thread": args.pop("thread"), "why": args.pop("why")}
             result = via_session(args)
-            if not result and touchid_enrolment(vault_config(args["vault"])):
-                try:
-                    result = {"ok": True, **transaction(inline_vault(args["vault"]), args, ask=lambda *_: True)}
-                except EnrolmentGone:
-                    result = None  # Expired or broken: the Terminal below serves the request and renews Touch ID.
+            vaults = broker_vaults(explicit_vault)
+            if not result and broker_enrolled(vaults):
+                # One Touch ID panel, every enrolled vault searched (or just --vault); no Terminal.
+                fields = {key: args[key] for key in ("op", "host", "field", "username", "id") if args.get(key)}
+                result = broker({**fields, **claim, "vaults": vaults})
             result = result or launch(args)
         elif args["op"]:
             result = launch(args)
