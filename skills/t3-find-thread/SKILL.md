@@ -33,6 +33,13 @@ Thread ids: full id or ≥8-char short id (the thread's UUID). Reading a thread 
 `peek`/`grep` take their ids as usual; `read <id> [--tools]` replaces `t3_thread_read` for them.
 Archived tool calls show in `grep` and `read --tools` (role = tool name); entry numbers match.
 
+**Revive a purged thread** (T3 can't reopen it): export, then start a fresh thread on the file.
+1. `t3-find-thread read <id> --limit 0 > ~/Downloads/<slug>.md`: every message whole (tens of KB).
+   Add a `--tools` copy only as a grep-only tool log (often 10x larger).
+2. `peek <id>` gives the project; `t3_thread_launch` there with message "Continuation of purged
+   thread <title>. Read ~/Downloads/<slug>.md first (tool log: …-tools.md, grep only). Then: <ask>".
+Verified 2026-10: a fresh agent rebuilt task, decisions, commits and next step from the export alone.
+
 ## Opening
 
 - In T3 chat: `t3-open-thread <id> --link` → `[title](t3-thread://v1/<threadId>)`.

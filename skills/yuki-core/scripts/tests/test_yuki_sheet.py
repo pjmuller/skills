@@ -65,14 +65,14 @@ class FakeGws:
 
 
 def test_creates_tab_seeds_from_legacy_tab_and_reruns_idempotently():
-    gws = FakeGws({"2026 - Q2": [LEGACY, ["Will", "TRUE", "2026-07-02", "-10.00", "old"],
+    gws = FakeGws({"2026 - Q2": [LEGACY, ["Bob", "TRUE", "2026-07-02", "-10.00", "old"],
                                  ["A", "", "2026-07-03", "-5.00", "dup"], ["B", "", "2026-07-03", "-5.00", "dup"]]})
     rows = [row("x", "2026-07-02", desc="old"), row("y", "2026-07-03", "-5.00", "dup"), row("z")]
     summary = push(gws, "sid", MANUAL, "2026-Q3", rows)
     tab = gws.tabs["2026-Q3"]
     assert summary["created"] and summary["appended"] == 3 and summary["seeded"] == 1
     assert tab[0] == HEADER
-    assert tab[1][:2] == ["Will", "True"] and tab[2][:2] == ["", ""]  # unique match seeded, ambiguous blank
+    assert tab[1][:2] == ["Bob", "True"] and tab[2][:2] == ["", ""]  # unique match seeded, ambiguous blank
     assert tab[1][HEADER.index("amount")] == "-10.0"  # written as a number
     layout = gws.batches[0]
     assert layout[0]["updateSheetProperties"]["properties"]["gridProperties"] == {"frozenRowCount": 1}
@@ -87,19 +87,19 @@ def test_creates_tab_seeds_from_legacy_tab_and_reruns_idempotently():
 
 
 def test_formula_column_and_existing_filter_grows():
-    rules = [{"name": "Likely resp", "rules": [{"label": "PJ", "pattern": '(?i)kbc|"q"'}, {"label": "Will", "pattern": "(?i)figma"}]}]
+    rules = [{"name": "Likely resp", "rules": [{"label": "Alice", "pattern": '(?i)kbc|"q"'}, {"label": "Bob", "pattern": "(?i)figma"}]}]
     header = ["Likely resp"] + HEADER
     old = {"range": {"sheetId": 0, "startRowIndex": 0, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": len(header)},
            "sortSpecs": [{"dimensionIndex": 12, "sortOrder": "ASCENDING"}], "criteria": {"0": {}}, "filterSpecs": [{"columnIndex": 0}]}
     gws = FakeGws({"2026-Q3 test": [header, sheet_row(row("x"), 3)]}, filters={"2026-Q3 test": old})
     summary = push(gws, "sid", MANUAL, "2026-Q3", [row("x"), row("y")], formulas=rules, tab="2026-Q3 test")
     assert summary["appended"] == 1
-    # contact is column E, description_clean column G once the formula column leads (as in PJ's PB tab)
-    assert gws.user_entered == [[['=IFS(REGEXMATCH(E3&" "&G3,"(?i)kbc|""q"""),"PJ",REGEXMATCH(E3&" "&G3,"(?i)figma"),"Will",TRUE,"")']]]
+    # contact is column E, description_clean column G once the formula column leads (as in a typical tab)
+    assert gws.user_entered == [[['=IFS(REGEXMATCH(E3&" "&G3,"(?i)kbc|""q"""),"Alice",REGEXMATCH(E3&" "&G3,"(?i)figma"),"Bob",TRUE,"")']]]
     grown = gws.batches[0][0]["setBasicFilter"]["filter"]
     nl = FakeGws({"2026-Q3": [header]}, locale="nl_NL")  # comma-decimal locales parse ";" separators
     push(nl, "sid", MANUAL, "2026-Q3", [row("x")], formulas=rules)
-    assert nl.user_entered[0][0][0].startswith('=IFS(REGEXMATCH(E2&" "&G2;"(?i)kbc|""q""");"PJ";')
+    assert nl.user_entered[0][0][0].startswith('=IFS(REGEXMATCH(E2&" "&G2;"(?i)kbc|""q""");"Alice";')
     assert grown["range"]["endRowIndex"] == 3 and grown["sortSpecs"] == old["sortSpecs"] and "criteria" not in grown
 
 
@@ -115,7 +115,7 @@ def test_header_mismatch_and_dry_run_write_nothing():
 def test_legacy_key_must_be_unique_on_both_sides():
     """One annotated legacy row, two current Yuki rows with the same tuple: seed neither,
     also when one of the two was imported by an earlier push."""
-    gws = FakeGws({"2026-Q2": [LEGACY, ["Will", "TRUE", "2026-07-02", "-10.00", "same"]]})
+    gws = FakeGws({"2026-Q2": [LEGACY, ["Bob", "TRUE", "2026-07-02", "-10.00", "same"]]})
     twins = [row("a", "2026-07-02", desc="same"), row("b", "2026-07-02", desc="same")]
     assert push(gws, "sid", MANUAL, "2026-Q3", twins)["seeded"] == 0
     gws = FakeGws({"2026-Q2": gws.tabs["2026-Q2"], "2026-Q3": [HEADER, sheet_row(twins[0])]})
@@ -124,13 +124,13 @@ def test_legacy_key_must_be_unique_on_both_sides():
 
 def test_legacy_amount_matches_on_unformatted_value():
     """nl_BE sheets display "-10,00"; the unformatted -10 must match -10.00, never -1000."""
-    shown = [LEGACY, ["Will", "TRUE", "2026-07-02", "-10,00", "fee"]]
-    gws = FakeGws({"2026-Q2": shown}, {"2026-Q2": [LEGACY, ["Will", True, "2026-07-02", -10, "fee"]]})
+    shown = [LEGACY, ["Bob", "TRUE", "2026-07-02", "-10,00", "fee"]]
+    gws = FakeGws({"2026-Q2": shown}, {"2026-Q2": [LEGACY, ["Bob", True, "2026-07-02", -10, "fee"]]})
     rows = [row("ten", "2026-07-02", "-10.00", "fee"), row("thousand", "2026-07-02", "-1000.00", "fee")]
     summary = push(gws, "sid", MANUAL, "2026-Q3", rows)
     tab = gws.tabs["2026-Q3"]
     assert summary["seeded"] == 1
-    assert tab[1][:2] == ["Will", "True"] and tab[2][:2] == ["", ""]
+    assert tab[1][:2] == ["Bob", "True"] and tab[2][:2] == ["", ""]
 
 
 def test_lookup_column_creates_notes_tab_and_vlookup():

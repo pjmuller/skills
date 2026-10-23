@@ -14,5 +14,11 @@
   "gws": {
     "script": "../google-workspace-core/scripts/gws.py",
     "config": "../google-workspace/workspace.json"
+  },
+  "aws_profiles": ["example-billing"],
+  "web": {
+    "tenant_url": "https://l0000-example.yukiworks.be",
+    "login_email": "bookkeeping@example.com",
+    "mail_in_address": "l0000-example@yukiworks.be"
   }
 }

@@ -98,10 +98,12 @@ Manual request only.
   almost never are). `list` shows those as `kept` with the reason. A failing helper = refuse.
 - `apply` first copies the cohort into the [archive](#archive-t3-thread-archive) (a failure or a
   missing thread aborts), then deletes from every thread-keyed table (V2 and the copied 0.0.x tables).
-  `--full-backup` adds a `VACUUM INTO` store copy (GBs, never offered for deletion), verified
-  (integrity + per-table row counts) before anything is deleted. Old
+  `--full-backup` adds a `VACUUM INTO` store copy (GBs), verified (integrity + per-table row
+  counts) before anything is deleted; it replaces the previous run's copy (one undo step: each
+  copy holds every secret the purge removes). Old
   `purged-threads-*.sqlite` slim backups are folded into the archive, then offered for deletion.
-- The archive is search-only; only the full backup restores. Restore: quit T3, move
+- The archive is search-only (reviving a purged thread from it: [t3-find-thread](../t3-find-thread/SKILL.md));
+  only the full backup restores. Restore: quit T3, move
   `statev2.sqlite{,-wal,-shm}` aside, copy the backup in as `statev2.sqlite`, reopen T3. Deleted
   transcript files are not in it.
 - One transaction, set-based deletes (some thread columns have no usable index; per-id deletes

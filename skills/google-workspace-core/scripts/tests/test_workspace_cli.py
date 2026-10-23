@@ -166,19 +166,19 @@ def test_draft_also_prints_a_clickable_gmail_link(capsys):
 @pytest.mark.parametrize("ref", [
     ("https://mail.google.com/mail/u/1/?ik=85be6e80b2&view=pt&search=all"
      "&permthid=thread-f:1879530680048795886&simpl=msg-f:1879530680048795886"),
-    "gmail:1a156f3200c1c0ee info@probackup.io",
+    "gmail:1a156f3200c1c0ee ops@example.com",
     "1A156F3200C1C0EE",
     "https://mail.google.com/mail/u/0/#inbox/1a156f3200c1c0ee",
     "https://mail.google.com/mail/u/0/?ui=2&view=pt&th=1a156f3200c1c0ee",
 ])
 def test_gmail_url_turns_any_thread_reference_into_the_normal_view(ref, capsys):
     from gws_core.cli import cmd_gmail_url
-    ws = SimpleNamespace(config=SimpleNamespace(account="info@probackup.io"))
+    ws = SimpleNamespace(config=SimpleNamespace(account="ops@example.com"))
     args = build_parser().parse_args(["gmail-url", ref])
     args.json = False
     cmd_gmail_url(args, ws)
     assert capsys.readouterr().out.strip() == \
-        "https://mail.google.com/mail/?authuser=info@probackup.io#all/1a156f3200c1c0ee"
+        "https://mail.google.com/mail/?authuser=ops@example.com#all/1a156f3200c1c0ee"
 
 
 def test_gmail_url_refuses_new_ui_tokens():
@@ -195,7 +195,7 @@ def test_gmail_thread_runs_with_its_own_display_flags(capsys):
                             view=lambda message, trim: seen.update(trim=trim) or {
                                 "id": "m1", "threadId": "t1", "headers": {}, "attachments": [],
                                 "body": "x" * 80})
-    ws = SimpleNamespace(config=SimpleNamespace(account="info@probackup.io"), gmail=gmail)
+    ws = SimpleNamespace(config=SimpleNamespace(account="ops@example.com"), gmail=gmail)
     args = build_parser().parse_args(["gmail-thread", "1a156f3200c1c0ee", "--full", "--max-chars", "50"])
     args.json = False
     cmd_gmail_thread(args, ws)

@@ -448,7 +448,8 @@ def table_counts(db: sqlite3.Connection) -> dict[str, int]:
 
 def full_backup(db: sqlite3.Connection, store: Path) -> Path:
     """Restorable copy of the whole store (the archive is search-only), verified before any delete:
-    integrity check plus the same row count in every table, else refuse."""
+    integrity check plus the same row count in every table, else refuse. Only the newest is kept:
+    a verified copy replaces the previous run's (one undo step; each copy holds every secret)."""
     need, free = store.stat().st_size, shutil.disk_usage(BACKUP_DIR).free
     if free < need:
         raise SystemExit(f"refusing: full backup needs up to {mb(need)} MB, {mb(free)} MB free; nothing purged")
@@ -463,6 +464,10 @@ def full_backup(db: sqlite3.Connection, store: Path) -> Path:
         copy.close()
     if check != "ok" or not same:
         raise SystemExit(f"refusing: full backup {backup} failed verification ({check}, counts match: {same}); nothing purged")
+    for old in BACKUP_DIR.glob("statev2-before-purge-*.sqlite"):
+        if old != backup:
+            print(f"replacing previous full backup {old.name} ({mb(old.stat().st_size)} MB)")
+            old.unlink()
     return backup
 
 
@@ -488,7 +493,8 @@ def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store
 
 def offer_backup_cleanup(ask=input) -> None:
     """Old slim backups the archive has imported are superseded: list them, delete on Y.
-    Full store copies (`--full-backup`) hold more than the archive; never offered."""
+    Full store copies (`--full-backup`) hold more than the archive; never offered (the next
+    verified full backup replaces them)."""
     archive = sqlite3.connect(ARCHIVE)
     try:
         stale = [p for p in sorted(BACKUP_DIR.glob("purged-threads-*.sqlite")) if t3_archive.imported(archive, p)]

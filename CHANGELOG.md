@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-23 — yuki-core: tenant details come from the wrapper
+
+- `fetch-invoices.md` reads tenant URL, Visma login and mail-in address from the wrapper's `yuki.json`
+  `web` object (informational, agent-read; see `templates/yuki.example.json`); missing `web` blocks
+  browser delivery only. Company-specific examples, names and paths replaced with neutral ones.
+- google-workspace-core / yuki-core tests use neutral fixture accounts and labels.
+
 ## 2026-10-23 — t3-purge-threads: fast, verified, smarter keep
 
 - Set-based deletes (one per table, one transaction): a 2,100-thread purge went from ~11 h to
@@ -7,6 +14,9 @@
 - `--full-backup` verifies the copy (integrity + per-table row counts) before deleting anything.
 - Keep rules: default `--older-than 7d`; open PRs and real conversations (8+ typed messages or
   typed on 2+ days) are kept with a reason. `--json` key `kept_pending_wake` is now `kept`.
+- `--full-backup` keeps only the newest verified copy (it replaces the previous run's).
+- t3-find-thread: `read --limit 0` exports a whole (purged) thread; SKILL.md documents reviving it
+  in a fresh thread.
 
 ## 2026-10-21 — account routing and recovery
 

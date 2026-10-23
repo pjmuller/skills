@@ -255,6 +255,9 @@ class FindThreadTest(unittest.TestCase):
         self.assertEqual([(e["idx"], e["role"]) for e in story], [(1, "assistant"), (2, "Bash")])
         self.assertIn("revoked", self.run_cli("read", "dddddddd"))
         self.assertIn("--from 2 --tools --limit 1", self.run_cli("read", "dddddddd", "--tools", "--limit", "1", "--from", "1"))
+        whole = self.run_cli("read", "dddddddd", "--tools", "--limit", "0")  # revive: every entry, no "More:"
+        self.assertIn("#2 Bash", whole)
+        self.assertNotIn("More:", whole)
 
     def test_short_id_must_be_long_enough(self):
         with self.assertRaises(SystemExit):

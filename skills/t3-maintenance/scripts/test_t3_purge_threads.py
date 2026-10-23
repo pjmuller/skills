@@ -180,8 +180,11 @@ def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, 
 def test_full_backup_is_verified_restorable_copy(store: Path, tmp_path: Path, monkeypatch) -> None:
     with sqlite3.connect(store) as live:
         before = cli.table_counts(live)
+    previous = tmp_path / "backups" / "statev2-before-purge-20260901T000000Z.sqlite"
+    previous.parent.mkdir()
+    previous.write_bytes(b"last month")
     hard_purge(store, tmp_path, monkeypatch, "--full-backup")
-    (backup,) = (tmp_path / "backups").glob("statev2-before-purge-*.sqlite")
+    (backup,) = (tmp_path / "backups").glob("statev2-before-purge-*.sqlite")  # replaced the previous one
     with sqlite3.connect(backup) as copy:  # the pre-purge store, row for row
         assert cli.table_counts(copy) == before
 

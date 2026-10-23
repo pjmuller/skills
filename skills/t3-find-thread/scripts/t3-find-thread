@@ -668,7 +668,7 @@ def cmd_read(args) -> None:
     entries = [
         m for m in thread_messages(Path(args.store), row["thread_id"], from_backup, tools=args.tools)
         if m["idx"] >= args.start
-    ][: args.limit]
+    ][: args.limit or None]
     if args.json:
         print(json.dumps({"thread_id": row["thread_id"], "title": row["title"], "entries": entries}, indent=2))
         return
@@ -676,7 +676,7 @@ def cmd_read(args) -> None:
     print(f"## {heading}  ({short_id(row['thread_id'])})")
     for m in entries:
         print(f"\n#{m['idx']} {m['role']} {minute(m['created_at'])}\n{m['text']}")
-    if len(entries) == args.limit:
+    if args.limit and len(entries) == args.limit:
         flags = (" --tools" if args.tools else "") + (f" --limit {args.limit}" if args.limit != 30 else "")
         print(f"\nMore: t3-find-thread read {short_id(row['thread_id'])} --from {entries[-1]['idx'] + 1}{flags}")
 
@@ -731,7 +731,7 @@ def main(argv: list[str] | None = None) -> None:
     read_parser.add_argument("id")
     read_parser.add_argument("--tools", action="store_true", help="include archived tool calls / reasoning")
     read_parser.add_argument("--from", dest="start", type=int, default=0, help="first entry #")
-    read_parser.add_argument("--limit", type=int, default=30)
+    read_parser.add_argument("--limit", type=int, default=30, help="entries (0 = all, e.g. to revive the thread)")
     read_parser.set_defaults(func=cmd_read)
 
     grep_parser = subparsers.add_parser("grep", help="snippets around keyword hits in one thread")

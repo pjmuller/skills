@@ -1,16 +1,16 @@
 # Fetch missing invoices (before upload-invoices.md)
 
 One thread does the whole quarter: learn a vendor from PJ's clip, fetch, upload, mark DONE. Start it in the
-company repo (PB `pro-backup-backend`, KA `kampadmin`) so the wrapper's `yuki.json`, sheet and tenant apply.
+company's repository so its wrapper's `yuki.json` (ids, sheet, `web` tenant/login) and `vendor-recipes.md` apply.
 
 ## Order of routes per open row
 1. **Gmail already has it**: `GWS gmail-search '<vendor> after:<quarter start>'` → `GWS gmail-attachments <id> -o <dir>`.
    Many vendors mail PDFs (Stripe receipts, webshops, forwards from colleagues).
-2. **Supplier portal in the T3 browser, Work profile** (`preview_open {profileId:"Work", open:false}`, then the same
+2. **Supplier portal in the T3 browser, signed-in profile per host policy** (`preview_open {profileId, open:false}`, then the same
    `fetch(url,{credentials:'include'})` → `blob` → `<a download>`.click() via `preview_evaluate`; `preview_status`
    `downloads[].path` then holds the bytes, nothing passes through the model; verified 2026-10-18). PJ's real
-   Chrome over CDP only with his OK for this run: every attach pops Chrome's consent modal (tool notes in
-   `macbook_setup/ai/t3-preview.md`). Recipe per vendor in the wrapper's `vendor-recipes.md`. CDP variant:
+   Chrome over CDP only with his OK for this run: every attach pops Chrome's consent modal (tool notes in the
+   host's browser policy). Recipe per vendor in the wrapper's `vendor-recipes.md`. CDP variant:
    ```bash
    chrome-devtools start --autoConnect
    chrome-devtools new_page '<billing url>' --background        # own tab; pageId from list_pages
@@ -23,23 +23,20 @@ company repo (PB `pro-backup-backend`, KA `kampadmin`) so the wrapper's `yuki.js
 3. **Paper receipt** (restaurant, fuel, shop): PJ scans with his phone → Drive/Downloads; agent only matches + uploads.
 4. **Expired session / unknown vendor**: name the Bitwarden entry from the recipe; PJ logs in (2FA) and says "ready".
 
-Verify each PDF with `pdftotext -layout`: company name (Pro Backup BV / KampAdmin BV), amount, date match the row.
+Verify each PDF with `pdftotext -layout`: company name (the wrapper's `company_label` entity), amount, date match the row.
 Save as `~/Downloads/vat-q<n>-<year>/<company>/<vendor>-<YYYY-MM-DD or period>[-<invoice no>].pdf`.
 Then follow [upload-invoices.md](upload-invoices.md). Yuki duplicates are harmless; a wrong company is not.
 
 Delivery is always the browser upload ([upload-invoices.md](upload-invoices.md)): T3 browser (`preview_*`) or
 PJ's Chrome over CDP. Tenant shows the Visma Connect login page → ask PJ to sign in to that tenant in the T3 browser
-and say "ready"; never fall back to mail. Yuki's mail-in addresses below are reference only (suppliers and PJ's
-phone forward invoices there; Yuki confirms with "Je hebt een nieuwe … factuur ontvangen"), not an agent upload route.
+and say "ready"; never fall back to mail.
 
-One Visma Connect login (you@example.com) for all three tenants; the session is per subdomain, so each tenant
-needs its own sign-in. Mail-in intake takes hours before Yuki confirms: wait, do not re-send.
-
-| Company | Tenant | Yuki mail-in (reference) |
-|---|---|---|
-| Pro Backup | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
-| KampAdmin | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
-| Momentum Tools | `l0000-example.yukiworks.be` | `l0000-example@yukiworks.be` |
+Tenant, login and mail-in come from the wrapper's `yuki.json` `web` object (private; template:
+[yuki.example.json](templates/yuki.example.json)): `tenant_url`, `login_email` (verify it in the tenant's user menu
+before uploading), `mail_in_address`. The mail-in address is reference only (suppliers and PJ's phone forward invoices
+there; Yuki confirms with "Je hebt een nieuwe … factuur ontvangen"), never an agent upload route. Missing `web` blocks
+browser delivery, not CSV reporting. One Visma Connect login can serve several tenants; the session is per subdomain,
+so each tenant needs its own sign-in. Mail-in intake takes hours before Yuki confirms: wait, do not re-send.
 
 ## Getting PDF bytes out of a T3 browser tab (verified 2026-10-14, Sentry)
 Never return file bytes through `preview_evaluate` (a 47 KB PDF is 63 KB of base64 per call and burns context twice).
@@ -60,8 +57,8 @@ Invoicing API and downloads every invoice PDF (`invoicing:ListInvoiceSummaries` 
 verify it. Billing month = usage month: the card line of the 2nd of month M+1 matches billing month M; a mid-month
 extra invoice (e.g. 26 Aug) is a separate line. The AWS profile per company lives in the wrapper's `yuki.json`
 (`aws_profiles`, informational) and SKILL.md; profiles are in `~/.aws/credentials`, never in a repo.
-An account with no invoices for the quarter is normal when the company buys AWS through a reseller (PB via Automat:
-the reseller mails its invoice, PJ forwards it to Yuki).
+An account with no invoices for the quarter is normal when the company buys AWS through a reseller (the reseller
+mails its invoice, which is forwarded to Yuki; the wrapper's recipes say which).
 
 ## Learn a vendor from a screen recording
 PJ records a CleanShot clip of one download (Bitwarden autofill → clicks → PDF). Turn it into recipe bullets:

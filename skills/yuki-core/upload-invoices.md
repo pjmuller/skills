@@ -18,7 +18,7 @@ Use the current session when already executing this task; do not spawn the same 
    For invoices absent from the sheet, check the matching quarter with `Y outstanding`; an
    outdated sheet is not evidence that the invoice was delivered. Keep accepted document links
    for those invoices; do not fabricate a row or mark a different payment DONE.
-4. Open the wrapper's Yuki tenant. Follow the host's browser policy; verify the signed-in
+4. Open the wrapper's Yuki tenant (`yuki.json` `web.tenant_url`). Follow the host's browser policy; verify the signed-in
    identity and administration. A logged-out page is not upload access. Never substitute a
    different company's account. Route: **Postbus → Aanleveren → Aankoop binder → Uploaden**.
 5. Inspect the current upload dialog and selected purchase destination before attaching files.
@@ -67,7 +67,7 @@ operations). Run `scripts/install --check` for Yuki readiness. Browser uploads f
 there is no unattended upload/OCR pipeline. Invoice matching remains a verified agent decision.
 Company/account IDs stay in each `yuki` wrapper; consumer repos carry committed core copies.
 
-## Chrome CDP upload, verified 2026-10-13 (PB, 2 PDFs)
+## Chrome CDP upload, verified 2026-10-13 (2 PDFs)
 
 `new_page <tenant>/domain/inbox/aspx/uploadarchive.aspx --background`. The binder picker lives in the
 same-origin iframe `name="Main"`: select Aankoop with `evaluate_script` (leaf element whose text is
@@ -77,7 +77,7 @@ same-origin iframe `name="Main"`: select Aankoop with `evaluate_script` (leaf el
 navigates to `UploadedFiles.aspx?Batch=<id>` whose iframe lists filename, Map, Status "Open" per file.
 Sources for the files: [fetch-invoices.md](fetch-invoices.md).
 
-## T3 preview upload, verified 2026-10-13 (KA, 4 PDFs, no base64 in chat)
+## T3 preview upload, verified 2026-10-13 (4 PDFs, no base64 in chat)
 
 Cheaper than base64 evaluate calls: serve the PDFs from a throwaway local folder with a tiny CORS HTTP server
 (`Access-Control-Allow-Origin: *`, free port, only the files to upload, kill it afterwards; http://127.0.0.1 is

@@ -38,7 +38,9 @@ Template: [templates/yuki.example.json](templates/yuki.example.json). Keys: `com
 `domain_id`, `administration_id` (from `discover`), `api_key_env` (env var holding the key, never
 the key), `sheet` = `{spreadsheet_id, manual_columns, formula_columns?, lookup_columns?}` or `null` (CSV only), `gws` =
 `{script, config}` (google-workspace-core `gws.py` + a Sheets-capable `workspace.json`; paths absolute,
-`~`, or relative to yuki.json) or `null`; `--gws` / `--gws-config` override.
+`~`, or relative to yuki.json) or `null`; `--gws` / `--gws-config` override. Informational, read by agents
+not code: `aws_profiles`, and `web` = `{tenant_url, login_email, mail_in_address}` for browser delivery
+([fetch-invoices.md](fetch-invoices.md)). Company-specific values live only in the private wrapper.
 
 ## Behaviour worth knowing
 
@@ -75,7 +77,7 @@ Browser invoice delivery requires explicit authorization; it does not expand the
 
 ## Yuki API gotchas
 
-- Generic host `https://api.yukiworks.be/ws/<Service>.asmx`; tenant hosts (`l0000-*.yukiworks.be`)
+- Generic host `https://api.yukiworks.be/ws/<Service>.asmx`; tenant hosts (`l0000-<name>.yukiworks.be`)
   reject web-service calls. NL tenants use `api.yukiworks.nl`.
 - SOAP names are case-sensitive: `sessionID`, `administrationID`; `sessionId` gives a misleading
   "Invalid session ID".
