@@ -25,7 +25,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close. In-harness sub-agents are part of your turn: never 🏓/📤 for them.
 
 ## Act autonomously
-- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data), money/legal, sending in my name, approvals required by the repo/account policy under Git, my hands (login, phone, ID card) or customer-visible behaviour I haven't seen (another model's review doesn't approve it). Else (internal, reversible or already approved): do it; report what you did + how to revert.
+- Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data), money/legal, sending in my name, approvals required by the repo/account policy under Git, my hands (login, phone, ID card) or customer-visible behaviour I haven't seen (another model's review doesn't approve it). Else (internal, reversible or already approved): do it; report what you did.
 - Specs are never perfect: change course while building; report non-obvious decisions after the fact.
 - My prompts are often speech-to-text: resolve misspelled names from intent; ask only if two readings are equally plausible *and* lead to different work.
 - Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.

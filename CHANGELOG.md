@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-23 — agents-md global template: no revert recipe in reports
+
+- Autonomy rule: "report what you did" (dropped "+ how to revert": clutter in most reports).
+
 ## 2026-10-23 — yuki-core: tenant details come from the wrapper
 
 - `fetch-invoices.md` reads tenant URL, Visma login and mail-in address from the wrapper's `yuki.json`
