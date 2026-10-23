@@ -21,6 +21,7 @@ flowchart LR
   R -->|misunderstanding / setup| F
   R -->|confirmed bug, sized| T[own T3 thread<br/>in the owning repo]
   T -->|fix proposal| G{operator go?} -->|go| S[ship, verify live, tell customer]
+  R -->|draft needed a human| B[brain thread:<br/>teach, prove, publish on go]
   F --> L[fresh collect → ledger]
 ```
 
@@ -42,11 +43,13 @@ flowchart LR
    obsolete drafts **when the wrapper (or this request) authorizes corrections**. Render the page to
    the operator's artifact dir (normally `~/Downloads`): seven prioritized rows, rest collapsed;
    subject + one action; closed accordions for owner and technical evidence; brain proposals in their
-   own section ([optional fields](references/optional-fields.md)). No raw mail or tokenized URLs.
+   own section ([optional fields](references/optional-fields.md)), landed per "Teach the brain"
+   below. No raw mail or tokenized URLs.
 6. End with a fresh `collect` and a ≤10-bullet ledger: send · decide · discard. Sending and deleting
-   need the operator's explicit go in that conversation; verify in Gmail afterwards. A new reply where
-   no draft is left: GWS `gmail-draft --reply-to-message <last id> --from "<Name> <mailbox>"` (without
-   `--from` the display name is lost), HTML from `rp dev tools draft-render`, then send.
+   need the operator's explicit go in that conversation; verify in Gmail afterwards. Brain lessons
+   waiting for a publish go are a "decide" bullet. A new reply where no draft is left: GWS
+   `gmail-draft --reply-to-message <last id> --from "<Name> <mailbox>"` (without `--from` the display
+   name is lost), HTML from `rp dev tools draft-render`, then send.
 
 ## Go deep, whoever runs it
 
@@ -75,6 +78,25 @@ flowchart LR
   scoped to one customer (one account or backup, reversible, regression risk rated low by the agent)
   may run on the operator's explicit go through an audited action or the repo's documented write path,
   read back afterwards; anything broader is a PR.
+
+## Teach the brain: you are its teacher
+
+Solving today's case by hand is half the job. The other half: next time ReplyPen's own draft gets it
+right without a coding agent. For every draft you corrected or had to deepen, ask what the brain
+lacked: a fact or policy, a case runbook, routing (the symptom table pointed elsewhere), grounding (a
+script hid the deciding fact), an action (the fix needed hands). If the brain already said the right
+thing, it is a model/host issue for `replypen`, not a brain edit.
+- **Land the lessons, don't just list them.** One brain thread per review run (`t3_thread_launch` in
+  the brain checkout the wrapper names) bundles every `brain_proposal`, keyed to the run ids it fixes.
+  It reads the brain's `AGENTS.md` and its repo-local brain-dev skills (`<brain>/.agents/skills/`,
+  copies of `replypen-brain-skills`; `local-brain-work` first), writes the rule for the class of
+  cases (never this customer's name), proves it on the real case through `brain-simulate`/`brain-ask`
+  against a `dev/*` ref (simulation only, never a rerun of the customer thread): before wrong, after
+  right. Then `brain-publish`.
+- **Fix facts at their source.** A product fact the brain reads from a mirrored repo (wrapper lists the
+  mirrors) is fixed in that repo's docs, not copied into the brain.
+- **Publishing changes customer answers:** it needs the operator's go, shown with the simulated
+  before/after. The proven `dev/*` ref waiting for that go is the deliverable, not a list of ideas.
 
 Reviewers stay read-only: no `rp ask`, retry, process-thread, sending, deletion, labels, archive or
 customer actions. A needed mutation becomes an audited action or its own thread. Draft correction
