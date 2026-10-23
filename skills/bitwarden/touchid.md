@@ -20,7 +20,8 @@ bw-once touchid status | bw-once touchid forget
 - **Agent says (unverified)**, orange: `--thread`, `--why` as the agent wrote them (plain text, ≤120/200 chars).
 - **bw-once will (checked)**, green, built by the broker from the validated request: field, login filter, exact
   host, vaults searched, destination. Touch ID approves exactly that; afterwards the window shows what was
-  released ("Copied password of … (user, vault) · vault locked"). Cancel/Esc/close or 5 minutes → nothing.
+  released ("Copied password of … (user, vault) · vault locked"). Cancel/Esc/close or 5 minutes from the
+  request (password-renewal panels included) → nothing.
 
 ## How (all inside the compiled broker; the Python front end only forwards the request)
 

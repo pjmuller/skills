@@ -6,6 +6,12 @@ on:
       - 'skills/t3-manage-thread/**'
       - 'skills/t3-schedule/**'
       - '.github/workflows/t3-portability.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/t3-manage-thread/**'
+      - 'skills/t3-schedule/**'
+      - '.github/workflows/t3-portability.yml'
   workflow_dispatch:
 
 permissions:

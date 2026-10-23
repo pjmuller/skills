@@ -62,7 +62,6 @@ SERVER_RUNTIME = USERDATA / "server-runtime.json"
 V1_STORE = USERDATA / "state.sqlite"
 BACKUP_DIR = USERDATA.parent / "backups"
 ARCHIVE = t3_archive.ARCHIVE
-CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 LOG_DIR = Path(
     os.environ.get(
         "T3_MAINTENANCE_STATE_DIR",
@@ -262,18 +261,19 @@ def cursor_session_ids(raw: str | None, t3_thread_id: str) -> set[str]:
     }
 
 
-def claude_homes() -> list[Path]:
-    """~/.claude plus every claudeAgent instance `homePath`: transcripts are found by
+def provider_homes() -> dict[str, list[Path]]:
+    """Per driver, the default home plus every instance `homePath`: transcripts are found by
     session UUID across all homes, never by cwd slug."""
     try:
         instances = json.loads(SETTINGS.read_text()).get("providerInstances", {})
     except (OSError, ValueError):
         instances = {}
-    homes = [Path.home() / ".claude"]
+    homes = {"claudeAgent": [Path.home() / ".claude"], "codex": [Path.home() / ".codex"]}
     for instance in instances.values() if isinstance(instances, dict) else instances:
+        driver = (instance or {}).get("driver")
         home = (((instance or {}).get("config") or {}).get("homePath") or "").strip()
-        if home and (path := Path(home).expanduser()) not in homes:
-            homes.append(path)
+        if driver in homes and home and (path := Path(home).expanduser()) not in homes[driver]:
+            homes[driver].append(path)
     return homes
 
 
@@ -282,11 +282,12 @@ def provider_log(thread_id: str) -> Path:
     return PROVIDER_LOGS / f"events.{re.sub(r'[^a-z0-9-]', '-', thread_id.lower())[:80]}.log"
 
 
-def thread_files(thread: Thread, homes: list[Path], by_stem: dict[str, list[Path]]) -> list[Path]:
+def thread_files(thread: Thread, homes: dict[str, list[Path]], by_stem: dict[str, list[Path]]) -> list[Path]:
     files: list[Path] = []
     for session in sorted(thread.session_ids):
-        files += sorted(CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{session}.jsonl"))
-        for home in homes:
+        for home in homes["codex"]:
+            files += sorted((home / "sessions").glob(f"*/*/*/rollout-*-{session}.jsonl"))
+        for home in homes["claudeAgent"]:
             files += sorted((home / "projects").glob(f"*/{session}.jsonl"))
     for attachment in sorted(thread.attachment_ids):
         files += by_stem.get(attachment, [])
@@ -296,7 +297,7 @@ def thread_files(thread: Thread, homes: list[Path], by_stem: dict[str, list[Path
 
 def attach_files(rows: list[Thread], threads: dict[str, Thread]) -> None:
     """Files of each root's whole family: descendants have their own sessions and logs."""
-    homes = claude_homes()
+    homes = provider_homes()
     by_stem: dict[str, list[Path]] = defaultdict(list)
     if ATTACHMENTS.is_dir():
         for path in ATTACHMENTS.iterdir():

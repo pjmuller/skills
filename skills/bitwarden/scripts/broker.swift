@@ -49,6 +49,17 @@ func emit(_ result: [String: Any]) {
     close(null)
 }
 
+/// One deadline for the whole request, renewal panels included (each restarts its own 300 s watchdog): the
+/// front end stops waiting at this + 30 s (bw_once.BROKER_SECONDS) and reports nothing released, so nothing is.
+let answerSeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_ANSWER_SECONDS"] ?? "300")!
+    #else
+    return 300
+    #endif
+}()
+let answerDeadline = Date().addingTimeInterval(answerSeconds)
+
 let pickSeconds: Double = {
     #if BW_BROKER_TEST
     return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_PICK_SECONDS"] ?? "60")!
@@ -1086,6 +1097,9 @@ func serveRequest(_ request: Request) {
             if testEnv["BW_BROKER_TEST_CANCEL_AFTER_SEARCH"] == "1" { panel.onCancel() }
             #endif
             guard cleanup() else { throw Failure(message: "Lock verification failed; nothing released; run `bw lock` now") }
+            guard Date() < answerDeadline else {
+                throw Failure(message: "Request took over \(Int(answerSeconds)) s; nothing released, ask again")
+            }
             if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result) }
             guard gate.commit() else { fail("Request cancelled") }  // Closed during the search: release nothing.
             if let value = secret { try deliver(value) }

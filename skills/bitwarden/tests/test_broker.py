@@ -9,6 +9,7 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the broker is a macOS Swift binary")
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 HOST = "admin.example.com"
 SECRET_A, SECRET_B = "fixture-secret-vault-a", "fixture-secret-vault-b"
@@ -189,6 +190,13 @@ def test_several_logins_lock_first_then_the_agent_picks_one(world):
     released = world["pick"](answer["pick"]["token"], ID_B)
     assert released["ok"] and released["vault"] == "testb" and world["clip"]() == SECRET_B
     assert child.wait(10) == 0 and "Agent picked Example (bob, testb)" in child.stderr.read().decode()
+
+
+def test_nothing_released_after_the_front_end_stopped_waiting(world):
+    enroll(world)
+    result, _ = world["run"]("copy", host=HOST, field="password", extra_env={"BW_BROKER_TEST_ANSWER_SECONDS": "0"})
+    assert result["ok"] is False and "nothing released" in result["error"]
+    assert world["clip"]() is None and all(world["locked"](name) for name in MASTER)
 
 
 def test_no_pick_in_time_releases_nothing(world):

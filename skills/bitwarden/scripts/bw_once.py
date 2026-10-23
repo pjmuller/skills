@@ -34,7 +34,7 @@ TTL_DEFAULT_MINUTES = 60
 TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
 TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit.
-BROKER_SECONDS = 330  # The broker's own watchdog closes its panel after 300 s.
+BROKER_SECONDS = 330  # The broker releases nothing once 300 s passed since its start (renewal panels included).
 SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
 

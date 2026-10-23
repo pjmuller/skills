@@ -94,7 +94,7 @@ Manual request only.
 - Keep a settled thread out of a purge: pin it. T3's own delete (sidebar multi-select) only
   tombstones: history and space stay ([#17845](https://github.com/pingdotgg/t3code/issues/17845)).
 - Transcripts resolve by provider session id (V2 `nativeThreadRef`, imported resume cursors) across
-  every Claude home and `~/.codex/sessions`, never by cwd slug. Attachments by id, provider log by
+  every Claude and Codex home (defaults plus each instance `homePath`), never by cwd slug. Attachments by id, provider log by
   T3's sanitized file name.
 - `--older-than` (default 7d) uses `updated_at`, which settling bumps: conservative.
 

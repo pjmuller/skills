@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-23 — CI on every change; scheduler, purge, gitsync and bitwarden hardening
+
+- CI and the documented test command run the suite with `pytest-xdist -n 4` (about 3x faster); the bitwarden signal test runs in its own process so it is xdist-safe.
+- CI: the full suite runs on every push to `main` and every PR (it ran only for lock/workflow changes, so script-only commits were never tested); T3 portability also on push. macOS-only bitwarden tests skip on Linux, so CI is green again.
+- `t3-schedule`: an accepted-but-unconfirmed launch now survives midnight and blocks later fires until `t3-relay status` decides; a late confirmation counts for the day it was fired, and a once-job is no longer retired as "never fired" while its launch is still pending. `fire` takes a per-job lock (a launchd run and `run-now --foreground` could double-launch on macOS); specs and markers are written atomically, and an unreadable spec skips only its own job.
+- `t3-purge-threads`: Codex transcripts are found in every Codex instance `homePath`, not only `~/.codex`. Its tests now isolate every path it deletes from.
+- `gitsync`: one checked `git status` read; a failing read is "unverified" (status) or needs a worker (survey), never clean, landed or fast-forwarded. New claims get a random request id (two claims in the same second reused one).
+- bitwarden: the broker releases nothing once 300 s passed since the request, renewal panels included, so the front end's "nothing released" after its timeout is true.
+- google-workspace-core: the mail-cases link is absolute, so it works in vendored copies.
+
 ## 2026-10-23 — skills-refresh: no runaway t3-schedule refresh
 
 - `skills-refresh` bounds its `t3-schedule refresh` calls (300 s, then TERM/KILL). Why: under a foreign HOME the mise `uv` shim exec-loops at 100% CPU forever; three such processes from test runs burned cores for hours.

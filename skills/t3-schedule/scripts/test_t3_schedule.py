@@ -211,6 +211,7 @@ def fire(tmp_path, monkeypatch, spec, relay_rc=0, no_capacity=(), status_rc=None
     p["spec"].parent.mkdir(parents=True, exist_ok=True)
     p["spec"].write_text(json.dumps({"name": "job", "project": "/repo", "title": "⏰ job {date}", **spec}))
     p["prompt"].write_text("Run the report.\n")
+    p["last"].unlink(missing_ok=True)  # each call is a fresh slot unless a test says otherwise
     calls = []
     def run(argv, **kw):
         calls.append(argv)
@@ -744,3 +745,99 @@ def test_accepted_request_survives_confirmation_crash(tmp_path, monkeypatch):
     assert rc == mod.PENDING_EXIT and mod.paths("job")["pending"].exists()
     rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=99)            # status crashes too: keep waiting
     assert rc == mod.PENDING_EXIT and len(calls) == 1 and mod.paths("job")["pending"].exists()
+
+
+def mark_pending(day, since=None):
+    from datetime import datetime
+    mod.paths("job")["pending"].write_text(f"{day} abc123 {since if since is not None else datetime.now().timestamp():.0f}\n")
+
+
+def test_pending_marker_survives_midnight(tmp_path, monkeypatch):
+    """A late-night launch still unconfirmed after midnight blocks today's fire until t3-relay decides."""
+    from datetime import timedelta
+    yesterday = (mod.date.today() - timedelta(days=1)).isoformat()
+    fire(tmp_path, monkeypatch, {}, status_rc=0)  # creates the job dirs
+    mark_pending(yesterday)
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=mod.PENDING_EXIT)
+    assert rc == mod.PENDING_EXIT and [c[:2] for c in calls] == [["t3-relay", "status"]]
+    assert mod.paths("job")["pending"].read_text().startswith(yesterday)
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=0)  # yesterday's landed: today's still fires
+    assert rc == 0 and [c[:2] for c in calls] == [["t3-relay", "status"], ["t3-relay", "launch"]]
+    assert mod.last_fire("job") == mod.date.today().isoformat() and not mod.paths("job")["pending"].exists()
+
+
+def test_forgotten_relay_record_retires_only_an_earlier_days_marker(tmp_path, monkeypatch):
+    from datetime import timedelta
+    fire(tmp_path, monkeypatch, {}, status_rc=0)
+    mark_pending(mod.date.today().isoformat())
+    rc, _ = fire(tmp_path, monkeypatch, {}, status_rc=2)  # today's request unknown: still never re-fired
+    assert rc == mod.PENDING_EXIT
+    mark_pending((mod.date.today() - timedelta(days=8)).isoformat())
+    rc, calls = fire(tmp_path, monkeypatch, {}, status_rc=2)  # t3-relay keeps records 7 days
+    assert rc == 0 and calls[-1][:2] == ["t3-relay", "launch"]
+
+
+def test_fire_after_same_day_fire_is_a_no_op(tmp_path, monkeypatch):
+    fire(tmp_path, monkeypatch, {}, status_rc=0)
+    mod.paths("job")["last"].write_text(f"{mod.date.today().isoformat()}\n")
+    import argparse
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: pytest.fail("fired twice"))
+    assert mod.cmd_fire(argparse.Namespace(name="job")) == 0
+
+
+def test_fire_waits_for_a_concurrent_fire(tmp_path, monkeypatch):
+    import argparse
+    import fcntl
+    import threading
+    fire(tmp_path, monkeypatch, {}, status_rc=0)
+    mod.paths("job")["last"].unlink()
+    result = []
+    with mod.paths("job")["fire_lock"].open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        worker = threading.Thread(target=lambda: result.append(mod.cmd_fire(argparse.Namespace(name="job"))))
+        worker.start()
+        worker.join(0.3)
+        assert worker.is_alive() and not result  # blocked behind the other fire
+        mod.paths("job")["last"].write_text(f"{mod.date.today().isoformat()}\n")  # which fired meanwhile
+    worker.join(5)
+    assert result == [0]
+
+
+def test_catch_up_confirms_a_once_job_for_its_own_day_before_retiring(tmp_path, monkeypatch):
+    import argparse
+    import subprocess
+    from datetime import timedelta
+    no_launchd(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "os_notify", lambda msg: None)
+    monkeypatch.setattr(mod, "kickstart", lambda name: pytest.fail("kicked"))
+    once = (mod.date.today() - timedelta(days=1)).isoformat()
+    p = mod.paths("job")
+    p["spec"].parent.mkdir(parents=True)
+    p["spec"].write_text(json.dumps({"name": "job", "project": "/repo", "title": "t", "at": "22:30", "days": None,
+                                     "once": once}))
+    mark_pending(once)
+    status = {"rc": 3}
+    monkeypatch.setattr(mod.subprocess, "run", lambda argv, **_: subprocess.CompletedProcess(
+        argv, status["rc"], {0: "ok mcp:t\n", 3: "pending\n"}[status["rc"]], ""))
+    mod.cmd_catch_up(argparse.Namespace(dry_run=False))
+    assert "retired" not in json.loads(p["spec"].read_text())  # accepted, maybe still landing: not "never fired"
+    status["rc"] = 0
+    mod.cmd_catch_up(argparse.Namespace(dry_run=False))
+    assert mod.last_fire("job") == once and json.loads(p["spec"].read_text())["retired"] == f"fired {once}"
+
+
+def test_unreadable_local_spec_and_markers_isolate_one_job(tmp_path, monkeypatch, capsys):
+    import argparse
+    from datetime import datetime
+    no_launchd(monkeypatch, tmp_path)
+    base = mod.runtime_dir()
+    base.mkdir(parents=True)
+    (base / "good.json").write_text(json.dumps({"name": "good", "project": "/r", "at": "05:00", "days": None}))
+    (base / "bad.json").write_text('{"name": "bad", "at"')  # truncated by a crash mid-write
+    (base / "good.last").mkdir()  # unreadable marker: treated as missing
+    by_name = {s["name"]: s for s in mod.specs()}
+    assert by_name["bad"]["missing"].startswith("local spec unreadable")
+    assert mod.last_fire("good") is None and mod.due_now(by_name["good"], datetime.now().replace(hour=6), None)
+    mod.cmd_catch_up(argparse.Namespace(dry_run=True))
+    mod.cmd_list(argparse.Namespace(json=False, markdown=False))
+    assert "bad" in capsys.readouterr().out

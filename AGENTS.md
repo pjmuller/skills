@@ -11,7 +11,7 @@ outside installed skills because CLI updates replace them.
 Use neutral examples/fixtures; preserve useful upstream workaround explanations.
 Keep entrypoints short and link specialized docs. Dependencies: uv for Python,
 pnpm for Node, mise for runtime versions. Test before tagging:
-`uv run --with pytest pytest skills -q`, shell syntax checks, relevant installer
+`uv run --with pytest --with pytest-xdist pytest skills -q -n 4` (tests must stay xdist-safe), shell syntax checks, relevant installer
 checks, `t3-pick-instance <model>` / `t3-relay check`, and a launchd smoke job for scheduling changes.
 Verify Markdown relative links. Never exercise destructive purge/cleanup in tests.
 Commit logical changes to main; update CHANGELOG and tag only verified releases.

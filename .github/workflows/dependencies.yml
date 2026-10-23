@@ -1,19 +1,10 @@
 name: Dependencies
 
 on:
+  # Every change: most work lands straight on main, so code-only pushes need the suite too.
   pull_request:
-    paths:
-      - '**/pyproject.toml'
-      - '**/uv.lock'
-      - '.github/dependabot.yml'
-      - '.github/workflows/**'
   push:
     branches: [main]
-    paths:
-      - '**/pyproject.toml'
-      - '**/uv.lock'
-      - '.github/dependabot.yml'
-      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
@@ -36,6 +27,6 @@ jobs:
             uv lock --check --project "$(dirname "$lock")"
           done
       - name: Test skills
-        run: uv run --locked --with pytest pytest skills -q
+        run: uv run --locked --with pytest --with pytest-xdist pytest skills -q -n 4
       - name: Test ClickUp with its shipped lock
         run: uv run --project skills/clickup-core --locked --with pytest pytest skills/clickup-core/scripts -q

@@ -23,6 +23,7 @@ a one-machine job skips on a machine it no longer lists, once that checkout has 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import uuid
 import os
@@ -105,6 +106,7 @@ def paths(name: str) -> dict[str, Path]:
         "last": base / f"{name}.last",
         "failed": base / f"{name}.failed",
         "pending": base / f"{name}.pending",  # "<day> <relay rid> <epoch>": accepted, not yet confirmed
+        "fire_lock": base / f"{name}.fire.lock",  # one `fire` at a time (launchd run + run-now --foreground)
         "log": home() / ".t3/userdata/logs" / f"t3-schedule.{name}.log",
     }
 
@@ -200,8 +202,21 @@ def merge_pointer(local: dict) -> dict:
 
 
 def load_spec(local: Path) -> dict:
-    spec = json.loads(local.read_text())
+    """An unreadable local spec marks only that job `missing`: catch-up and list keep serving the others."""
+    try:
+        spec = json.loads(local.read_text())
+        if not isinstance(spec, dict) or not isinstance(spec.get("name"), str):
+            raise ValueError("not a job object")
+    except (OSError, ValueError) as exc:
+        return {"name": local.stem, "missing": f"local spec unreadable ({exc!r:.80})"}
     return merge_pointer(spec) if spec.get("source") else spec
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """tmp + rename: a crash mid-write never leaves a truncated spec or marker behind."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
 
 
 def prompt_path(spec: dict) -> Path:
@@ -381,7 +396,7 @@ def job_flag(spec: dict) -> str | None:
         return None
     state = git_state(spec) if spec.get("source") else None
     if spec.get("missing"):
-        return state
+        return state if spec.get("source") else spec["missing"]
     p = paths(spec["name"])
     try:
         sh, plist = artefacts({"wait_max": DEFAULT_WAIT_MAX, **spec})
@@ -608,7 +623,7 @@ export PATH="{SCHEDULE_PATH}"
     exit 0
   fi
   (( rc == 0 )) || fail "{name}: fire FAILED (exit $rc) - see log"
-  echo "$today" > {last}
+  echo "$today" > {last}.tmp && mv -f {last}.tmp {last}
   rm -f {shlex.quote(str(p["failed"]))}
   notify "{name}: $(echo "$out" | tail -1)"
 }} >> {shlex.quote(str(p["log"]))} 2>&1
@@ -789,26 +804,35 @@ def pick(spec: dict) -> tuple[str, str] | None:
     return None
 
 
-def resolve_pending(name: str) -> str | None:
-    """Outcome of an earlier accepted-but-unconfirmed fire today: 'ok' (landed), 'pending',
-    'stale' (pending > PENDING_ALERT), or None (no marker, or it failed: fire anew)."""
+def resolve_pending(name: str) -> tuple[str | None, str]:
+    """(outcome, occurrence day) of an earlier accepted-but-unconfirmed fire, any day: 'ok' (landed),
+    'pending', 'stale' (pending > PENDING_ALERT), or None (no marker, or it failed: fire anew).
+    A marker outlives midnight: only t3-relay's verdict retires it, so a late launch never doubles."""
     p = paths(name)["pending"]
     if not p.exists():
-        return None
-    day, rid, since = p.read_text().split()
-    if day != date.today().isoformat():
-        p.unlink()
-        return None
+        return None, ""
+    try:
+        day, rid, since = p.read_text().split()
+        float(since)
+    except (OSError, ValueError):
+        print(f"unreadable pending marker {p}; never re-fired (could duplicate): check the thread, then remove it")
+        return "stale", ""
     result = helper("t3-relay", "status", rid)
-    print(f"relay {rid}: {result.stdout.strip() or 'status failed'}")
+    print(f"relay {rid} ({day}): {result.stdout.strip() or 'status failed'}")
     if result.returncode == 0:
         p.unlink()
-        return "ok"
-    if relay_failed(result):
-        p.unlink()
-        return None
+        return "ok", day
+    if relay_failed(result) or (result.returncode == 2 and day < date.today().isoformat()):
+        p.unlink()  # failed, or an earlier day's record t3-relay no longer keeps: nothing left to wait for
+        return None, day
     # pending, or the lookup itself broke: the request may still run, so never re-fire it
-    return "stale" if datetime.now().timestamp() - float(since) > PENDING_ALERT else "pending"
+    return ("stale" if datetime.now().timestamp() - float(since) > PENDING_ALERT else "pending"), day
+
+
+def mark_fired(name: str, day: str) -> None:
+    """`.last` = the occurrence that fired; a late confirmation never moves it backwards."""
+    if (last_fire(name) or "") < day:
+        write_atomic(paths(name)["last"], f"{day}\n")
 
 
 def relay_failed(result: subprocess.CompletedProcess) -> bool:
@@ -819,22 +843,40 @@ def relay_failed(result: subprocess.CompletedProcess) -> bool:
 def cmd_fire(args: argparse.Namespace) -> int:
     """Runner step: hand the job to t3-relay and wait for the thread/message to exist.
     Exit 0 = confirmed, PENDING_EXIT = accepted but unconfirmed (marker; catch-up re-checks), 1 = failed."""
-    spec = load_spec(require_spec(args.name)["spec"])
+    p = require_spec(args.name)
+    spec = load_spec(p["spec"])
     if spec.get("missing"):
-        print(f"MISSING {spec['source']}: {spec['missing']}")
+        print(f"MISSING {spec.get('source') or p['spec']}: {spec['missing']}")
         return 1
-    state = resolve_pending(spec["name"])
-    if state == "ok":
-        print("confirmed: the earlier fire landed")
+    p["fire_lock"].parent.mkdir(parents=True, exist_ok=True)
+    with p["fire_lock"].open("a") as lock:
+        # The Linux runner flocks itself; on macOS a launchd run and `run-now --foreground` can overlap.
+        # Serialised here, the second one sees the first one's `.last` or pending marker.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return fire_locked(spec)
+
+
+def fire_locked(spec: dict) -> int:
+    name = spec["name"]
+    today = date.today().isoformat()
+    last = last_fire(name)
+    if last and (spec.get("once") or last == today):
+        print(f"already fired ({last}); not firing again")
         return 0
+    state, day = resolve_pending(name)
+    if state == "ok":
+        mark_fired(name, day)
+        if day == today or spec.get("once"):
+            print(f"confirmed: the earlier fire ({day}) landed")
+            return 0
+        print(f"the {day} fire landed late; firing today's")
     if state == "pending":
-        print("earlier fire not yet confirmed; not firing again")
+        print(f"earlier fire ({day}) not yet confirmed; not firing again")
         return PENDING_EXIT
     if state == "stale":
         print(f"earlier fire unconfirmed for >{PENDING_ALERT // 60} min; not firing again (it may still land)")
         return 1
     prompt = prompt_path(spec).read_text().strip()
-    today = date.today().isoformat()
     if spec.get("resume_thread"):
         argv = ["t3-relay", "send", "--thread", spec["resume_thread"], "--wait", str(CONFIRM_WAIT), "--",
                 resume_message(prompt, spec["name"], today)]
@@ -860,12 +902,13 @@ def cmd_fire(args: argparse.Namespace) -> int:
     print(relay.stdout.strip())
     accepted = re.search(r"^accepted: relay (\w+)", relay.stdout, re.M)
     if relay.returncode and accepted and not relay_failed(relay):  # pending or confirmation broke
-        paths(spec["name"])["pending"].write_text(f"{today} {accepted[1]} {datetime.now().timestamp():.0f}\n")
+        write_atomic(paths(name)["pending"], f"{today} {accepted[1]} {datetime.now().timestamp():.0f}\n")
         print("relay accepted, not yet confirmed; catch-up re-checks")
         return PENDING_EXIT
     if relay.returncode:
         print(f"t3-relay FAILED (exit {relay.returncode})")
         return 1
+    mark_fired(name, today)
     print(done)
     return 0
 
@@ -973,10 +1016,10 @@ def cmd_add(args: argparse.Namespace) -> int:
         p["last"].unlink(missing_ok=True)
     if versioned:
         source = write_repo_job(project, name, spec, prompt)
-        p["spec"].write_text(json.dumps(pointer(name, source, args.profile), indent=2) + "\n")
+        write_atomic(p["spec"], json.dumps(pointer(name, source, args.profile), indent=2) + "\n")
         p["prompt"].unlink(missing_ok=True)
     else:
-        p["spec"].write_text(json.dumps(spec, indent=2) + "\n")
+        write_atomic(p["spec"], json.dumps(spec, indent=2) + "\n")
         p["prompt"].write_text(prompt)
     p["sh"].write_text(body)
     p["sh"].chmod(0o755)
@@ -1078,7 +1121,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     p = require_spec(args.name)
     spec = load_spec(p["spec"])
     bootout(args.name)
-    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed", "pending"):
+    for key in ("plist", "service", "spec", "prompt", "sh", "last", "failed", "pending", "fire_lock"):
         p[key].unlink(missing_ok=True)
     if systemd():
         checked_systemctl("daemon-reload")
@@ -1227,8 +1270,10 @@ def retire_status(spec: dict, now: datetime, last: str | None) -> str | None:
 
 
 def last_fire(name: str) -> str | None:
-    p = paths(name)["last"]
-    return p.read_text().strip() if p.exists() else None
+    try:
+        return paths(name)["last"].read_text().strip() or None
+    except (OSError, UnicodeError):
+        return None
 
 
 def pending_resumes(now: datetime) -> list[dict]:
@@ -1284,10 +1329,29 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
     now = datetime.now()
     log = home() / ".t3/userdata/logs" / f"t3-schedule.{CATCH_UP}.log"
     kicked = []
+    # An accepted-but-unconfirmed fire is re-checked first (a status read, no runner): landed →
+    # mark its occurrence fired; failed → due again below; still pending → never re-fired (could
+    # duplicate), and a once-job is not retired as "never fired" meanwhile.
+    for spec in specs():
+        name = spec["name"]
+        if args.dry_run or running(name) or not paths(name)["pending"].exists():
+            continue
+        state, day = resolve_pending(name)
+        if state == "ok":
+            mark_fired(name, day)
+            paths(name)["failed"].unlink(missing_ok=True)
+            kicked.append(f"{name} confirmed ({day})")
+        elif state == "stale":
+            failed = paths(name)["failed"]
+            if failed.exists() and failed.read_text().strip() == f"{now:%Y-%m-%d}":
+                continue
+            failed.write_text(f"{now:%Y-%m-%d}\n")
+            kicked.append(f"{name} UNCONFIRMED")
+            os_notify(f"{name}: relay accepted but launch unconfirmed for {PENDING_ALERT // 60}+ min")
     for spec in specs():
         name = spec["name"]
         status = retire_status(spec, now, last_fire(name))
-        if not status or running(name):
+        if not status or running(name) or paths(name)["pending"].exists():
             continue
         kicked.append(f"retire {name} ({status})")
         if args.dry_run:
@@ -1299,27 +1363,9 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
             checked_systemctl("daemon-reload")
         paths(name)["sh"].unlink(missing_ok=True)
         spec["retired"] = status
-        paths(name)["spec"].write_text(json.dumps(spec, indent=2) + "\n")
+        write_atomic(paths(name)["spec"], json.dumps(spec, indent=2) + "\n")
         if status.startswith("expired"):
             os_notify(f"{name}: once-job for {spec['once']} {spec['at']} never fired, retired")
-    # An accepted-but-unconfirmed fire is re-checked here (a status read, no runner): landed →
-    # mark fired; failed → due again below; still pending → never re-fired (could duplicate).
-    for spec in specs():
-        name = spec["name"]
-        if args.dry_run or running(name) or not paths(name)["pending"].exists():
-            continue
-        state = resolve_pending(name)
-        if state == "ok":
-            paths(name)["last"].write_text(f"{now:%Y-%m-%d}\n")
-            paths(name)["failed"].unlink(missing_ok=True)
-            kicked.append(f"{name} confirmed")
-        elif state == "stale":
-            failed = paths(name)["failed"]
-            if failed.exists() and failed.read_text().strip() == f"{now:%Y-%m-%d}":
-                continue
-            failed.write_text(f"{now:%Y-%m-%d}\n")
-            kicked.append(f"{name} UNCONFIRMED")
-            os_notify(f"{name}: relay accepted but launch unconfirmed for {PENDING_ALERT // 60}+ min")
     # One job per tick, earliest slot first: after a long power-off several slots are due at
     # once, and firing them together would make every launch route to the same profile from
     # the same limits snapshot. Spacing them by one tick re-reads the limits between jobs.
@@ -1357,7 +1403,7 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         if spec.get("retired"):
             continue  # never re-arm a spent once-job
         if spec.get("missing"):
-            print(f"skipped   {label_for(name)} (MISSING {spec['source']}: {spec['missing']}; fix it or `t3-schedule remove {name}`)")
+            print(f"skipped   {label_for(name)} (MISSING {spec.get('source') or 'local spec'}: {spec['missing']}; fix it or `t3-schedule remove {name}`)")
             continue
         if rearm(spec):
             print(f"refreshed {label_for(name)}")
@@ -1428,7 +1474,7 @@ def cmd_adopt(args: argparse.Namespace) -> int:
         p["spec"].parent.mkdir(parents=True, exist_ok=True)
         p["plist"].parent.mkdir(parents=True, exist_ok=True)
         changed = write_registration(src, machines, owners)
-        p["spec"].write_text(json.dumps(local, indent=2) + "\n")
+        write_atomic(p["spec"], json.dumps(local, indent=2) + "\n")
         spec = merge_pointer(local)
         if rearm(spec):
             print(f"adopted  {label_for(name)} · {describe_when(spec)} {spec['at']} · profile={local['profile'] or 'auto'}")

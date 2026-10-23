@@ -26,7 +26,7 @@ Hard rules:
   document just to prove access.
 
 Gmail draft/send commands print `Mail-ref: gmail:<thread id> <account>` on their own line: in T3
-that claims the mail case for the running thread, so replies wake it ([mail cases](../t3-manage-thread/mail-link.md)).
+that claims the mail case for the running thread, so replies wake it ([mail cases](https://github.com/pjmuller/skills/blob/main/skills/t3-manage-thread/mail-link.md)).
 Don't filter that line away; never put it in the mail itself.
 They, plus `gmail-get`/`gmail-thread`, also print `Open: <normal Gmail link>`: put it in every
 report about a mail so the human can click straight to the thread. A pasted print link

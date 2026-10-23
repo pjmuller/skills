@@ -58,8 +58,10 @@ skills updater uses it. `run-now <name>` fires through the service manager and t
 
 - **Once per day**: `<name>.last` written only once t3-relay confirms the effect; failures notify
   once per day (`<name>.failed`). Accepted but unconfirmed after 120 s → `<name>.pending` (rid):
-  the catch-up tick re-checks it (`t3-relay status`, no runner): landed → fired; failed → due
-  again; pending → never re-fired (could duplicate), notify once after 30 min.
+  the catch-up tick re-checks it (`t3-relay status`, no runner): landed → fired (for the marker's
+  day); failed → due again; pending → never re-fired (could duplicate), notify once after 30 min.
+  The marker survives midnight and blocks later fires until t3-relay decides. One `fire` per job
+  at a time (lock); spec and markers are written atomically, an unreadable spec skips only its job.
 - **Catch-up**: LaunchAgent `com.t3-skills.t3-schedule.catch-up` re-kicks a job whose slot passed
   today without a fire, until slot+10h (same day). One job per tick, earliest first, never while
   another runner is active, so capacity is re-read between jobs. Keep slots ≥15 min apart.

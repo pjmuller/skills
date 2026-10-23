@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,14 @@ def ts(iso: str) -> float:
 
 def last_line(p: subprocess.CompletedProcess, default: str) -> str:
     return ((p.stderr or p.stdout).strip().splitlines() or [default])[-1]
+
+
+class GitError(Exception):
+    pass
+
+
+def git_error(r: dict) -> str | None:
+    return r.get("status_error") or r.get("fetch_error") or r.get("ff_error")
 
 
 # ---------------------------------------------------------------- T3 fleet
@@ -196,10 +205,17 @@ def newest_mtime(path: Path) -> float | None:
         return None
 
 
+def porcelain(root: Path) -> str:
+    """The one `git status` read: a failure raises, so it never reads as a clean checkout."""
+    p = run(["git", "status", "--porcelain=v1", "-z"], cwd=root)
+    if p.returncode:
+        raise GitError("git status: " + last_line(p, "failed"))
+    return p.stdout
+
+
 def dirty_paths(root: Path, fresh_minutes: int, now: float) -> list[dict]:
     """One row per `git status` entry with its age; deletions take their parent directory's mtime."""
-    out = run(["git", "status", "--porcelain=v1", "-z"], cwd=root).stdout
-    parts = out.split("\0")
+    parts = porcelain(root).split("\0")
     rows, i = [], 0
     while i < len(parts):
         entry = parts[i]
@@ -254,14 +270,17 @@ def check(root: Path, sources: list[str], threads: list[dict], claims: dict, arg
         except subprocess.TimeoutExpired:
             info["fetch_error"] = "fetch timeout"
     info["ahead"], info["behind"] = ahead_behind(root, upstream) if upstream else (0, 0)
-    dirty = dirty_paths(root, args.fresh_minutes, now)
+    try:
+        dirty = dirty_paths(root, args.fresh_minutes, now)
+    except GitError as exc:  # unknown dirt: never clean or fast-forwardable
+        dirty, info["status_error"] = [], str(exc)
     info["dirty"] = dirty[:200]
     info["dirty_count"] = len(dirty)
     info["stale_count"] = sum(1 for d in dirty if not d["fresh"])
     info["aux_worktrees"] = max(0, git(root, "worktree", "list", "--porcelain").count("worktree ") - 1)
     if held:
         v = "owned"
-    elif info["stale_count"] or info["ahead"] or info.get("fetch_error"):
+    elif info["stale_count"] or info["ahead"] or git_error(info):
         v = "worker"
     elif not upstream:
         v = "local"
@@ -279,7 +298,12 @@ def apply_ff(entry: dict) -> None:
     if entry["live_threads"]:
         entry["ff_skipped"] = "live thread in checkout"
         return
-    if run(["git", "status", "--porcelain"], cwd=root).stdout.strip():
+    try:
+        dirtied = porcelain(root).strip()
+    except GitError as exc:
+        entry.update(verdict="worker", ff_error=str(exc))
+        return
+    if dirtied:
         entry.update(verdict="worker", ff_error="dirtied since survey")
         return
     p = run(["git", "pull", "--ff-only", "--quiet"], cwd=root, timeout=FETCH_TIMEOUT)
@@ -292,8 +316,8 @@ def apply_ff(entry: dict) -> None:
 def note(r: dict) -> str:
     if r.get("ff_applied"):
         return "fast-forwarded"
-    if r.get("ff_error") or r.get("fetch_error") or r.get("ff_skipped"):
-        return r.get("ff_error") or r.get("fetch_error") or r["ff_skipped"]
+    if git_error(r) or r.get("ff_skipped"):
+        return git_error(r) or r["ff_skipped"]
     bits = [f"{d['xy'].strip()} {d['path']}" + (" (fresh)" if d["fresh"] else "") for d in r["dirty"][:3]]
     if r.get("claim"):
         bits.append(f"claimed by {r['claim']['owner']}")
@@ -369,8 +393,8 @@ def worker_brief(row: dict, run_dir: Path, fresh_minutes: int, extra: str) -> st
                      + ", ".join(protect[:20]))
     if row["live_threads"]:
         lines.append("Live threads in this checkout at survey time: " + "; ".join(row["live_threads"]))
-    if row.get("fetch_error") or row.get("ff_error"):
-        lines.append(f"Git error: {row.get('fetch_error') or row.get('ff_error')}")
+    if git_error(row):
+        lines.append(f"Git error: {git_error(row)}")
     if extra:
         lines.append(extra)
     return "\n".join(lines) + "\n"
@@ -380,9 +404,12 @@ def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
     root = Path(row["repo"])
     if not root.is_dir():
         return False
-    stale = [d for d in dirty_paths(root, fresh_minutes, time.time()) if not d["fresh"]]
+    try:
+        stale = [d for d in dirty_paths(root, fresh_minutes, time.time()) if not d["fresh"]]
+    except GitError:
+        return True  # cannot tell: a worker looks
     ahead = ahead_behind(root, row["upstream"])[0] if row["upstream"] else 0
-    return bool(stale or ahead or row.get("fetch_error") or row.get("ff_error"))
+    return bool(stale or ahead or git_error(row))
 
 
 def handoff(repo: str, c: dict) -> dict:
@@ -418,8 +445,8 @@ def cmd_prepare(args) -> int:
             brief.write_text(worker_brief(row, run_dir, survey["fresh_minutes"], args.extra))
             claims[repo] = {"owner": args.owner, "run_dir": str(run_dir), "claimed_at": now_iso(),
                             "title": f"{TITLE_PREFIX} {Path(repo).name}", "brief": str(brief),
-                            # once per claim: a later claim on the same repo must not replay a finished task
-                            "client_request_id": f"gitsync:{run_dir.name}:{key}:{args.owner[-8:]}:{int(now)}"}
+                            # once per claim (kept on resume): a later claim must not replay a finished task
+                            "client_request_id": f"gitsync:{run_dir.name}:{key}:{args.owner[-8:]}:{uuid.uuid4().hex[:12]}"}
             todo.append(handoff(repo, claims[repo]))
     print(json.dumps({"delegate": todo, "held_elsewhere": held, "skipped": skipped}, indent=1, ensure_ascii=False))
     return 0
@@ -447,16 +474,16 @@ def verify(root: Path, fresh_minutes: int, now: float, fetch: bool) -> dict:
             p = run(["git", "fetch", "--quiet", upstream.split("/", 1)[0]], cwd=root, timeout=FETCH_TIMEOUT)
             if p.returncode:
                 return {"error": "fetch: " + last_line(p, "failed")}
-        if run(["git", "status", "--porcelain"], cwd=root).returncode:
-            return {"error": "git status failed"}
+        dirty = dirty_paths(root, fresh_minutes, now)
         ahead = behind = 0
         if upstream:
             p = run(["git", "rev-list", "--left-right", "--count", f"{upstream}...HEAD"], cwd=root)
             if p.returncode:
                 return {"error": "rev-list failed"}
             behind, ahead = map(int, p.stdout.split())
-        return {"upstream": upstream, "ahead": ahead, "behind": behind,
-                "dirty": dirty_paths(root, fresh_minutes, now)}
+        return {"upstream": upstream, "ahead": ahead, "behind": behind, "dirty": dirty}
+    except GitError as exc:
+        return {"error": str(exc)}
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
 

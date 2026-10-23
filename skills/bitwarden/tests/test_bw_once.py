@@ -15,6 +15,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 spec = importlib.util.spec_from_file_location("bw_once", SCRIPTS / "bw_once.py")
 bw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bw)
+macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="clipboard helper and broker are macOS-only")
 ID = "12345678-1234-1234-1234-123456789abc"
 SECRET = "fixture-password-never-output"
 SESSION = "fixtureSessionKey123=="
@@ -205,6 +206,7 @@ def test_ambiguous_missing_or_mismatched_username_never_delivers(fake, values):
     assert json.loads((directory / "state").read_text())["locked"]
 
 
+@macos_only
 def test_clear_only_reports_helper_verdict(monkeypatch, tmp_path):
     helper = tmp_path / "clipboard"
     helper.write_text("#!/bin/sh\n[ \"$1\" = --clear-if-ours ] && echo cleared\n")
@@ -260,23 +262,38 @@ def test_failed_sync_never_unlocks_or_asks(fake):
     assert json.loads((directory / "state").read_text())["locked"]
 
 
+SIGNAL_CHILD = r'''
+import importlib.util, json, pathlib, signal, sys
+spec = importlib.util.spec_from_file_location("bw_once", sys.argv[1])
+bw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bw)
+bw.Path.home = classmethod(lambda _: pathlib.Path(sys.argv[2]))
+sig = int(sys.argv[3])
+signal.signal(sig, bw.interrupted)
+mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+vault = bw.Vault()
+try:
+    bw.transaction(vault, json.loads(sys.argv[4]), ask=lambda *_: True,
+                   deliver=lambda _: sys.exit("released despite interruption"))
+except bw.Failure as error:
+    print(json.dumps({"error": str(error), "session": vault.session,
+                      "mask_restored": signal.pthread_sigmask(signal.SIG_BLOCK, set()) == mask}))
+'''
+
+
 @pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGALRM])
-def test_signal_during_final_lock_is_deferred_until_verification_and_session_clear(fake, sig):
+def test_signal_during_final_lock_is_deferred_until_verification_and_session_clear(fake, tmp_path, sig):
+    # Own single-threaded process: masks are per thread, and pytest-xdist worker threads take the signal unmasked.
     directory, update, events = fake
     update(cleanup_signal=int(sig))
-    previous_handler = signal.signal(sig, bw.interrupted)
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-    vault = bw.Vault()
-    try:
-        with pytest.raises(bw.Failure, match="interrupted"):
-            bw.transaction(vault, request(), ask=lambda *_: True,
-                           deliver=lambda _: pytest.fail("released despite interruption"))
-        assert vault.session is None
-        assert events()[-1]["args"] == ["status"] and events()[-1]["session"]
-        assert json.loads((directory / "state").read_text())["locked"]
-        assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == previous_mask
-    finally:
-        signal.signal(sig, previous_handler)
+    child = subprocess.run([sys.executable, "-c", SIGNAL_CHILD, str(SCRIPTS / "bw_once.py"), str(tmp_path / "home"),
+                            str(int(sig)), json.dumps(request())], capture_output=True, text=True, timeout=60)
+    assert child.returncode == 0, child.stderr
+    result = json.loads(child.stdout)
+    assert "interrupted" in result["error"]
+    assert result["session"] is None and result["mask_restored"]
+    assert events()[-1]["args"] == ["status"] and events()[-1]["session"]
+    assert json.loads((directory / "state").read_text())["locked"]
 
 
 @pytest.mark.parametrize("uri", ["admin.example.com", "admin.example.com/login?key=fixture",
@@ -390,6 +407,7 @@ def test_mutex_refuses_contention(fake):
             with bw.mutex("default"): pytest.fail("concurrent request accepted")
 
 
+@macos_only
 def test_installer_copy_link_and_help_without_vault_access(fake, tmp_path):
     directory, _, _ = fake
     for name, text in {"uname": "echo Darwin", "xcrun": 'printf "#!/bin/sh\\nexit 0\\n" > "$4"',
@@ -617,6 +635,7 @@ def front(fake, monkeypatch, tmp_path):
     return run, launched
 
 
+@macos_only
 def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
     run, launched = front
     sent = run("copy", "--host", "admin.example.com", "--username", "user", "--field", "password",
@@ -628,6 +647,7 @@ def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
     assert launched == []
 
 
+@macos_only
 def test_explicit_vault_restricts_the_broker_search(front):
     run, _ = front
     sent = run("--vault", "work", "list", "--host", "admin.example.com")

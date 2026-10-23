@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import importlib.machinery
 import importlib.util
+import json
 import sqlite3
 import subprocess
 import sys
@@ -31,6 +32,22 @@ def load_cli():
 
 
 cli = load_cli()
+
+
+@pytest.fixture(autouse=True)
+def isolated(tmp_path: Path, monkeypatch) -> Path:
+    """Purge deletes for real: every path it reads or unlinks lives under tmp_path, helpers are absent."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(cli.Path, "home", classmethod(lambda _: home))
+    monkeypatch.setattr(cli, "SETTINGS", tmp_path / "settings.json")
+    monkeypatch.setattr(cli, "PROVIDER_LOGS", tmp_path / "logs")
+    monkeypatch.setattr(cli, "ATTACHMENTS", tmp_path / "attachments")
+    monkeypatch.setattr(cli, "V1_STORE", tmp_path / "state.sqlite")
+    monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(cli, "ARCHIVE", tmp_path / "backups" / "t3-archive.sqlite")
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "actions")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    return home
 
 
 @pytest.fixture
@@ -116,8 +133,7 @@ def test_keep_rules_save_conversations_and_open_prs(tmp_path: Path) -> None:
     }
 
 
-def test_wakes_keep_threads(store: Path, monkeypatch) -> None:
-    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+def test_wakes_keep_threads(store: Path) -> None:
     wakes = cli.pending_wakes(store)
     assert wakes == {"sched": "scheduled task nightly"}
     assert selected(store, "--settled", wakes=wakes) == {"settold"}
@@ -138,14 +154,29 @@ def test_provider_log_name() -> None:
     assert name == "events.thread-delegated-task-command-3amcp-3ab6678c96-9ecb.log"
 
 
+def test_transcripts_found_in_every_provider_home(store: Path, tmp_path: Path, isolated: Path) -> None:
+    session = "0f0e0d0c-0b0a-4908-8706-050403020100"
+    cli.SETTINGS.write_text(json.dumps({"providerInstances": {
+        "codex": {"driver": "codex", "config": {"homePath": ""}},
+        "codex_work": {"driver": "codex", "config": {"homePath": str(tmp_path / "codex-work")}},
+        "claude_work": {"driver": "claudeAgent", "config": {"homePath": str(tmp_path / "claude-work")}},
+    }}))
+    expected = [
+        isolated / ".codex" / "sessions" / "2026" / "10" / "01" / f"rollout-2026-10-01T00-00-00-{session}.jsonl",
+        tmp_path / "codex-work" / "sessions" / "2026" / "10" / "02" / f"rollout-2026-10-02T00-00-00-{session}.jsonl",
+        isolated / ".claude" / "projects" / "-repo" / f"{session}.jsonl",
+        tmp_path / "claude-work" / "projects" / "-repo" / f"{session}.jsonl",
+    ]
+    for path in expected:
+        path.parent.mkdir(parents=True)
+        path.write_text("transcript")
+    thread = cli.load_threads(store, datetime.now(UTC))["archold"]
+    thread.session_ids = {session}
+    assert sorted(cli.thread_files(thread, cli.provider_homes(), {})) == sorted(expected)
+
+
 def hard_purge(store: Path, tmp_path: Path, monkeypatch, *extra: str) -> Path:
-    logs = tmp_path / "logs"
-    logs.mkdir(exist_ok=True)
-    monkeypatch.setattr(cli, "PROVIDER_LOGS", logs)
-    monkeypatch.setattr(cli, "ATTACHMENTS", tmp_path / "attachments")
-    monkeypatch.setattr(cli, "BACKUP_DIR", tmp_path / "backups")
-    monkeypatch.setattr(cli, "ARCHIVE", tmp_path / "backups" / "t3-archive.sqlite")
-    monkeypatch.setattr(cli, "LOG_DIR", tmp_path / "actions")
+    (tmp_path / "logs").mkdir(exist_ok=True)
     monkeypatch.setattr(cli, "t3_is_running", lambda: None)
     monkeypatch.setattr(cli, "offer_backup_cleanup", lambda: None)
     args = cli.build_parser().parse_args(["apply", "--yes", "--archived", *extra])

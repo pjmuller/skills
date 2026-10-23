@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -142,8 +144,15 @@ class GitsyncTest(unittest.TestCase):
             os.utime(repo / "a.txt", (OLD, OLD))
         return repos
 
-    def prepare(self, owner: str = "mcp:lead") -> dict:
-        return json.loads(self.cli("prepare", str(self.run_dir), "--owner", owner))
+    def prepare(self, owner: str = "mcp:lead", clock: float | None = None) -> dict:
+        args = ("prepare", str(self.run_dir), "--owner", owner)
+        if clock is None:
+            return json.loads(self.cli(*args))
+        frozen = (f"import runpy, sys, time; time.time = lambda: {clock!r}; sys.argv = sys.argv[1:]; "
+                  "runpy.run_path(sys.argv[0], run_name='__main__')")
+        p = subprocess.run([sys.executable, "-c", frozen, str(SCRIPT), *args], text=True, capture_output=True, env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
 
     def test_prepare_claims_writes_briefs_and_resumes(self) -> None:
         one, two = self.stale_repos("one", "two")
@@ -213,25 +222,38 @@ class GitsyncTest(unittest.TestCase):
     def test_new_claim_after_release_gets_a_new_request_id(self) -> None:
         (repo,) = self.stale_repos("again")
         self.survey(repo)
-        first = self.prepare()["delegate"][0]["clientRequestId"]
+        clock = time.time()  # both claims within the same second
+        first = self.prepare(clock=clock)["delegate"][0]["clientRequestId"]
         self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", "k", "--child-thread", "c")
         self.fleet.write_text(json.dumps([{"thread_id": "c", "task_status": "completed", "session_status": "idle"}]))
         self.cli("status", str(self.run_dir), "--no-fetch")  # blocked: stale file left, claim released
-        time.sleep(1.1)
-        second = self.prepare()["delegate"][0]
+        second = self.prepare(clock=clock)["delegate"][0]
         self.assertNotEqual(second["clientRequestId"], first)
         self.assertIsNone(second["taskId"])
 
     def test_status_fails_closed_on_git_errors(self) -> None:
-        broken, gone = self.stale_repos("broken", "gone")
-        self.survey(broken, gone)
+        broken, gone, unreadable = self.stale_repos("broken", "gone", "unreadable")
+        self.survey(broken, gone, unreadable)
         self.prepare()
+        for i, repo in enumerate((broken, gone, unreadable)):
+            self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", f"k{i}", "--child-thread", f"c{i}")
+        self.fleet.write_text(json.dumps([{"thread_id": f"c{i}", "task_status": "completed", "session_status": "idle"}
+                                          for i in range(3)]))
+        fail_status = self.base / "fail-status"  # `git status` breaks (index lock, corruption) in one checkout
+        (self.bin / "git").write_text(f'#!/bin/sh\n[ "$1" = status ] && [ -e {fail_status} ] && [ "$PWD" = {unreadable} ] '
+                                      f'&& {{ echo "fatal: index file corrupt" >&2; exit 128; }}\nexec {shutil.which("git")} "$@"\n')
+        (self.bin / "git").chmod(0o755)
+        fail_status.touch()
         sh(broken, "git", "checkout", "-q", "--", "a.txt")  # clean, but its remote is unreachable
         sh(broken, "git", "remote", "set-url", "origin", str(self.base / "nowhere.git"))
         subprocess.run(["rm", "-rf", str(gone)], check=True)
         status = json.loads(self.cli("status", str(self.run_dir)))
         self.assertEqual({Path(r["repo"]).name: r["outcome"] for r in status["repos"]},
-                         {"broken": "unverified", "gone": "unverified"})
+                         {"broken": "unverified", "gone": "unverified", "unreadable": "unverified"})
+        sh(unreadable, "git", "checkout", "-q", "--", "a.txt")  # survey: unknown dirt is never clean or ff
+        row = self.survey(unreadable, extra=("--ignore-thread", "mcp:lead"))["unreadable"]
+        self.assertEqual(row["verdict"], "worker")
+        self.assertIn("index file corrupt", row["status_error"])
 
 
 if __name__ == "__main__":
