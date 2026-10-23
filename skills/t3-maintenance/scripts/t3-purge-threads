@@ -34,6 +34,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -413,9 +414,37 @@ def thread_columns(db: sqlite3.Connection) -> list[tuple[str, str]]:
     return pairs
 
 
-def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store: Path) -> Path:
+def table_counts(db: sqlite3.Connection) -> dict[str, int]:
+    return {
+        table: db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    }
+
+
+def full_backup(db: sqlite3.Connection, store: Path) -> Path:
+    """Restorable copy of the whole store (the archive is search-only), verified before any delete:
+    integrity check plus the same row count in every table, else refuse."""
+    need, free = store.stat().st_size, shutil.disk_usage(BACKUP_DIR).free
+    if free < need:
+        raise SystemExit(f"refusing: full backup needs up to {mb(need)} MB, {mb(free)} MB free; nothing purged")
+    backup = BACKUP_DIR / f"statev2-before-purge-{datetime.now(UTC):%Y%m%dT%H%M%SZ}.sqlite"
+    db.execute("VACUUM INTO ?", (str(backup),))
+    backup.chmod(0o600)
+    copy = sqlite3.connect(f"file:{backup}?mode=ro", uri=True)
+    try:
+        check = copy.execute("PRAGMA quick_check").fetchone()[0]
+        same = table_counts(copy) == table_counts(db)
+    finally:
+        copy.close()
+    if check != "ok" or not same:
+        raise SystemExit(f"refusing: full backup {backup} failed verification ({check}, counts match: {same}); nothing purged")
+    return backup
+
+
+def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store: Path, step) -> None:
     """Archive the cohort (always; an error aborts the purge), plus a full store copy on request.
     Old slim backups are folded into the archive so cleanup can offer them."""
+    step(f"archiving {len(ids)} threads → {ARCHIVE}")
     archive = t3_archive.open_archive(ARCHIVE)
     with archive:
         written = t3_archive.archive_threads(db, archive, [tid for (tid,) in ids])
@@ -425,13 +454,11 @@ def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store
             if not t3_archive.imported(archive, old):
                 t3_archive.import_backup(old, archive, store)
     archive.close()
-    print(f"archived {written} threads → {ARCHIVE} ({mb(ARCHIVE.stat().st_size)} MB)")
+    step(f"archived {written} threads ({mb(ARCHIVE.stat().st_size)} MB, search only, not restorable)")
     if full:
-        backup = BACKUP_DIR / f"statev2-before-purge-{datetime.now(UTC):%Y%m%dT%H%M%SZ}.sqlite"
-        db.execute("VACUUM INTO ?", (str(backup),))
-        print(f"full backup {backup} ({mb(backup.stat().st_size)} MB)")
-        return backup
-    return ARCHIVE
+        step("full backup (VACUUM INTO + verify)")
+        backup = full_backup(db, store)
+        step(f"full backup verified: {backup} ({mb(backup.stat().st_size)} MB)")
 
 
 def offer_backup_cleanup(ask=input) -> None:
@@ -485,12 +512,27 @@ def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thr
     log_path.write_text(json.dumps(
         {"store": str(store), "threads": [t.as_dict() for t in rows]}, ensure_ascii=False, indent=2
     ))
+    start = time.monotonic()
+
+    def step(message: str) -> None:
+        print(f"[{time.monotonic() - start:7.1f}s] {message}", flush=True)
+
     db = sqlite3.connect(str(store))
     try:
-        backup = make_backup(db, ids, full=args.full_backup, store=store)
+        make_backup(db, ids, full=args.full_backup, store=store, step=step)
+        # One transaction: interrupted before commit = nothing deleted. Set-based on purpose: some
+        # thread columns have no usable index (orchestration_events.stream_id: GBs), and a per-id
+        # DELETE rescans such a table once per thread (2026-10: ~19 s each, hours per cohort).
+        db.execute("CREATE TEMP TABLE purge_ids (id TEXT PRIMARY KEY)")
+        db.executemany("INSERT INTO purge_ids VALUES (?)", ids)
+        pairs = thread_columns(db)
         with db:
-            for table, column in thread_columns(db):
-                db.executemany(f'DELETE FROM "{table}" WHERE "{column}" = ?', ids)
+            for n, (table, column) in enumerate(pairs, 1):
+                gone = db.execute(f'DELETE FROM "{table}" WHERE "{column}" IN (SELECT id FROM purge_ids)').rowcount
+                if gone:
+                    step(f"delete {n}/{len(pairs)} {table}.{column}: {gone} rows")
+            step("committing")
+        step("committed; deleting transcripts, logs, attachments")
         removed = 0
         for thread in rows:
             for path in thread.files:
@@ -499,7 +541,9 @@ def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thr
                     removed += 1
                 except OSError as error:
                     print(f"keep {path}: {error}")
+        step(f"{removed} files deleted; VACUUM (returns space, drops deleted text from free pages)")
         db.execute("VACUUM")
+        step("vacuumed")
     finally:
         db.close()
     after = store.stat().st_size

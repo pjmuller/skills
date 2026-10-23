@@ -96,8 +96,19 @@ Manual request only.
   shows those as `kept`. A failing helper = refuse.
 - `apply` first copies the cohort into the [archive](#archive-t3-thread-archive) (a failure or a
   missing thread aborts), then deletes from every thread-keyed table (V2 and the copied 0.0.x tables).
-  `--full-backup` adds a `VACUUM INTO` store copy (GBs, never offered for deletion). Old
+  `--full-backup` adds a `VACUUM INTO` store copy (GBs, never offered for deletion), verified
+  (integrity + per-table row counts) before anything is deleted. Old
   `purged-threads-*.sqlite` slim backups are folded into the archive, then offered for deletion.
+- The archive is search-only; only the full backup restores. Restore: quit T3, move
+  `statev2.sqlite{,-wal,-shm}` aside, copy the backup in as `statev2.sqlite`, reopen T3. Deleted
+  transcript files are not in it.
+- One transaction, set-based deletes (some thread columns have no usable index; per-id deletes
+  took hours), progress per phase/table. Interrupted before `committed` = store unchanged (the
+  archive may already hold the cohort: harmless, rerun). After it: rows gone, a rerun can't find the
+  leftover transcript files; the action log lists them. During VACUUM: the store stays valid,
+  space comes back on the next VACUUM / `t3 doctor --fix`.
+- Keep a settled thread out of a purge: pin it. T3's own delete (sidebar multi-select) only
+  tombstones: history and space stay ([#17845](https://github.com/pingdotgg/t3code/issues/17845)).
 - Transcripts resolve by provider session id (V2 `nativeThreadRef`, imported resume cursors) across
   every Claude home and `~/.codex/sessions`, never by cwd slug. Attachments by id, provider log by
   T3's sanitized file name.

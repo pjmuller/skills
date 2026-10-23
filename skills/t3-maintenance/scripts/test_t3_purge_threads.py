@@ -53,6 +53,7 @@ def store(tmp_path: Path) -> Path:
     s.thread("sched", "sched", settled=True, minutes=10 * DAY)
     s.db.execute("INSERT INTO scheduled_tasks VALUES ('t1', 'nightly', 1, 'sched')")
     s.db.execute("INSERT INTO orchestration_events VALUES (1, 'archold', '{}')")
+    s.db.execute("INSERT INTO orchestration_events VALUES (2, 'settold', '{}')")
     return s.close()
 
 
@@ -149,8 +150,17 @@ def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, 
         left = {r[0] for r in live.execute("SELECT thread_id FROM orchestration_v2_projection_threads")}
         assert not left & {"archold", "archold-task", "archold-grandchild", "otherpr"}
         assert {"settold", "pinned", "livechild", "archold-fork"} <= left
-        assert live.execute("SELECT COUNT(*) FROM orchestration_events").fetchone()[0] == 0
+        assert live.execute("SELECT stream_id FROM orchestration_events").fetchall() == [("settold",)]
         assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 1
+
+
+def test_full_backup_is_verified_restorable_copy(store: Path, tmp_path: Path, monkeypatch) -> None:
+    with sqlite3.connect(store) as live:
+        before = cli.table_counts(live)
+    hard_purge(store, tmp_path, monkeypatch, "--full-backup")
+    (backup,) = (tmp_path / "backups").glob("statev2-before-purge-*.sqlite")
+    with sqlite3.connect(backup) as copy:  # the pre-purge store, row for row
+        assert cli.table_counts(copy) == before
 
 
 def test_hard_purge_refuses_while_running(store: Path, monkeypatch) -> None:
