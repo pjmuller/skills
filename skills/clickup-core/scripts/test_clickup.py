@@ -183,6 +183,15 @@ class CommentPartsTests(unittest.TestCase):
         self.assertEqual(table["cells"]["2:1"]["content"][0], {"insert": "lang woord"})
         self.assertEqual(parts[3], {"text": "na"})
 
+    def test_table_cells_keep_inline_markdown_and_show_images(self):
+        # Cells used to be plain text: a link or an attachment showed as its raw markdown (2026-10-23).
+        table = comment_parts("| a | b |\n|---|---|\n| [x](https://e.x) **b** | ![](https://e.x/1.png) ![](https://e.x/2.png) |")[0]["table-embed"]
+        self.assertEqual(table["cells"]["2:1"]["content"][:3],
+                         [{"insert": "x", "attributes": {"link": "https://e.x"}}, {"insert": " "},
+                          {"insert": "b", "attributes": {"bold": True}}])
+        self.assertEqual(table["cells"]["2:2"]["content"],
+                         [{"insert": {"image": "https://e.x/1.png"}}, {"insert": {"image": "https://e.x/2.png"}}, {"insert": "\n"}])
+
     def test_table_widths_fit_short_columns_and_share_budget(self):
         widths = MODULE["_column_widths"]
         self.assertEqual(widths([["ID", "x" * 200]], 2, 840), [60, 420])  # long column capped
@@ -360,6 +369,8 @@ class FileReferenceTests(unittest.TestCase):
 
     def test_newest_version_wins(self):
         self.assertEqual(self.link("[[file:de-kies-retro.md]]", FILE_TASK), f"[de-kies-retro.md]({ATT_URL}new.md)")
+        # bold stays bold text: auto-linking inside it nested a link in bold and ClickUp split the URL
+        self.assertEqual(self.link("open **de-kies-retro.md** now", FILE_TASK), "open **de-kies-retro.md** now")
 
     def test_unknown_name_fails_listing_titles(self):
         with self.assertRaisesRegex(SystemExit, "no attachment.*de-kies-retro.md, notes"):

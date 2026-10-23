@@ -31,7 +31,7 @@ change by looking, not by reading a diff. Same screen, same state, same viewport
 | `before-after.html` | one self-contained file: attach to the ticket, open anywhere |
 | `index.html` + `before/` `after/` | browsing locally, attaching single PNGs |
 | `compact.html` + `compact/` | inline in the chat: a few KB of HTML pointing at absolute JPEG thumbnail paths; pass its contents to T3 `html_render`, which inlines local images (host theme variables, no page background) |
-| `attachments/` + `ticket-table.md` | upload `attachments/*` to the ticket (named `before-<file>` / `after-<file>`), then paste the table into its body |
+| `attachments/` + `ticket-table.md` | upload `attachments/*` to the ticket (named `before-<file>` / `after-<file>`), then append the table: its `![[file:…]]` cells show the screenshots inline |
 
 6. Ticket for the reviewer: per change the screen, bug vs preference, the before/after, the file to
    touch and how to revert it; bug fixes in their own commit so a taste revert never undoes a fix.

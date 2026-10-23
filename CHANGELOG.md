@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-23 — clickup-core: images and links inside table cells
+
+- Table cells carry the same inline markdown as a paragraph (links, bold, mentions); a cell made only of
+  `![](url)` images shows them, and `![[file:NAME]]` shows an attachment as an image. Why: before/after
+  screenshot tables showed raw `[name](url)` text instead of the pictures. Verified by readback and the
+  rendered task page.
+- A bare attachment filename inside `**bold**` is no longer auto-linked (the nested link made ClickUp split
+  the URL and the readback check fail).
+- ui-before-after: `ticket-table.md` uses `![[file:…]]`, so the screenshots show inline in the ticket.
+
 ## 2026-10-23 — ui-before-after; feedback rounds; Codex sandbox note
 
 - New skill `ui-before-after`: `ui-shoot` (Playwright scenes → screenshots) and `ui-compare` (manifest →

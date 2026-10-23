@@ -410,7 +410,7 @@ def _table_rows(lines: list[str]) -> list[list[str]]:
 def _column_widths(rows: list[list[str]], ncols: int, budget: int) -> list[int]:
     """Pixel width per column: fits its longest cell, short columns first, long ones share the rest
     of `budget`. ClickUp renders `width` as fixed px with no auto-fit (a flat 150 wrapped per word)."""
-    natural = [min(32 + 9 * max((len(r[c]) for r in rows if c < len(r)), default=0), 420) for c in range(ncols)]
+    natural = [min(32 + 9 * max((_cell_len(r[c]) for r in rows if c < len(r)), default=0), 420) for c in range(ncols)]
     widths, left = natural[:], budget
     for k, c in enumerate(sorted(range(ncols), key=natural.__getitem__)):
         widths[c] = max(60, min(natural[c], left // (ncols - k)))
@@ -418,8 +418,35 @@ def _column_widths(rows: list[list[str]], ncols: int, budget: int) -> list[int]:
     return widths
 
 
+_CELL_IMAGES = re.compile(r"^(?:\s*!\[[^\]]*\]\(https?://[^)\s]+\))+\s*$")
+_CELL_IMAGE = re.compile(r"!\[[^\]]*\]\((?P<url>https?://[^)\s]+)\)")
+
+
+def _cell_len(text: str) -> int:
+    """Rendered width in characters: link markup counts its text, an image ~ 40 characters."""
+    if _CELL_IMAGES.match(text):
+        return 40
+    return sum(len(value) if kind == "text" else 12 for kind, value, _ in _inline_events(text))
+
+
+def _cell_ops(text: str) -> list[dict]:
+    """A cell holds the same inline markdown as a paragraph (links, bold, code, mentions); a cell made
+    only of `![alt](url)` images shows them (attachments: `![[file:NAME]]`)."""
+    if _CELL_IMAGES.match(text):
+        return [{"insert": {"image": m["url"]}} for m in _CELL_IMAGE.finditer(text)]
+    ops = []
+    for kind, value, extra in _inline_events(text):
+        if kind == "user":
+            ops.append({"insert": {"user_mention": {"id": value, "name": extra}}})
+        elif kind == "task":
+            ops.append({"insert": {"task_mention": {"task_id": value}}})
+        else:
+            ops.append({"insert": value, **({"attributes": extra} if extra else {})})
+    return ops
+
+
 def _table_embed(rows: list[list[str]], budget: int = 840) -> dict:
-    """Native ClickUp table (the shape the UI writes; ids are opaque, cells are plain text).
+    """Native ClickUp table (the shape the UI writes; ids are opaque).
     `budget` ≈ usable px: ~860 in a task body, ~490 in the comment panel (measured 2026-10-13)."""
     ncols = max(map(len, rows))
     rid = lambda p: p + "-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))  # noqa: E731
@@ -427,8 +454,7 @@ def _table_embed(rows: list[list[str]], budget: int = 840) -> dict:
         "rows": [{"insert": {"id": rid("row")}} for _ in rows],
         "columns": [{"insert": {"id": rid("column")}, "attributes": {"width": str(w)}}
                     for w in _column_widths(rows, ncols, budget)],
-        "cells": {f"{r + 1}:{c + 1}": {"content": [{"insert": row[c] if c < len(row) else ""},
-                                                   {"insert": "\n"}],
+        "cells": {f"{r + 1}:{c + 1}": {"content": [*_cell_ops(row[c] if c < len(row) else ""), {"insert": "\n"}],
                                        "attributes": {"colspan": "1", "rowspan": "1"}}
                   for r, row in enumerate(rows) for c in range(ncols)},
     }
@@ -580,6 +606,7 @@ def md_to_delta(md: str) -> str:
 # Code spans, fenced code, Markdown links, other `[[…]]` and URLs are left untouched.
 _FILE_INLINE = re.compile(
     r"`[^`\n]+`"                                  # code span
+    r"|\*\*(?:(?!\[\[file:)[^*\n])+\*\*"            # **bold**: a link inside would nest (unsupported)
     r"|!?\[[^\]\n]*\]\([^)\n]*\)"                 # existing Markdown link / image
     r"|\[\[file:(?P<fname>[^\]\n]+)\]\]"          # [[file:NAME]]
     r"|\[\[[^\]\n]*\]\]"                          # [[task-id]]

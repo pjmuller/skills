@@ -59,8 +59,8 @@ def test_outputs(tmp_path):
     for src in re.findall(r'src="([^"]+)"', compact):
         assert Path(src).is_absolute() and Path(src).is_file()
     table = (out / 'ticket-table.md').read_text()
-    assert '[[file:before-1-inbox.png]]' in table
-    assert '[[file:after-2-settings-1.png]] [[file:after-2-settings-2.png]]' in table
+    assert '![[file:before-1-inbox.png]]' in table
+    assert '![[file:after-2-settings-1.png]] ![[file:after-2-settings-2.png]]' in table
     assert (out / 'attachments' / 'before-1-inbox.png').is_file()
 
 

@@ -115,7 +115,8 @@ Appends go through ClickUp's private v1 Quill content and verify on readback, fa
 [reference.md](reference.md). Readback proves stored mentions, not notification delivery.
 
 - `[[file:NAME]]` → link to that task's attachment titled NAME (newest version; unknown fails
-  before writing). Attach first (`attach` prints the reference), then comment/update. Bare
+  before writing); `![[file:NAME]]` shows it as an image, also inside a table cell (before/after
+  screenshot tables). Attach first (`attach` prints the reference), then comment/update. Bare
   attachment filenames are auto-linked (ClickUp would turn `x.md` into a dead domain link).
 - ClickUp strips every description link that has a code block after it, on every save; description
   writes refuse that up front. Put code blocks before links, or reference files in a comment.

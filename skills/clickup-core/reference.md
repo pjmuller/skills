@@ -39,7 +39,10 @@ One parser (`_md_blocks` + `_inline_events`); `md_to_delta` and `comment_parts` 
 sharing Quill attributes. `comment_text` is plain text (Markdown shows literally). A Markdown table
 becomes a `table-embed` part in the shape the UI writes (opaque row/column ids, `cells` keyed
 `"r:c"`). Column `width` is fixed px (no auto-fit): `_column_widths` sizes each column to its
-longest cell, short columns first, within ~840 px (body) / 480 px (comment panel). Dividers/images have no comment part: they degrade to a rule line / plain link.
+longest cell, short columns first, within ~840 px (body) / 480 px (comment panel). Cells carry the same inline
+markdown as a paragraph (links, bold, mentions); a cell made only of `![](url)` images holds
+`{"insert": {"image": url}}` ops and the UI shows them at column width (verified in a task
+description by readback + rendered DOM, 2026-10-23; inside comments unverified). Dividers/images have no comment part: they degrade to a rule line / plain link.
 
 ## Normalization and limits
 

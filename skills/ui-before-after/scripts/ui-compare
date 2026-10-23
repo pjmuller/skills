@@ -194,7 +194,8 @@ def main() -> int:
 
     lines = ['| Screen | Before | After |', '| --- | --- | --- |']
     for row in rows:
-        cells = [' '.join(f'[[file:{side}-{p.name}]]' for p in row[side]) or '-' for side in ('before', 'after')]
+        # ![[file:…]] shows the attachment inside the ClickUp table cell (clickup-core), not just a link.
+        cells = [' '.join(f'![[file:{side}-{p.name}]]' for p in row[side]) or '-' for side in ('before', 'after')]
         lines.append(f'| {md_cell(row["title"])} | {cells[0]} | {cells[1]} |')
     (out / 'ticket-table.md').write_text('\n'.join(lines) + '\n')
 
