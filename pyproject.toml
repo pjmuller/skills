@@ -11,4 +11,8 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["google-genai>=1", "pytest>=8"]
+dev = [
+    "google-genai>=1",
+    "pytest>=8",
+    "tomlkit>=0.13,<1",
+]

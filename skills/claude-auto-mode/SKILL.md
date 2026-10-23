@@ -8,6 +8,10 @@ description: Set up or tune Claude Code auto mode so agents stop getting blocked
 Goal: run in auto mode without clicking, and without loosening what protects data. The
 classifier is a backstop against rogue or injected actions. It is not a QA gate.
 
+For a user correction (“this should be allowed”), cross-provider repair or fleet onboarding, use
+the [auto-mode-policy workflow](../auto-mode-policy/SKILL.md). If absent, install `auto-mode-policy`
+from `pjmuller/skills` in the same setup repo. This skill owns the Claude adapter.
+
 ## How auto mode decides ([docs](https://code.claude.com/docs/en/permission-modes#how-auto-mode-evaluates-actions))
 
 1. `permissions` deny/ask/allow rules resolve first. A narrow allow rule (`Bash(npm test)`) **skips the
@@ -62,8 +66,9 @@ after that must run.
 - Bulk vendor change: export, then an ID file, then a dry run, then `--apply --max N` reading the same ID file. Ask
   the user once, naming the system, the record kind and the max count.
 - Deploy: run the prod-vs-ship comparison (`git log origin/stable..HEAD`) right before shipping, after tests.
-- Blocked → no workaround through another tool. Never edit your own settings to unblock the action that was just
-  denied: config changes go through the overlay files and a reviewed apply.
+- Blocked → no workaround through another tool. A user-authorized policy correction goes through canonical
+  overlays, an inspected diff and the fleet apply; do not ask for a second approval of that same correction.
+  Without that authorization, never loosen settings just to make a denied action run.
 
 ## Never add
 Allows for exfiltration, credential printing or customer PII leaving the company's accounts. A `soft_deny`/`hard_deny`

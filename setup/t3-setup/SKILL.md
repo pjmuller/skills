@@ -161,7 +161,15 @@ Other requested skills: at their scope, dependencies first
 skill files, `skills-lock.json` and the `.claude/skills` link. Recheck all home links:
 one canonical tree.
 
-## Auto mode (Claude)
+## Auto mode (Claude and Codex)
+
+Install with `pnpm dlx skills add pjmuller/skills -s auto-mode-policy -y $A` in the private setup repo;
+link its resolved path from the global prompt.
+Create `ai/auto-mode.md` from its private pointer template using this person's actual profile inventory
+and authorization. A user's scoped correction repairs that rule across every configured Claude/Codex
+home without requiring another “go” or Full Access. Installing a template grants no data access.
+For Codex, follow its provider adapter: complete verified active default + private supplement; preserve
+sandbox/mode and check effective app-server policy. The Claude adapter follows below.
 
 Goal: agents run without permission clicks, and data protection stays as strict as before. In the setup repo:
 `pnpm dlx skills add pjmuller/skills -s claude-auto-mode -y $A` (repo-local). Write `ai/claude-auto-mode.json`

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-23 — scoped auto-mode policy repair
+
+- New `auto-mode-policy`: reusable correction playbook, private setup template, and Codex policy sync with complete-default preservation, drift checks, backups and profile coverage. Claude keeps its existing adapter.
+- Global template: a scoped user correction authorizes its durable policy repair; no second “go” or Full Access by default. Why: missing context trust was turning routine delegated work into repeated permission requests. Personal data roots and account grants stay in private overlays.
+- Onboarding now covers both engines; Claude policy guidance distinguishes an authorized repair from bypassing a denial.
+
 ## v0.5.11 (2026-10-23)
 
 - **History rewrite (sensitive data removed).** Commits from 6 Oct onward and tags v0.4.4–v0.5.10 were rewritten to drop accounting details that had been published by mistake. Tags were re-signed with the same key; files at every tag are unchanged apart from the scrubbed lines. `skills-refresh` users need nothing: this release moves them onto the new history. Anyone with a **git clone** of this repo: re-clone, and never merge or push the old history.
