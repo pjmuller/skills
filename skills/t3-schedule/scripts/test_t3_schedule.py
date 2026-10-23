@@ -785,6 +785,17 @@ def test_fire_after_same_day_fire_is_a_no_op(tmp_path, monkeypatch):
     assert mod.cmd_fire(argparse.Namespace(name="job")) == 0
 
 
+def test_fire_refuses_an_unreadable_last_marker(tmp_path, monkeypatch, capsys):
+    # A `.last` that exists but can't be read must not launch: recording the fire would fail, so every retry launched again.
+    import argparse
+    fire(tmp_path, monkeypatch, {}, status_rc=0)
+    mod.paths("job")["last"].unlink(missing_ok=True)
+    mod.paths("job")["last"].mkdir()
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: pytest.fail("launched with an unreadable .last"))
+    assert mod.cmd_fire(argparse.Namespace(name="job")) == 1
+    assert "UNREADABLE" in capsys.readouterr().out
+
+
 def test_fire_waits_for_a_concurrent_fire(tmp_path, monkeypatch):
     import argparse
     import fcntl

@@ -859,6 +859,9 @@ def cmd_fire(args: argparse.Namespace) -> int:
 def fire_locked(spec: dict) -> int:
     name = spec["name"]
     today = date.today().isoformat()
+    if last_unreadable(name):
+        print(f"UNREADABLE {paths(name)['last']}: not firing until it is fixed or removed")
+        return 1
     last = last_fire(name)
     if last and (spec.get("once") or last == today):
         print(f"already fired ({last}); not firing again")
@@ -1274,6 +1277,17 @@ def last_fire(name: str) -> str | None:
         return paths(name)["last"].read_text().strip() or None
     except (OSError, UnicodeError):
         return None
+
+
+def last_unreadable(name: str) -> bool:
+    """A `.last` that exists but cannot be read: firing would launch, then fail to record it, on every retry."""
+    try:
+        paths(name)["last"].read_text()
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError):
+        return True
+    return False
 
 
 def pending_resumes(now: datetime) -> list[dict]:
