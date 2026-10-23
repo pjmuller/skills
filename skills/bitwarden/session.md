@@ -55,10 +55,10 @@ sequenceDiagram
    Terminal PJ can watch. It never writes the key, a result or a secret to disk.
 3. **Use** (agent): the normal commands pick the socket automatically when it exists, else fall back to the
    per-request Terminal flow: `bw-once list --host <exact host>` → pick the item by username,
-   `bw-once copy --id <uuid> --host <host> --field username|password|totp` → clipboard, then paste into the
-   form. `bw-once session status` shows remaining seconds; `bw-once session stop` locks early.
+   `bw-once copy --id <uuid> --host <host> --field username|password|totp` → clipboard, paste into the
+   form, `bw-once clear`. `bw-once session status` shows remaining seconds; `bw-once session stop` locks early.
 4. **Lock**: at the deadline (or stop, Ctrl-C, SIGTERM, any failure) the holder runs `bw lock`, verifies
-   `status == locked`, forgets the key and exits. Kill switch from anywhere: `bw lock` in any shell also
+   `status == locked`, forgets the key and exits; `session stop` answers `locked: true` only after that check. Kill switch from anywhere: `bw lock` in any shell also
    invalidates the key; the holder then fails closed on its next call.
 
 ## Getting the secret into the login form without model text
@@ -74,7 +74,36 @@ sequenceDiagram
 - Username is not secret: `copy --field username` + paste keeps the pattern uniform, or read it from the
   `list` output.
 - TOTP: `--field totp` delivers the current 6-8 digit code, never the seed.
-- Clipboard clears after 30 s; paste promptly, one copy per field.
+- Clipboard clears after 30 s; paste promptly, one copy per field, `bw-once clear` right after the paste.
+- One login without TOTP needs no session: `copy --host … --username … --field password` is one unlock.
+
+## Browser context for agent logins
+
+T3's `incognito` profile is in memory only, but **one partition per T3 app, shared by every thread's incognito
+tabs** (T3 0.1.2 `resolvePartitionScope`: scope = environment + profile, no thread/tab), including threads
+reading untrusted pages. Still the right place for an agent login: it holds no other logins and dies when T3
+quits. Never log in or out in Work/Personal for this: their cookies serve other threads.
+
+1. `preview_open {profileId:"incognito", reuseExistingTab:false}` on the login URL; own tab, verify host.
+2. One-unlock copy, paste, `bw-once clear`, submit; verify the account on the page.
+3. Do the task, then the site's own logout in the same tab; verify a signed-in page now asks to log in;
+   `t3_preview_close`. Logout also runs after a failed task. Logout itself failed → report: the session lives
+   until T3 quits or PJ uses Settings → Integrations → Incognito → Clear data (also drops other threads'
+   incognito tabs, so never silently).
+
+A logged-out page proves the site session ended, not that the partition is gone. Native per-tab ephemeral
+contexts or a `secretRef` field fill don't exist in T3 0.1.2 (`request_secret` refs feed only webhook
+signatures); both would be T3 features, not local code.
+
+## Verified live 2026-10-23
+
+Stack Overflow login without a session: one `copy --host … --username … --field password` (one Terminal,
+one master password), `preview_click` the password field, `preview_press Meta+V` (only `value.length`
+checked), `bw-once clear` → `cleared: true`, submit, account verified on the page; site logout in the same
+incognito tab (SO's "log out everywhere" left unchecked), protected page then redirected to login; tab closed,
+CLI locked. Gotchas: the first try's visible prompt mentioned the
+master password, so it got typed there (now hidden + discarded); a wrong password showed only "operation failed"
+(now names the step).
 
 ## Verified live 2026-10-14
 
@@ -88,7 +117,7 @@ without sync logs the CLI out during the pre-unlock sync, and only PJ can `bw lo
 
 ## Never
 
-`bw export`, `bw list items` without a host, `bw get item` dumps, `bw get password` to stdout, reading
+`bw export`, `bw list items` output (the helper reads it unfiltered internally and emits only exact-host metadata), `bw get item` dumps, `bw get password` to stdout, reading
 `pbpaste`/the clipboard, passing a secret to `preview_type`/`fill`/any text-entry tool, screenshotting a
 revealed password field, TOTP seeds or notes, `--passwordenv`/`--passwordfile`, copying `data.json`, setting
 `BW_SESSION` in any shell/env file/repo, or asking PJ to paste a key into the chat. A session is exposure

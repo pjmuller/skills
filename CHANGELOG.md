@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: one unlock per login
+
+- `bw-once copy --host H --username U --field password` picks the only exact-host login in the same unlock
+  (no `list` first); zero/several matches fail before delivery. Candidates come from an unfiltered
+  `bw list items` inside the helper: bw's `--url`/`--search` hide items with Exact/StartsWith/regex rules.
+- `bw-once clear` drops our clipboard write right after the paste (only while it is still ours).
+- Terminal: bell, hidden "press Return" approval (an early-typed password is discarded), 6 min locked wait
+  for the human, then 180 s for the unlock; errors name the failing bw step. No Touch ID promise: it needs
+  Bitwarden's `biometrics-sdk-ipc` server flag (still off on EU).
+- `session stop` answers only after a verified lock.
+- Docs: T3 incognito is one in-memory partition shared by all threads (not per thread); agent logins use it,
+  then site logout + verify + close tab; never log out in Work.
+
 ## 2026-10-23 — bitwarden: Send expiry via --days
 
 - `bw-once send-text|send-file --days N` (1-31, default 7): expiry and deletion date; shown in the approval.

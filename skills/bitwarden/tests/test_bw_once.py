@@ -56,7 +56,7 @@ else:
  if state['locked'] or os.environ.get('BW_SESSION')!=config['session']:sys.exit(3)
  if config.get('delay'):time.sleep(config['delay'])
  if config.get('bad_json'):print(config['secret'])
- elif args[0]=='list':print(json.dumps(config['items']))
+ elif args[0]=='list':print(json.dumps(config.get('filtered_items',config['items']) if len(args)>2 else config['items']))
  elif args[:2]==['get','item']:print(json.dumps(config['item']))
  elif args[:2]==['get','totp']:print(config.get('totp','123456'))
  elif args==['send','--fullObject','create']:
@@ -168,6 +168,67 @@ def test_item_id_type_host_and_missing_field_rejected(fake, change):
     with pytest.raises(bw.Failure):
         bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
     assert json.loads((directory / "state").read_text())["locked"]
+
+
+OTHER = {**ITEM, "id": "abcdef12-1234-1234-1234-123456789abc", "login": {**ITEM["login"], "username": None}}
+
+
+def test_copy_without_id_picks_by_username_in_one_unlock(fake):
+    _, update, events = fake
+    update(items=[OTHER, ITEM])
+    delivered = []
+    result = bw.transaction(bw.Vault(), request(id=None, username="USER"), ask=lambda *_: True,
+                            deliver=delivered.append)
+    assert delivered == [SECRET]
+    assert result == {"copied": "password", "id": ID, "name": "Example", "username": "user",
+                      "host": "admin.example.com", "clear_after_seconds": 30}
+    assert sum(event["args"][0] == "unlock" for event in events()) == 1
+
+
+@pytest.mark.parametrize("rule", [3, 4])  # Exact, Regular expression: hidden from bw's --url and --search
+def test_item_hidden_by_its_match_rule_still_counts_as_ambiguous(fake, rule):
+    directory, update, _ = fake
+    hidden = {**OTHER, "login": {**ITEM["login"], "uris": [{"uri": "https://admin.example.com/admin", "match": rule}]}}
+    update(items=[hidden, ITEM], filtered_items=[ITEM])  # any bw-side filter would drop the hidden item
+    with pytest.raises(bw.Failure, match="2 exact-host logins"):
+        bw.transaction(bw.Vault(), request(id=None, username="user"), ask=lambda *_: True,
+                       deliver=lambda _: pytest.fail("delivered"))
+    assert json.loads((directory / "state").read_text())["locked"]
+
+
+@pytest.mark.parametrize("values", [{"id": None}, {"id": None, "username": "nobody"}, {"username": "nobody"}])
+def test_ambiguous_missing_or_mismatched_username_never_delivers(fake, values):
+    directory, update, _ = fake
+    update(items=[OTHER, ITEM])
+    with pytest.raises(bw.Failure):
+        bw.transaction(bw.Vault(), request(**values), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert json.loads((directory / "state").read_text())["locked"]
+
+
+def test_clear_only_reports_helper_verdict(monkeypatch, tmp_path):
+    helper = tmp_path / "clipboard"
+    helper.write_text("#!/bin/sh\n[ \"$1\" = --clear-if-ours ] && echo cleared\n")
+    helper.chmod(0o700)
+    monkeypatch.setattr(bw, "ROOT", tmp_path)
+    assert bw.clear_clipboard() == {"ok": True, "cleared": True}
+    helper.write_text("#!/bin/sh\necho surprise\n")
+    with pytest.raises(bw.Failure):
+        bw.clear_clipboard()
+
+
+def test_unlock_deadline_restarts_at_human_approval(monkeypatch):
+    alarms = []
+    monkeypatch.setattr(bw.signal, "alarm", alarms.append)
+    monkeypatch.setattr(bw, "confirm", lambda *_: alarms.append("asked") or True)
+    assert bw.timed_confirm(request(), None) is True
+    assert alarms == ["asked", bw.AUTH_SECONDS]
+
+
+@pytest.mark.parametrize("answer,approved", [("", True), ("Y", True), ("n", False), (SECRET, False)])
+def test_confirm_reads_hidden_and_discards_early_password(monkeypatch, capsys, answer, approved):
+    monkeypatch.setattr(bw.getpass, "getpass", lambda prompt: answer)
+    assert bw.confirm(request(), None) is approved
+    assert SECRET not in capsys.readouterr().out
 
 
 def test_totp_generates_code_not_seed(fake):
@@ -397,7 +458,8 @@ def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake
     assert delivered == [SECRET]
     assert not json.loads((directory / "state").read_text())["locked"]  # unlocked while the holder lives
     assert bw.via_session({"op": "send-text", "vault": "default", "input_file": "/x", "name": "n", "views": 1})["ok"] is False
-    assert bw.via_session({"op": "session-stop", "vault": "default"}) == {"ok": True, "active": False}
+    assert bw.via_session({"op": "session-stop", "vault": "default"}) == {"ok": True, "active": False, "locked": True}
+    assert json.loads((directory / "state").read_text())["locked"]  # locked before the acknowledgement
     thread.join(5)
     assert outcome.get("result") == {"active": False} and "error" not in outcome
     assert json.loads((directory / "state").read_text())["locked"]

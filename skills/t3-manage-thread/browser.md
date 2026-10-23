@@ -4,7 +4,7 @@ Escalate in order. Verify the signed-in identity before authenticated work; neve
 
 | # | Route | When | Notes |
 | --- | --- | --- | --- |
-| 1 | T3 `preview_*` (MCP) | Always first: signed-in accounts, localhost, user watches | `preview_status` → `preview_open {profileId, reuseExistingTab:false}`: **new tab per profile**; reused tabs silently keep their old profile (v0.1.1): check `profileId` in `tabs[]`. No profile = Default (may lack logins). Profile cookies shared across threads; incognito isolated. Snapshot caps ~50 elements: lists via `preview_evaluate`. |
+| 1 | T3 `preview_*` (MCP) | Always first: signed-in accounts, localhost, user watches | `preview_status` → `preview_open {profileId, reuseExistingTab:false}`: **new tab per profile**; reused tabs silently keep their old profile (v0.1.1): check `profileId` in `tabs[]`. No profile = Default (may lack logins). Profile cookies shared across threads; incognito = in memory only, still one partition shared by all threads until T3 quits. Snapshot caps ~50 elements: lists via `preview_evaluate`. |
 | 2a | User's real Chrome (CDP) | T3 can't: login missing, site breaks, passkey-only | `chrome-devtools` / `playwright-cli attach --cdp=chrome`, one connection per task (consent modal, below). Ask the user once to sign in inside T3 (next time: route 1). |
 | 2b | Computer use (Codex/Astra `cua_repl`; Claude via `delegate_task`) | Visual steps CDP can't script, OS dialogs, native apps | Foreground; aborts when the user touches that app. Never on T3's browser. Claude computer use: interactive CLI only. |
 | — | headless Playwright | Agent-only visual check, no login | Beats background preview tabs. |

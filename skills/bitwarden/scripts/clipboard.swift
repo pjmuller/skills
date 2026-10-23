@@ -1,11 +1,21 @@
 import AppKit
 import Darwin
 
+let board = NSPasteboard.general
+let owner = NSPasteboard.PasteboardType("org.bw-once.owner")
+if CommandLine.arguments.dropFirst().first == "--clear-if-ours" {
+    // Reads only the item's type list, never its value; a newer unrelated copy stays untouched.
+    if board.types?.contains(owner) == true {
+        board.clearContents()
+        print("cleared")
+    } else {
+        print("not-ours")
+    }
+    exit(0)
+}
 let content = FileHandle.standardInput.readDataToEndOfFile()
 guard let secret = String(data: content, encoding: .utf8), !secret.isEmpty else { exit(1) }
-let board = NSPasteboard.general
 let item = NSPasteboardItem()
-let owner = NSPasteboard.PasteboardType("org.bw-once.owner")
 let token = UUID().uuidString
 item.setString(secret, forType: .string)
 item.setString(token, forType: owner)

@@ -22,7 +22,9 @@ email fails before any Terminal opens. Never substitute one vault's credentials 
 ```sh
 bw-once session start --ttl 60m --host admin.example.com --reason 'thread X: invoice download'   # PJ unlocks once
 bw-once session status | bw-once session stop
-bw-once list --host admin.example.com
+bw-once copy --host admin.example.com --username user@example.com --field password   # one unlock, no list first
+bw-once clear                                   # right after the paste: drop our clipboard write now
+bw-once list --host admin.example.com           # several logins on the host? metadata, then copy --id
 bw-once copy --id 12345678-1234-1234-1234-123456789abc --host admin.example.com --field password
 bw-once send-text --input-file /path/to/message.txt --name 'Account details'
 bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1
@@ -31,8 +33,9 @@ bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1
 Without a session, each request opens **real macOS Terminal** through a POSIX-compatible shell
 (zsh/bash; fish unsupported), locks the CLI, verifies locked, refreshes the locked
 cache for login requests, shows
-the request, and asks the human to continue and type the master password into
-official `bw unlock`. **Never send approval/password keystrokes or read that
+the request with a Terminal bell, and asks the human to press Return (input hidden; a password typed there
+too early is discarded and cancels) and type the master password into official `bw unlock`. Locked, it waits 6 minutes for that approval, then gives the unlock 180 s: tell
+the human first and run the command with a 10-minute tool timeout (or in the background). **Never send approval/password keystrokes or read that
 Terminal while authentication is in progress.** No agent PTY fallback. Current
 Touch ID: CLI ≥ 2026.10.0 unlocks through Bitwarden Desktop biometrics ([PR #22448](https://github.com/bitwarden/clients/pull/22448))
 only while the server flag `biometrics-sdk-ipc` is on (`doctor` → `touch_id_flag`; `false` on EU and US clouds
@@ -40,16 +43,21 @@ only while the server flag `biometrics-sdk-ipc` is on (`doctor` → `touch_id_fl
 of the password prompt; no code change. Don't invent an authentication shim. `--worker` is internal, not a bypass to use from tools.
 
 Metadata contains only item UUID/name/username and exact matched DNS host.
-Clipboard accepts one UUID, exact host and username/password/generated TOTP;
+`copy` without `--id` picks the only exact-host login (narrowed by `--username`) inside the same unlock
+and returns its metadata; zero or several matches fail before any delivery. Candidates come from an unfiltered
+`bw list items` inside the helper (bw's `--url`/`--search` hide Exact/regex-rule items), then the exact-host filter. Failures name the bw step (`bw unlock failed` = wrong password or cancelled). Clipboard gets one item,
+exact host and username/password/generated TOTP;
 no notes, seeds, raw item dumps or arbitrary consumers. CLI locks and verifies
 before any result or clipboard delivery. A private request result contains only
 metadata or Send link, never session/password. Raw CLI failures are suppressed.
 
 Clipboard carries transient/concealed markers and a 30-second clear timer that
 checks its write's `changeCount` and owner marker. Human paste, or the agent's
-`preview_press Meta+V` into a **preverified tab/host**, keeps the value out of model text; never read `pbpaste`, use a text-entry
+`preview_press Meta+V` into a **preverified tab/host**, keeps the value out of model text; then `bw-once clear` (clears only while the clipboard still holds a
+bw-once write, reading its type list, never the value). Never read `pbpaste`, use a text-entry
 tool with the secret, or snapshot/reveal the populated field. No browser-fill
-automation is included. Clipboard observers can still read it, and apps may ignore
+automation is included. Type the (non-secret) username from the result with `preview_type`; only the
+password or TOTP crosses the clipboard. Browser context and logout: [session.md](session.md#browser-context-for-agent-logins). Clipboard observers can still read it, and apps may ignore
 markers; count-check/clear is best effort, not an atomic clipboard transaction.
 
 Send approval shows the exact escaped text, or file name/bytes/SHA-256, plus name,

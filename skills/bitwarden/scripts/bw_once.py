@@ -7,6 +7,7 @@ import base64
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import fcntl
+import getpass
 import hashlib
 import json
 import os
@@ -27,7 +28,8 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 import uuid
 
-AUTH_SECONDS = 180
+WAIT_SECONDS = 360  # Vault still locked: time for the human to reach the Terminal and approve.
+AUTH_SECONDS = 180  # From approval: unlock, operation, lock. Launcher waits both + 20 s, under a 10-minute tool call.
 TTL_DEFAULT_MINUTES = 60
 TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
@@ -137,7 +139,9 @@ def validate(request):
         request = {"reason": None, **request}
     if op in ("send-text", "send-file"):
         request = {"days": SEND_DAYS_DEFAULT, **request}
-    allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "field"},
+    if op == "copy":
+        request = {"id": None, "username": None, **request}
+    allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "username", "field"},
                "send-text": {"op", "input_file", "name", "views", "days"},
                "send-file": {"op", "input_file", "name", "views", "days"},
                "session-start": {"op", "ttl", "hosts", "reason"}, "session-stop": {"op"}, "session-status": {"op"},
@@ -158,7 +162,12 @@ def validate(request):
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
     if op == "copy":
-        request["id"] = item_id(request["id"])
+        if request["id"] is not None:
+            request["id"] = item_id(request["id"])
+        if request["username"] is not None and (not isinstance(request["username"], str) or not request["username"]
+                                                or len(request["username"]) > 254
+                                                or any(ord(c) < 32 or ord(c) == 127 for c in request["username"])):
+            raise Failure("Username must be 1-254 characters without control characters")
         if request["field"] not in ("username", "password", "totp"):
             raise Failure("Unsupported credential field")
     if op.startswith("send-"):
@@ -209,7 +218,9 @@ class Vault:
             if terminal is not None:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, terminal)
         if result.returncode:
-            raise Failure("Bitwarden operation failed; inspect manually while locked")
+            step = args[0] if args[0] in ("unlock", "login", "sync", "list", "get", "send", "lock", "status", "config") else "operation"
+            hint = " (wrong master password or cancelled?)" if step in ("unlock", "login") else "; inspect manually while locked"
+            raise Failure(f"bw {step} failed{hint}")
         return result.stdout
 
     def json(self, *args, **kwargs):
@@ -315,14 +326,21 @@ def snapshot(request):
 
 
 def confirm(request, payload, account=None):
-    print(f"Bitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}); "
-          "master password or Touch ID follows:", flush=True)
+    print(f"\aBitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}):", flush=True)
     print(json.dumps(request, ensure_ascii=True), flush=True)
     if payload:
         review = {key: payload[key] for key in ("name", "maxAccessCount", "deletionDate", "expirationDate")}
         review.update(payload.get("_review", {"exact_text": payload.get("text", {}).get("text")}))
         print(json.dumps(review, ensure_ascii=True), flush=True)
-    return input("Continue? [y/N] ").strip().lower() == "y"
+    # Return approves: the master password typed next is the real consent. Read without echo, so a password
+    # typed here too early is neither shown nor used. Touch ID replaces bw's password prompt only once Bitwarden
+    # enables `biometrics-sdk-ipc` for the account's server (`bw-once doctor` → touch_id_flag).
+    answer = getpass.getpass("Press Return for bw's unlock prompt, n = cancel (password goes there, not here): ")
+    if answer.strip().lower() in ("", "y", "yes"):
+        return True
+    if answer.strip().lower() not in ("n", "no"):
+        print("Unexpected input discarded unseen; request cancelled.", flush=True)
+    return False
 
 
 def matching(item, expected):
@@ -339,19 +357,39 @@ def matching(item, expected):
     return False
 
 
+def exact_items(vault, expected):
+    # Unfiltered on purpose: `--url` applies each item's saved match rule and `--search` skips regex URIs, so
+    # either can hide an exact-host login and let `pick` claim a false uniqueness. Only metadata leaves here.
+    items = vault.json("list", "items")
+    if not isinstance(items, list):
+        raise Failure("Invalid item list")
+    return [{"id": item_id(item.get("id")), "name": item.get("name"),
+             "username": item["login"].get("username"), "host": expected}
+            for item in items if matching(item, expected)]
+
+
+def pick(vault, request):
+    """Without --id, one exact-host login (narrowed by --username) in the same unlock as the copy."""
+    if request["id"]:
+        return request["id"]
+    found = [item for item in exact_items(vault, request["host"])
+             if request["username"] is None or str(item["username"] or "").lower() == request["username"].lower()]
+    if len(found) != 1:
+        raise Failure(f"{len(found)} exact-host logins match; pass --username or --id (from `list`)")
+    return found[0]["id"]
+
+
 def operate(vault, request, payload):
     op = request["op"]
     if op == "list":
-        items = vault.json("list", "items", "--url", "https://" + request["host"])
-        if not isinstance(items, list):
-            raise Failure("Invalid item list")
-        return {"items": [{"id": item_id(item.get("id")), "name": item.get("name"),
-                           "username": item["login"].get("username"), "host": request["host"]}
-                          for item in items if matching(item, request["host"])]}, None
+        return {"items": exact_items(vault, request["host"])}, None
     if op == "copy":
+        request = {**request, "id": pick(vault, request)}
         item = vault.json("get", "item", request["id"])
         if not matching(item, request["host"]) or str(item.get("id") or "").lower() != request["id"]:
             raise Failure("Item ID, login type or exact host does not match")
+        if request["username"] is not None and str(item["login"].get("username") or "").lower() != request["username"].lower():
+            raise Failure("Item username does not match")
         if request["field"] == "totp":
             secret = vault.call("get", "totp", request["id"]).decode().strip()
             if not re.fullmatch(r"[0-9]{6,8}", secret):
@@ -360,7 +398,8 @@ def operate(vault, request, payload):
             secret = item["login"].get(request["field"])
         if not isinstance(secret, str) or not secret or "\x00" in secret:
             raise Failure("Requested field is missing or unsupported")
-        return {"copied": request["field"], "id": request["id"], "host": request["host"],
+        return {"copied": request["field"], "id": request["id"], "name": item.get("name"),
+                "username": item["login"].get("username"), "host": request["host"],
                 "clear_after_seconds": 30}, secret
     encoded = base64.b64encode(json.dumps({k: v for k, v in payload.items() if k != "_review"}).encode())
     created = vault.json("send", "--fullObject", "create", data=encoded)
@@ -390,6 +429,21 @@ def clipboard(secret):
     finally:
         child.stdout.close()
     # Child owns the bounded 30-second timer; it has never inherited BW_SESSION.
+
+
+def clear_clipboard():
+    """Right after the paste: drop our clipboard write now instead of at the 30-second timer."""
+    helper = ROOT / "clipboard"
+    if sys.platform != "darwin" or not helper.is_file():
+        raise Failure("macOS clipboard helper missing; run installer first")
+    try:
+        done = subprocess.run([str(helper), "--clear-if-ours"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, env=clean_env(), timeout=5)
+    except subprocess.TimeoutExpired:
+        raise Failure("Clipboard clear timed out") from None
+    if done.returncode or done.stdout not in (b"cleared\n", b"not-ours\n"):
+        raise Failure("Clipboard clear failed")
+    return {"ok": True, "cleared": done.stdout == b"cleared\n"}
 
 
 def same_vault(vault, request):
@@ -522,8 +576,13 @@ def serve_session(vault, request, announce=lambda status: None, deliver=clipboar
                     incoming = json.loads(read_line(connection, 4096))
                     result = {"ok": True, **session.handle(incoming)}
                 except Stop:
-                    connection.sendall(b'{"ok": true, "active": false}\n')
-                    audit({"op": "session-stop"})
+                    try:
+                        vault.relock()  # Acknowledge only a verified lock.
+                        reply = {"ok": True, "active": False, "locked": True}
+                    except Failure as error:
+                        reply = {"ok": False, "active": False, "error": str(error)}
+                    connection.sendall(json.dumps(reply).encode() + b"\n")
+                    audit({"op": "session-stop", "ok": reply["ok"]})
                     break
                 except Failure as error:
                     result = {"ok": False, "error": str(error)}
@@ -535,7 +594,8 @@ def serve_session(vault, request, announce=lambda status: None, deliver=clipboar
                 except OSError:
                     pass
                 if isinstance(incoming, dict) and incoming.get("op") in ("list", "copy"):
-                    audit({key: incoming.get(key) for key in ("op", "vault", "host", "id", "field") if key in incoming}
+                    audit({key: incoming.get(key) for key in ("op", "vault", "host", "id", "username", "field")
+                           if incoming.get(key) is not None}
                           | {"ok": result["ok"]})
     finally:
         server.close()
@@ -644,6 +704,13 @@ def interrupted(*_):
     raise Failure("Request interrupted or timed out")
 
 
+def timed_confirm(*args):
+    """The human may take WAIT_SECONDS to show up (vault locked); unlocking gets AUTH_SECONDS from approval."""
+    approved = confirm(*args)
+    signal.alarm(AUTH_SECONDS)
+    return approved
+
+
 def worker(directory):
     if sys.platform != "darwin" or os.environ.get("TERM_PROGRAM") != "Apple_Terminal" or not all(
             stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
@@ -654,7 +721,7 @@ def worker(directory):
     private_json(directory / "worker.json", {"pid": os.getpid()})
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGALRM):
         signal.signal(sig, interrupted)
-    signal.alarm(AUTH_SECONDS)
+    signal.alarm(WAIT_SECONDS)
     try:
         request = json.loads((directory / "request.json").read_text())
         if isinstance(request, dict) and request.get("op") == "session-start":
@@ -664,12 +731,12 @@ def worker(directory):
                 print(f"Session on vault '{status['vault']}' active until {status['expires_at']} for hosts "
                       f"{status['hosts'] or 'any'}. "
                       "Each request is logged below; Ctrl-C or `bw-once session stop` locks earlier.", flush=True)
-            result = {"ok": True, **session_transaction(Vault(request["vault"]), request, announce=announce,
+            result = {"ok": True, **session_transaction(Vault(request["vault"]), request, ask=timed_confirm, announce=announce,
                                                         audit=lambda line: print(json.dumps(line), flush=True))}
         elif isinstance(request, dict) and request.get("op") == "login":
-            result = {"ok": True, **login_transaction(Vault(request["vault"]), request)}
+            result = {"ok": True, **login_transaction(Vault(request["vault"]), request, ask=timed_confirm)}
         else:
-            result = {"ok": True, **transaction(Vault(request.get("vault")), request)}
+            result = {"ok": True, **transaction(Vault(request.get("vault")), request, ask=timed_confirm)}
     except Failure as error:
         result = {"ok": False, "error": str(error)}
     except Exception:
@@ -714,7 +781,7 @@ def launch(request):
                                      stderr=subprocess.DEVNULL, timeout=15)
             if started.returncode:
                 raise Failure("Cannot open human Terminal")
-            deadline = time.monotonic() + AUTH_SECONDS + 20
+            deadline = time.monotonic() + WAIT_SECONDS + AUTH_SECONDS + 20
             while time.monotonic() < deadline:
                 if (path / "result.json").is_file():
                     return json.loads((path / "result.json").read_text())
@@ -741,10 +808,12 @@ def main():
     commands.add_parser("status")
     commands.add_parser("doctor")
     commands.add_parser("login", help="first login of a vault's CLI context in a human Terminal")
+    commands.add_parser("clear", help="clear the clipboard now if it still holds a bw-once copy")
     commands.add_parser("list").add_argument("--host", required=True)
     copy = commands.add_parser("copy")
-    copy.add_argument("--id", required=True)
     copy.add_argument("--host", required=True)
+    copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
+    copy.add_argument("--username", help="pick the exact-host login with this username (no --id needed)")
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
     for op in ("send-text", "send-file"):
         send = commands.add_parser(op)
@@ -770,6 +839,9 @@ def main():
         directory = args.pop("worker")
         if directory:
             worker(directory)
+            return
+        if args["op"] == "clear":
+            print(json.dumps(clear_clipboard()))
             return
         args["vault"] = vault_config(args["vault"])["name"]
         if args["op"] in ("status", "doctor"):
