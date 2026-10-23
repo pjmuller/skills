@@ -29,6 +29,15 @@ Env: SKILLS_REFRESH_HOME (~/.agents), SKILLS_REFRESH_REPO (GitHub URL or local p
 USAGE
 }
 die() { echo "skills-refresh: $*" >&2; exit 1; }
+# t3-schedule refresh takes seconds; a wedged one (a mise uv shim exec-loops at 100% CPU under a
+# foreign HOME, ignoring SIGALRM) must fail instead of outliving this run. macOS has no timeout(1).
+schedule_refresh() {
+  perl -e 'my $t = shift; defined(my $pid = fork) or die "fork: $!\n";
+    unless ($pid) { exec @ARGV or die "exec $ARGV[0]: $!\n" }
+    $SIG{ALRM} = sub { kill "TERM", $pid; sleep 5; kill "KILL", $pid; print STDERR "timed out after ${t}s\n" };
+    alarm $t; 1 while waitpid($pid, 0) == -1 && $!{EINTR};
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "${SKILLS_REFRESH_SCHEDULE_TIMEOUT:-300}" t3-schedule refresh
+}
 # Things only the user can fix. Collected across the run (also from the refresh subshell) and
 # printed as one block right before the thread line, so they never scroll away above a changelog.
 action() { mkdir -p "$STATE"; printf '%s\n' "$*" >> "$ACTIONS"; }
@@ -218,7 +227,7 @@ $edited  Move what you need into your own skill, then discard: rm $STATE/manifes
     echo "warning: $name: run scripts/install --check"
   done
   if [[ " ${managed[*]} " == *" t3-schedule "* ]] && command -v t3-schedule >/dev/null; then
-    check="$(t3-schedule refresh 2>&1)" || echo "warning: t3-schedule refresh failed"
+    check="$(schedule_refresh 2>&1)" || echo "warning: t3-schedule refresh failed or timed out"
     printf '%s\n' "$check" | grep '^skipped' | sed 's/^/warning: /' || true
   fi
 
@@ -501,7 +510,7 @@ if not spec.get("pre_command"):
 PY
 )" || return 0
   [[ -n "$spec" ]] || return 0
-  t3-schedule refresh >/dev/null 2>&1 || true
+  schedule_refresh >/dev/null 2>&1 || true
   echo "scheduled job now installs updates before (and without) T3: --pre-command 'skills-refresh --apply'"
   [[ "$spec" == "$pointer" ]] || action "commit $spec in your setup repo (skills-refresh job gained its T3-independent pre-command)"
 }

@@ -56,10 +56,17 @@ def env(tmp_path):
     (home / "skills/demo/SKILL.md").write_text("demo 1\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # Never the real t3-schedule: it would re-arm the user's launchd jobs, and under this fake HOME a
+    # mise uv shim exec-loops at 100% CPU forever (outliving the test).
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "t3-schedule").write_text(f'#!/bin/sh\necho "$*" >> {tmp_path / "t3-schedule.calls"}\n')
+    (stub / "t3-schedule").chmod(0o755)
     e = {k: v for k, v in os.environ.items() if not k.startswith("SKILLS_REFRESH")}
     e.update(SKILLS_REFRESH_HOME=str(home), SKILLS_REFRESH_REPO=str(repo), T3_MANAGE_BIN=str(bin_dir),
-             T3CODE_HOME=str(tmp_path / "t3"), HOME=str(tmp_path / "userhome"))
-    return {"repo": repo, "home": home, "bin": bin_dir, "env": e, "script": script, "key": key}
+             T3CODE_HOME=str(tmp_path / "t3"), HOME=str(tmp_path / "userhome"), PATH=f"{stub}:{os.environ['PATH']}")
+    return {"repo": repo, "home": home, "bin": bin_dir, "stub": stub, "env": e, "script": script, "key": key,
+            "calls": tmp_path / "t3-schedule.calls"}
 
 
 def run(env, *args, **extra):
@@ -218,11 +225,10 @@ def tenv(env, tmp_path):
     (setup / "ai").mkdir(parents=True)
     git(setup, "init", "-q")
     prompt = setup / "ai/AGENTS.md"
-    stub = tmp_path / "stub"
-    stub.mkdir()
+    stub = env["stub"]
     (stub / "t3-pick-instance").write_text('#!/bin/sh\n[ "$1" = claude ] && echo "claudeAgent claude-opus-5-5 high"\n')
     (stub / "t3-pick-instance").chmod(0o755)
-    env["env"].update(SKILLS_REFRESH_PROMPT=str(prompt), PATH=f"{stub}:{os.environ['PATH']}")
+    env["env"].update(SKILLS_REFRESH_PROMPT=str(prompt))
     return {**env, "old": old, "setup": setup, "prompt": prompt, "stub": stub}
 
 
@@ -610,18 +616,9 @@ def test_publish_skips_user_files_and_reports_unresolvable_upstream(env, tmp_pat
     assert "is not fetched or does not exist" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")
 
 
-def stub_t3_schedule(env):
-    calls = env["bin"].parent / "t3-schedule.calls"
-    stub = env["bin"] / "t3-schedule"
-    stub.write_text(f'#!/bin/sh\necho "$*" >> {calls}\n')
-    stub.chmod(0o755)
-    return calls
-
-
 def test_apply_installs_without_t3_and_the_job_thread_reports_it(env):
     """--apply = the scheduler's pre-command: lands a release even when T3/t3-relay is broken."""
     path = f"{env['bin']}:{env['env']['PATH']}"
-    stub_t3_schedule(env)
     applied = run(env, "--apply", PATH=path)
     assert applied.returncode == 0, applied.stdout + applied.stderr
     assert "applied v0.2.0" in applied.stdout and stamp(env) == "v0.2.0"
@@ -637,7 +634,7 @@ def test_apply_failure_exits_1(env, tmp_path):
 
 def test_old_schedule_gains_pre_command_once(env, tmp_path):
     import json
-    calls = stub_t3_schedule(env)
+    calls = env["calls"]
     spec = tmp_path / "setup/.agents/schedules/skills-refresh.json"
     spec.parent.mkdir(parents=True)
     spec.write_text('{"at": "06:30"}\n')
@@ -649,6 +646,22 @@ def test_old_schedule_gains_pre_command_once(env, tmp_path):
     assert json.loads(spec.read_text()) == {"at": "06:30", "pre_command": "skills-refresh --apply"}
     assert "refresh" in calls.read_text() and "commit " + str(spec) in first.stdout
     assert "pre-command" not in run(env, PATH=path).stdout    # once
+
+
+def test_wedged_t3_schedule_refresh_is_killed(env, tmp_path):
+    """A hung `t3-schedule refresh` (mise shim exec-loop under a foreign HOME) must not outlive the run."""
+    import json
+    (env["stub"] / "t3-schedule").write_text(f"#!/bin/sh\necho $$ > {tmp_path / 'pid'}\nexec sleep 60\n")
+    spec = tmp_path / "setup/.agents/schedules/skills-refresh.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("{}\n")
+    pointer = tmp_path / "userhome/.t3/userdata/scheduled/t3-schedule/skills-refresh.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(json.dumps({"source": str(spec)}))
+    start = time.monotonic()
+    assert run(env, SKILLS_REFRESH_SCHEDULE_TIMEOUT="1").returncode == 10
+    assert time.monotonic() - start < 30
+    assert subprocess.run(["kill", "-0", (tmp_path / "pid").read_text().strip()], capture_output=True).returncode != 0
 
 
 def test_apply_keeps_actions_and_a_failed_job_keeps_the_report(env, tmp_path):

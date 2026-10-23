@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-23 — skills-refresh: no runaway t3-schedule refresh
+
+- `skills-refresh` bounds its `t3-schedule refresh` calls (300 s, then TERM/KILL). Why: under a foreign HOME the mise `uv` shim exec-loops at 100% CPU forever; three such processes from test runs burned cores for hours.
+- Its test suite stubs `t3-schedule` in the shared fixture, so no test reaches the real one (which would also re-arm the user's launchd jobs).
+
 ## 2026-10-23 — scoped auto-mode policy repair
 
 - New `auto-mode-policy`: reusable correction playbook, private setup template, and Codex policy sync with complete-default preservation, drift checks, backups and profile coverage. Claude keeps its existing adapter.
