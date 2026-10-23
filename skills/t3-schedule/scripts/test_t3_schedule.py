@@ -814,6 +814,28 @@ def test_fire_waits_for_a_concurrent_fire(tmp_path, monkeypatch):
     assert result == [0]
 
 
+def test_catch_up_isolates_an_unreadable_last_and_keeps_the_pending_proof(tmp_path, monkeypatch):
+    # Confirming a landed fire must not drop `.pending` before `.last` is recorded: repairing the marker later would re-launch.
+    import argparse
+    import subprocess
+    no_launchd(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "os_notify", lambda msg: None)
+    monkeypatch.setattr(mod, "kickstart", lambda name: None)
+    p = mod.paths("job")
+    p["spec"].parent.mkdir(parents=True)
+    p["spec"].write_text(json.dumps({"name": "job", "project": "/repo", "title": "t", "at": "22:30", "days": None}))
+    mark_pending(mod.date.today().isoformat())
+    p["last"].mkdir()
+    monkeypatch.setattr(mod.subprocess, "run", lambda argv, **_: subprocess.CompletedProcess(argv, 0, "ok mcp:t\n", ""))
+    mod.cmd_catch_up(argparse.Namespace(dry_run=False))  # no crash for the other jobs
+    assert p["pending"].exists()
+    with pytest.raises(OSError):  # a direct confirmation that cannot record keeps the marker too
+        mod.resolve_pending("job")
+    assert p["pending"].exists()
+    p["last"].rmdir()
+    assert mod.resolve_pending("job")[0] == "ok" and mod.last_fire("job") and not p["pending"].exists()
+
+
 def test_catch_up_confirms_a_once_job_for_its_own_day_before_retiring(tmp_path, monkeypatch):
     import argparse
     import subprocess

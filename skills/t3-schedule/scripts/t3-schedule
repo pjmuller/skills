@@ -820,6 +820,7 @@ def resolve_pending(name: str) -> tuple[str | None, str]:
     result = helper("t3-relay", "status", rid)
     print(f"relay {rid} ({day}): {result.stdout.strip() or 'status failed'}")
     if result.returncode == 0:
+        mark_fired(name, day)  # record before dropping the marker: a failed write keeps the proof it already ran
         p.unlink()
         return "ok", day
     if relay_failed(result) or (result.returncode == 2 and day < date.today().isoformat()):
@@ -868,7 +869,6 @@ def fire_locked(spec: dict) -> int:
         return 0
     state, day = resolve_pending(name)
     if state == "ok":
-        mark_fired(name, day)
         if day == today or spec.get("once"):
             print(f"confirmed: the earlier fire ({day}) landed")
             return 0
@@ -1350,9 +1350,11 @@ def cmd_catch_up(args: argparse.Namespace) -> int:
         name = spec["name"]
         if args.dry_run or running(name) or not paths(name)["pending"].exists():
             continue
+        if last_unreadable(name):  # isolate this job: confirming it would fail to record, the others still run
+            kicked.append(f"{name} UNREADABLE {paths(name)['last'].name}")
+            continue
         state, day = resolve_pending(name)
         if state == "ok":
-            mark_fired(name, day)
             paths(name)["failed"].unlink(missing_ok=True)
             kicked.append(f"{name} confirmed ({day})")
         elif state == "stale":
