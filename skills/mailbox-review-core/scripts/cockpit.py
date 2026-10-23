@@ -377,14 +377,15 @@ def continuation(args):
         if entry['state'] == 'draft_ready' and not stubs:  # the run drafted, but no Gmail draft is left
             entry['state'] = 'no_draft'
         snapshot = prior[tid]['gmail']
-        entry['in_index'] = bool(stubs) or not snapshot or 'inbound' in mail_delta(snapshot, thread)[0]
+        entry['in_index'] = (bool(stubs) or not snapshot or tid in args.include
+                             or 'inbound' in mail_delta(snapshot, thread)[0])
         if entry['in_index']:
             index['threads'].append(entry)
         entries.append(entry)
-    if failed:
-        coverage = index['coverage']
-        coverage['failed_thread_ids'] = coverage.get('failed_thread_ids', []) + failed
-        coverage['uncovered_threads'] = coverage.get('uncovered_threads', 0) + len(failed)
+    coverage = index['coverage']
+    fresh = [tid for tid in failed if tid not in coverage.get('failed_thread_ids', [])]  # a rerun counts once
+    coverage['failed_thread_ids'] = coverage.get('failed_thread_ids', []) + fresh
+    coverage['uncovered_threads'] = coverage.get('uncovered_threads', 0) + len(fresh)
     rows = [{'thread_id': tid, 'subject': '', 'state': 'unknown', 'carried': True, 'in_index': False,
              'gmail_url': gmail_url(account, tid), 'mail_ref': f'Mail-ref: gmail:{tid} {account}',
              'run_id': None, 'status': 'unknown', 'why': 'Gmail or rp fetch failed; recheck this earlier case',
@@ -841,6 +842,8 @@ def main():
     k.add_argument('--bundle', required=True)
     k.add_argument('--history', action='extend', nargs='+', required=True,
                    help='earlier review bundles or directories holding them (a shell glob works)')
+    k.add_argument('--include', action='append', default=[],
+                   help='earlier case to carry in although its mail is quiet (an open bug, payment or deadline)')
     k.set_defaults(func=continuation)
     for name, func in (('detail', detail), ('validate', None), ('render', render), ('apply', apply)):
         p = subs.add_parser(name)

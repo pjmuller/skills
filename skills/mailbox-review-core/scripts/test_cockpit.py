@@ -566,7 +566,7 @@ class Tests(unittest.TestCase):
                     raise c.Refused('gone')
                 return real_gws(self, *args)
             Fake.gws = gws
-            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)]))
+            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)], include=[]))
             result = c.read(today / 'continuation.json')
             status = {r['thread_id']: (r['status'], r.get('changes')) for r in result['threads']}
             self.assertEqual(status, {'a1': ('unchanged', []), 'b2': ('changed', ['inbound']),
@@ -589,6 +589,10 @@ class Tests(unittest.TestCase):
             self.assertEqual(index['coverage']['uncovered_threads'], 1)  # a failed carry stays visible
             self.assertEqual(result['counts']['unknown'], 1)
             self.assertTrue((today / 'threads' / 'c3.json').exists())
+            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)], include=['d4']))
+            index = c.read(today / 'index.json')
+            self.assertIn('d4', [t['thread_id'] for t in index['threads']])  # open bug, quiet mail
+            self.assertEqual(index['coverage']['uncovered_threads'], 1)  # the rerun did not count f9 twice
 
     def test_draft_save_and_removed_mail_count_as_changes(self):
         before = {'id': 't', 'messages': [message('in'), message('d1', ACCOUNT, draft=True, at=2)]}

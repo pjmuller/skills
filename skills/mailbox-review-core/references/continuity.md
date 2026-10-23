@@ -22,7 +22,8 @@ flowchart LR
    unknown, `changes` (inbound, sent, drafts, removed, run), `new_inbound` previews, the `prior`
    finding (bundle, date, verdict, action) and its `mail_ref`. Earlier cases outside today's index
    join it (`carried`) when they still hold a draft, got new inbound, or lack an old snapshot; the
-   rest are listed with `in_index: false`. Missing evidence or a failed fetch is `unknown` (and
+   rest are listed with `in_index: false`; `--include <thread>` carries one anyway when its action
+   does not depend on mail (an open bug, a payment, a deadline). Missing evidence or a failed fetch is `unknown` (and
    counted uncovered), never `unchanged`.
 2. Every thread you will look at (new, changed, unknown):
    `t3-mail-link --config <gws wrapper> find <thread id> --exclude <own T3 id> --json`.
@@ -41,7 +42,7 @@ flowchart LR
 | Owner, only courtesy since (thanks, ack, auto-reply) | No wake; no finding unless an action is still open. Settled is resumable, not unfinished. |
 | Owner deleted / purged | `t3-find-thread read <id> --limit 0 > <bundle>/owner-<id>.md`; fresh reviewer with that file. A replacement standalone thread only when the case needs one (step 5 rules). |
 | No owner, earlier finding | Fresh reviewer (new sub-agent / `delegate_task`, never a resumed child) given the prior finding path, `new_inbound` and `changes`. Re-verify time-sensitive claims (payments, deploys, deadlines); don't redo settled research. |
-| Unchanged | No reviewer. Mail unchanged ≠ world unchanged: recheck what the earlier action depends on (refund issued? fix deployed?). Carry the finding with today's `detail` fingerprint and say "carried from <date>" in `changed_since_run`. |
+| Unchanged | No reviewer (`--include` it if its open action needs a row). Mail unchanged ≠ world unchanged: recheck what the earlier action depends on (refund issued? fix deployed?). Carry the finding with today's `detail` fingerprint and say "carried from <date>" in `changed_since_run`. |
 
 4. A standalone thread you launch for a case gets the exact `Mail-ref: gmail:<id> <account>` line in
    its brief and owns the case: run `t3-mail-link --config … claim <id> --for <its thread id>` (the
