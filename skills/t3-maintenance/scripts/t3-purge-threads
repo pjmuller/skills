@@ -559,9 +559,11 @@ def cmd_apply(args: argparse.Namespace, rows: list[Thread], kept: list[tuple[Thr
         pairs = thread_columns(db)
         with db:
             for n, (table, column) in enumerate(pairs, 1):
+                began = time.monotonic()
                 gone = db.execute(f'DELETE FROM "{table}" WHERE "{column}" IN (SELECT id FROM purge_ids)').rowcount
-                if gone:
-                    step(f"delete {n}/{len(pairs)} {table}.{column}: {gone} rows")
+                took = time.monotonic() - began
+                if gone or took > 1:  # a stall shows as the last line; the next table is the culprit
+                    step(f"delete {n}/{len(pairs)} {table}.{column}: {gone} rows in {took:.1f}s")
             step("committing")
         step("committed; deleting transcripts, logs, attachments")
         removed = 0
