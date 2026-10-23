@@ -4,6 +4,10 @@ For launchd jobs and pollers (t3-schedule, recording-watcher, t3-mail-link, warm
 inside T3 call the MCP tools directly and never need this, not even to get past a
 `runtime_mode_escalation_denied` ([permission-ceiling.md](permission-ceiling.md)).
 
+T3 ≥ 0.1.2 also ships `t3 thread start|send|show|list` (the app's CLI, `~/.t3/bin/t3`): fine for a quick
+manual thread, but it takes no model options (T3 defaults: Opus effort medium, Sol low) and no retry key,
+so scripts keep `t3-relay` for capacity routing, house effort and confirmed delivery.
+
 ```bash
 t3-relay launch --project /abs/repo --title "⏰ Daily digest" --model opus [--wait 120] -- "Read and execute /abs/brief.md"
 t3-relay send --thread <threadId> [--mode queue] [--wait 120] -- "New mail in the linked thread: …"
