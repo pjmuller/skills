@@ -117,10 +117,14 @@ def stamp(message):
     return int(message.get('internalDate') or 0)
 
 
+VOLATILE = ('attachmentId', 'historyId')
+
+
 def stable(value):
-    # Gmail mints a new attachmentId on every fetch; hashing it would refuse every thread with files.
+    # Gmail mints a new attachmentId on every fetch and bumps historyId on unrelated mailbox activity;
+    # hashing either refuses unchanged mail. An edit still shows: a draft save mints a new message id.
     if isinstance(value, dict):
-        return {k: stable(v) for k, v in value.items() if k != 'attachmentId'}
+        return {k: stable(v) for k, v in value.items() if k not in VOLATILE}
     if isinstance(value, list):
         return [stable(v) for v in value]
     return value

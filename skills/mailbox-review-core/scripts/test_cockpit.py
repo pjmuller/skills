@@ -620,6 +620,14 @@ class Tests(unittest.TestCase):
             self.assertIn(f'Mail-ref: gmail:abc {ACCOUNT}\nCase thread: t3-thread://v1/mcp:aaaa', report)
             self.assertIn('1 earlier cases carried in', report)
 
+    def test_history_id_bump_is_not_a_change(self):
+        """Gmail bumps historyId on unrelated mailbox activity: same content must keep its fingerprint."""
+        thread = {'id': 'abc', 'messages': [dict(message('in'), historyId='1')]}
+        bumped = {'id': 'abc', 'messages': [dict(message('in'), historyId='2')]}
+        edited = {'id': 'abc', 'messages': [dict(message('in', text='other'), historyId='2')]}
+        self.assertEqual(c.fingerprint(thread), c.fingerprint(bumped))
+        self.assertNotEqual(c.fingerprint(thread), c.fingerprint(edited))
+
 
 if __name__ == '__main__':
     unittest.main()
