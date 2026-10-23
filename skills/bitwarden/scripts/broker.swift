@@ -658,13 +658,21 @@ func enroll(_ request: Request, known: [String: [String: String]] = [:], mergeEx
             reason: String? = nil, then: (() -> Void)? = nil) {
     let binary: String
     do { binary = try bitwardenBinary() } catch let error as Failure { fail(error.message) } catch { fail("\(error)") }
-    let existing = (try? keychainLoad()) ?? nil
+    // An unreadable item (e.g. the post-update Keychain prompt denied) must never turn into a new phrase.
+    let existing: [String: Any]?
+    do { existing = try keychainLoad() } catch let error as Failure {
+        fail(error.message + "; nothing changed (allow the Keychain prompt, or `bw-once touchid forget` to start over)")
+    } catch { fail("Cannot read the bw-once Keychain item; nothing changed") }
     let phrase = (existing?["phrase"] as? String) ?? newPhrase()
     let saved = Set(((existing?["vaults"] as? [[String: String]]) ?? []).compactMap { $0["name"] })
     let panel = Panel(title: "bw-once · Touch ID setup")
-    panel.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 12)
+    if existing == nil {
+        panel.line("NEW phrase: remember it (it becomes yours when you press Save):", color: .systemOrange, size: 12)
+    } else {
+        panel.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 12)
+    }
     panel.line(phrase, size: 20, mono: true)
-    panel.line("Every genuine bw-once window shows this phrase. No phrase → don't type or touch.",
+    panel.line("From now on every genuine bw-once window shows this phrase. No phrase or other words → don't type or touch.",
                color: .secondaryLabelColor, size: 11)
     if let reason { panel.line(reason, color: .systemOrange) }
     let asked = request.vaults.filter { known[$0.name] == nil }

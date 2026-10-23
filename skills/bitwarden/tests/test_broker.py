@@ -256,3 +256,19 @@ def test_closing_the_panel_during_the_search_releases_nothing(world):
     result, _ = world["run"]("copy", host=HOST, field="password", extra_env={"BW_BROKER_TEST_CANCEL_AFTER_SEARCH": "1"})
     assert result == {"ok": False, "error": "Request cancelled"} and world["clip"]() is None
     assert all(world["locked"](name) for name in MASTER)
+
+
+def test_phrase_is_new_only_before_the_first_save_then_stays(world):
+    _, panel = world["run"]("enroll", typed=MASTER)
+    phrase = json.loads(world["store"].read_text())["phrase"]
+    assert "NEW phrase" in panel and phrase in panel
+    _, panel = world["run"]("enroll", typed={"testa": MASTER["testa"]}, names=("testa",))
+    assert "NEW phrase" not in panel and phrase in panel and json.loads(world["store"].read_text())["phrase"] == phrase
+    _, panel = world["run"]("copy", host=HOST, field="password")
+    assert phrase in panel
+
+
+def test_unreadable_item_never_becomes_a_new_phrase(world):
+    world["store"].write_text("not json")
+    result, _ = world["run"]("enroll", typed=MASTER)
+    assert result["ok"] is False and "nothing changed" in result["error"] and world["store"].read_text() == "not json"

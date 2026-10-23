@@ -13,8 +13,9 @@ bw-once touchid status | bw-once touchid forget
 
 ## The window
 
-- **Your phrase** (3 words, generated at setup, kept in the Keychain item): every genuine bw-once window shows
-  it, setup included. No phrase → don't type, don't touch. A recognition cue, not proof (screen recording could
+- **Your phrase** (3 words, generated at the first setup and fixed by its Save, kept in the Keychain item): every
+  genuine bw-once window shows the same words, setup included; only a first setup labels it "NEW". No phrase or
+  other words → don't type, don't touch. An unreadable item stops setup instead of minting a new phrase. A recognition cue, not proof (screen recording could
   copy it); the real protection is that only the broker can open the stored secrets.
 - **Agent says (unverified)**, orange: `--thread`, `--why` as the agent wrote them (plain text, ≤120/200 chars).
 - **bw-once will (checked)**, green, built by the broker from the validated request: field, login filter, exact

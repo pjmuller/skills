@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: phrase stays put
+
+- The first setup window labels its phrase "NEW" (it becomes yours on Save); later windows say "Your phrase".
+  An unreadable Keychain item (e.g. the post-update prompt denied) stops setup instead of minting and saving a
+  new phrase.
+
 ## 2026-10-23 — bitwarden: compiled Touch ID broker
 
 - New `scripts/broker.swift` (built by the installer, hardened runtime) owns the whole Touch ID path: a native
