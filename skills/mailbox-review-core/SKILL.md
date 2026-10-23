@@ -60,6 +60,16 @@ flowchart LR
   out → `dx_gaps` on the finding (page section "What limited this review"), naming who can grant it
   (wrapper), so the operator asks for it and the next run goes deeper. Never settle silently for a
   shallower answer.
+- **Escalate only what research cannot settle** (rare; each names the exact question):
+  1. *Decisions, not facts:* money (refund, discount, void), contract or legal commitments, commercial
+     offers, a policy change customers will see.
+  2. *Writes beyond a scoped one-customer fix:* infra, bulk data, irreversible deletion, deploys, publishing.
+  3. *Facts outside every system this machine reaches:* a call or chat nobody logged, an admin console
+     without access (then also a `dx_gaps` line), a vendor's private state, why code was deliberately
+     disabled when git history does not say.
+  4. *Human hands:* login, phone, eID, payment, signature; sending or deleting mail.
+  Missing access is a `dx_gaps` line, not a reason to stop: answer with what is reachable and say what
+  the rest needs.
 - **Shipping a found fix:** a PR with tests on the critical path. Product-owner operator → the PR stays
   open for the developer. Developer operator → merge and ship when confident, verify live. A data fix
   scoped to one customer (one account or backup, reversible, regression risk rated low by the agent)
