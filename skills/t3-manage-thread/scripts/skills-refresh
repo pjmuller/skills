@@ -369,7 +369,9 @@ global_prompt() { # the user's live global prompt: first resolved target carryin
 template_cache() { # blobless bare clone with history, for markers that are commits on main
   local cache="$STATE/repo.git"
   [[ -d "$cache" ]] || git clone -q --bare --filter=blob:none "$REPO" "$cache" 2>/dev/null || return 1
-  git -C "$cache" fetch -q --filter=blob:none --tags origin '+refs/heads/*:refs/heads/*' 2>/dev/null || return 1
+  # Forced tags too: after an upstream history rewrite re-signed tags would otherwise be rejected
+  # forever. Read-only cache: released content is still read only by the stamp's verified commit.
+  git -C "$cache" fetch -q --filter=blob:none origin '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*' 2>/dev/null || return 1
   echo "$cache"
 }
 

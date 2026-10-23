@@ -672,3 +672,23 @@ def test_apply_keeps_actions_and_a_failed_job_keeps_the_report(env, tmp_path):
     report = run(env, "--job", PATH=path)
     assert report.returncode == 10 and "cannot fire: t3-relay not ready" in report.stdout
     assert not (env["home"] / "pjmuller-skills/last-apply").exists()
+
+
+def test_history_rewrite_heals_with_the_next_signed_release(tenv):
+    """Rewritten history + re-signed tags + a forward release: the disposable template cache follows."""
+    tenv["prompt"].write_text(f"me\n<!-- template: pjmuller/skills@{tenv['old']} -->\n")
+    commit(tenv["setup"], "prompt")
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: DELEGATE")  # v0.3.0 + cache
+    repo = tenv["repo"]
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "-m", "rewritten")
+    git(repo, "tag", "-d", "v0.3.0")
+    signed_tag(repo, "v0.3.0")  # same name, new object and commit
+    release(repo, "v0.4.0", "4")
+    out = job(tenv).stdout
+    assert "applied v0.4.0" in out and out.splitlines()[-1].startswith("thread: DELEGATE"), out
+    # A machine whose cache predates nothing: a fresh clone of the rewritten history also delegates.
+    import shutil
+    state = tenv["home"] / "pjmuller-skills"
+    shutil.rmtree(state / "repo.git")
+    (state / "template-sync.claim").unlink()
+    assert job(tenv).stdout.splitlines()[-1].startswith("thread: DELEGATE")
