@@ -7,12 +7,7 @@
 
   sync        archive every thread whose copy is missing or stale (read-only on T3's store)
   import      fold old `purged-threads-*.sqlite` slim backups in (0.0.x or V2 shape)
-  scrub       re-redact the whole archive under the current rules (rebuild + verify + atomic swap);
-              `--dry-run` only counts what it would redact
   stats       size and contents
-
-Every write redacts secrets first (t3_redact.py: rules, limits). Output shows counts per
-category, never values.
 
 `t3-purge-threads apply` archives its cohort itself; `t3-find-thread` falls back to the archive.
 Archive: $T3_ARCHIVE, default ~/.t3/backups/t3-archive.sqlite (mode 600). Schema: t3_archive.py.
@@ -27,46 +22,24 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from collections import Counter
-
-from t3_archive import ARCHIVE, archive_threads, import_backup, open_archive, scan, scrub
+from t3_archive import ARCHIVE, archive_threads, import_backup, open_archive
 from t3_store import DEFAULT_STORE, connect_readonly
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
     db = open_archive(args.archive)
-    hits = Counter()
     with connect_readonly(args.store) as src, db:
-        written = archive_threads(src, db, args.ids or None, changed_only=not args.force, hits=hits)
-    print(f"archived {written} threads → {args.archive}; {summary(hits)}")
-    return 0
-
-
-def summary(hits: Counter) -> str:
-    if not hits:
-        return "nothing redacted"
-    return f"redacted {sum(hits.values())} values (" + ", ".join(f"{k} {n}" for k, n in hits.most_common()) + ")"
-
-
-def cmd_scrub(args: argparse.Namespace) -> int:
-    if not args.archive.exists():
-        raise SystemExit(f"no archive at {args.archive}")
-    if args.dry_run:
-        hits, threads = scan(args.archive)
-        print(f"would redact in {threads} threads: {summary(hits)}")
-        return 0
-    hits = scrub(args.archive, step=lambda msg: print(msg, flush=True))
-    print(summary(hits))
+        written = archive_threads(src, db, args.ids or None, changed_only=not args.force)
+    print(f"archived {written} threads → {args.archive}")
     return 0
 
 
 def cmd_import(args: argparse.Namespace) -> int:
     db = open_archive(args.archive)
     for path in args.backups:
-        hits = Counter()
         with db:
-            written = import_backup(path, db, args.store, hits)
-        print(f"imported {written} threads from {path.name} → {args.archive}; {summary(hits)}")
+            written = import_backup(path, db, args.store)
+        print(f"imported {written} threads from {path.name} → {args.archive}")
     return 0
 
 
@@ -79,9 +52,6 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print(f"{args.archive}  {size / 1_048_576:.1f} MB · {threads} threads · {oldest} → {newest}")
     for source, n in db.execute("SELECT source, COUNT(*) FROM threads GROUP BY source"):
         print(f"  source {source}: {n} threads")
-    if "redaction" in {row[1] for row in db.execute("PRAGMA table_info(threads)")}:
-        for version, n in db.execute("SELECT redaction, COUNT(*) FROM threads GROUP BY 1 ORDER BY 1"):
-            print(f"  redaction {'none' if version is None else f'v{version}'}: {n} threads")
     for role, n, chars in db.execute("SELECT role, COUNT(*), sum(length(text)) FROM entries GROUP BY role ORDER BY 3 DESC"):
         print(f"  {role:<10} {n:>8} entries  {chars / 1_048_576:>7.1f} MB text")
     return 0
@@ -99,9 +69,6 @@ def main(argv: list[str] | None = None) -> int:
     imp = sub.add_parser("import", help="fold old purged-threads-*.sqlite backups in")
     imp.add_argument("backups", type=Path, nargs="+")
     imp.set_defaults(func=cmd_import)
-    scr = sub.add_parser("scrub", help="re-redact the whole archive (rebuild, verify, swap)")
-    scr.add_argument("--dry-run", action="store_true", help="only count what would be redacted")
-    scr.set_defaults(func=cmd_scrub)
     sub.add_parser("stats", help="size and contents").set_defaults(func=cmd_stats)
     args = parser.parse_args(argv)
     return args.func(args)

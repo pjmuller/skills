@@ -4,8 +4,8 @@ description: Discover exact-host Bitwarden logins, copy one approved credential,
 ---
 
 Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** once enrolled
-(`bw-once touchid enroll`, master password typed once per 30 days, sealed in the Secure Enclave; each request =
-one fingerprint, no Terminal: [touchid.md](touchid.md)). Otherwise a fresh human Terminal
+(`bw-once touchid enroll`, master password sealed in the Secure Enclave; each request = one fingerprint, no
+Terminal; every 30 days the next request's Terminal asks the password once and renews it: [touchid.md](touchid.md)). Otherwise a fresh human Terminal
 unlock per request, or a time-boxed **session holder** PJ unlocks once
 (`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
 commands serve from it; design, paste mechanics and never-list: [session.md](session.md)). Install with

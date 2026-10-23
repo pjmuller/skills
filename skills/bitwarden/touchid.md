@@ -5,8 +5,8 @@ or another app can see it; every later unlock needs a fingerprint that the hardw
 
 ```sh
 bw-once [--vault work] touchid enroll    # human Terminal: Return, master password (hidden), verified by a real unlock
-bw-once touchid status                   # {enrolled, expires}; also in `doctor`
-bw-once touchid forget                   # delete the sealed file = unusable
+bw-once touchid status                   # {enrolled, expires, renewal_due}; also in `doctor`
+bw-once touchid forget                   # delete the file: Touch ID off, no automatic renewal
 ```
 
 ## How
@@ -21,8 +21,12 @@ bw-once touchid forget                   # delete the sealed file = unusable
   Terminal review, with Touch ID instead of the password prompt. `login` (new device: password + 2FA) is unchanged.
 - The dialog text comes from the validated request ("use Bitwarden (work) to copy the password of … on …"), not
   from caller prose. Touch only when an agent just told you that exact request.
-- Expiry `TOUCHID_DAYS` = 30, then the file is deleted and the next request falls back to the Terminal prompt.
-  Master password changed → bw rejects the sealed one: `touchid forget`, `touchid enroll`.
+- **Renewal is automatic.** Expiry (`TOUCHID_DAYS` = 30), changed fingerprints or a changed master password
+  turn the file into a renewal marker (ciphertext dropped). The next request skips the Touch ID dialog and
+  opens the Terminal, which says so; the master password typed there serves the request **and** re-seals it
+  for 30 days. A failure detected only at unlock (enclave refuses, bw rejects the sealed password) relaunches
+  that Terminal in the same call; a cancelled dialog does not. `renewal_due: true` in `touchid status` →
+  tell the human the next request asks the master password once.
 
 ## Why not
 

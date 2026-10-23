@@ -608,9 +608,15 @@ def touchid(fake, monkeypatch, tmp_path):
     helpers.mkdir()
     (helpers / "touchid").write_text(f"#!{sys.executable}\n" + TOUCHID)
     (helpers / "touchid").chmod(0o700)
+    (helpers / "clipboard").write_text("#!/bin/sh\ncat >/dev/null\necho ready\n")
+    (helpers / "clipboard").chmod(0o700)
     monkeypatch.setattr(bw, "ROOT", helpers)
     monkeypatch.setattr(bw, "TRUSTED_BW_DIRS", (os.path.realpath(directory) + "/",))
     return helpers
+
+
+def renew_marker():
+    bw.touchid_write(bw.vault_config(), {"renew": True})
 
 
 def enroll():
@@ -667,23 +673,51 @@ def test_touchid_cancel_never_unlocks(fake, touchid):
     assert json.loads((directory / "state").read_text())["locked"]
 
 
-def test_touchid_changed_master_password_or_expiry(fake, touchid):
+def test_touchid_changed_master_password_marks_renewal_and_expiry_keeps_the_marker(fake, touchid):
     _, update, _ = fake
     enroll()
     update(master="changed-on-the-web")
-    with pytest.raises(bw.Failure, match="touchid forget"):
+    with pytest.raises(bw.EnrolmentGone, match="master password changed"):
         bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert bw.touchid_status(bw.vault_config())["renewal_due"]
+    update(master=MASTER)
+    enroll()
     path = bw.touchid_path("default")
     enrolment = json.loads(path.read_text())
     enrolment["expires"] = "2000-01-01T00:00:00+00:00"
     path.write_text(json.dumps(enrolment))
-    assert bw.touchid_enrolment(bw.vault_config()) is None and not path.exists()
+    assert bw.touchid_status(bw.vault_config()) == {"enrolled": False, "expires": None, "renewal_due": True}
+    assert "sealed" not in path.read_text()  # Expired ciphertext dropped; only the renewal wish stays.
 
 
-def test_touchid_sealed_file_is_bound_to_its_vault(fake, touchid):
+def test_terminal_unlock_due_for_renewal_serves_request_and_reseals(fake, touchid):
+    _, _, events = fake
+    renew_marker()
+    vault = bw.Vault()
+    vault.read_password = lambda prompt: MASTER
+    delivered = []
+    bw.transaction(vault, request(), ask=lambda *_: True, deliver=delivered.append)
+    assert delivered == [SECRET]
+    assert bw.touchid_status(bw.vault_config())["enrolled"]
+    assert all(MASTER not in json.dumps(event) for event in events())
+    delivered.clear()
+    bw.transaction(bw.inline_vault("default"), request(), ask=lambda *_: True, deliver=delivered.append)
+    assert delivered == [SECRET]  # Next request: Touch ID again, no Terminal.
+
+
+def test_inline_request_due_for_renewal_hands_over_to_the_terminal(fake, touchid, monkeypatch, capsys):
+    renew_marker()
+    launched = []
+    monkeypatch.setattr(bw, "launch", lambda args: launched.append(args["op"]) or {"ok": True, "via": "terminal"})
+    monkeypatch.setattr(sys, "argv", ["bw-once", "copy", "--host", "admin.example.com", "--id", ID, "--field", "password"])
+    bw.main()
+    assert launched == ["copy"] and json.loads(capsys.readouterr().out)["via"] == "terminal"
+
+
+def test_forget_turns_touchid_off_without_renewal(fake, touchid):
     enroll()
-    with pytest.raises(bw.Failure, match="Touch ID unlock failed"):
-        bw.touchid_open({"name": "other", "email": "x@example.com"}, bw.touchid_enrolment(bw.vault_config()), "r")
+    bw.touchid_path("default").unlink()
+    assert bw.touchid_status(bw.vault_config()) == {"enrolled": False, "expires": None, "renewal_due": False}
 
 
 def test_touchid_refuses_untrusted_bw_before_any_prompt(fake, touchid, monkeypatch):
@@ -700,3 +734,43 @@ def test_inline_request_never_falls_back_to_an_agent_side_password_prompt(fake, 
         bw.transaction(bw.inline_vault("default"), request(), ask=lambda *_: True,
                        deliver=lambda _: pytest.fail("delivered"))
     assert not any(event["args"][0] == "unlock" for event in events())
+
+
+@pytest.mark.parametrize("breakage,relaunched", [("master", True), ("cancel", False)])
+def test_inline_breakage_relaunches_terminal_but_cancel_does_not(fake, touchid, monkeypatch, capsys, breakage, relaunched):
+    _, update, _ = fake
+    enroll()
+    if breakage == "master":
+        update(master="changed-on-the-web")
+    else:
+        (touchid / "cancel").write_text("")
+    launched = []
+    monkeypatch.setattr(bw, "launch", lambda args: launched.append(args["op"]) or {"ok": True, "via": "terminal"})
+    monkeypatch.setattr(sys, "argv", ["bw-once", "copy", "--host", "admin.example.com", "--id", ID, "--field", "password"])
+    try:
+        bw.main()
+    except SystemExit:
+        pass
+    assert bool(launched) is relaunched
+    assert ("cancelled" in capsys.readouterr().out) is (not relaunched)
+
+
+def test_forget_during_renewal_prompt_stays_forgotten(fake, touchid):
+    renew_marker()
+    vault = bw.Vault()
+
+    def forget_while_typing(prompt):
+        bw.touchid_forget(bw.vault_config())
+        return MASTER
+
+    vault.read_password = forget_while_typing
+    bw.transaction(vault, request(), ask=lambda *_: True, deliver=lambda _: None)
+    assert bw.touchid_status(bw.vault_config())["enrolled"] is False and not bw.touchid_path("default").exists()
+
+
+def test_stale_expiry_reader_never_overwrites_a_fresh_enrolment(fake, touchid):
+    enroll()
+    stale = json.loads(bw.touchid_path("default").read_text())
+    enroll()  # Another Terminal re-enrolled meanwhile.
+    bw.touchid_mark_renew(bw.vault_config(), stale)
+    assert bw.touchid_status(bw.vault_config())["enrolled"]

@@ -222,5 +222,5 @@ def test_offer_backup_cleanup(tmp_path: Path, monkeypatch, answer: str, kept: in
     cli.offer_backup_cleanup(ask=lambda prompt: answer)
     # only the imported slim backup is ever offered; full copies, unimported files and the archive stay
     assert {p.name for p in backups.iterdir()} == {
-        "statev2-before-purge-old.sqlite", "purged-threads-new.sqlite", "t3-archive.sqlite", "t3-archive.sqlite.lock",
+        "statev2-before-purge-old.sqlite", "purged-threads-new.sqlite", "t3-archive.sqlite",
     } | ({"purged-threads-imported.sqlite"} if kept else set())

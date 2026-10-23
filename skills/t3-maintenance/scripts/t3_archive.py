@@ -9,27 +9,19 @@ questions/answers, errors. Dropped: the event log, started/updated tool states, 
 task progress / checkpoint noise, images. Schema contract for readers: `threads` (one row per
 thread) and FTS5 `entries` (text, thread_id, seq, role, tool, created_at; role is
 user|assistant|reasoning|tool|event). Re-archiving a thread replaces its rows; nothing expires.
-
-Every write goes through `write_thread`, which redacts secrets (`t3_redact`) and stamps
-`threads.redaction` with the rule version; `scrub` rebuilds the whole file under the current rules.
-One writer at a time: `open_archive` holds `<archive>.lock` for the life of the process.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
 import sqlite3
-import sys
-from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-import t3_redact
 from t3_store import id_key
 
 ARCHIVE = Path(
@@ -57,18 +49,13 @@ CREATE TABLE IF NOT EXISTS threads (
   settled INTEGER NOT NULL DEFAULT 0, user_msgs INTEGER NOT NULL DEFAULT 0,
   assistant_msgs INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
   last_msg_at TEXT, source TEXT NOT NULL, backed_up_at TEXT NOT NULL,
-  first_entry INTEGER, last_entry INTEGER,  -- the thread's contiguous `entries` rowids
-  redaction INTEGER  -- t3_redact.VERSION its text went through; NULL = written before redaction
+  first_entry INTEGER, last_entry INTEGER  -- the thread's contiguous `entries` rowids
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS entries USING fts5(
   text, thread_id UNINDEXED, seq UNINDEXED, role UNINDEXED, tool UNINDEXED, created_at UNINDEXED,
   tokenize = "unicode61 remove_diacritics 2"
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS vocab USING fts5vocab(entries, 'row');
--- Writers without redaction (an older copy of this file) fail here: only `open_archive` registers
--- the function. Readers never fire it.
-CREATE TRIGGER IF NOT EXISTS redacting_writer BEFORE INSERT ON threads
-  BEGIN SELECT RAISE(ABORT, 'archive writer predates redaction') WHERE t3_redaction_version() < 1; END;
 """
 
 
@@ -76,54 +63,16 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-_LOCKS: dict[Path, int] = {}
-
-
-def writer_lock(path: Path) -> None:
-    """Exclusive `<archive>.lock` until the process exits: purge, sync, import and scrub never
-    interleave, and nobody writes into a file `scrub` is about to replace."""
-    path = path.resolve()
-    if path in _LOCKS:
-        return
-    fd = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print(f"waiting for another archive writer ({path.name}.lock)…", file=sys.stderr)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    _LOCKS[path] = fd
-
-
 def open_archive(path: Path = ARCHIVE) -> sqlite3.Connection:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    writer_lock(path)  # before connecting: a replaced file must be opened afresh
     # SQLite gives journal / WAL files the database file's mode.
     path.touch(mode=0o600)
     os.chmod(path, 0o600)
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
-    register(db)
-    db.execute("PRAGMA secure_delete = ON")  # a re-archived thread's old text is zeroed, not left in free pages
     db.executescript(SCHEMA)
-    if "redaction" not in {row[1] for row in db.execute("PRAGMA table_info(threads)")}:
-        db.execute("ALTER TABLE threads ADD COLUMN redaction INTEGER")
     db.execute("INSERT OR REPLACE INTO meta VALUES ('version', ?)", (VERSION,))
-    db.commit()
-    if stale := stale_threads(db):
-        print(f"archive: {stale} threads (or leftover index text) predate redaction v{t3_redact.VERSION}; "
-              "run `t3-thread-archive scrub`", file=sys.stderr)
     return db
-
-
-def register(db: sqlite3.Connection) -> None:
-    db.create_function("t3_redaction_version", 0, lambda: t3_redact.VERSION, deterministic=True)
-
-
-def stale_threads(db: sqlite3.Connection) -> int:
-    """Threads under older rules, plus 1 while old text may linger in FTS segments: re-archiving a
-    stale thread replaces its rows, but FTS5 keeps deleted tokens until a rebuild (`scrub`)."""
-    stale = db.execute("SELECT COUNT(*) FROM threads WHERE coalesce(redaction, 0) < ?", (t3_redact.VERSION,)).fetchone()[0]
-    return stale + bool(db.execute("SELECT 1 FROM meta WHERE key = 'scrub_required'").fetchone())
 
 
 # --- text shaping -------------------------------------------------------------
@@ -131,50 +80,14 @@ def stale_threads(db: sqlite3.Connection) -> int:
 _BLOB = re.compile(r"[A-Za-z0-9+/=_-]{400,}")  # base64 images, minified bundles, tokens
 
 
-# Redactions made while clipping, credited to the next `write_thread` (entries are built per thread
-# right before it writes them).
-CLIP_HITS: Counter = Counter()
-_MARGIN = 16_384  # context kept around the parts that survive a cut, before redacting
-
-
-def _redact_for_cut(text: str, head: int, tail: int) -> tuple[str, int]:
-    """Redact before cutting: a cut can drop a key (`PASSWORD = …`) or split a token so the kept part
-    no longer matches a rule. Huge texts keep a margin around head and tail (rules are local)."""
-    total = len(text)
-    if total > head + tail + 2 * _MARGIN:
-        text = text[:head + _MARGIN] + "\n" + text[-(tail + _MARGIN):]
-    text, found = t3_redact.redact(text)
-    CLIP_HITS.update(found)
-    return text, total - len(text)  # chars already dropped by the margin cut
-
-
-def _snap(text: str, at: int, forward: bool = False) -> int:
-    """The nearest whitespace ≤ 200 chars from a cut, so the cut splits no marker or word."""
-    if forward:
-        found = re.search(r"\s", text[at:at + 200])
-        return at + found.start() if found else at
-    found = re.search(r"\s\S*\Z", text[max(0, at - 200):at])
-    return max(0, at - 200) + found.start() if found else at
-
-
 def clip(text: str, cap: int) -> str:
-    if len(text) <= cap:
-        return text
-    text, dropped = _redact_for_cut(text, cap, 0)
-    if len(text) <= cap:
-        return text
-    cut = _snap(text, cap)
-    return text[:cut] + f" …[+{len(text) - cut + dropped} chars]"
+    return text if len(text) <= cap else text[:cap] + f" …[+{len(text) - cap} chars]"
 
 
 def head_tail(text: str, head: int = OUTPUT_HEAD, tail: int = OUTPUT_TAIL) -> str:
     if len(text) <= head + tail:
         return text
-    text, dropped = _redact_for_cut(text, head, tail)
-    if len(text) <= head + tail:
-        return text
-    start, end = _snap(text, head), _snap(text, len(text) - tail, forward=True)
-    return f"{text[:start]}\n…[{end - start + dropped} chars]…\n{text[end:]}"
+    return f"{text[:head]}\n…[{len(text) - head - tail} chars]…\n{text[-tail:]}"
 
 
 def flatten(value: object) -> str:
@@ -362,19 +275,11 @@ SELECT t.thread_id, t.project_id, t.title, t.created_at, t.updated_at, t.archive
 """
 
 
-def write_thread(db: sqlite3.Connection, meta: dict, entries: list[tuple[str, str, str, str]],
-                 hits: Counter | None = None) -> None:
-    """Replace one thread's rows (idempotent re-archive), secrets redacted; `hits` counts them."""
-    hits = Counter() if hits is None else hits
+def write_thread(db: sqlite3.Connection, meta: dict, entries: list[tuple[str, str, str, str]]) -> None:
+    """Replace one thread's rows (idempotent re-archive)."""
     tid = meta["thread_id"]
-    entries = [(at, role, tool, redacted(text, hits)) for at, role, tool, text in entries]
-    meta = {**meta, "title": redacted(meta.get("title") or "", hits)}
-    hits.update(CLIP_HITS)
-    CLIP_HITS.clear()
-    if old := db.execute("SELECT first_entry, last_entry, coalesce(redaction, 0) FROM threads WHERE thread_id = ?", (tid,)).fetchone():
-        if old[2] < t3_redact.VERSION:  # its unredacted tokens stay in FTS segments until a rebuild
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('scrub_required', ?)", (now(),))
-        db.execute("DELETE FROM entries WHERE rowid BETWEEN ? AND ?", tuple(old[:2]))  # no thread_id scan
+    if old := db.execute("SELECT first_entry, last_entry FROM threads WHERE thread_id = ?", (tid,)).fetchone():
+        db.execute("DELETE FROM entries WHERE rowid BETWEEN ? AND ?", tuple(old))  # no thread_id scan
         db.execute("DELETE FROM threads WHERE thread_id = ?", (tid,))
     first = (db.execute("SELECT max(rowid) FROM entries").fetchone()[0] or 0) + 1
     meta = {"subagent": 0, "settled": 0, **meta,
@@ -387,7 +292,6 @@ def write_thread(db: sqlite3.Connection, meta: dict, entries: list[tuple[str, st
         "backed_up_at": now(),
         "first_entry": first,
         "last_entry": first + len(entries) - 1,
-        "redaction": t3_redact.VERSION,
     }
     columns = [row[1] for row in db.execute("PRAGMA table_info(threads)")]
     db.execute(
@@ -400,26 +304,17 @@ def write_thread(db: sqlite3.Connection, meta: dict, entries: list[tuple[str, st
     )
 
 
-def redacted(text: str, hits: Counter) -> str:
-    text, found = t3_redact.redact(text)
-    hits.update(found)
-    return text
-
-
-def archive_threads(src: sqlite3.Connection, db: sqlite3.Connection, ids: Iterable[str] | None = None, *,
-                    changed_only: bool = False, hits: Counter | None = None) -> int:
+def archive_threads(src: sqlite3.Connection, db: sqlite3.Connection, ids: Iterable[str] | None = None, *, changed_only: bool = False) -> int:
     """Copy threads (all when `ids` is None) from a statev2 connection; returns the count written.
-    `changed_only` skips threads whose `updated_at` matches the archived copy and whose redaction is
-    current (older rules → rewritten from the source); `hits` counts redactions."""
+    `changed_only` skips threads whose `updated_at` matches the archived copy."""
     wanted = None if ids is None else set(ids)
-    have = {r[0]: r[1] for r in db.execute("SELECT thread_id, updated_at FROM threads WHERE redaction >= ?",
-                                           (t3_redact.VERSION,))} if changed_only else {}
+    have = {r[0]: r[1] for r in db.execute("SELECT thread_id, updated_at FROM threads")} if changed_only else {}
     count = 0
     factory, src.row_factory = src.row_factory, sqlite3.Row
     try:
         for row in src.execute(THREADS_SQL).fetchall():
             if (wanted is None or row["thread_id"] in wanted) and have.get(row["thread_id"]) != row["updated_at"]:
-                write_thread(db, thread_meta(row), thread_entries(src, row["thread_id"]), hits)
+                write_thread(db, thread_meta(row), thread_entries(src, row["thread_id"]))
                 count += 1
     finally:
         src.row_factory = factory
@@ -445,7 +340,7 @@ def thread_meta(row: sqlite3.Row) -> dict:
     }
 
 
-def import_backup(path: Path, db: sqlite3.Connection, store: Path, hits: Counter | None = None) -> int:
+def import_backup(path: Path, db: sqlite3.Connection, store: Path) -> int:
     """Fold an old slim purge backup (`purged-threads-*.sqlite`) in: the 0.0.x shape
     (`projection_threads` + `projection_thread_messages`) or the V2 one (threads + messages tables).
     Project titles come from the live `store`; threads already archived are left alone; the file
@@ -457,9 +352,9 @@ def import_backup(path: Path, db: sqlite3.Connection, store: Path, hits: Counter
     try:
         if table_exists(backup, "orchestration_v2_projection_threads"):
             fresh = [r[0] for r in backup.execute("SELECT thread_id FROM orchestration_v2_projection_threads") if r[0] not in have]
-            count = archive_threads(backup, db, fresh, hits=hits)
+            count = archive_threads(backup, db, fresh)
         else:
-            count = _import_v1(backup, db, have, hits)
+            count = _import_v1(backup, db, have)
     finally:
         backup.close()
     db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"imported:{path.name}", now()))
@@ -470,7 +365,7 @@ def imported(db: sqlite3.Connection, path: Path) -> bool:
     return db.execute("SELECT 1 FROM meta WHERE key = ?", (f"imported:{path.name}",)).fetchone() is not None
 
 
-def _import_v1(backup: sqlite3.Connection, db: sqlite3.Connection, have: set[str], hits: Counter | None) -> int:
+def _import_v1(backup: sqlite3.Connection, db: sqlite3.Connection, have: set[str]) -> int:
     projects = {r[0]: (r[1], r[2]) for r in backup.execute("SELECT project_id, title, workspace_root FROM live.projection_projects")}
     messages: dict[str, list[tuple[str, str, str, str]]] = {}
     for m in backup.execute(
@@ -493,114 +388,6 @@ def _import_v1(backup: sqlite3.Connection, db: sqlite3.Connection, have: set[str
             "settled": int(row["settled_override"] == "settled"),
             "source": "v1-backup",
         }
-        write_thread(db, meta, messages.get(tid, []), hits)
+        write_thread(db, meta, messages.get(tid, []))
         count += 1
     return count
-
-
-# --- retroactive redaction -------------------------------------------------------------------
-
-
-def scan(path: Path = ARCHIVE) -> tuple[Counter, int]:
-    """(redactions the current rules would make, threads they touch); read-only, values never leave."""
-    db = sqlite3.connect(f"file:{quote(str(path), safe='/')}?mode=ro", uri=True)
-    hits, threads = Counter(), set()
-    try:
-        for tid, title in db.execute("SELECT thread_id, title FROM threads"):
-            if found := t3_redact.redact(title or "")[1]:
-                hits.update(found)
-                threads.add(tid)
-        for tid, text in db.execute("SELECT thread_id, text FROM entries"):
-            if found := t3_redact.redact(text)[1]:
-                hits.update(found)
-                threads.add(tid)
-    finally:
-        db.close()
-    return hits, len(threads)
-
-
-def scrub(path: Path = ARCHIVE, *, step=print) -> Counter:
-    """Rebuild the archive under the current redaction rules and swap it in atomically.
-
-    A fresh file, not UPDATEs in place: the old text would linger in FTS5 segments, free pages and
-    the rollback journal. Thread ids, rowids and `first_entry`/`last_entry` stay identical, so
-    readers and re-archives keep working. Verified before the swap (integrity, FTS integrity,
-    row/rowid parity, a second pass finds nothing); any failure leaves the old archive untouched.
-    Holds the writer lock throughout. Disk: one archive-sized temp file next to it."""
-    path = path.resolve()
-    writer_lock(path)
-    old = open_archive(path)  # migrates the schema and rolls back any hot journal
-    old.close()
-    tmp = path.with_name(path.name + ".scrub-tmp")
-    for leftover in (tmp, tmp.with_name(tmp.name + "-journal")):
-        leftover.unlink(missing_ok=True)
-    os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-    hits: Counter = Counter()
-    try:
-        db = sqlite3.connect(f"file:{quote(str(tmp), safe='/')}", uri=True)
-        register(db)
-        db.create_function("redact", 1, lambda text: redacted(text, hits) if text else text, deterministic=True)
-        db.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;" + SCHEMA)
-        db.execute("ATTACH DATABASE ? AS old", (f"file:{quote(str(path), safe='/')}?mode=ro",))
-        columns = [row[1] for row in db.execute("PRAGMA table_info(threads)")]
-        pick = ", ".join({"title": "redact(title)", "redaction": str(t3_redact.VERSION)}.get(c, c) for c in columns)
-        with db:
-            db.execute("INSERT INTO meta SELECT * FROM old.meta WHERE key != 'scrub_required'")
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('redaction', ?)", (str(t3_redact.VERSION),))
-            db.execute(f"INSERT INTO threads ({', '.join(columns)}) SELECT {pick} FROM old.threads")
-            step(f"threads copied ({db.execute('SELECT COUNT(*) FROM threads').fetchone()[0]}), redacting entries")
-            db.execute("INSERT INTO entries (rowid, text, thread_id, seq, role, tool, created_at) "
-                       "SELECT rowid, redact(text), thread_id, seq, role, tool, created_at FROM old.entries ORDER BY rowid")
-            db.execute("INSERT INTO entries (entries) VALUES ('optimize')")
-        step(f"redacted {sum(hits.values())} values; verifying")
-        verify_scrub(db)
-        db.execute("DETACH DATABASE old")
-        db.close()
-        fd = os.open(tmp, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
-        dir_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    step(f"swapped in {path} ({path.stat().st_size / 1_048_576:.0f} MB)")
-    return hits
-
-
-def verify_scrub(db: sqlite3.Connection) -> None:
-    """Raise unless the rebuilt archive (`main`) mirrors `old` row for row and is fully redacted."""
-    def one(sql: str):
-        return db.execute(sql).fetchone()[0]
-
-    problems = []
-    if (check := one("PRAGMA main.integrity_check")) != "ok":
-        problems.append(f"integrity_check: {check}")
-    try:
-        with db:
-            db.execute("INSERT INTO entries (entries) VALUES ('integrity-check')")
-    except sqlite3.DatabaseError as error:
-        problems.append(f"fts integrity-check: {error}")
-    for table, key in (("threads", "thread_id"), ("entries", "rowid")):
-        if one(f"SELECT COUNT(*) FROM main.{table}") != one(f"SELECT COUNT(*) FROM old.{table}"):
-            problems.append(f"{table}: row count differs")
-        if one(f"SELECT COUNT(*) FROM main.{table} n JOIN old.{table} o ON n.{key} = o.{key}") != one(f"SELECT COUNT(*) FROM old.{table}"):
-            problems.append(f"{table}: {key}s differ")
-    if one("SELECT COUNT(*) FROM main.entries n JOIN old.entries o ON n.rowid = o.rowid "
-           "WHERE n.thread_id IS NOT o.thread_id OR n.seq IS NOT o.seq OR n.role IS NOT o.role"):
-        problems.append("entries: thread/seq/role differ")
-    if one("SELECT COUNT(*) FROM main.threads n JOIN old.threads o USING (thread_id) "
-           "WHERE n.first_entry IS NOT o.first_entry OR n.last_entry IS NOT o.last_entry "
-           "OR n.parent_thread_id IS NOT o.parent_thread_id OR n.root_thread_id IS NOT o.root_thread_id"):
-        problems.append("threads: entry ranges or lineage differ")
-    again = sum(1 for (text,) in db.execute("SELECT text FROM main.entries") if t3_redact.redact(text)[1])
-    if again:
-        problems.append(f"{again} entries still match a rule after redaction (not idempotent)")
-    if problems:
-        raise SystemExit("scrub verification failed, archive left untouched: " + "; ".join(problems))

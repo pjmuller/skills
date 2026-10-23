@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -476,17 +476,15 @@ def make_backup(db: sqlite3.Connection, ids: list[tuple[str]], full: bool, store
     Old slim backups are folded into the archive so cleanup can offer them."""
     step(f"archiving {len(ids)} threads → {ARCHIVE}")
     archive = t3_archive.open_archive(ARCHIVE)
-    hits = Counter()
     with archive:
-        written = t3_archive.archive_threads(db, archive, [tid for (tid,) in ids], hits=hits)
+        written = t3_archive.archive_threads(db, archive, [tid for (tid,) in ids])
         if written != len(ids):  # this run must have (re)written every one; a stale copy is no proof
             raise SystemExit(f"refusing: archived {written} of {len(ids)} threads, nothing purged")
         for old in sorted(BACKUP_DIR.glob("purged-threads-*.sqlite")):
             if not t3_archive.imported(archive, old):
-                t3_archive.import_backup(old, archive, store, hits)
+                t3_archive.import_backup(old, archive, store)
     archive.close()
-    step(f"archived {written} threads ({mb(ARCHIVE.stat().st_size)} MB, search only, not restorable); "
-         f"redacted {sum(hits.values())} secret-looking values ({', '.join(f'{k} {n}' for k, n in hits.most_common()) or 'none'})")
+    step(f"archived {written} threads ({mb(ARCHIVE.stat().st_size)} MB, search only, not restorable)")
     if full:
         step("full backup (VACUUM INTO + verify)")
         backup = full_backup(db, store)
