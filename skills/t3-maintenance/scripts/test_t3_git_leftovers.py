@@ -30,21 +30,14 @@ class GitLeftoversTest(unittest.TestCase):
         self.bin.mkdir()
         self.fleet = self.base / "fleet.json"
         self.fleet.write_text("[]")
-        self.spawn_log = self.base / "spawns.log"
-        (self.bin / "t3-fleet").write_text(f"#!/bin/sh\ncat {self.fleet}\n")
-        self.refuse = self.base / "refuse"
-        (self.bin / "t3-relay").write_text(
-            "#!/bin/sh\n"
-            f'[ -e {self.refuse} ] && {{ echo "capacity exhausted" >&2; exit 1; }}\n'
-            f'echo "$*" | tr "\\n" " " >> {self.spawn_log}; echo >> {self.spawn_log}\n'
-            f'n=$(wc -l < {self.spawn_log} | tr -d " ")\n'
-            'echo "accepted: relay r$n (d$n)"\n'
-        )
+        self.fleet_fail = self.base / "fleet-fail"
+        (self.bin / "t3-fleet").write_text(
+            f'#!/bin/sh\n[ -e {self.fleet_fail} ] && {{ echo "store locked" >&2; exit 1; }}\ncat {self.fleet}\n')
         for f in self.bin.iterdir():
             f.chmod(0o755)
         self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}",
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-                    "GIT_COMMITTER_EMAIL": "t@t"}
+                    "GIT_COMMITTER_EMAIL": "t@t", "T3_GIT_LEFTOVERS_STATE": str(self.base / "state")}
         os.environ.update({k: self.env[k] for k in self.env if k.startswith("GIT_")})
         self.origin = self.base / "origin.git"
         sh(self.base, "git", "init", "-q", "--bare", "-b", "main", str(self.origin))
@@ -92,78 +85,55 @@ class GitLeftoversTest(unittest.TestCase):
         paths = {d["path"]: d["fresh"] for d in rows["stale"]["dirty"]}
         self.assertEqual(paths, {"a.txt": False, "new/": False, "fresh.md": True})
 
-    def test_apply_ff_and_owned_worker(self) -> None:
-        behind, owned = self.clone("behind"), self.clone("owned")
+    def test_apply_ff_skips_live_checkouts_and_claims_mark_owned(self) -> None:
+        behind, busy, owned = self.clone("behind"), self.clone("busy"), self.clone("owned")
         pusher = self.clone("pusher")
         (pusher / "c.txt").write_text("c\n")
         sh(pusher, "git", "add", ".")
         sh(pusher, "git", "commit", "-qm", "upstream")
         sh(pusher, "git", "push", "-q")
-        sh(behind, "git", "fetch", "-q")
+        for repo in (behind, busy):
+            sh(repo, "git", "fetch", "-q")
         (owned / "a.txt").write_text("old\n")
         os.utime(owned / "a.txt", (OLD, OLD))
-        self.fleet.write_text(json.dumps([{"thread_id": "t1", "short_id": "t1", "session_status": "running",
-                                           "workspace_root": str(owned), "title": "🧹 git leftovers owned 2026-01-01"}]))
-        rows = self.survey(behind, owned, extra=("--apply-ff",))
-        self.assertEqual(rows["behind"]["verdict"], "clean")
+        self.fleet.write_text(json.dumps([{"thread_id": "t1", "short_id": "t1", "kind": "top", "session_status": "running",
+                                           "workspace_root": str(busy), "title": "live work"}]))
+        self.write_claims({str(owned): self.claim("mcp:other", age_s=60)})
+        rows = self.survey(behind, busy, owned, extra=("--apply-ff",))
         self.assertTrue(rows["behind"]["ff_applied"])
+        self.assertEqual(rows["behind"]["verdict"], "clean")
+        self.assertEqual((rows["busy"]["verdict"], rows["busy"]["ff_skipped"]), ("ff", "live thread in checkout"))
+        self.assertEqual(sh(busy, "git", "rev-list", "--count", "HEAD..@{u}").strip(), "1")
         self.assertEqual(rows["owned"]["verdict"], "owned")
 
-    def test_dispatch_is_capped_idempotent_and_status_tracks_outcome(self) -> None:
-        one, two = self.clone("one"), self.clone("two")
-        for repo in (one, two):
-            (repo / "a.txt").write_text("old\n")
-            os.utime(repo / "a.txt", (OLD, OLD))
-        self.survey(one, two)
-        self.cli("dispatch", str(self.run_dir), "--model", "sol", "--max-parallel", "1", code=3)
-        ledger = json.loads((self.run_dir / "ledger.json").read_text())
-        self.assertEqual(list(ledger), [str(one)])
-        self.assertEqual(ledger[str(one)]["relay_id"], "r1")
-        spawn_args = self.spawn_log.read_text()
-        self.assertIn("launch --project", spawn_args)
-        self.assertIn("--model sol", spawn_args)
-        self.assertIn("git-leftovers.md", spawn_args)
-        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1", code=3)  # launch in flight holds the slot
-        self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
-
-        running = {"thread_id": "th-one", "title": ledger[str(one)]["title"], "workspace_root": str(one),
-                   "session_status": "running", "settled": False, "created_at": ledger[str(one)]["launched_at"]}
-        self.fleet.write_text(json.dumps([running]))
-        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1", code=3)  # slot still taken
-        self.assertEqual(len(self.spawn_log.read_text().splitlines()), 1)
-        self.assertEqual(json.loads((self.run_dir / "ledger.json").read_text())[str(one)]["thread_id"], "th-one")
-
-        # worker one landed its file and settled; the slot frees up for repo two
-        sh(one, "git", "commit", "-qam", "landed")
-        sh(one, "git", "push", "-q")
-        self.fleet.write_text(json.dumps([{**running, "session_status": "stopped", "settled": True}]))
-        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1")
-        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1")  # rerun: nothing new
-        self.assertEqual(len(self.spawn_log.read_text().splitlines()), 2)
-
-        second_entry = json.loads((self.run_dir / "ledger.json").read_text())[str(two)]
-        second = second_entry["title"]
-        self.fleet.write_text(json.dumps([
-            {**running, "session_status": "stopped", "settled": True},
-            {"thread_id": "th-two", "title": second, "workspace_root": str(two),
-             "session_status": "ready", "settled": False, "last_text": "a.txt — unclear intent",
-             "created_at": second_entry["launched_at"]},
-        ]))
-        status = json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))
-        self.assertEqual({Path(r["repo"]).name: r["outcome"] for r in status["repos"]},
-                         {"one": "landed", "two": "blocked"})
-
-    def test_dispatch_adopts_existing_worker_instead_of_duplicating(self) -> None:
+    def test_activity_splits_interactive_from_scheduled(self) -> None:
         repo = self.clone("busyrepo")
-        (repo / "a.txt").write_text("old\n")
-        os.utime(repo / "a.txt", (OLD, OLD))
-        self.survey(repo)
-        self.fleet.write_text(json.dumps([{"thread_id": "x1", "title": "🧹 git leftovers busyrepo 2026-01-01",
-                                           "workspace_root": str(repo), "session_status": "ready",
-                                           "settled": False}]))
-        self.cli("dispatch", str(self.run_dir))
-        self.assertFalse(self.spawn_log.exists())
-        self.assertEqual(json.loads((self.run_dir / "ledger.json").read_text())[str(repo)]["thread_id"], "x1")
+        rows = [{"thread_id": f"t{i}", "kind": k, "title": t, "workspace_root": str(repo)}
+                for i, (k, t) in enumerate([("top", "fix a bug"), ("launched", "📤 sub job"),
+                                            ("top", "⏰ Mailreview"), ("task", "child")])]
+        self.fleet.write_text(json.dumps(rows))
+        self.assertEqual(self.survey(repo)["busyrepo"]["activity"], {"interactive": 2, "scheduled": 1})
+
+    def test_fleet_failure_fails_closed(self) -> None:
+        self.fleet_fail.touch()
+        p = subprocess.run([str(SCRIPT), "survey", "--no-fetch", str(self.clone("x"))],
+                           text=True, capture_output=True, env=self.env)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("refusing", p.stderr)
+
+    # ------------------------------------------------------------ claims
+
+    def claim(self, owner: str, age_s: float, **kw) -> dict:
+        at = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - age_s))
+        return {"owner": owner, "claimed_at": at, "run_dir": str(self.run_dir), "title": "t", "brief": "b",
+                "client_request_id": "c", **kw}
+
+    def write_claims(self, claims: dict) -> None:
+        (self.base / "state").mkdir(exist_ok=True)
+        (self.base / "state" / "claims.json").write_text(json.dumps(claims))
+
+    def claims(self) -> dict:
+        return json.loads((self.base / "state" / "claims.json").read_text())
 
     def stale_repos(self, *names: str) -> list[Path]:
         repos = [self.clone(n) for n in names]
@@ -172,64 +142,96 @@ class GitLeftoversTest(unittest.TestCase):
             os.utime(repo / "a.txt", (OLD, OLD))
         return repos
 
-    def test_owned_repo_is_adopted_and_tracked(self) -> None:
-        (repo,) = self.stale_repos("ownedrepo")
-        self.fleet.write_text(json.dumps([{"thread_id": "w1", "short_id": "w1", "session_status": "running",
-                                           "settled": False, "workspace_root": str(repo),
-                                           "title": "🧹 git leftovers ownedrepo 2026-01-01"}]))
-        self.assertEqual(self.survey(repo)["ownedrepo"]["verdict"], "owned")
-        self.cli("dispatch", str(self.run_dir), "--max-parallel", "1")
-        self.assertFalse(self.spawn_log.exists())
+    def prepare(self, owner: str = "mcp:lead") -> dict:
+        return json.loads(self.cli("prepare", str(self.run_dir), "--owner", owner))
+
+    def test_prepare_claims_writes_briefs_and_resumes(self) -> None:
+        one, two = self.stale_repos("one", "two")
+        self.survey(one, two)
+        first = self.prepare()
+        self.assertEqual([Path(d["repo"]).name for d in first["delegate"]], ["one", "two"])
+        brief = Path(first["delegate"][0]["task"].removeprefix("Read and execute "))
+        self.assertIn("git-leftovers.md", brief.read_text())
+        self.assertIn(f"git -C {one}", brief.read_text())
+        self.assertIn("Fresh threshold for this run: 30 minutes", brief.read_text())
+        self.cli("record", str(one), "--owner", "mcp:lead", "--task-id", "task-1", "--child-thread", "child-1")
+        again = self.prepare()  # rerun: same claims and request ids, the recorded task comes back
+        self.assertEqual([d["clientRequestId"] for d in again["delegate"]],
+                         [d["clientRequestId"] for d in first["delegate"]])
+        self.assertEqual([d["taskId"] for d in again["delegate"]], ["task-1", None])
+        other = self.prepare("mcp:weekly")  # a second orchestrator defers, never duplicates
+        self.assertEqual(other["delegate"], [])
+        self.assertEqual({h["owner"] for h in other["held_elsewhere"]}, {"mcp:lead"})
+
+    def test_expired_claim_of_a_finished_owner_is_reclaimed(self) -> None:
+        (repo,) = self.stale_repos("old")
+        self.survey(repo)
+        self.write_claims({str(repo): self.claim("mcp:gone", age_s=7 * 3600)})
+        self.assertEqual(len(self.prepare()["delegate"]), 1)
+        self.write_claims({str(repo): self.claim("mcp:busy", age_s=7 * 3600)})
+        self.fleet.write_text(json.dumps([{"thread_id": "mcp:busy", "session_status": "running"}]))
+        self.assertEqual(self.prepare()["delegate"], [])  # past the TTL, yet its owner still runs
+
+    def test_status_outcomes_and_release(self) -> None:
+        landed, blocked, protected, unpushed = self.stale_repos("landed", "blocked", "protected", "unpushed")
+        self.survey(landed, blocked, protected, unpushed)
+        self.prepare()
+        for i, repo in enumerate((landed, blocked, protected, unpushed)):
+            self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", f"k{i}", "--child-thread", f"c{i}")
+        sh(landed, "git", "commit", "-qam", "landed")
+        sh(landed, "git", "push", "-q")
+        sh(unpushed, "git", "commit", "-qam", "local only")
+        fleet = [{"thread_id": f"c{i}", "task_status": "completed", "session_status": "idle"} for i in range(4)]
+        fleet.append({"thread_id": "w", "short_id": "w", "session_status": "running",
+                      "workspace_root": str(protected), "title": "live owner"})
+        self.fleet.write_text(json.dumps(fleet))
         status = json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))
-        self.assertEqual([(r["thread_id"], r["outcome"]) for r in status["repos"]], [("w1", "running")])
+        self.assertEqual({Path(r["repo"]).name: r["outcome"] for r in status["repos"]},
+                         {"landed": "landed", "blocked": "blocked", "protected": "protected", "unpushed": "blocked"})
+        self.assertTrue(all(c.get("released_at") for c in self.claims().values()))
+
+    def test_status_running_child_keeps_claim(self) -> None:
+        (repo,) = self.stale_repos("busy")
+        self.survey(repo)
+        self.prepare()
+        self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", "k", "--child-thread", "c")
+        self.fleet.write_text(json.dumps([{"thread_id": "c", "task_status": "running", "session_status": "idle"}]))
+        status = json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))
+        self.assertEqual(status["repos"][0]["outcome"], "running")
+        self.assertNotIn("released_at", self.claims()[str(repo)])
+
+    def test_waiting_child_keeps_its_claim(self) -> None:
+        (repo,) = self.stale_repos("waits")
+        self.survey(repo)
+        self.prepare()
+        self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", "k", "--child-thread", "c")
+        self.write_claims({k: {**v, "claimed_at": "2026-01-01T00:00:00+00:00"} for k, v in self.claims().items()})
+        self.fleet.write_text(json.dumps([{"thread_id": "c", "task_status": "waiting", "session_status": "idle"}]))
+        self.assertEqual(json.loads(self.cli("status", str(self.run_dir), "--no-fetch"))["repos"][0]["outcome"], "running")
+        self.assertEqual(self.prepare("mcp:weekly")["delegate"], [])
+
+    def test_new_claim_after_release_gets_a_new_request_id(self) -> None:
+        (repo,) = self.stale_repos("again")
+        self.survey(repo)
+        first = self.prepare()["delegate"][0]["clientRequestId"]
+        self.cli("record", str(repo), "--owner", "mcp:lead", "--task-id", "k", "--child-thread", "c")
+        self.fleet.write_text(json.dumps([{"thread_id": "c", "task_status": "completed", "session_status": "idle"}]))
+        self.cli("status", str(self.run_dir), "--no-fetch")  # blocked: stale file left, claim released
+        time.sleep(1.1)
+        second = self.prepare()["delegate"][0]
+        self.assertNotEqual(second["clientRequestId"], first)
+        self.assertIsNone(second["taskId"])
 
     def test_status_fails_closed_on_git_errors(self) -> None:
         broken, gone = self.stale_repos("broken", "gone")
         self.survey(broken, gone)
-        ledger = {str(r): {"thread_id": f"t-{r.name}"} for r in (broken, gone)}
-        (self.run_dir / "ledger.json").write_text(json.dumps(ledger))
-        self.fleet.write_text(json.dumps([{"thread_id": f"t-{r.name}", "session_status": "stopped", "settled": True}
-                                          for r in (broken, gone)]))
+        self.prepare()
         sh(broken, "git", "checkout", "-q", "--", "a.txt")  # clean, but its remote is unreachable
         sh(broken, "git", "remote", "set-url", "origin", str(self.base / "nowhere.git"))
         subprocess.run(["rm", "-rf", str(gone)], check=True)
         status = json.loads(self.cli("status", str(self.run_dir)))
         self.assertEqual({Path(r["repo"]).name: r["outcome"] for r in status["repos"]},
                          {"broken": "unverified", "gone": "unverified"})
-
-    def test_spawn_refusal_keeps_later_repos_pending(self) -> None:
-        first, second = self.stale_repos("first", "second")
-        self.survey(first, second)
-        (self.run_dir / "ledger.json").write_text(json.dumps({str(first): {"errors": ["x", "y"]}}))
-        self.refuse.touch()
-        self.cli("dispatch", str(self.run_dir), code=3)
-        ledger = json.loads((self.run_dir / "ledger.json").read_text())
-        self.assertEqual(ledger[str(first)]["skipped"], "spawn failed 3x")
-        self.assertNotIn(str(second), ledger)
-
-    def test_relay_launch_never_adopts_an_earlier_same_title_worker(self) -> None:
-        (repo,) = self.stale_repos("again")
-        self.survey(repo)
-        title = "🧹 git leftovers again 2026-01-01"
-        (self.run_dir / "ledger.json").write_text(json.dumps(
-            {str(repo): {"relay_id": "r0", "title": title, "launched_at": "2026-01-01T12:00:00+00:00"}}))
-        self.fleet.write_text(json.dumps([
-            {"thread_id": "morning", "title": title, "workspace_root": str(repo), "settled": True,
-             "session_status": "idle", "created_at": "2026-01-01T08:00:00.000Z"},
-            {"thread_id": "noon", "title": title, "workspace_root": str(repo), "settled": False,
-             "session_status": "running", "created_at": "2026-01-01T12:00:20.000Z"},
-        ]))
-        self.cli("dispatch", str(self.run_dir))
-        self.assertEqual(json.loads((self.run_dir / "ledger.json").read_text())[str(repo)]["thread_id"], "noon")
-
-    def test_lost_relay_launch_is_retried(self) -> None:
-        (repo,) = self.stale_repos("lost")
-        self.survey(repo)
-        (self.run_dir / "ledger.json").write_text(json.dumps(
-            {str(repo): {"relay_id": "r0", "title": "🧹 git leftovers lost 2026-01-01", "launched_at": "2026-01-01T00:00:00+00:00"}}))
-        self.cli("dispatch", str(self.run_dir))
-        entry = json.loads((self.run_dir / "ledger.json").read_text())[str(repo)]
-        self.assertEqual((entry["relay_id"], entry["errors"]), ("r1", ["relay r0 launch never appeared"]))
 
 
 if __name__ == "__main__":

@@ -3,30 +3,35 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Find uncommitted or unpushed leftovers in the repos you worked in lately; one T3 worker per repo.
+"""Find uncommitted or unpushed leftovers in the repos you worked in lately; the calling T3 thread
+delegates one child task per repo that needs judgment.
 
-  survey    select repos (T3 threads + recent commits + --always), fetch, one verdict per repo
-  dispatch  spawn one worker thread per `worker` repo, capped and idempotent (RUN_DIR/ledger.json)
-  status    worker thread state + a fresh git re-check per repo -> landed/protected/blocked counts
+  survey   select repos (T3 threads + recent commits + --always), fetch, one verdict per repo
+  prepare  claim every `worker` repo for --owner (cross-run claim store) and write its brief;
+           prints what to pass to delegate_task. Rerun = resume: same claims, same request ids
+  record   store the delegate_task taskId / childThreadId on the claim
+  status   child state + a strict git re-check per claimed repo -> landed/protected/blocked;
+           releases claims whose child finished
 
 Verdicts:
   clean    nothing dirty, level with upstream          ff      clean, only behind (--apply-ff)
   fresh    every dirty path changed < --fresh-minutes  local   no upstream, nothing stale
-  owned    a worker thread for this repo is running    worker  stale dirty paths, ahead/diverged,
+  owned    another orchestrator holds a live claim     worker  stale dirty paths, ahead/diverged,
                                                                fetch failed or ff refused
-Age only filters; it never proves work is finished. Judgment lives in the worker: ../git-leftovers.md.
+Age only filters; it never proves work is finished. Judgment lives in the child: ../git-leftovers.md.
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,8 +42,14 @@ FETCH_TIMEOUT = 60
 WALK_CAP = 5000  # files scanned per untracked directory before calling it fresh (unknown = protect)
 VERDICTS = ["worker", "owned", "fresh", "ff", "local", "clean"]
 DISPATCHABLE = ("worker", "owned")
-RELAY_GRACE_S = 15 * 60  # a relay launch not in the fleet by then failed: retry
-CLOCK_SKEW_S = 120  # ledger launched_at vs T3 created_at
+# A claim is held while its owner or child runs, and always for CLAIM_TTL_S after claiming: T3's store can
+# show a busy orchestrator as idle between turns, so liveness alone would let a second run steal its repos.
+CLAIM_TTL_S = 6 * 3600
+INTERACTIVE_KINDS = ("top", "launched")  # tasks/sub-agents inherit their parent's workspace: not activity
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("T3_GIT_LEFTOVERS_STATE", "~/.local/state/git-leftovers")).expanduser()
 
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -54,18 +65,38 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def ts(iso: str) -> float:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
+def last_line(p: subprocess.CompletedProcess, default: str) -> str:
+    return ((p.stderr or p.stdout).strip().splitlines() or [default])[-1]
+
+
 # ---------------------------------------------------------------- T3 fleet
 
-def fleet(recent: str, title_prefix: str | None = None) -> list[dict]:
-    cmd = ["t3-fleet", "list", "--recent", recent, "--limit", "10000", "--json"]
-    if title_prefix:
-        cmd += ["--title-prefix", title_prefix]
+def fleet(recent: str) -> list[dict]:
+    """Every thread incl. delegated tasks and sub-agents. Fails closed: an empty fleet would hide live owners."""
+    cmd = ["t3-fleet", "list", "--recent", recent, "--limit", "10000", "--subagents", "--json"]
     try:
         p = run(cmd, timeout=180)
-        data = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else []
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        return []
+        if p.returncode:
+            sys.exit(f"t3-fleet failed ({last_line(p, 'no output')}); refusing to judge ownership blind")
+        data = json.loads(p.stdout or "[]")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as exc:
+        sys.exit(f"t3-fleet unusable ({type(exc).__name__}); refusing to judge ownership blind")
     return data if isinstance(data, list) else data.get("threads", [])
+
+
+TERMINAL_TASK = ("completed", "failed", "cancelled", "interrupted", "rolled_back")
+
+
+def is_live(t: dict | None) -> bool:
+    """Running session, or a delegated task not yet terminal (waiting children still own their repo)."""
+    if not t:
+        return False
+    task = t.get("task_status")
+    return t.get("session_status") == "running" or (task is not None and task not in TERMINAL_TASK)
 
 
 def under(path: str, root: Path) -> bool:
@@ -73,8 +104,28 @@ def under(path: str, root: Path) -> bool:
     return path == str(root) or path.startswith(str(root) + "/")
 
 
-def worker_title(root: Path) -> str:
-    return f"{TITLE_PREFIX} {root.name}"
+def is_scheduled(t: dict, prefixes: list[str]) -> bool:
+    return (t.get("title") or "").startswith(tuple(prefixes))
+
+
+# ---------------------------------------------------------------- claims (shared by every run)
+
+@contextmanager
+def claims_locked():
+    """Exclusive read-modify-write of the claim store; keyed by canonical checkout path."""
+    d = state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / ".claims.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        claims = load_json(d / "claims.json", {})
+        yield claims
+        save_json(d / "claims.json", claims)
+
+
+def claim_held(c: dict | None, threads: dict, now: float) -> bool:
+    if not c or c.get("released_at"):
+        return False
+    return now - ts(c["claimed_at"]) < CLAIM_TTL_S or any(is_live(threads.get(c.get(k) or "")) for k in ("owner", "child_thread"))
 
 
 # ---------------------------------------------------------------- selection
@@ -174,20 +225,32 @@ def ahead_behind(root: Path, upstream: str) -> tuple[int, int]:
     return int(ahead), int(behind)
 
 
-def check(root: Path, sources: list[str], threads: list[dict], args, now: float) -> dict:
+def live_in(root: Path, threads: list[dict], ignore: set[str]) -> list[dict]:
+    """Running threads in this checkout, minus the caller and its own children."""
+    return [t for t in threads if is_live(t) and under(t.get("workspace_root") or "", root)
+            and t.get("thread_id") not in ignore and t.get("parent_id") not in ignore]
+
+
+def check(root: Path, sources: list[str], threads: list[dict], claims: dict, args, now: float) -> dict:
     info: dict = {"repo": str(root), "name": root.name, "sources": sources,
                   "branch": git(root, "rev-parse", "--abbrev-ref", "HEAD")}
     upstream = git(root, "rev-parse", "--abbrev-ref", "@{u}") or None
     info["upstream"] = upstream
-    live = [t for t in threads if t.get("session_status") == "running"
-            and under(t.get("workspace_root") or "", root) and t.get("thread_id") not in args.ignore_thread]
+    mine = [t for t in threads if t.get("kind") in INTERACTIVE_KINDS and under(t.get("workspace_root") or "", root)]
+    sched = sum(is_scheduled(t, args.scheduled_prefix) for t in mine)
+    info["activity"] = {"interactive": len(mine) - sched, "scheduled": sched}
+    live = live_in(root, threads, set(args.ignore_thread))
     info["live_threads"] = [f"{t.get('short_id')} {t.get('title')}" for t in live]
-    owned = [t for t in live if (t.get("title") or "").startswith(worker_title(root) + " ")]
+    by_id = {t.get("thread_id"): t for t in threads}
+    claim = claims.get(str(root))
+    held = claim_held(claim, by_id, now) and claim["owner"] not in args.ignore_thread
+    if held:
+        info["claim"] = {k: claim.get(k) for k in ("owner", "claimed_at", "task_id")}
     if upstream and not args.no_fetch:
         try:
             p = run(["git", "fetch", "--quiet", upstream.split("/", 1)[0]], cwd=root, timeout=FETCH_TIMEOUT)
             if p.returncode:
-                info["fetch_error"] = (p.stderr.strip().splitlines() or ["fetch failed"])[-1]
+                info["fetch_error"] = last_line(p, "fetch failed")
         except subprocess.TimeoutExpired:
             info["fetch_error"] = "fetch timeout"
     info["ahead"], info["behind"] = ahead_behind(root, upstream) if upstream else (0, 0)
@@ -196,7 +259,7 @@ def check(root: Path, sources: list[str], threads: list[dict], args, now: float)
     info["dirty_count"] = len(dirty)
     info["stale_count"] = sum(1 for d in dirty if not d["fresh"])
     info["aux_worktrees"] = max(0, git(root, "worktree", "list", "--porcelain").count("worktree ") - 1)
-    if owned:
+    if held:
         v = "owned"
     elif info["stale_count"] or info["ahead"] or info.get("fetch_error"):
         v = "worker"
@@ -211,35 +274,48 @@ def check(root: Path, sources: list[str], threads: list[dict], args, now: float)
 
 
 def apply_ff(entry: dict) -> None:
-    p = run(["git", "pull", "--ff-only", "--quiet"], cwd=Path(entry["repo"]), timeout=FETCH_TIMEOUT)
+    """Fast-forward a clean, behind checkout nobody is working in; recheck right before touching it."""
+    root = Path(entry["repo"])
+    if entry["live_threads"]:
+        entry["ff_skipped"] = "live thread in checkout"
+        return
+    if run(["git", "status", "--porcelain"], cwd=root).stdout.strip():
+        entry.update(verdict="worker", ff_error="dirtied since survey")
+        return
+    p = run(["git", "pull", "--ff-only", "--quiet"], cwd=root, timeout=FETCH_TIMEOUT)
     if p.returncode == 0:
         entry.update(ff_applied=True, behind=0, verdict="clean")
     else:  # e.g. an untracked file collides with an incoming path
-        entry.update(ff_applied=False, verdict="worker",
-                     ff_error=(p.stderr.strip().splitlines() or ["pull failed"])[-1])
+        entry.update(ff_applied=False, verdict="worker", ff_error=last_line(p, "pull failed"))
 
 
 def note(r: dict) -> str:
     if r.get("ff_applied"):
         return "fast-forwarded"
-    if r.get("ff_error") or r.get("fetch_error"):
-        return r.get("ff_error") or r["fetch_error"]
+    if r.get("ff_error") or r.get("fetch_error") or r.get("ff_skipped"):
+        return r.get("ff_error") or r.get("fetch_error") or r["ff_skipped"]
     bits = [f"{d['xy'].strip()} {d['path']}" + (" (fresh)" if d["fresh"] else "") for d in r["dirty"][:3]]
+    if r.get("claim"):
+        bits.append(f"claimed by {r['claim']['owner']}")
     if r["live_threads"]:
         bits.append("live: " + "; ".join(r["live_threads"])[:120])
     return ", ".join(bits)
 
 
 def survey_markdown(report: dict) -> str:
-    rows = sorted(report["repos"], key=lambda r: (VERDICTS.index(r["verdict"]), r["repo"]))
+    rows = sorted(report["repos"], key=lambda r: (VERDICTS.index(r["verdict"]), -r["activity"]["interactive"], r["repo"]))
     out = [f"# git leftovers survey {report['at']}", "",
            " · ".join(f"{v} {n}" for v, n in report["counts"].items() if n), "",
-           "| repo | verdict | branch | ahead/behind | dirty (stale) | note |", "|---|---|---|---|---|---|"]
+           "| repo | verdict | branch | ahead/behind | dirty (stale) | threads i/s | note |",
+           "|---|---|---|---|---|---|---|"]
     for r in rows:
         if r["verdict"] == "clean":
             continue
+        a = r["activity"]
         out.append(f"| `{r['repo']}` | **{r['verdict']}** | {r['branch']} | {r['ahead']}/{r['behind']} "
-                   f"| {r['dirty_count']} ({r['stale_count']}) | {note(r).replace('|', '/')} |")
+                   f"| {r['dirty_count']} ({r['stale_count']}) | {a['interactive']}/{a['scheduled']} "
+                   f"| {note(r).replace('|', '/')} |")
+    out += ["", "threads i/s = interactive / scheduled T3 threads in the window."]
     if report["missing"]:
         out += ["", "Missing on disk: " + ", ".join(report["missing"])]
     return "\n".join(out) + "\n"
@@ -249,7 +325,8 @@ def cmd_survey(args) -> int:
     threads = fleet(f"{args.days}d")
     repos, missing = select(threads, args)
     now = time.time()
-    entries = [check(r, src, threads, args, now) for r, src in repos.items()]
+    claims = load_json(state_dir() / "claims.json", {})
+    entries = [check(r, src, threads, claims, args, now) for r, src in repos.items()]
     if args.apply_ff:
         for e in entries:
             if e["verdict"] == "ff":
@@ -265,7 +342,7 @@ def cmd_survey(args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------- dispatch
+# ---------------------------------------------------------------- prepare / record
 
 def load_json(path: Path, default):
     return json.loads(path.read_text()) if path.exists() else default
@@ -277,12 +354,15 @@ def save_json(path: Path, data) -> None:
     tmp.replace(path)
 
 
-def worker_brief(row: dict, run_dir: Path, extra: str) -> str:
+def worker_brief(row: dict, run_dir: Path, fresh_minutes: int, extra: str) -> str:
     protect = [d["path"] for d in row["dirty"] if d["fresh"]]
     lines = [
         f"Read and follow {PLAYBOOK} for the checkout {row['repo']}.",
+        "You run as a delegate_task child: your working directory is the parent's checkout, not this repo. "
+        f"Use `git -C {row['repo']}` or cd there for every command.",
         f"Survey ({run_dir / 'survey.json'}): branch {row['branch']}, upstream {row['upstream'] or 'none'}, "
         f"ahead {row['ahead']}, behind {row['behind']}, {row['dirty_count']} dirty ({row['stale_count']} stale).",
+        f"Fresh threshold for this run: {fresh_minutes} minutes. A path modified more recently is protected.",
     ]
     if protect:
         lines.append("Fresh at survey time, leave untouched unless they age out and pass every check: "
@@ -293,7 +373,7 @@ def worker_brief(row: dict, run_dir: Path, extra: str) -> str:
         lines.append(f"Git error: {row.get('fetch_error') or row.get('ff_error')}")
     if extra:
         lines.append(extra)
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
@@ -305,181 +385,136 @@ def still_needs_worker(row: dict, fresh_minutes: int) -> bool:
     return bool(stale or ahead or row.get("fetch_error") or row.get("ff_error"))
 
 
-def spawn(row: dict, args) -> tuple[str | None, str]:
-    """Launch via t3-relay (async): (relay id, title) or (None, error). The thread id comes later from the fleet."""
-    title = f"{worker_title(Path(row['repo']))} {datetime.now().strftime('%Y-%m-%d')}"
-    cmd = ["t3-relay", "launch", "--project", row["repo"], "--title", title]
-    if args.model:
-        cmd += ["--model", args.model]
-    if args.thinking:
-        cmd += ["--effort", args.thinking]
-    brief = worker_brief(row, args.run_dir, args.extra)
-    if args.dry_run:
-        print(f"--- {' '.join(cmd)}\n{brief}")
-        return "dry-run", title
-    p = run([*cmd, "--", brief], timeout=120)
-    m = re.search(r"^accepted: relay (\S+)", p.stdout, re.M)
-    if p.returncode == 0 and m:
-        return m.group(1), title
-    return None, ((p.stderr or p.stdout).strip().splitlines() or ["spawn failed"])[-1]
+def handoff(repo: str, c: dict) -> dict:
+    return {"repo": repo, "title": c["title"], "task": f"Read and execute {c['brief']}",
+            "clientRequestId": c["client_request_id"], "taskId": c.get("task_id")}
 
 
-def ledger_thread(repo: str, entry: dict, threads: dict) -> dict | None:
-    """The entry's thread: by id, else (relay launch) the first thread with its exact title in
-    this checkout created after the launch: an earlier same-day worker shares the title."""
-    if entry.get("thread_id"):
-        return threads.get(entry["thread_id"])
-    if not entry.get("relay_id"):
-        return None
-    since = datetime.fromisoformat(entry["launched_at"]).timestamp() - CLOCK_SKEW_S
-    fresh = [t for t in threads.values() if t.get("title") == entry.get("title")
-             and os.path.realpath(t.get("workspace_root") or "/") == repo
-             and t.get("created_at")
-             and datetime.fromisoformat(t["created_at"].replace("Z", "+00:00")).timestamp() >= since]
-    return min(fresh, key=lambda t: t["created_at"], default=None)
-
-
-def dispatch_pass(args, survey: dict, ledger: dict) -> tuple[int, int]:
-    """One pass: adopt or spawn until --max-parallel workers run. Returns (active, pending)."""
-    threads = {t["thread_id"]: t for t in fleet(f"{args.days}d", TITLE_PREFIX)}
-    by_title = {}
-    for t in threads.values():
-        if not t.get("settled") and not t.get("deleted") and not t.get("archived"):
-            ws = os.path.realpath(t.get("workspace_root") or "/")
-            by_title.setdefault((ws, (t.get("title") or "").rsplit(" ", 1)[0]), t)
-    active = 0
-    for repo, e in ledger.items():
-        if e.get("relay_id") and not e.get("thread_id"):
-            t = ledger_thread(repo, e, threads)
-            if t:
-                e["thread_id"] = t["thread_id"]
-            elif time.time() - datetime.fromisoformat(e["launched_at"]).timestamp() > RELAY_GRACE_S:
-                e["errors"] = e.get("errors", []) + [f"relay {e.pop('relay_id')} launch never appeared"]
-                if len(e["errors"]) >= 3:
-                    e["skipped"] = "spawn failed 3x"
-                continue
-            else:
-                active += 1  # launch in flight: holds its slot
-                continue
-        active += threads.get(e.get("thread_id") or "", {}).get("session_status") == "running"
-    for row in survey["repos"]:
-        repo = row["repo"]
-        entry = ledger.get(repo, {})
-        if row["verdict"] not in DISPATCHABLE or entry.get("thread_id") or entry.get("relay_id") or entry.get("skipped"):
-            continue
-        twin = by_title.get((repo, worker_title(Path(repo))))
-        if twin:  # another run (or a resumed one) already owns this repo: adopt, never duplicate
-            ledger[repo] = {"thread_id": twin["thread_id"], "title": twin["title"], "adopted_at": now_iso()}
-            active += twin.get("session_status") == "running"
-            continue
-        if row["verdict"] == "owned" or active >= args.max_parallel:
-            continue  # owned: its worker is outside the fleet window; stays pending, never a second one
-        if not still_needs_worker(row, survey["fresh_minutes"]):
-            ledger[repo] = {"skipped": "nothing stale left at dispatch time", "at": now_iso()}
-            continue
-        rid, detail = spawn(row, args)
-        entry = ledger.setdefault(repo, {})
-        if rid:
-            entry.update(relay_id=rid, title=detail, launched_at=now_iso())
-            active += not args.dry_run
-        else:
-            entry["errors"] = entry.get("errors", []) + [detail]
-            print(f"spawn refused for {repo}: {detail}", file=sys.stderr)
-            if len(entry["errors"]) >= 3:
-                entry["skipped"] = "spawn failed 3x"
-            break  # capacity refusals hit every repo alike; retry next pass
-    pending = sum(1 for row in survey["repos"] if row["verdict"] in DISPATCHABLE
-                  and not any(ledger.get(row["repo"], {}).get(k) for k in ("thread_id", "relay_id", "skipped")))
-    return active, pending
-
-
-def cmd_dispatch(args) -> int:
-    args.run_dir = args.run_dir.expanduser().resolve()
-    survey = load_json(args.run_dir / "survey.json", None)
+def cmd_prepare(args) -> int:
+    run_dir = args.run_dir.expanduser().resolve()
+    survey = load_json(run_dir / "survey.json", None)
     if survey is None:
-        sys.exit(f"no survey.json in {args.run_dir}; run `survey --out {args.run_dir}` first")
-    lock = open(args.run_dir / ".dispatch.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        sys.exit(f"another dispatcher holds {args.run_dir}; not competing")
-    ledger_path = args.run_dir / ("ledger.dry-run.json" if args.dry_run else "ledger.json")
-    deadline = time.time() + args.max_hours * 3600
-    while True:
-        ledger = load_json(ledger_path, {})
-        active, pending = dispatch_pass(args, survey, ledger)
-        save_json(ledger_path, ledger)
-        print(f"{now_iso()} active {active} · pending {pending} · ledger {len(ledger)}", flush=True)
-        if not args.wait or (active == 0 and pending == 0) or args.dry_run or time.time() > deadline:
-            return 0 if pending == 0 else 3
-        time.sleep(args.poll)
+        sys.exit(f"no survey.json in {run_dir}; run `survey --out {run_dir}` first")
+    threads = {t["thread_id"]: t for t in fleet(f"{args.days}d")}
+    now, todo, held, skipped = time.time(), [], [], []
+    (run_dir / "briefs").mkdir(exist_ok=True)
+    with claims_locked() as claims:
+        for row in survey["repos"]:
+            repo = row["repo"]
+            if row["verdict"] not in DISPATCHABLE:
+                continue
+            c = claims.get(repo)
+            if c and c["owner"] == args.owner and not c.get("released_at"):
+                todo.append(handoff(repo, c))  # resume: same brief, same request id, maybe a task already
+                continue
+            if claim_held(c, threads, now):
+                held.append({"repo": repo, "owner": c["owner"], "task_id": c.get("task_id")})
+                continue
+            if not still_needs_worker(row, survey["fresh_minutes"]):
+                skipped.append({"repo": repo, "reason": "nothing stale left"})
+                continue
+            key = hashlib.sha1(repo.encode()).hexdigest()[:8]
+            brief = run_dir / "briefs" / f"{Path(repo).name}-{key}.md"
+            brief.write_text(worker_brief(row, run_dir, survey["fresh_minutes"], args.extra))
+            claims[repo] = {"owner": args.owner, "run_dir": str(run_dir), "claimed_at": now_iso(),
+                            "title": f"{TITLE_PREFIX} {Path(repo).name}", "brief": str(brief),
+                            # once per claim: a later claim on the same repo must not replay a finished task
+                            "client_request_id": f"git-leftovers:{run_dir.name}:{key}:{args.owner[-8:]}:{int(now)}"}
+            todo.append(handoff(repo, claims[repo]))
+    print(json.dumps({"delegate": todo, "held_elsewhere": held, "skipped": skipped}, indent=1, ensure_ascii=False))
+    return 0
+
+
+def cmd_record(args) -> int:
+    repo = str(Path(args.repo).expanduser().resolve())
+    with claims_locked() as claims:
+        c = claims.get(repo)
+        if not c or c["owner"] != args.owner or c.get("released_at"):
+            sys.exit(f"{repo}: no open claim of {args.owner}; run `prepare` first")
+        c.update(task_id=args.task_id, child_thread=args.child_thread, delegated_at=now_iso())
+    return 0
 
 
 # ---------------------------------------------------------------- status
 
-def verify(root: Path, upstream: str | None, fresh_minutes: int, now: float, fetch: bool) -> tuple[list, int, str]:
-    """(dirty, ahead, error) from a strict re-read; any git failure is an error, never a clean result."""
+def verify(root: Path, fresh_minutes: int, now: float, fetch: bool) -> dict:
+    """Strict re-read; any git failure is an error, never a clean result."""
     try:
         if not root.is_dir():
-            return [], 0, "repo missing"
+            return {"error": "repo missing"}
+        upstream = git(root, "rev-parse", "--abbrev-ref", "@{u}") or None
         if upstream and fetch:
             p = run(["git", "fetch", "--quiet", upstream.split("/", 1)[0]], cwd=root, timeout=FETCH_TIMEOUT)
             if p.returncode:
-                return [], 0, "fetch: " + ((p.stderr.strip().splitlines() or ["failed"])[-1])
+                return {"error": "fetch: " + last_line(p, "failed")}
         if run(["git", "status", "--porcelain"], cwd=root).returncode:
-            return [], 0, "git status failed"
-        ahead = 0
+            return {"error": "git status failed"}
+        ahead = behind = 0
         if upstream:
-            p = run(["git", "rev-list", "--count", f"{upstream}..HEAD"], cwd=root)
+            p = run(["git", "rev-list", "--left-right", "--count", f"{upstream}...HEAD"], cwd=root)
             if p.returncode:
-                return [], 0, "rev-list failed"
-            ahead = int(p.stdout.strip())
-        return dirty_paths(root, fresh_minutes, now), ahead, ""
+                return {"error": "rev-list failed"}
+            behind, ahead = map(int, p.stdout.split())
+        return {"upstream": upstream, "ahead": ahead, "behind": behind,
+                "dirty": dirty_paths(root, fresh_minutes, now)}
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        return [], 0, f"{type(exc).__name__}: {exc}"
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def outcome_of(c: dict, child: dict | None, g: dict, live: list[dict]) -> tuple[str, str]:
+    """(outcome, reason). `landed` needs an upstream, nothing ahead and no stale dirt; whatever
+    remains is `protected` only with a named reason (fresh paths, live thread), else `blocked`."""
+    if g.get("error"):
+        return "unverified", g["error"]
+    if not c.get("task_id"):
+        return "pending", "claimed, not delegated yet"
+    if is_live(child):
+        return "running", ""
+    if child is None:
+        return "unknown-child", "child thread not in the fleet window"
+    stale = [d["path"] for d in g["dirty"] if not d["fresh"]]
+    fresh = [d["path"] for d in g["dirty"] if d["fresh"]]
+    if not g["upstream"]:
+        return "local", "no upstream: committed locally at best"
+    if g["ahead"]:
+        return "blocked", f"{g['ahead']} commit(s) not pushed"
+    owners = "; ".join(f"{t.get('short_id')} {t.get('title')}" for t in live)[:160]
+    if stale:
+        return ("protected", f"live: {owners}; stale: {', '.join(stale[:4])}") if live else \
+               ("blocked", "stale: " + ", ".join(stale[:4]))
+    if fresh or (g["behind"] and live):
+        return "protected", "; ".join(filter(None, [("fresh: " + ", ".join(fresh[:4])) if fresh else "",
+                                                     f"live: {owners}" if live else ""]))
+    if g["behind"]:
+        return "blocked", f"checkout {g['behind']} behind, nobody in it"
+    return "landed", ""
 
 
 def cmd_status(args) -> int:
     run_dir = args.run_dir.expanduser().resolve()
-    survey = load_json(run_dir / "survey.json", {"repos": [], "fresh_minutes": 30})
-    ledger = load_json(run_dir / "ledger.json", {})
-    threads = {t["thread_id"]: t for t in fleet(f"{args.days}d", TITLE_PREFIX)}
+    survey = load_json(run_dir / "survey.json", {"fresh_minutes": 30})
+    fleet_rows = fleet(f"{args.days}d")
+    threads = {t["thread_id"]: t for t in fleet_rows}
     rows, now = [], time.time()
-    for row in survey["repos"]:
-        repo, entry = row["repo"], ledger.get(row["repo"], {})
-        if row["verdict"] not in DISPATCHABLE and not entry:
-            continue
-        dirty, ahead, error = verify(Path(repo), row["upstream"], survey["fresh_minutes"], now, not args.no_fetch)
-        t = ledger_thread(repo, entry, threads)
-        if error:
-            outcome = "unverified"  # git could not be read: never count it landed
-        elif entry.get("skipped"):
-            outcome = "skipped"
-        elif not t:
-            outcome = ("launching" if entry.get("relay_id") else
-                       "pending" if not entry.get("thread_id") else "unknown-thread")
-        elif t.get("session_status") == "running":
-            outcome = "running"
-        elif not t.get("settled"):
-            outcome = "blocked"  # the worker ended without settling: it needs the user
-        elif ahead and row["upstream"]:
-            outcome = "blocked"  # settled yet unpushed: verify by hand
-        elif dirty:
-            outcome = "protected"
-        else:
-            outcome = "landed"
-        rows.append({"repo": repo, "outcome": outcome, "thread_id": (t or {}).get("thread_id") or entry.get("thread_id"),
-                     "ahead": ahead, "dirty": [f"{d['xy'].strip()} {d['path']}" for d in dirty][:10],
-                     "last_text": (t or {}).get("last_text", "")[:200], "skipped": error or entry.get("skipped")})
-    order = ["blocked", "unverified", "unknown-thread", "running", "launching", "pending", "protected", "skipped", "landed"]
+    with claims_locked() as claims:
+        for repo, c in claims.items():
+            if c.get("run_dir") != str(run_dir):
+                continue
+            g = verify(Path(repo), survey["fresh_minutes"], now, not args.no_fetch)
+            child = threads.get(c.get("child_thread") or "")
+            live = live_in(Path(repo), fleet_rows, {c["owner"]} | set(args.ignore_thread))
+            outcome, reason = outcome_of(c, child, g, live)
+            if outcome in ("landed", "protected", "blocked", "local"):
+                c.update(released_at=c.get("released_at") or now_iso(), outcome=outcome)
+            rows.append({"repo": repo, "outcome": outcome, "reason": reason, "task_id": c.get("task_id"),
+                         "child_thread": c.get("child_thread"), "last_text": (child or {}).get("last_text", "")[:200]})
+    order = ["blocked", "unverified", "unknown-child", "running", "pending", "local", "protected", "landed"]
     rows.sort(key=lambda r: (order.index(r["outcome"]), r["repo"]))
     counts = {o: sum(r["outcome"] == o for r in rows) for o in order}
     report = {"at": now_iso(), "counts": counts, "survey_counts": survey.get("counts"), "repos": rows}
     md = [f"# git leftovers status {report['at']}", "",
-          " · ".join(f"{o} {n}" for o, n in counts.items() if n) or "no worker repos", ""]
-    for r in rows:
-        tail = r["skipped"] or ("; ".join(r["dirty"][:4]) if r["outcome"] == "protected" else r["last_text"][:140])
-        md.append(f"- **{r['outcome']}** `{r['repo']}` {(r['thread_id'] or '')[:8]} {tail}".rstrip())
+          " · ".join(f"{o} {n}" for o, n in counts.items() if n) or "no claimed repos", ""]
+    md += [f"- **{r['outcome']}** `{r['repo']}` {r['reason']}".rstrip() for r in rows]
     save_json(run_dir / "status.json", report)
     (run_dir / "status.md").write_text("\n".join(md) + "\n")
     print("\n".join(md) if args.markdown else json.dumps(report, indent=1))
@@ -495,36 +530,42 @@ def main() -> int:
     s.add_argument("--root", action="append", default=[], help="scan <root>/*/* for recent commits (repeatable; default ~/code)")
     s.add_argument("--always", action="append", default=[], help="always include this repo (repeatable)")
     s.add_argument("--exclude", action="append", default=[], help="repo name or path to leave out")
-    s.add_argument("--ignore-thread", action="append", default=[], help="thread id that is not 'live' (the caller)")
+    s.add_argument("--ignore-thread", action="append", default=[], help="the caller's thread id: neither live nor an owner")
+    s.add_argument("--scheduled-prefix", action="append", default=None,
+                   help="title prefix of scheduled-job threads, counted apart from interactive ones (default ⏰)")
     s.add_argument("--days", type=int, default=14)
     s.add_argument("--fresh-minutes", type=int, default=30)
     s.add_argument("--no-fetch", action="store_true")
-    s.add_argument("--apply-ff", action="store_true", help="fast-forward `ff` repos in place (only mutation)")
+    s.add_argument("--apply-ff", action="store_true", help="fast-forward `ff` repos without a live thread (only mutation)")
     s.add_argument("--out", type=Path, help="run dir: writes survey.json + survey.md")
     s.add_argument("--markdown", action="store_true")
     s.set_defaults(fn=cmd_survey)
 
-    d = sub.add_parser("dispatch", help="spawn one worker per `worker` repo; resumable via ledger.json")
-    d.add_argument("run_dir", type=Path)
-    d.add_argument("--model")
-    d.add_argument("--thinking", help="effort override (default: the model's house effort)")
-    d.add_argument("--max-parallel", type=int, default=4)
-    d.add_argument("--extra", default="", help="extra line appended to every worker brief")
-    d.add_argument("--wait", action="store_true", help="keep filling slots until every repo is dispatched")
-    d.add_argument("--poll", type=int, default=60)
-    d.add_argument("--max-hours", type=float, default=3)
-    d.add_argument("--days", type=int, default=3, help="fleet window for adopting existing workers")
-    d.add_argument("--dry-run", action="store_true", help="print the briefs, launch nothing, ledger.dry-run.json")
-    d.set_defaults(fn=cmd_dispatch)
+    p = sub.add_parser("prepare", help="claim `worker` repos for --owner and write their briefs (JSON for delegate_task)")
+    p.add_argument("run_dir", type=Path)
+    p.add_argument("--owner", required=True, help="the orchestrating thread's id (t3_thread_list currentThreadId)")
+    p.add_argument("--extra", default="", help="extra line appended to every brief")
+    p.add_argument("--days", type=int, default=3, help="fleet window for claim liveness")
+    p.set_defaults(fn=cmd_prepare)
 
-    st = sub.add_parser("status", help="outcome per dispatched repo; writes status.json + status.md")
+    r = sub.add_parser("record", help="store the delegate_task ids on a claim")
+    r.add_argument("repo")
+    r.add_argument("--owner", required=True)
+    r.add_argument("--task-id", required=True)
+    r.add_argument("--child-thread", required=True)
+    r.set_defaults(fn=cmd_record)
+
+    st = sub.add_parser("status", help="outcome per claimed repo; writes status.json + status.md")
     st.add_argument("run_dir", type=Path)
     st.add_argument("--days", type=int, default=3)
+    st.add_argument("--ignore-thread", action="append", default=[])
     st.add_argument("--no-fetch", action="store_true")
     st.add_argument("--markdown", action="store_true")
     st.set_defaults(fn=cmd_status)
 
     args = ap.parse_args()
+    if getattr(args, "scheduled_prefix", ...) is None:
+        args.scheduled_prefix = ["⏰"]
     return args.fn(args)
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-23 — t3-git-leftovers: the orchestrator delegates, claims span runs
+
+- The calling T3 thread runs one `delegate_task` child per judgment repo (results return to it for
+  verification): `prepare` claims repos and writes briefs, `record` stores task ids. `dispatch`
+  (standalone `t3-relay` workers, title adoption, `--wait`) is gone; children no longer self-settle.
+- Claims in `~/.local/state/git-leftovers/claims.json` cover every run and date: another orchestrator
+  (e.g. the weekly job) gets `held_elsewhere`; a rerun resumes with the same request ids.
+- Survey: interactive vs scheduled (`⏰`) thread counts per repo; `--apply-ff` skips checkouts a live
+  thread works in; an unreadable fleet now aborts instead of hiding live owners.
+- `status`: `landed` needs an upstream, nothing ahead and no stale dirt; leftovers are `protected`
+  only with a named reason (fresh path, live thread); no upstream = `local`.
+
 ## v0.5.10 (2026-10-23)
 
 - skills-refresh: the template-history cache force-updates tags. After an upstream history rewrite, the re-signed tags made every later prompt re-sync fail daily ("cannot fetch … retrying tomorrow"). Releases themselves already survived a rewrite: each apply fetches the exact tag into fresh staging and verifies its signature. Recovery after a rewrite = one new signed release (`scripts/release`). Old releases re-created under the same name stay installed until then.

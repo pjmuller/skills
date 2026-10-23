@@ -1,6 +1,6 @@
 ---
 name: t3-maintenance
-description: "Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for thread inventory across projects, monthly T3 cleanup, orchestrator fleet view (stuck or undelivered delegated tasks), purging old transcripts, unsent composer drafts, \"mine my prompts\", uncommitted/unpushed leftovers across recently active repos (one worker thread per repo), or \"/t3-maintenance\". Not for launching, messaging, reading or settling one thread: use the native T3 tools (t3-manage-thread)."
+description: "Audit and maintain the user's T3 Code thread fleet, or mine their recent prompts for recurring instructions. Use for thread inventory across projects, monthly T3 cleanup, orchestrator fleet view (stuck or undelivered delegated tasks), purging old transcripts, unsent composer drafts, \"mine my prompts\", uncommitted/unpushed leftovers across recently active repos (one delegated child per repo), or \"/t3-maintenance\". Not for launching, messaging, reading or settling one thread: use the native T3 tools (t3-manage-thread)."
 ---
 
 # T3 Maintenance
@@ -18,7 +18,7 @@ T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`)
   ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups.
 - `t3-preview-gc` — free browser-preview renderers (macOS): `--apply` closes tabs idle past `--idle-hours`
   whose thread has no running turn (same path as `t3_preview_close`; frees the renderer since T3 0.1).
-- `t3-git-leftovers` — repos with uncommitted/unpushed work, one worker per repo ([below](#git-leftovers-t3-git-leftovers)).
+- `t3-git-leftovers` — repos with uncommitted/unpushed work, one delegated child per repo ([below](#git-leftovers-t3-git-leftovers)).
 - `scripts/t3_store.py` — shared read-only store access, schema notes, short ids.
 
 Settling, unsettling, pinging: native `t3_thread_organize` / `t3_thread_send` / `task_status`
@@ -62,22 +62,29 @@ These commands only read; recovery/launch decisions stay with the caller/native 
 
 ## Git leftovers (`t3-git-leftovers`)
 
-Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`. One
-orchestrator owns a run dir; the ledger makes reruns adopt, never duplicate.
+INTENT: shared checkouts stay level with their remote, so the next agent starts clean. Repos = T3 threads
+of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`; one row each, ranked by interactive
+vs scheduled (`⏰`) threads. The orchestrator is a T3 thread: the script surveys, claims and verifies;
+the agent delegates (only an agent can call `delegate_task`).
 
 ```bash
-R=~/.local/state/git-leftovers/$(date +%F)
-t3-git-leftovers survey --out $R --apply-ff --ignore-thread <own thread id>
-t3-git-leftovers dispatch $R --model <m> --dry-run       # read the briefs, then without --dry-run
-t3-git-leftovers dispatch $R --model <m> --wait          # background shell; ≤ --max-parallel live
-t3-git-leftovers status $R --markdown                    # landed / protected / blocked / running
+R=~/.local/state/git-leftovers/$(date +%F); ME=<t3_thread_list currentThreadId>
+t3-git-leftovers survey --out $R --apply-ff --ignore-thread $ME   # fetch; ff only clean checkouts nobody is in
+t3-git-leftovers prepare $R --owner $ME          # JSON: claimed repos -> {title, task, clientRequestId, taskId}
+t3-git-leftovers record <repo> --owner $ME --task-id <taskId> --child-thread <childThreadId>
+t3-git-leftovers status $R --markdown            # after children finish: landed / protected / blocked
 ```
 
-Workers launch via `t3-relay launch` ([relay.md](../t3-manage-thread/relay.md); async, the ledger
-holds the relay id until the titled thread shows in `t3-fleet`, retried after 15 min), titled
-`🧹 git leftovers <repo> <date>`, and follow [git-leftovers.md](git-leftovers.md). `status`
-re-checks git and thread state; report its counts only. `blocked` = the worker stayed open for the
-user; `unverified` = git could not be re-read (never counted landed).
+- Trivial rows (one generated dir to ignore, a kit file the repo convention says to commit) the lead may
+  land itself under [git-leftovers.md](git-leftovers.md) before `prepare` (it skips rows with nothing stale left); judgment rows → one `delegate_task` per repo
+  (`task`/`title`/`clientRequestId` from `prepare`; skip rows that already have a `taskId`), `record` it at
+  once, ≤ 3 live (each runs repo checks). Children share the lead's checkout: their brief names the repo.
+- **Claims** (`~/.local/state/git-leftovers/claims.json`, flock) span dates and runs: held for 6 h, and
+  longer while owner or child runs. Another orchestrator's claim → `held_elsewhere` (survey: `owned`); a
+  rerun by the same owner resumes with the same request ids. `status` releases finished claims.
+- Verify each child yourself: its final answer (`task_status`) names commits and leftovers; `status`
+  re-reads git. `landed` = upstream, nothing ahead or stale; `protected` needs a reason (fresh path, live
+  thread); `local` = no upstream; `unverified` = git unreadable. Fleet unreadable → every command refuses.
 
 ## Prompt patterns (`t3-my-prompts`)
 
