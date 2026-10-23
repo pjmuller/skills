@@ -15,7 +15,7 @@ T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`)
 - `t3-purge-threads` — hard-delete old threads + transcripts (secrets); `drop-v1` frees the frozen
   0.0.x `state.sqlite`.
 - `t3-thread-archive` — the searchable backup archive purged threads live on in
-  ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups.
+  ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups, `scrub`.
 - `t3-preview-gc` — free browser-preview renderers (macOS): `--apply` closes tabs idle past `--idle-hours`
   whose thread has no running turn (same path as `t3_preview_close`; frees the renderer since T3 0.1).
 - `scripts/t3_store.py` — shared read-only store access, schema notes, short ids.
@@ -111,6 +111,20 @@ FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](
 - Written only by `apply` (its cohort) and by hand (`sync`: missing or changed threads; read-only on
   T3's store). Re-archiving replaces a thread's rows; nothing expires. No nightly job: nothing else
   hard-deletes T3 history.
+- **Secrets redacted on every write** (`write_thread`: purge, `sync`, `import`), deterministic only:
+  an LLM judge would see the values again. Rules + known misses: docstring of `scripts/t3_redact.py`
+  (vendor prefixes, secret-named assignments, auth headers/cookies, URL passwords/params, private
+  keys, long random runs; commit hashes, UUIDs, paths, ids, plain config survive). Value →
+  `[redacted:<category>]`; output shows counts, never values. Not a rotation: a leaked credential
+  stays leaked in T3's store, provider transcripts and the full backup.
+- Text is redacted before any clip (a cut could drop `PASSWORD =` and keep the value). Rule change →
+  bump `t3_redact.VERSION`, then `sync --force` (threads still in T3: re-cut from full source text)
+  and `scrub` (`--dry-run` counts first): rebuilds into a fresh file (old text would linger in FTS
+  segments/free pages), verifies parity + idempotency, swaps atomically; ~1 min, one archive-sized
+  temp file. `threads.redaction` +
+  a trigger make older writer copies fail instead of writing raw text; `stats` shows versions.
+  Writers share `t3-archive.sqlite.lock` (a second one waits). SSD/APFS: the replaced file's
+  blocks are freed, not wiped.
 - Measured 2026-10-18: the whole 6.6 GB store archives to 445 MB (incl. the old 0.0.x backup) in
   ~40 s; tool text is 85% of it. Codex's own
   `~/.codex/thread_history_1.sqlite` is out of scope: T3 already holds its threads' tool output.
