@@ -164,6 +164,15 @@ class Tests(unittest.TestCase):
         with self.assertRaises(c.Refused):
             c.guard_thread(refetched, detail, ACCOUNT)
 
+    def test_refetched_draft_attachment_ids_keep_draft_digest(self):
+        draft = {'id': 'r1', 'message': {'id': 'm1', 'payload': {'parts': [
+            {'mimeType': 'text/csv', 'body': {'attachmentId': 'first-fetch', 'size': 9}}]}}}
+        refetched = copy.deepcopy(draft)
+        refetched['message']['payload']['parts'][0]['body']['attachmentId'] = 'second-fetch'
+        self.assertEqual(c.digest(c.stable(draft)), c.digest(c.stable(refetched)))
+        refetched['message']['payload']['parts'][0]['body']['size'] = 10
+        self.assertNotEqual(c.digest(c.stable(draft)), c.digest(c.stable(refetched)))
+
     def test_findings_freshness_run_identity_and_quotes(self):
         detail, finding = fixture()
         c.check_finding(finding, detail)
@@ -288,6 +297,34 @@ class Tests(unittest.TestCase):
             self.assertIn('Proposed brain changes', report)  # Shown even for non-actionable threads.
             self.assertIn('Add &lt;b&gt;workaround&lt;/b&gt;', report)
             self.assertIn('/private/x.brain.md', report)
+
+    def test_bug_and_dx_gaps_validate_and_render_escaped(self):
+        detail, finding = fixture()
+        del finding['replacement_body']
+        finding['bug'] = {'title': 'Sheet <b>drops</b> rows', 'evidence': ['sync.go:181 returns early'],
+                          'affected': '67 backups', 'fix_direction': 'Backfill on reset', 'owner': 'Developer',
+                          'thread': 't3-thread://v1/mcp:x'}
+        finding['dx_gaps'] = [{'gap': 'No AWS profile', 'unblock': 'Ask the developer for read-only logs'}]
+        c.check_finding(finding, detail)
+        for bad in ({'bug': dict(finding['bug'], evidence=[])}, {'bug': dict(finding['bug'], owner='')},
+                    {'dx_gaps': []}, {'dx_gaps': [{'gap': 'x'}]}):
+            with self.subTest(bad=bad), self.assertRaises(c.Refused):
+                c.check_finding(dict(finding, **bad), detail)
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            c.save(bundle / 'details/abc.json', detail)
+            c.save(bundle / 'findings.json', [finding])
+            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
+                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'draft_ready'}],
+                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
+                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
+            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                        out=str(bundle / 'report.html')))
+            report = (bundle / 'report.html').read_text()
+            self.assertIn('Confirmed product bugs', report)
+            self.assertIn('Sheet &lt;b&gt;drops&lt;/b&gt; rows', report)
+            self.assertIn('What limited this review', report)
+            self.assertIn('Ask the developer for read-only logs', report)
 
     def test_html_escaping_secret_links_and_confirmed_action(self):
         detail, finding = fixture()

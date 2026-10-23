@@ -4,6 +4,8 @@ Give each Opus 5.5 high reviewer its single refreshed detail file, relevant loca
 
 Read the latest unanswered inbound and current draft first. Establish what the customer wants, what would make the answer correct, and what changed since ReplyPen's run. Then read run notes/trace only where they help explain the claim. Independently verify consequential claims through the current product code/brain and public, read-only `rp` grounding or authoritative external sources. A prior run's assertion is not an independent source. Use progressive disclosure: inspect relevant steps/files/records, not the entire trace/database. Never use `rp ask`, run retry or process-thread.
 
+**Promised follow-ups are research you owe.** A draft that defers to developers ("we're looking into it", "will come back with results") for something code, logs or data can settle: settle it now and say what you found; name the exact fact that stays unknowable otherwise. Record what blocked deeper research as `dx_gaps` ([optional-fields.md](optional-fields.md)).
+
 **Pre-send tasks are by design.** A run note "Before you send: …" (pay, transfer, change a setting) means the draft is deliberately written as if that task is done: the human does it, then sends. Not incorrect: check the claim matches the task and make the task the owner action ("Pay via PayPal, then send"). Flag only when no pre-send note covers the claim, or the task is wrong.
 
 Resolve action owners from explicit team/operator context, never an email display name or signature: a configured persona is not evidence of an employee. If the owner is unknown, address the mailbox reviewer.
@@ -38,6 +40,6 @@ Keep the header action to one short statement, normally 8–14 words; retain ess
 
 Keep exact provenance in `sources`: file paths and lines (including Go files), read-only commands, record IDs and URLs. New findings must emit `technical_evidence`: select 2–4 relevant source/result blocks (one if only one source matters), each with a zero-based `source` index, short `title` (≤60 characters), and 1–4 supported `points` (≤160 characters each). Prefer 8–14-word fragments; include material changes and caveats, omit chronology dumps and repeated facts. Source locations appear separately, so do not repeat them in points. The full-width Technical evidence accordion shows these selected blocks instead of the raw source prose. Raw sources and `changed_since_run` stay in the private finding. Legacy findings render their original source/result blocks without invented paraphrases.
 
-Optional fields `brain_proposal` (plainly wrong draft, small brain fix) and `replacement_body` (correcting an untouched AI draft): open [optional-fields.md](optional-fields.md) before emitting either.
+Optional fields `brain_proposal` (plainly wrong draft, small brain fix), `replacement_body` (correcting an untouched AI draft), `bug` (confirmed product bug) and `dx_gaps` (what limited your research): open [optional-fields.md](optional-fields.md) before emitting either.
 
 A concise cockpit header needs subject + one short action. Do not make a card for every successful/simple email or reproduce sensitive content. Both evidence accordions start closed; URLs in the published page must not carry bearer tokens.

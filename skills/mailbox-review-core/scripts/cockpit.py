@@ -420,6 +420,20 @@ def check_finding(item, detail_data, require_fresh=True):
             and isinstance(item['brain_proposal'].get('detail', ''), str)
             and len(item['brain_proposal'].get('detail', '')) <= 300):
         raise Refused('Brain proposal needs target, change and why (short strings), optional detail path')
+    bug = item.get('bug')
+    if 'bug' in item and not (
+            isinstance(bug, dict)
+            and all(isinstance(bug.get(k), str) and bug[k].strip() and len(bug[k]) <= limit
+                    for k, limit in (('title', 160), ('affected', 300), ('fix_direction', 600), ('owner', 160)))
+            and isinstance(bug.get('evidence'), list) and 1 <= len(bug['evidence']) <= 6
+            and all(isinstance(e, str) and e.strip() and len(e) <= 300 for e in bug['evidence'])
+            and isinstance(bug.get('thread', ''), str) and len(bug.get('thread', '')) <= 300):
+        raise Refused('Bug needs title, 1-6 evidence lines, affected, fix_direction, owner (short strings), optional thread')
+    if 'dx_gaps' in item and not (
+            isinstance(item['dx_gaps'], list) and 1 <= len(item['dx_gaps']) <= 5
+            and all(isinstance(g, dict) and all(isinstance(g.get(k), str) and g[k].strip() and len(g[k]) <= 200
+                                                for k in ('gap', 'unblock')) for g in item['dx_gaps'])):
+        raise Refused('DX gaps need one to five {gap, unblock} short strings')
     if item['draft_id'] is not None and item['draft_id'] not in [
             d['id'] for d in detail_data.get('drafts', [])]:
         raise Refused('Finding references an unknown Gmail draft')
@@ -538,6 +552,26 @@ def render(args):
                          f'{html.escape(entry["subject"])}</a> · <code>{html.escape(safe_text(bp["target"], 200))}</code>'
                          f'<br><strong>{html.escape(safe_text(bp["change"], 400))}</strong>'
                          f'<small>{html.escape(safe_text(bp["why"], 300))}</small>{detail_note}</li>')
+    bugs, gaps = [], []
+    for item in sorted(items, key=lambda i: rank[i['priority']]):
+        entry = next(t for t in index['threads'] if t['thread_id'] == item['thread_id'])
+        link = (f'<a href="{html.escape(gmail_url(index["account"], item["thread_id"]), quote=True)}">'
+                f'{html.escape(entry["subject"])}</a>')
+        bug = item.get('bug')
+        if bug:
+            thread = (f'<p>Fix: {html.escape(safe_text(bug["thread"], 300))}</p>' if bug.get('thread') else '')
+            bugs.append(f'<li>{link}<br><strong>{html.escape(safe_text(bug["title"], 160))}</strong>'
+                        f'<small>Affected: {html.escape(safe_text(bug["affected"], 300))} · '
+                        f'owner: {html.escape(safe_text(bug["owner"], 160))}</small><details><summary>Evidence and fix direction'
+                        '</summary><ul>' + ''.join(f'<li>{html.escape(safe_text(e, 300))}</li>' for e in bug['evidence'])
+                        + f'</ul><p>{html.escape(safe_text(bug["fix_direction"], 600))}</p>{thread}</details></li>')
+        for gap in item.get('dx_gaps', []):
+            gaps.append(f'<li>{html.escape(safe_text(gap["gap"], 200))}<small>Unblock: '
+                        f'{html.escape(safe_text(gap["unblock"], 200))} · {link}</small></li>')
+    bug_section = ('<section class="brain"><h2>Confirmed product bugs</h2><ol>' + ''.join(bugs)
+                   + '</ol></section>' if bugs else '')
+    gap_section = ('<section class="brain"><h2>What limited this review</h2><p>Grant these and the next run '
+                   'goes deeper.</p><ul>' + ''.join(gaps) + '</ul></section>' if gaps else '')
     brain = ('<section class="brain"><h2>Proposed brain changes</h2><p>Not applied; the owner decides.</p><ol>'
              + ''.join(proposals) + '</ol></section>' if proposals else '')
     reviewed = {i['thread_id'] for i in items}
@@ -560,7 +594,7 @@ def render(args):
               + html.escape(index['account']) + ' · ' + html.escape(index['collected_at'][:10]) + '</p>'
               + freshness_note
               + (''.join(primary_rows) or '<p>No reviewed actions to surface.</p>')
-              + remaining + brain + '<p>'
+              + remaining + bug_section + gap_section + brain + '<p>'
               + f'Draft threads {c["checked_threads"]}/{c["discovered_threads"]} checked · '
               + f'{c["uncovered_threads"]} discovered threads uncovered'
               + ('; additional unlisted threads unknown (pagination capped)' if c['list_truncated'] else '')
@@ -595,7 +629,7 @@ def apply(args):
     current_drafts = [client.api('drafts/' + d['id'], format='full') for d in stubs
                       if d.get('message', {}).get('threadId') == args.thread_id]
     current = matched_draft({**baseline, 'run': shown, 'drafts': current_drafts}, item['draft_id'])
-    if current['message'].get('id') != old['message'].get('id') or digest(current) != digest(old):
+    if current['message'].get('id') != old['message'].get('id') or digest(stable(current)) != digest(stable(old)):
         raise Refused('Draft changed after review; refresh instead of overwriting')
     thread = client.gws('gmail-thread', args.thread_id)
     guard_thread(thread, baseline, account)

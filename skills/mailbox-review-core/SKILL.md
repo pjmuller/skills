@@ -36,8 +36,8 @@ flowchart LR
 4. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
    A bug needs evidence (logs, rows, a live reproduction) and a count of affected customers. A
    confirmed bug, above all one hitting several customers, gets its own T3 thread (`t3_thread_launch`
-   in the owning repo; second opinion inside it via `delegate_task`) that finds the fix and ships only
-   after the operator's go. Explain at the operator's level (the wrapper says who is who).
+   in the owning repo; second opinion inside it via `delegate_task`) that finds the fix; shipping per
+   "Go deep" below. Explain at the operator's level (the wrapper says who is who).
 5. Merge evidence-supported findings, `validate`, then `apply --allow-draft-corrections` for wrong or
    obsolete drafts **when the wrapper (or this request) authorizes corrections**. Render the page to
    the operator's artifact dir (normally `~/Downloads`): seven prioritized rows, rest collapsed;
@@ -47,6 +47,24 @@ flowchart LR
    need the operator's explicit go in that conversation; verify in Gmail afterwards. A new reply where
    no draft is left: GWS `gmail-draft --reply-to-message <last id> --from "<Name> <mailbox>"` (without
    `--from` the display name is lost), HTML from `rp dev tools draft-render`, then send.
+
+## Go deep, whoever runs it
+
+- Developer or product owner at the keyboard, the agent debugs as far as this machine allows: product
+  code, every project repo and doc on disk, the brain, read-only production data/logs/traces, a live
+  reproduction. A draft that says "we're following up with our developers/engineering" is a research
+  gap, not an answer: get to the bottom first (one `delegate_task` per deep case), then reply with the
+  cause and a step the customer can take today. Only facts that stay unknowable go to the developer:
+  one ticket of one-line questions, drafted reply attached.
+- **Say what limited you.** A missing env var, credential, CLI, repo or access, or a query that timed
+  out → `dx_gaps` on the finding (page section "What limited this review"), naming who can grant it
+  (wrapper), so the operator asks for it and the next run goes deeper. Never settle silently for a
+  shallower answer.
+- **Shipping a found fix:** a PR with tests on the critical path. Product-owner operator → the PR stays
+  open for the developer. Developer operator → merge and ship when confident, verify live. A data fix
+  scoped to one customer (one account or backup, reversible, regression risk rated low by the agent)
+  may run on the operator's explicit go through an audited action or the repo's documented write path,
+  read back afterwards; anything broader is a PR.
 
 Reviewers stay read-only: no `rp ask`, retry, process-thread, sending, deletion, labels, archive or
 customer actions. A needed mutation becomes an audited action or its own thread. Draft correction
