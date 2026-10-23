@@ -409,6 +409,25 @@ def test_gmail_draft_update_keeps_lf_line_endings_and_refuses_a_part_it_would_re
     assert "PUT" not in [method for method, _, _ in session.calls]
 
 
+def test_gmail_draft_update_accepts_a_composer_alternative_without_epilogue():
+    # Gmail's composer closes the nested alternative right before the next mixed boundary:
+    # parsed epilogue None, regenerated "". That is no layout change.
+    raw = b"\r\n".join([
+        b"From: a@example.org", b"To: b@example.org", b"MIME-Version: 1.0",
+        b'Content-Type: multipart/mixed; boundary="m"', b"", b"--m",
+        b'Content-Type: multipart/alternative; boundary="a"', b"", b"--a",
+        b"Content-Type: text/plain; charset=UTF-8", b"", b"old", b"",
+        b"--a", b"Content-Type: text/html; charset=UTF-8", b"", b"<div>old</div>", b"",
+        b"--a--", b"--m", b"Content-Type: application/zip; name=x.zip",
+        b"Content-Disposition: attachment; filename=x.zip", b"Content-Transfer-Encoding: base64",
+        b"", b"aGVsbG8=", b"--m--", b""])
+    session = DraftSession(websafe(raw))
+    GmailClient(session, sender=ACCOUNT).update_draft("d1", "Updated")
+    stored = message_from_bytes(put_raw(session), policy=default)
+    assert "Updated" in stored.get_body(("plain",)).get_content()
+    assert [p.get_filename() for p in stored.iter_attachments()] == ["x.zip"]
+
+
 def test_gmail_view_trims_quotes_only_when_asked():
     message = {"id": "m1", "threadId": "t1", "payload": {
         "headers": [{"name": "Subject", "value": "Code"}],

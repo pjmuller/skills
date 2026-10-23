@@ -773,7 +773,8 @@ def _kept_facts(message: EmailMessage) -> tuple[dict, list]:
         children = part.get_payload() if part.is_multipart() else []  # incl. message/rfc822
         parts.append((path, list(part.raw_items()) if path else [],
                       None if children else part.get_payload(),
-                      part.preamble, part.epilogue, _related_root(part)))
+                      # None and '' serialise alike; the generator turns one into the other
+                      part.preamble or "", part.epilogue or "", _related_root(part)))
         for index, child in enumerate(children):
             visit(child, (*path, index))
 
