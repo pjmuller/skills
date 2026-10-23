@@ -713,8 +713,52 @@ def _patient(call: Callable[[], Any]) -> Any:
             time.sleep(2 ** (attempt + 1))  # 2 … 128 s, outlasting the per-minute window
 
 
+_QUOTE = re.compile(r"^(?:> ?)+")
+_LIST_ITEM = re.compile(r"\s*(?:[-*\u2022]|\d+[.)])\s")
+_QUOTE_STYLE = "margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex"
+
+
+def _quote_split(line: str) -> tuple[int, str]:
+    prefix = _QUOTE.match(line)
+    return (prefix.group().count(">"), line[prefix.end():]) if prefix else (0, line)
+
+
+def _unwrap(lines: list[str]) -> list[tuple[int, str]]:
+    """Gmail's plain part wraps long lines at ~76 chars and ends each wrapped line with a space:
+    rejoin those soft breaks (same quote depth, next line not empty and not a list item)."""
+    out: list[tuple[int, str]] = []
+    for line in lines:
+        depth, body = _quote_split(line)
+        if (out and out[-1][1].endswith(" ") and out[-1][1].strip() and out[-1][0] == depth
+                and body.strip() and not _LIST_ITEM.match(body)):
+            out[-1] = (depth, out[-1][1] + body)
+        else:
+            out.append((depth, body))
+    return out
+
+
+def _html_line(line: str) -> str:
+    body = line.lstrip(" ")
+    escaped = re.sub(r" {2,}", lambda run: " " + "&nbsp;" * (len(run.group()) - 1),
+                     html_module.escape(body.rstrip(" ")))
+    return "&nbsp;" * (len(line) - len(body)) + escaped
+
+
 def _text_html(text: str) -> str:
-    return html_module.escape(text).replace("\n", "<br>")
+    """Plain text as HTML that reads like Gmail's own: soft wraps rejoined, indentation (nested
+    bullets) and space runs kept as &nbsp; (a tab = 4), "> " quote runs as gmail_quote blocks."""
+    parts, depth = [], 0
+    for level, line in _unwrap(text.replace("\t", "    ").split("\n")):
+        if level < depth:  # a closing block already breaks the line
+            parts.append("</blockquote>" * (depth - level))
+        elif parts:  # a <br> right before an opening block collapses, like in Gmail's own HTML
+            parts.append("<br>")
+        if level > depth:
+            parts.append(f'<blockquote class="gmail_quote" style="{_QUOTE_STYLE}">' * (level - depth))
+        depth = level
+        parts.append(_html_line(line))
+    parts.append("</blockquote>" * depth)
+    return "".join(parts)
 
 
 def _text_key(text: str) -> str:

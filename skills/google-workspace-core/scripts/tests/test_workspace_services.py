@@ -291,7 +291,9 @@ def test_gmail_draft_update_replaces_only_the_body_and_keeps_thread_headers_and_
     text = {kind: stored.get_body((kind,)).get_content().replace("\r\n", "\n").rstrip()
             for kind in ("plain", "html")}
     assert text == {"plain": "Nieuwe tekst & meer.\n\n> Graag",
-                    "html": "Nieuwe tekst &amp; meer.<br><br>&gt; Graag"}
+                    "html": "Nieuwe tekst &amp; meer.<br><br><blockquote class=\"gmail_quote\" "
+                            "style=\"margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex\">"
+                            "Graag</blockquote>"}
     pdf = next(stored.iter_attachments())
     assert pdf.get_filename() == "offerte.pdf" and pdf.get_content() == b"%PDF-1.4 bytes"
     assert result["verified"] == {"threadId": "t1", "files": 1}
@@ -426,6 +428,19 @@ def test_gmail_draft_update_accepts_a_composer_alternative_without_epilogue():
     stored = message_from_bytes(put_raw(session), policy=default)
     assert "Updated" in stored.get_body(("plain",)).get_content()
     assert [p.get_filename() for p in stored.iter_attachments()] == ["x.zip"]
+
+
+def test_text_html_keeps_indentation_rejoins_soft_wraps_and_quotes():
+    from gws_core.gmail import _text_html
+    assert _text_html("- a\n  - b\n\tc  d <e>") == (
+        "- a<br>&nbsp;&nbsp;- b<br>&nbsp;&nbsp;&nbsp;&nbsp;c &nbsp;d &lt;e&gt;")
+    # Gmail's plain part: wrapped lines end with a space; list items and blank lines stay apart
+    assert _text_html("Een lange \nzin.\n- item \n- item2\n\nNieuw") == (
+        "Een lange zin.<br>- item<br>- item2<br><br>Nieuw")
+    quoted = _text_html("Hoi\n\n> Oud \n> bericht\n>> ouder\n> terug")
+    assert quoted.startswith('Hoi<br><br><blockquote class="gmail_quote"')
+    assert "Oud bericht" in quoted and quoted.count("<blockquote") == 2
+    assert quoted.endswith("terug</blockquote>")
 
 
 def test_gmail_view_trims_quotes_only_when_asked():

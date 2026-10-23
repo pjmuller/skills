@@ -10,7 +10,10 @@ missing access or an obsolete id, so reauthentication alone is not a demonstrate
 
 Write the body as plain text (`gmail-draft --body-file PATH`): ordinary paragraphs and `- `
 bullets (blank line between long bullets), no fixed-width line breaks. The core always stores a
-`multipart/alternative`: that text as `text/plain` plus an escaped HTML twin (`<br>` per line).
+`multipart/alternative`: that text as `text/plain` plus an HTML twin (`_text_html`): `<br>` per line,
+leading spaces/space runs as `&nbsp;` (nested bullets survive), Gmail's ~76-char soft wraps (line
+ends in a space) rejoined, `> ` runs as `gmail_quote` blockquotes. Visual check: render that HTML
+locally (headless Playwright); never Gmail's print view (`view=pt`), it pops the OS print dialog.
 `--html` / `--html-file` only when layout itself matters: minimal paragraphs/lists, no fixed
 widths, layout tables, fonts or pasted editor markup; never auto-convert Markdown.
 
