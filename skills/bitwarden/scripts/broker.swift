@@ -469,21 +469,50 @@ func matches(_ item: [String: Any], host: String) -> Bool {
     return false
 }
 
-// MARK: - Clipboard (the installed `clipboard` helper owns the 30 s owner-checked clear)
+// MARK: - Clipboard (written here: no other binary ever receives a released secret)
+
+let ownerType = NSPasteboard.PasteboardType("org.bw-once.owner")
 
 func deliver(_ secret: String) throws {
-    let helper = Process()
-    helper.executableURL = here.appendingPathComponent("clipboard")
-    helper.environment = ["PATH": "/usr/bin:/bin"]
-    let input = Pipe(), output = Pipe()
-    helper.standardInput = input
-    helper.standardOutput = output
-    helper.standardError = FileHandle.nullDevice
-    try helper.run()
-    input.fileHandleForWriting.write(Data(secret.utf8))
-    try input.fileHandleForWriting.close()
-    let ready = output.fileHandleForReading.readData(ofLength: 6)
-    guard ready == Data("ready\n".utf8) else { throw Failure(message: "Clipboard delivery failed") }
+    #if BW_BROKER_TEST
+    try Data(secret.utf8).write(to: here.appendingPathComponent("clip"))
+    return
+    #endif
+    let board = NSPasteboard.general
+    let item = NSPasteboardItem()
+    let token = UUID().uuidString
+    item.setString(secret, forType: .string)
+    item.setString(token, forType: ownerType)
+    item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+    item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+    board.clearContents()
+    guard board.writeObjects([item]) else { throw Failure(message: "Clipboard delivery failed") }
+    // The clear timer is this same binary in a detached child that only knows the token and change count.
+    var pid: pid_t = 0
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    for fd in Int32(0)...2 { posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", fd == 0 ? O_RDONLY : O_WRONLY, 0) }
+    let me = here.appendingPathComponent("bw-broker").path
+    let arguments: [String] = [me, "--clear-after", String(clipboardSeconds), token, String(board.changeCount)]
+    var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) }
+    argv.append(nil)
+    var env: [UnsafeMutablePointer<CChar>?] = [strdup("PATH=/usr/bin:/bin"), nil]
+    defer { (argv + env).forEach { free($0) } }
+    _ = posix_spawn(&pid, me, &actions, &attributes, &argv, &env)  // Best effort, like any clipboard clear.
+}
+
+/// `bw-broker --clear-after SECONDS TOKEN CHANGECOUNT`: clear only our unchanged write (a newer copy stays).
+func clearLater(_ arguments: [String]) -> Never {
+    guard arguments.count == 5, let seconds = Double(arguments[2]), let count = Int(arguments[4]) else { exit(2) }
+    Thread.sleep(forTimeInterval: seconds)
+    let board = NSPasteboard.general
+    if board.changeCount == count && board.string(forType: ownerType) == arguments[3] { board.clearContents() }
+    exit(0)
 }
 
 // MARK: - Mutex shared with the Python front end (~/.cache/bw-once/lock-<vault>)
@@ -946,6 +975,8 @@ func serveRequest(_ request: Request) {
 }
 
 // MARK: - Main
+
+if CommandLine.arguments.dropFirst().first == "--clear-after" { clearLater(CommandLine.arguments) }
 
 let request: Request
 do { request = try parseRequest(FileHandle.standardInput.readDataToEndOfFile()) } catch let error as Failure {

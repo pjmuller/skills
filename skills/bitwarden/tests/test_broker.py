@@ -74,8 +74,6 @@ def broker(tmp_path_factory):
     build = tmp_path_factory.mktemp("broker")
     subprocess.run(["xcrun", "swiftc", "-D", "BW_BROKER_TEST", str(SCRIPTS / "broker.swift"), "-o",
                     str(build / "bw-broker")], check=True, capture_output=True)
-    (build / "clipboard").write_text("#!/bin/sh\ncat > \"$(dirname \"$0\")/clip\"\necho ready\n")
-    (build / "clipboard").chmod(0o700)
     (build / "bw").write_text(f"#!{sys.executable}\n" + FAKE_SERVE)
     (build / "bw").chmod(0o700)
     return build

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: broker owns the clipboard; stable builds
+
+- The broker writes released secrets to the clipboard itself (previously piped to the separate, unverified
+  `clipboard` helper, which a replaced file could have captured silently); a detached copy of the broker clears
+  its own unchanged write after 30 s.
+- The installer rebuilds the broker only when `broker.swift` changed (builds aren't reproducible; every rebuild
+  meant a new Keychain prompt). A bw-broker Keychain prompt outside an update = deny.
+
 ## 2026-10-23 — bitwarden: phrase stays put
 
 - The first setup window labels its phrase "NEW" (it becomes yours on Save); later windows say "Your phrase".

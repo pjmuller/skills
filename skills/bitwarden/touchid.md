@@ -35,7 +35,10 @@ bw-once touchid status | bw-once touchid forget
   ~2.4 s; one serve per vault does the whole request in ~1.5 s.
 - **Release**: only a unique match across all searched vaults (else metadata `vault/name/username` to narrow with
   `--username`/`--id`); clipboard only after **every** vault is verified locked; a cancel after the touch still
-  releases nothing.
+  releases nothing. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
+  itself, knowing only an owner token, clears that write after 30 s unless something newer was copied.
+- **Updates**: builds aren't reproducible, so the installer rebuilds the broker only when `broker.swift` changed.
+  A Keychain prompt for bw-broker is therefore expected only right after you updated bw-once: any other time, Deny.
 - **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
   a saved password (changed) → setup window for that vault; then the request continues (second touch). Both show
   the phrase.
@@ -44,9 +47,11 @@ bw-once touchid status | bw-once touchid forget
 
 Raises the bar from "any process reads it" to "needs this Mac's enclave, your finger, and the genuine broker".
 Same-user malware can still: ask for a real login (you see an honest window: read it), fake a whole window
-(no phrase), read the clipboard during its 30 s, or record the screen. Apple Developer ID signing would bind the
-Keychain item to a team instead of one binary (no prompt after updates, a ready-signed app for colleagues): an
-option at $99/yr. Without a session or enrolment, `bw-once` falls back to the human Terminal flow in [SKILL.md](SKILL.md).
+(no phrase), read the clipboard during its 30 s, record the screen, or **replace the broker and wait for you to
+approve its Keychain prompt** (it looks like the post-update prompt; with your login password it gets the
+phrase and the sealed passwords, and a window with your real phrase). Apple Developer ID signing ($99/yr)
+closes exactly that: the item would be bound to a signing team, so no click can hand it to another binary,
+and updates stop prompting; colleagues get a ready-signed app. Without a session or enrolment, `bw-once` falls back to the human Terminal flow in [SKILL.md](SKILL.md).
 
 ## Not built
 

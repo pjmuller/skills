@@ -46,10 +46,15 @@ chmod 700 "$target/clipboard.new" "$target/bw-once"
 mv "$target/clipboard.new" "$target/clipboard"
 # Hardened runtime: no injected libraries in the process that holds unsealed master passwords. A changed binary
 # makes macOS ask once (login password, "Always Allow") before it may read its Keychain item.
-xcrun swiftc "$target/broker.swift" -o "$target/bw-broker.new" -O
-codesign -s - -f -o runtime "$target/bw-broker.new" 2>/dev/null
-chmod 700 "$target/bw-broker.new"
-mv "$target/bw-broker.new" "$target/bw-broker"
+# Builds are not reproducible (new code hash each time), so rebuild only when the source changed: an unchanged
+# broker keeps its Keychain access, and a Keychain prompt then really means "the broker was updated".
+if [ ! -x "$target/bw-broker" ] || ! cmp -s "$source_dir/broker.swift" "$target/broker.built.swift"; then
+  xcrun swiftc "$target/broker.swift" -o "$target/bw-broker.new" -O
+  codesign -s - -f -o runtime "$target/bw-broker.new" 2>/dev/null
+  chmod 700 "$target/bw-broker.new"
+  mv "$target/bw-broker.new" "$target/bw-broker"
+  cp "$source_dir/broker.swift" "$target/broker.built.swift"
+fi
 # Bitwarden's signed CLI from its official GitHub release (latest cli-v*), replaced only when the version changes.
 case "$(uname -m)" in arm64) flavour=macos-arm64;; *) flavour=macos;; esac
 release=cli-vskipped
