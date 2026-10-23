@@ -12,6 +12,8 @@
 
 ## Unreleased
 
+- New `public-footprint-audit`: consent-based public-web privacy research, evidence states, concise lockdown checklist and removal rechecks. Keeps personal findings outside public skill sources.
+
 - agents-md template: explicit “auto-settle” defaults to settling after verified completion; keep open only for material findings, risks or decisions needing human attention. Why: the sidebar should surface work requiring the user's eyes, not routine results.
 
 - t3-manage-thread: workload-aware routing. `t3-pick-instance` ranks by `score × session left / (1 + live load)`; load comes read-only from T3's store (`lib/fleet_load.py`: owners on their actual run account, native sub-agents folded by max, queued/held/orphan/quiet handled, `routing-load: heavy` launch-line = 3). Missing store → quota-only with a warning; `T3_ROUTING_LOAD=shadow` keeps the old pick. Explanations show each reading's real age and observation gaps; picks are logged to a bounded local `t3-routing-decisions.jsonl`. Why: 2026-10-22 six launches in 40 s all went to the account already running 7 jobs.
