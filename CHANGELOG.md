@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.11 (2026-10-23)
+
+- **History rewrite (sensitive data removed).** Commits from 6 Oct onward and tags v0.4.4–v0.5.10 were rewritten to drop accounting details that had been published by mistake. Tags were re-signed with the same key; files at every tag are unchanged apart from the scrubbed lines. `skills-refresh` users need nothing: this release moves them onto the new history. Anyone with a **git clone** of this repo: re-clone, and never merge or push the old history.
+
 ## 2026-10-23 — clickup-core: images and links inside table cells
 
 - Table cells carry the same inline markdown as a paragraph (links, bold, mentions); a cell made only of
