@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5.10 (2026-10-23)
+
+- skills-refresh: the template-history cache force-updates tags. After an upstream history rewrite, the re-signed tags made every later prompt re-sync fail daily ("cannot fetch … retrying tomorrow"). Releases themselves already survived a rewrite: each apply fetches the exact tag into fresh staging and verifies its signature. Recovery after a rewrite = one new signed release (`scripts/release`). Old releases re-created under the same name stay installed until then.
+
 ## 2026-10-23 — agents-md global template: no revert recipe in reports
 
 - Autonomy rule: "report what you did" (dropped "+ how to revert": clutter in most reports).
