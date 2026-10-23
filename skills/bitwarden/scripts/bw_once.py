@@ -512,12 +512,42 @@ def broker(request):
     helper = ROOT / "bw-broker"
     if sys.platform != "darwin" or not helper.is_file():
         raise Failure("Touch ID broker missing; run installer first")
+    # The first stdout line is the answer; with several matching logins the broker keeps running after it,
+    # waiting for `bw-once pick`, so read that line instead of waiting for the process to exit.
+    child = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             env=clean_env(), start_new_session=True)
     try:
-        done = subprocess.run([str(helper)], input=json.dumps(request).encode(), stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL, env=clean_env(), timeout=BROKER_SECONDS)
-        return json.loads(done.stdout)
-    except (subprocess.TimeoutExpired, ValueError):
+        child.stdin.write(json.dumps(request).encode())
+        child.stdin.close()
+        if not select.select([child.stdout], [], [], BROKER_SECONDS)[0]:
+            raise ValueError
+        result = json.loads(child.stdout.readline())
+        if "pick" not in result:
+            child.wait(10)
+        return result
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         raise Failure("Touch ID broker failed; nothing released") from None
+    finally:
+        child.stdout.close()
+
+
+def submit_pick(token, item):
+    """Name the login after a copy answered with `pick` (several logins match); the broker releases it."""
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise Failure("Use the pick token from the copy result")
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(15)
+    try:
+        client.connect(str(cache_dir() / f"pick-{token}.sock"))
+    except OSError:
+        client.close()
+        raise Failure("No pick waiting (expired after 60 s, cancelled, or already picked); ask again") from None
+    with client:
+        client.sendall(json.dumps({"id": item_id(item)}).encode() + b"\n")
+        try:
+            return json.loads(read_line(client))
+        except ValueError:
+            raise Failure("Invalid pick answer") from None
 
 
 def broker_vaults(name=None):
@@ -850,6 +880,9 @@ def main():
     copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
     copy.add_argument("--username", help="pick the exact-host login with this username (no --id needed)")
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
+    chosen = commands.add_parser("pick", help="after a copy listed several logins: name the one to release")
+    chosen.add_argument("--token", required=True)
+    chosen.add_argument("--id", required=True)
     for command in (listing, copy):
         command.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
         command.add_argument("--why", help="one line: why this login is needed (shown as the agent's claim)")
@@ -883,6 +916,10 @@ def main():
         if args["op"] == "clear":
             print(json.dumps(clear_clipboard()))
             return
+        if args["op"] == "pick":
+            result = submit_pick(args["token"], args["id"])
+            print(json.dumps(result))
+            raise SystemExit(0 if result.get("ok") else 1)
         explicit_vault = args["vault"]
         args["vault"] = vault_config(args["vault"])["name"]
         if args["op"] in ("status", "doctor"):

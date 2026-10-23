@@ -6,8 +6,16 @@ description: Discover exact-host Bitwarden logins, copy one approved credential,
 Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** once enrolled
 (`bw-once touchid enroll`: native window, master passwords sealed in the Secure Enclave): `list`/`copy` open one
 window (the human's phrase, your claim, the checked request) and need one fingerprint; every enrolled account is
-searched unless `--vault` is given. Always pass `--thread "<T3 thread title>" --why "<one line>"` and tell the human
-what the green box will say: [touchid.md](touchid.md). Otherwise a fresh human Terminal
+searched unless `--vault` is given: [touchid.md](touchid.md). Agent recipe:
+1. Own tab on the login page (T3: `incognito`), type the username if known, then **click the password field
+   before asking** (the paste then lands right after the touch, well inside the 30 s clipboard window).
+2. Tell the human what the green box will say, then run in the background (it waits up to 5 min for them):
+   `bw-once copy --host H [--username U] --field password --thread "<title>" --why "<one line>"`. Title = your T3
+   thread's `title` from `t3_thread_list` (its first row is you: `currentThreadId`).
+3. Answer has `pick` (several logins, no `--username`)? Vaults are already locked: choose from `pick.candidates`
+   (vault, id, name, username) and run `bw-once pick --token <pick.token> --id <id>` within 60 s; no second touch.
+4. `preview_press Meta+V`, then check `value.length` only, then `bw-once clear`, then submit: **one call at a time**
+   (a parallel `clear` can beat the paste and leave the field empty); afterwards log out (session.md). Otherwise a fresh human Terminal
 unlock per request, or a time-boxed **session holder** PJ unlocks once
 (`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
 commands serve from it; design, paste mechanics and never-list: [session.md](session.md)). Install with

@@ -33,9 +33,11 @@ bw-once touchid status | bw-once touchid forget
   fd+connected://3` per vault over a socketpair (no TCP, no socket file, fixed environment): status (locked, right
   account), sync, unlock, list all items, exact-host filter, lock, verify locked, stop. Each `bw` CLI start costs
   ~2.4 s; one serve per vault does the whole request in ~1.5 s.
-- **Release**: only a unique match across all searched vaults (else metadata `vault/name/username` to narrow with
-  `--username`/`--id`); clipboard only after **every** vault is verified locked; a cancel after the touch still
-  releases nothing. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
+- **Release**: clipboard only after **every** vault is verified locked; a cancel after the touch still releases
+  nothing. One match (or `--username`/`--id` narrowing to one) → released. Several matches → the broker keeps only
+  those logins' requested field in memory, answers with `pick` (token + candidates' metadata), shows them in the
+  window and waits 60 s on a private socket for `bw-once pick --token … --id …`; the window then shows the agent's
+  choice. One touch either way; the agent can only choose among the host's logins the human approved. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
   itself, knowing only an owner token, clears that write after 30 s unless something newer was copied.
 - **Updates**: builds aren't reproducible, so the installer rebuilds the broker only when `broker.swift` changed.
   A Keychain prompt for bw-broker is therefore expected only right after you updated bw-once: any other time, Deny.
@@ -55,6 +57,6 @@ and updates stop prompting; colleagues get a ready-signed app. Without a session
 
 ## Not built
 
-A second "copy" click after the touch (the green box already binds the release), a metadata cache to show the
+A human click to choose among several logins (the agent picks; the window shows it), a second "copy" click after the touch (the green box already binds the release), a metadata cache to show the
 exact item before the touch, routine expiry (more password prompts = more phishing practice), Bitwarden's own
 CLI→Desktop Touch ID (server flag `biometrics-sdk-ipc` still off; `doctor` → `touch_id_flag`).

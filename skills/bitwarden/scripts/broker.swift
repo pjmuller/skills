@@ -39,6 +39,69 @@ func finish(_ result: [String: Any]) -> Never {
 
 func fail(_ message: String) -> Never { finish(["ok": false, "error": message]) }
 
+/// Answer the front end now and keep running (the agent's pick arrives later over a private socket).
+func emit(_ result: [String: Any]) {
+    guard !stdoutWritten, let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return }
+    stdoutWritten = true
+    FileHandle.standardOutput.write(data + Data("\n".utf8))
+    let null = open("/dev/null", O_WRONLY)
+    dup2(null, 1)  // EOF for the front end, which returns the candidates to the agent.
+    close(null)
+}
+
+let pickSeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_PICK_SECONDS"] ?? "60")!
+    #else
+    return 60
+    #endif
+}()
+
+/// One-shot private socket (0600, random name) on which the agent names the login it wants.
+func pickSocket(_ token: String) throws -> (Int32, String) {
+    #if BW_BROKER_TEST
+    let directory = ProcessInfo.processInfo.environment["BW_BROKER_TEST_SOCKDIR"]!
+    #else
+    let directory = (ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()) + "/.cache/bw-once"
+    #endif
+    let path = directory + "/pick-\(token).sock"
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    guard fd >= 0, path.utf8.count < MemoryLayout.size(ofValue: address.sun_path) else { throw Failure(message: "Cannot open the pick socket") }
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+        _ = path.withCString { strncpy(raw.baseAddress!.assumingMemoryBound(to: CChar.self), $0, raw.count - 1) }
+    }
+    let previous = umask(0o177)
+    defer { umask(previous) }
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard bound == 0, listen(fd, 4) == 0 else { close(fd); throw Failure(message: "Cannot open the pick socket") }
+    return (fd, path)
+}
+
+func readRequestLine(_ fd: Int32, until deadline: Date) -> [String: Any]? {
+    let left = max(0.05, min(5, deadline.timeIntervalSinceNow))  // A slow client can't stretch the pick window.
+    var timeout = timeval(tv_sec: Int(left), tv_usec: Int32((left - Double(Int(left))) * 1_000_000))
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 1024)
+    while !data.contains(10), data.count < 4096 {
+        let n = read(fd, &buffer, buffer.count)
+        guard n > 0 else { break }
+        data.append(contentsOf: buffer[0..<n])
+    }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+func reply(_ fd: Int32, _ value: [String: Any]) {
+    if let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) {
+        (data + Data("\n".utf8)).withUnsafeBytes { _ = write(fd, $0.baseAddress!, $0.count) }
+    }
+    close(fd)
+}
+
 let here: URL = {
     var size = UInt32(PATH_MAX)
     var buffer = [CChar](repeating: 0, count: Int(size))
@@ -642,6 +705,9 @@ final class Panel: NSObject, NSWindowDelegate {
     }
 
     func setStatus(_ value: String, color: NSColor = .secondaryLabelColor) {
+        #if BW_BROKER_TEST
+        FileHandle.standardError.write(Data(("status: " + value + "\n").utf8))
+        #endif
         status.stringValue = value
         status.textColor = color
         window.setContentSize(stack.fittingSize)
@@ -779,10 +845,67 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
     case "list": what = "names and usernames of matching logins (no secrets)"
     default:
         what = "\(request.field) of " + (request.username.map { "login \($0)" } ?? request.id.map { "item \($0)" }
-            ?? "the only matching login")
+            ?? (request.field == "totp" ? "the only matching login"
+                : "one matching login; if several match, the agent picks one (shown here)"))
     }
     return [("Releases", what), ("Exact host", request.host), ("Searches", vaults.joined(separator: ", ")),
             ("Goes to", request.op == "copy" ? "clipboard, cleared after \(clipboardSeconds) s" : "the agent (metadata)")]
+}
+
+/// Vaults are locked; only the matching logins' field values live here. Never returns.
+func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: Panel, gate: Gate,
+               base: [String: Any]) -> Never {
+    var choices = choices
+    let token = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    let (server, path) = (try? pickSocket(token)) ?? (-1, "")
+    if server < 0 { fail("Cannot open the pick socket; nothing released") }
+    func closeSocket() { close(server); unlink(path) }  // Every exit path below; exit() skips defers.
+    func label(_ meta: [String: Any]) -> String {
+        "\(meta["name"] as? String ?? "?") (\(meta["username"] as? String ?? "no username"), \(meta["vault"] as? String ?? "?"))"
+    }
+    onMain {
+        panel.setStatus("Vault locked. \(choices.count) logins match; the agent picks one within \(Int(pickSeconds)) s:\n"
+                        + choices.map { "• " + label($0.0) }.joined(separator: "\n"))
+    }
+    emit(base.merging(["pick": ["token": token, "expires_in": Int(pickSeconds), "candidates": choices.map(\.0),
+                                "next": "bw-once pick --token \(token) --id <id>"]]) { $1 })
+    let deadline = Date().addingTimeInterval(pickSeconds)
+    while Date() < deadline && !gate.isCancelled {
+        var poller = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
+        guard poll(&poller, 1, Int32(min(500, max(1, deadline.timeIntervalSinceNow * 1000)))) > 0 else { continue }
+        let client = accept(server, nil, nil)
+        guard client >= 0 else { continue }
+        guard let ask = readRequestLine(client, until: deadline), let id = (ask["id"] as? String)?.lowercased(),
+              let index = choices.firstIndex(where: { ($0.0["id"] as? String) == id }) else {
+            reply(client, ["ok": false, "error": "Unknown --id; pick one of the listed candidates"])
+            continue
+        }
+        guard Date() < deadline else { reply(client, ["ok": false, "error": "Pick expired"]); break }
+        guard gate.commit() else { reply(client, ["ok": false, "error": "Request cancelled"]); break }
+        let (meta, value) = choices[index]
+        choices = []
+        closeSocket()
+        do { try deliver(value) } catch {
+            reply(client, ["ok": false, "error": "Clipboard delivery failed"])
+            fail("Clipboard delivery failed")
+        }
+        reply(client, ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds].merging(meta) { $1 })
+        onMain {
+            panel.onCancel = {}
+            panel.setStatus("✓ Agent picked \(label(meta)) · copied \(request.field) · vault locked", color: .systemGreen)
+            DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) { exit(0) }
+        }
+        while true { sleep(60) }  // The main queue exits.
+    }
+    choices = []
+    closeSocket()
+    let why = gate.isCancelled ? "Request cancelled" : "No pick within \(Int(pickSeconds)) s"
+    onMain {
+        panel.onCancel = {}
+        panel.setStatus("\(why); nothing released", color: .systemOrange)
+        DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) { exit(1) }
+    }
+    while true { sleep(60) }
 }
 
 func serveRequest(_ request: Request) {
@@ -880,6 +1003,7 @@ func serveRequest(_ request: Request) {
             }
             onMain { panel.setStatus("Approved · searching…") }
             var candidates: [(Vault, [String: Any], Serve)] = []
+            var choices: [([String: Any], String)] = []  // (metadata, field value) when the agent must pick.
             var unavailable = skipped
             var rejected: [Vault] = []
             for vault in vaults {
@@ -927,28 +1051,42 @@ func serveRequest(_ request: Request) {
                     return (request.id == nil || (entry.1["id"] as? String)?.lowercased() == request.id)
                         && (request.username == nil || ((login?["username"] as? String) ?? "").lowercased() == request.username)
                 }
-                guard picked.count == 1, let chosen = picked.first else {
-                    throw Failure(message: "\(picked.count) exact-host logins match; pass --username or --id (from `list`): "
-                                  + candidates.map { "\($0.0.name)/\($0.1["name"] as? String ?? "?")/\((($0.1["login"] as? [String: Any])?["username"] as? String) ?? "-")" }
-                                  .joined(separator: ", "))
+                if picked.count > 1 && request.field != "totp" {  // A TOTP code would go stale during the pick.
+                    // Several logins and no --username/--id: keep only these logins' field, lock everything,
+                    // and let the agent pick one (`bw-once pick`); the window shows its choice.
+                    for entry in picked {
+                        let login = entry.1["login"] as? [String: Any]
+                        let value = login?[request.field] as? String
+                        if let value, !value.isEmpty, !value.contains("\0") { choices.append((metadata(entry), value)) }
+                    }
+                    guard choices.count > 1 else { throw Failure(message: "Requested field is missing on the matching logins") }
                 }
-                let login = chosen.1["login"] as? [String: Any]
-                switch request.field {
-                case "totp": secret = try chosen.2.totp((chosen.1["id"] as? String ?? "").lowercased())
-                default: secret = login?[request.field] as? String
+                guard picked.count == 1 || !choices.isEmpty, let chosen = picked.first else {
+                    throw Failure(message: (picked.isEmpty ? "No exact-host login matches" : "\(picked.count) logins match; pass --username or --id")
+                        + (candidates.isEmpty ? "" : "; candidates: "
+                        + candidates.map { "\($0.0.name)/\($0.1["name"] as? String ?? "?")/\((($0.1["login"] as? [String: Any])?["username"] as? String) ?? "-")" }
+                        .joined(separator: ", ")))
                 }
-                guard let value = secret, !value.isEmpty, !value.contains("\0") else {
-                    throw Failure(message: "Requested field is missing")
+                if choices.isEmpty {
+                    let login = chosen.1["login"] as? [String: Any]
+                    switch request.field {
+                    case "totp": secret = try chosen.2.totp((chosen.1["id"] as? String ?? "").lowercased())
+                    default: secret = login?[request.field] as? String
+                    }
+                    guard let value = secret, !value.isEmpty, !value.contains("\0") else {
+                        throw Failure(message: "Requested field is missing")
+                    }
+                    result.merge(metadata(chosen)) { $1 }
+                    result["copied"] = request.field
+                    result["clear_after_seconds"] = clipboardSeconds
                 }
-                result.merge(metadata(chosen)) { $1 }
-                result["copied"] = request.field
-                result["clear_after_seconds"] = clipboardSeconds
             }
             candidates = []
             #if BW_BROKER_TEST
             if testEnv["BW_BROKER_TEST_CANCEL_AFTER_SEARCH"] == "1" { panel.onCancel() }
             #endif
             guard cleanup() else { throw Failure(message: "Lock verification failed; nothing released; run `bw lock` now") }
+            if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result) }
             guard gate.commit() else { fail("Request cancelled") }  // Closed during the search: release nothing.
             if let value = secret { try deliver(value) }
             secret = nil

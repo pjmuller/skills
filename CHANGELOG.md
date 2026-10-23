@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: agent picks among several logins, one touch
+
+- `copy` without `--username`/`--id` on a host with several logins no longer fails after the touch: the vaults lock,
+  the answer carries `pick` (token, candidates: vault/id/name/username), the window lists them, and
+  `bw-once pick --token … --id …` within 60 s releases the chosen one (shown in the window). No second touch.
+- SKILL.md agent recipe: click the password field before asking, run in the background, thread title from
+  `t3_thread_list`, the pick step.
+
 ## 2026-10-23 — global template: 🔓 for auto-mode blocks
 
 - New status emoji 🔓 = blocked only by auto mode; the ask starts with it. Why: an auto-mode block looked like any

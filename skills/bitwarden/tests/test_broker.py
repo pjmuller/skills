@@ -2,8 +2,10 @@
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -82,6 +84,7 @@ def broker(tmp_path_factory):
 @pytest.fixture
 def world(broker, tmp_path):
     home = tmp_path / "home"
+    sockets = Path(tempfile.mkdtemp(prefix="bwp", dir="/tmp"))  # AF_UNIX paths are capped at 104 bytes.
     vaults = {}
     for name, email, items in (("testa", "a@example.com", [login(ID_A, SECRET_A, "alice")]),
                                ("testb", "b@example.com", [])):
@@ -104,6 +107,25 @@ def world(broker, tmp_path):
                               capture_output=True, timeout=60)
         return json.loads(done.stdout), done.stderr.decode()
 
+    def start(op, typed=None, names=("testa", "testb"), extra_env=None, **fields):
+        """Like run, but returns the live process after its first answer (the pick flow keeps running)."""
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "1",
+               "BW_BROKER_TEST_STORE": str(tmp_path / "store.json"), "BW_BROKER_TEST_TOUCH": "ok",
+               "BW_BROKER_TEST_TYPE": json.dumps(typed or {}), "BW_BROKER_TEST_SOCKDIR": str(sockets), **(extra_env or {})}
+        child = subprocess.Popen([str(broker / "bw-broker")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, env=env)
+        child.stdin.write(json.dumps({"op": op, "vaults": [vaults[n] for n in names], **fields}).encode())
+        child.stdin.close()
+        return child, json.loads(child.stdout.readline())
+
+    def pick(token, item):
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(str(sockets / f"pick-{token}.sock"))
+        client.sendall(json.dumps({"id": item}).encode() + b"\n")
+        answer = client.makefile().readline()
+        client.close()
+        return json.loads(answer)
+
     def events(name):
         path = Path(vaults[name]["appdata"]) / "events"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
@@ -116,7 +138,7 @@ def world(broker, tmp_path):
         path = broker / "clip"
         return path.read_text() if path.exists() else None
 
-    return {"run": run, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
+    return {"run": run, "start": start, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
 
 
 def enroll(world):
@@ -155,15 +177,34 @@ def test_copy_searches_all_vaults_shows_claim_and_facts_and_locks_before_deliver
     assert SECRET_B not in json.dumps(result) and SECRET_B not in panel and MASTER["testb"] not in panel
 
 
-def test_ambiguity_across_vaults_releases_nothing_but_username_picks(world):
+def test_several_logins_lock_first_then_the_agent_picks_one(world):
     enroll(world)
     world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
-    result, _ = world["run"]("copy", host=HOST, field="password")
-    assert result["ok"] is False and "2 exact-host logins" in result["error"] and world["clip"]() is None
-    assert "testa/Example/alice" in result["error"] and "testb/Example/bob" in result["error"]
+    child, answer = world["start"]("copy", host=HOST, field="password")
+    candidates = answer["pick"]["candidates"]
+    assert [(c["vault"], c["username"]) for c in candidates] == [("testa", "alice"), ("testb", "bob")]
+    assert all(world["locked"](name) for name in MASTER) and world["clip"]() is None  # Locked before the pick.
+    assert SECRET_A not in json.dumps(answer) and SECRET_B not in json.dumps(answer)
+    assert world["pick"](answer["pick"]["token"], "00000000-0000-0000-0000-000000000000")["ok"] is False
+    released = world["pick"](answer["pick"]["token"], ID_B)
+    assert released["ok"] and released["vault"] == "testb" and world["clip"]() == SECRET_B
+    assert child.wait(10) == 0 and "Agent picked Example (bob, testb)" in child.stderr.read().decode()
+
+
+def test_no_pick_in_time_releases_nothing(world):
+    enroll(world)
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
+    child, answer = world["start"]("copy", host=HOST, field="password", extra_env={"BW_BROKER_TEST_PICK_SECONDS": "1"})
+    assert child.wait(10) == 1 and world["clip"]() is None and "pick" in answer
+
+
+def test_username_still_selects_directly(world):
+    enroll(world)
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
     result, _ = world["run"]("copy", host=HOST, field="password", username="ALICE")
     assert result["ok"] and result["vault"] == "testa" and world["clip"]() == SECRET_A
-    assert all(world["locked"](name) for name in MASTER)
+    result, _ = world["run"]("copy", host=HOST, field="password", username="nobody")
+    assert result["ok"] is False and "testa/Example/alice" in result["error"]
 
 
 def test_list_returns_metadata_only(world):
@@ -270,3 +311,22 @@ def test_unreadable_item_never_becomes_a_new_phrase(world):
     world["store"].write_text("not json")
     result, _ = world["run"]("enroll", typed=MASTER)
     assert result["ok"] is False and "nothing changed" in result["error"] and world["store"].read_text() == "not json"
+
+
+def test_pick_window_discloses_agent_choice_and_late_or_totp_picks_fail(world):
+    enroll(world)
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
+    child, answer = world["start"]("copy", host=HOST, field="password", extra_env={"BW_BROKER_TEST_PICK_SECONDS": "1"})
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(str(world["sockets"] / f"pick-{answer['pick']['token']}.sock"))
+    import time; time.sleep(1.5)  # Connected in time, but names the login too late.
+    try:
+        client.sendall(json.dumps({"id": ID_B}).encode() + b"\n")
+        late = client.makefile().readline()
+    except OSError:
+        late = ""  # The broker already hung up: also a refusal.
+    assert child.wait(10) == 1 and world["clip"]() is None and (not late or json.loads(late)["ok"] is False)
+    assert not list(world["sockets"].glob("pick-*.sock"))  # Socket removed on every exit.
+    assert "the agent picks one" in child.stderr.read().decode()
+    result, _ = world["run"]("copy", host=HOST, field="totp")
+    assert result["ok"] is False and "pass --username" in result["error"]
