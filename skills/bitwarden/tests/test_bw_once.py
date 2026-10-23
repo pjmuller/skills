@@ -510,3 +510,12 @@ def test_session_refuses_other_vault_and_reports_reason(fake):
             session.handle({**other, "vault": "other"})
     with pytest.raises(bw.Failure, match="Reason"):
         bw.validate({"op": "session-start", "vault": "default", "ttl": 1, "hosts": ["a.example.com"], "reason": "a\nb"})
+
+
+def test_send_days_default_and_bounds(tmp_path):
+    base = {"op": "send-text", "vault": "default", "input_file": str(tmp_path / "m.txt"), "name": "n", "views": 1}
+    assert bw.validate(base)["days"] == bw.SEND_DAYS_DEFAULT
+    assert bw.validate({**base, "days": 14})["days"] == 14
+    for days in (0, bw.SEND_DAYS_MAX + 1, "14"):
+        with pytest.raises(bw.Failure):
+            bw.validate({**base, "days": days})

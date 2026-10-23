@@ -53,7 +53,7 @@ automation is included. Clipboard observers can still read it, and apps may igno
 markers; count-check/clear is best effort, not an atomic clipboard transaction.
 
 Send approval shows the exact escaped text, or file name/bytes/SHA-256, plus name,
-view limit and seven-day expiry/deletion. Input is frozen before review; file
+view limit and expiry/deletion (7 days by default, `--days 1-31`). Input is frozen before review; file
 snapshots are private temporary files removed afterward. Pilot caps: 600 UTF-8
 text bytes, 50 MiB files; file Sends require Premium. Views default to 1 (explicit
 1-100). Return only UUID/link/actual expiry/deletion/views. **Do not open a one-view

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-23 — bitwarden: Send expiry via --days
+
+- `bw-once send-text|send-file --days N` (1-31, default 7): expiry and deletion date; shown in the approval.
+
 ## 2026-10-23 — mailbox-review-core: ReplyPen mailbox review moves here
 
 - New core (was `rp-mailbox-cockpit` in replypen/replypen-brain-skills): collect/detail/validate/apply/render

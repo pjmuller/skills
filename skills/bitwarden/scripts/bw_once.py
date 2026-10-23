@@ -32,6 +32,7 @@ TTL_DEFAULT_MINUTES = 60
 TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
 TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit.
+SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
 
 
@@ -134,9 +135,11 @@ def validate(request):
     op = request.get("op") if isinstance(request, dict) else None
     if op == "session-start":
         request = {"reason": None, **request}
+    if op in ("send-text", "send-file"):
+        request = {"days": SEND_DAYS_DEFAULT, **request}
     allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "field"},
-               "send-text": {"op", "input_file", "name", "views"},
-               "send-file": {"op", "input_file", "name", "views"},
+               "send-text": {"op", "input_file", "name", "views", "days"},
+               "send-file": {"op", "input_file", "name", "views", "days"},
                "session-start": {"op", "ttl", "hosts", "reason"}, "session-stop": {"op"}, "session-status": {"op"},
                "login": {"op"}}
     if op not in allowed or set(request) != allowed[op] | {"vault"}:
@@ -164,6 +167,8 @@ def validate(request):
             raise Failure("Send name must be 1-200 characters without control characters")
         if type(request["views"]) is not int or not 1 <= request["views"] <= 100:
             raise Failure("Views must be an integer from 1 to 100")
+        if type(request["days"]) is not int or not 1 <= request["days"] <= SEND_DAYS_MAX:
+            raise Failure(f"Days must be an integer from 1 to {SEND_DAYS_MAX}")
         if not isinstance(request["input_file"], str):
             raise Failure("Invalid input file")
         request["input_file"] = str(Path(request["input_file"]).expanduser().resolve())
@@ -286,7 +291,7 @@ def snapshot(request):
         raise Failure("Cannot read Send input") from None
     if not content or len(content) > limit:
         raise Failure(f"Send input must be 1-{limit} bytes")
-    until = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    until = (datetime.now(timezone.utc) + timedelta(days=request["days"])).isoformat()
     payload = {"name": request["name"], "type": 0, "disabled": False,
                "hideEmail": True, "maxAccessCount": request["views"],
                "deletionDate": until, "expirationDate": until}
@@ -746,6 +751,7 @@ def main():
         send.add_argument("--input-file", required=True)
         send.add_argument("--name", required=True)
         send.add_argument("--views", type=int, default=1)
+        send.add_argument("--days", type=int, default=SEND_DAYS_DEFAULT, help=f"expiry/deletion, 1-{SEND_DAYS_MAX}")
     session = commands.add_parser("session").add_subparsers(dest="action")
     start = session.add_parser("start")
     start.add_argument("--ttl", default=f"{TTL_DEFAULT_MINUTES}m", help="minutes, e.g. 60m or 1h")
