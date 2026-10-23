@@ -122,12 +122,14 @@ def load_messages(store: Path, since: datetime, until: datetime, project_filter:
 def agent_thread_signal(msg: Message) -> str | None:
     """Classify an agent-spawned thread once; all its later user-role rows go too.
 
-    Strongest first: T3 >= 0.1 records the author (`createdBy`). History
-    imported from 0.0.x marks every row as the user's, so the 🏓 title and
-    spawn-helper opener heuristics stay for that era (drop them after 2026-12).
+    T3 >= 0.1 records every row's author (`createdBy`): a thread an agent opened
+    (dispatcher launch, scheduled job) is not dropped, its agent-written rows go
+    row by row and the user's own replies stay. History imported from 0.0.x marks
+    every row as the user's, so the 🏓 title and spawn-helper opener heuristics
+    stay for that era (drop them after 2026-12).
     """
     if msg.opener_by_agent:
-        return "agent author"
+        return None
     if msg.thread_title.startswith("🏓"):
         return "ping-pong title"
     opener = msg.opener_text.strip()
@@ -462,7 +464,7 @@ def main(argv: list[str] | None = None) -> None:
                 signal = agent_thread_signal(msg)
                 if signal:
                     thread_signals[msg.thread_id] = signal
-    signal_counts = Counter({"agent author": 0, "ping-pong title": 0, "spawn opener": 0, "ping opener": 0})
+    signal_counts = Counter({"ping-pong title": 0, "spawn opener": 0, "ping opener": 0})
     signal_counts.update(thread_signals.values())
     agent_thread_rows_dropped = sum(msg.thread_id in thread_signals for msg in live)
     manual_thread_rows = [msg for msg in live if msg.thread_id not in thread_signals]

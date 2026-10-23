@@ -43,10 +43,11 @@ def run(store: Path, *args: str) -> str:
 
 def test_agent_rows_filtered(store: Path) -> None:
     output = run(store, "--budget", "20000")
-    for secret in ("AGENT SECRET", "user-looking follow-up", "LEGACY WORKER", "SUBAGENT SECRET"):
+    for secret in ("AGENT SECRET", "LEGACY WORKER", "SUBAGENT SECRET"):
         assert secret not in output
-    assert "agent author 1" in output and "ping-pong title 1" in output
-    assert "1 ping row(s) inside manual threads" in output
+    assert "user-looking follow-up inside worker thread" in output  # the user's reply in an agent-opened thread
+    assert "ping-pong title 1" in output and "agent author" not in output
+    assert "2 ping row(s) inside manual threads" in output
 
 
 def test_code_block_stripped(store: Path) -> None:
