@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-23 — mailbox-review-core: ReplyPen mailbox review moves here
+
+- New core (was `rp-mailbox-cockpit` in replypen/replypen-brain-skills): collect/detail/validate/apply/render
+  for unsent ReplyPen drafts, Opus reviewer recipe, research-first operating mode (default corrections
+  per wrapper, own T3 thread per confirmed bug, operator-level explanations, end ledger). Project
+  wrappers (`mailbox-review`) own mailbox, accounts, repos and policy.
+
 ## 2026-10-23 — t3-git-leftovers: the orchestrator delegates, claims span runs
 
 - The calling T3 thread runs one `delegate_task` child per judgment repo (results return to it for
