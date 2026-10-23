@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_dir="${GITSYNC_INSTALL_DIR:-$HOME/.local/bin}"
+
+[[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
+[[ "${1:-}" != --check ]] || echo "source $script_dir"
+if [[ "${1:-}" == "--check" ]]; then
+  target="$install_dir/gitsync"
+  [[ -L "$target" && "$(readlink -f "$target")" == "$script_dir/gitsync" ]] || { echo "missing or stale: $target" >&2; exit 1; }
+  echo "ok      gitsync ($target)"
+  for dependency in git uv t3-fleet t3-pick-instance; do
+    command -v "$dependency" >/dev/null || { echo "missing $dependency; install prerequisites (skills add pjmuller/skills -s t3-maintenance and -s t3-manage-thread -g, then their scripts/install)" >&2; exit 1; }
+    echo "ok      $dependency ($(command -v "$dependency"))"
+  done
+  exit 0
+fi
+
+# Preflight the link before changing it.
+project_copy=false
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+esac
+warn_project=false
+for command_name in gitsync; do
+  existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    warn_project=true
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+  fi
+done
+if $project_copy && $warn_project; then
+  echo "warning: project copy $script_dir is being made global" >&2
+fi
+
+mkdir -p "$install_dir"
+# Retire the pre-gitsync command name (t3-maintenance shipped it); never touch unrelated binaries.
+target="$install_dir/t3-git-leftovers"
+if [[ -L "$target" && "$(readlink "$target")" == */scripts/t3-git-leftovers ]]; then
+  rm "$target" && echo "removed obsolete $target"
+fi
+ln -sfn "$script_dir/gitsync" "$install_dir/gitsync"
+echo "installed $install_dir/gitsync"

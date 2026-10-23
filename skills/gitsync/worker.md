@@ -1,4 +1,4 @@
-# Git leftovers — land one checkout
+# gitsync worker: land one checkout
 
 You own one repo for this run, as a `delegate_task` child of the orchestrator that claimed it. Goal: every
 finished change committed and on the remote; everything else left exactly as you found it, with a reason.
@@ -11,7 +11,7 @@ run everything with `git -C <repo>` or `cd <repo>` first.
 - Never `stash`, `reset`, `checkout <branch>` or `clean` in the shared checkout; never
   force-push or rewrite pushed history; never delete untracked content you cannot prove is regenerable
   or already landed. Staged vs unstaged is someone's intent: keep it unless you commit that path.
-- **Fresh = protected.** A path modified within the brief's fresh threshold (default 30 min; survey says
+- **Fresh = protected.** A path modified within the brief's fresh threshold (default 60 min; survey says
   `fresh`, or `stat` now says so) is another agent's live work: don't stage, edit or judge it.
 - **Old ≠ finished.** Age only makes a path eligible. Ownership: `t3-fleet list --status running`
   threads in this checkout are live; read their recent turns (`t3_thread_read`) and protect every path
@@ -76,6 +76,6 @@ git status --short; git rev-list --left-right --count @{u}...HEAD   # only prote
 
 ## 4. Finish
 
-Your final answer is the parent's input; it re-checks git itself (`t3-git-leftovers status`). No settling,
+Your final answer is the parent's input; it re-checks git itself (`gitsync status`). No settling,
 no footer. First line `landed`, `protected` or `blocked`; then one line per commit (`sha subject → remote
 branch`, checks run); then one line per item left: `path — why — what the user decides`. No recap.

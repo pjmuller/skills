@@ -103,7 +103,7 @@ class Thread:
         return self.run_status in LIVE_RUN
 
     def as_dict(self) -> dict[str, object]:
-        # Shape consumed by t3-git-leftovers: keep these keys stable.
+        # Shape consumed by gitsync: keep these keys stable.
         return {
             "thread_id": self.thread_id,
             "short_id": short_id(self.thread_id),

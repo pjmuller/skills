@@ -24,6 +24,13 @@
   per wrapper, own T3 thread per confirmed bug, operator-level explanations, end ledger). Project
   wrappers (`mailbox-review`) own mailbox, accounts, repos and policy.
 
+## 2026-10-23 — gitsync: git hygiene is its own skill
+
+- New skill `gitsync` (moved out of t3-maintenance): `gitsync survey|prepare|record|status`, worker
+  playbook `worker.md`, own installer. Default `--fresh-minutes` 60 (was 30). State moved to
+  `~/.local/state/gitsync`, env `GITSYNC_STATE`.
+- Removed: `t3-git-leftovers` → `gitsync` (both installers retire the old link).
+
 ## 2026-10-23 — t3-git-leftovers: the orchestrator delegates, claims span runs
 
 - The calling T3 thread runs one `delegate_task` child per judgment repo (results return to it for

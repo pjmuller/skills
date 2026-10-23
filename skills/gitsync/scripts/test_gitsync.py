@@ -14,7 +14,7 @@ import time
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).with_name("t3-git-leftovers")
+SCRIPT = Path(__file__).with_name("gitsync")
 OLD = time.time() - 3 * 3600
 
 
@@ -22,7 +22,7 @@ def sh(cwd: Path, *args: str) -> str:
     return subprocess.run(args, cwd=cwd, check=True, text=True, capture_output=True).stdout
 
 
-class GitLeftoversTest(unittest.TestCase):
+class GitsyncTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name).resolve()
@@ -37,7 +37,7 @@ class GitLeftoversTest(unittest.TestCase):
             f.chmod(0o755)
         self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}",
                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-                    "GIT_COMMITTER_EMAIL": "t@t", "T3_GIT_LEFTOVERS_STATE": str(self.base / "state")}
+                    "GIT_COMMITTER_EMAIL": "t@t", "GITSYNC_STATE": str(self.base / "state")}
         os.environ.update({k: self.env[k] for k in self.env if k.startswith("GIT_")})
         self.origin = self.base / "origin.git"
         sh(self.base, "git", "init", "-q", "--bare", "-b", "main", str(self.origin))
@@ -151,9 +151,9 @@ class GitLeftoversTest(unittest.TestCase):
         first = self.prepare()
         self.assertEqual([Path(d["repo"]).name for d in first["delegate"]], ["one", "two"])
         brief = Path(first["delegate"][0]["task"].removeprefix("Read and execute "))
-        self.assertIn("git-leftovers.md", brief.read_text())
+        self.assertIn("worker.md", brief.read_text())
         self.assertIn(f"git -C {one}", brief.read_text())
-        self.assertIn("Fresh threshold for this run: 30 minutes", brief.read_text())
+        self.assertIn("Fresh threshold for this run: 60 minutes", brief.read_text())
         self.cli("record", str(one), "--owner", "mcp:lead", "--task-id", "task-1", "--child-thread", "child-1")
         again = self.prepare()  # rerun: same claims and request ids, the recorded task comes back
         self.assertEqual([d["clientRequestId"] for d in again["delegate"]],

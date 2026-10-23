@@ -3,8 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Find uncommitted or unpushed leftovers in the repos you worked in lately; the calling T3 thread
-delegates one child task per repo that needs judgment.
+"""gitsync: shared checkouts level with their remote. Finds uncommitted or unpushed leftovers in the repos
+you worked in lately; the calling T3 thread delegates one child task per repo that needs judgment.
 
   survey   select repos (T3 threads + recent commits + --always), fetch, one verdict per repo
   prepare  claim every `worker` repo for --owner (cross-run claim store) and write its brief;
@@ -18,7 +18,7 @@ Verdicts:
   fresh    every dirty path changed < --fresh-minutes  local   no upstream, nothing stale
   owned    another orchestrator holds a live claim     worker  stale dirty paths, ahead/diverged,
                                                                fetch failed or ff refused
-Age only filters; it never proves work is finished. Judgment lives in the child: ../git-leftovers.md.
+Age only filters; it never proves work is finished. Judgment lives in the child: ../worker.md.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-PLAYBOOK = SKILL_DIR / "git-leftovers.md"
-TITLE_PREFIX = "🧹 git leftovers"
+PLAYBOOK = SKILL_DIR / "worker.md"
+TITLE_PREFIX = "🧹 gitsync"
 FETCH_TIMEOUT = 60
 WALK_CAP = 5000  # files scanned per untracked directory before calling it fresh (unknown = protect)
 VERDICTS = ["worker", "owned", "fresh", "ff", "local", "clean"]
@@ -49,7 +49,7 @@ INTERACTIVE_KINDS = ("top", "launched")  # tasks/sub-agents inherit their parent
 
 
 def state_dir() -> Path:
-    return Path(os.environ.get("T3_GIT_LEFTOVERS_STATE", "~/.local/state/git-leftovers")).expanduser()
+    return Path(os.environ.get("GITSYNC_STATE", "~/.local/state/gitsync")).expanduser()
 
 
 def run(args: list[str], cwd: Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -304,7 +304,7 @@ def note(r: dict) -> str:
 
 def survey_markdown(report: dict) -> str:
     rows = sorted(report["repos"], key=lambda r: (VERDICTS.index(r["verdict"]), -r["activity"]["interactive"], r["repo"]))
-    out = [f"# git leftovers survey {report['at']}", "",
+    out = [f"# gitsync survey {report['at']}", "",
            " · ".join(f"{v} {n}" for v, n in report["counts"].items() if n), "",
            "| repo | verdict | branch | ahead/behind | dirty (stale) | threads i/s | note |",
            "|---|---|---|---|---|---|---|"]
@@ -419,7 +419,7 @@ def cmd_prepare(args) -> int:
             claims[repo] = {"owner": args.owner, "run_dir": str(run_dir), "claimed_at": now_iso(),
                             "title": f"{TITLE_PREFIX} {Path(repo).name}", "brief": str(brief),
                             # once per claim: a later claim on the same repo must not replay a finished task
-                            "client_request_id": f"git-leftovers:{run_dir.name}:{key}:{args.owner[-8:]}:{int(now)}"}
+                            "client_request_id": f"gitsync:{run_dir.name}:{key}:{args.owner[-8:]}:{int(now)}"}
             todo.append(handoff(repo, claims[repo]))
     print(json.dumps({"delegate": todo, "held_elsewhere": held, "skipped": skipped}, indent=1, ensure_ascii=False))
     return 0
@@ -492,7 +492,7 @@ def outcome_of(c: dict, child: dict | None, g: dict, live: list[dict]) -> tuple[
 
 def cmd_status(args) -> int:
     run_dir = args.run_dir.expanduser().resolve()
-    survey = load_json(run_dir / "survey.json", {"fresh_minutes": 30})
+    survey = load_json(run_dir / "survey.json", {"fresh_minutes": 60})
     fleet_rows = fleet(f"{args.days}d")
     threads = {t["thread_id"]: t for t in fleet_rows}
     rows, now = [], time.time()
@@ -512,7 +512,7 @@ def cmd_status(args) -> int:
     rows.sort(key=lambda r: (order.index(r["outcome"]), r["repo"]))
     counts = {o: sum(r["outcome"] == o for r in rows) for o in order}
     report = {"at": now_iso(), "counts": counts, "survey_counts": survey.get("counts"), "repos": rows}
-    md = [f"# git leftovers status {report['at']}", "",
+    md = [f"# gitsync status {report['at']}", "",
           " · ".join(f"{o} {n}" for o, n in counts.items() if n) or "no claimed repos", ""]
     md += [f"- **{r['outcome']}** `{r['repo']}` {r['reason']}".rstrip() for r in rows]
     save_json(run_dir / "status.json", report)
@@ -534,7 +534,7 @@ def main() -> int:
     s.add_argument("--scheduled-prefix", action="append", default=None,
                    help="title prefix of scheduled-job threads, counted apart from interactive ones (default ⏰)")
     s.add_argument("--days", type=int, default=14)
-    s.add_argument("--fresh-minutes", type=int, default=30)
+    s.add_argument("--fresh-minutes", type=int, default=60)
     s.add_argument("--no-fetch", action="store_true")
     s.add_argument("--apply-ff", action="store_true", help="fast-forward `ff` repos without a live thread (only mutation)")
     s.add_argument("--out", type=Path, help="run dir: writes survey.json + survey.md")
