@@ -8,6 +8,17 @@
   request relaunches that Terminal in the same call; a cancelled dialog doesn't. `touchid status` →
   `renewal_due`. Only `touchid forget` turns it off.
 
+## 2026-10-23 — t3-maintenance: the thread archive redacts secrets
+
+- New `scripts/t3_redact.py`: deterministic rules (vendor token prefixes, secret-named assignments,
+  auth headers/cookies, URL passwords and secret params, private keys, long random runs), tuned on
+  aggregate counts of the real archive so ids, hashes, paths and Drive ids stay searchable.
+- Every archive write (purge, `sync`, `import`) redacts; text is redacted before any clip, so a cut
+  can't keep a value without its key. `t3-thread-archive scrub [--dry-run]` re-redacts an existing
+  archive (fresh rebuild, verified, atomic swap). Per-thread `redaction` version, a `scrub_required`
+  marker for FTS residue, a writer lock and a trigger that stops pre-redaction writer copies.
+- No LLM in the loop (it would see the values again). Limits: docstring of `t3_redact.py`.
+
 ## 2026-10-23 — bitwarden: Touch ID unlock
 
 - `bw-once touchid enroll` (human Terminal, once per 30 days): the master password, verified by a real unlock,
