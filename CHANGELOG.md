@@ -4,6 +4,7 @@
 
 - Global template: one line "With skill `t3-maintenance`: a secret passed through a thread → `t3-thread-archive check` …; a miss → rule + synthetic test, PR to `pjmuller/skills`; settling redacts nothing". Why: every user's agent should test whether a credential that crossed a thread would survive the archive, and contribute the missing rule instead of shrugging.
 - t3-maintenance: "A miss → PR upstream" steps; no local rule file, because `threads.redaction`, `scrub` and stale detection assume one rule set and a patched installed copy blocks every `skills-refresh` update. Optional weekly `t3-schedule` reminder that reports the purge cohort and asks; purge itself stays manual.
+- Rule change → `sync --force` + `scrub` immediately, without asking. Why: both only read T3's store and rewrite the archive with verification, safe with T3 open (~5 min for a 500 MB archive); waiting just leaves the secret readable in the archive.
 - Onboarding: README row and `t3-setup` install block offer t3-maintenance (purge frees disk and drops pasted secrets; the archive stays searchable).
 
 ## 2026-10-24 — bitwarden: explained Keychain prompts, 15-min re-copy, username-first

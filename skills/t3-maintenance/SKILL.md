@@ -133,12 +133,13 @@ FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](
   (assembled at runtime, never a real or token-shaped literal), bump `VERSION`, CHANGELOG line,
   tests green, PR. It goes out in the user's name: their own rule for sending applies. Never patch the
   installed copy: `skills-refresh` then blocks every skill update until the edit is undone. Once
-  the release is installed: the rule-change steps below.
+  the release is installed: run the rule-change steps below right away.
 - Text is redacted before any clip (a cut could drop `PASSWORD =` and keep the value). Rule change →
-  bump `t3_redact.VERSION`, then `sync --force` (threads still in T3: re-cut from full source text)
-  and `scrub` (`--dry-run` counts first): rebuilds into a fresh file (old text would linger in FTS
-  segments/free pages), verifies parity + idempotency, swaps atomically; ~1 min, one archive-sized
-  temp file. `threads.redaction` +
+  bump `t3_redact.VERSION`, then immediately, without asking (safe with T3 open), `sync --force`
+  (threads still in T3: re-cut from full source text) and `scrub` (`--dry-run` counts first):
+  rebuilds into a fresh file (old text would linger in FTS segments/free pages), verifies parity +
+  idempotency, swaps atomically; one archive-sized temp file. Measured 2026-10-24 (500 MB archive):
+  sync ~3 min, scrub ~1.5 min. `threads.redaction` +
   a trigger make older writer copies fail instead of writing raw text; `stats` shows versions.
   Writers share `t3-archive.sqlite.lock` (a second one waits). SSD/APFS: the replaced file's
   blocks are freed, not wiped.
