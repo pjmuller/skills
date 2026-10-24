@@ -98,6 +98,11 @@ Manual request only.
   every Claude and Codex home (defaults plus each instance `homePath`), never by cwd slug. Attachments by id, provider log by
   T3's sanitized file name.
 - `--older-than` (default 7d) uses `updated_at`, which settling bumps: conservative.
+- From time to time (raw secrets stay in the store until a purge): a weekly reminder thread that
+  never applies, `t3-schedule add --name t3-purge-review --days sun --at 10:00 --project <setup-repo>
+  --settle-when-done -- "Run t3-purge-threads list --settled --archived and t3-thread-archive stats
+  (no archive yet is fine). Under 50 threads: done. Else report the cohort and ask me; on go I
+  quit T3 and run apply --yes."`
 
 ## Archive (`t3-thread-archive`)
 
@@ -120,9 +125,15 @@ FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](
   stays leaked in T3's store, provider transcripts and the full backup. Settling or T3's own delete
   redact nothing: raw text stays in the store until a purge.
 - `check` pipes stdin through the same `redacted()` call as every write: `true` + categories (stderr,
-  exit 0) or `false` (exit 1). A miss → new rule + synthetic regression case in
-  `scripts/test_t3_redact.py` (assembled at runtime, never a real or token-shaped literal), then the
-  rule-change steps below.
+  exit 0) or `false` (exit 1). Run it whenever a secret (token, password, key) passes through a
+  thread; plain config (`PORT=3000`, `RAILS_ENV=production`) is meant to stay `false`.
+- **A miss → PR upstream**, no local rule file: `threads.redaction`, `scrub` and stale detection
+  assume one rule set, and a fix protects every user. In a clone of `pjmuller/skills` (fork without
+  push rights): rule in `scripts/t3_redact.py` + synthetic case in `scripts/test_t3_redact.py`
+  (assembled at runtime, never a real or token-shaped literal), bump `VERSION`, CHANGELOG line,
+  tests green, PR. It goes out in the user's name: their own rule for sending applies. Never patch the
+  installed copy: `skills-refresh` then blocks every skill update until the edit is undone. Once
+  the release is installed: the rule-change steps below.
 - Text is redacted before any clip (a cut could drop `PASSWORD =` and keep the value). Rule change →
   bump `t3_redact.VERSION`, then `sync --force` (threads still in T3: re-cut from full source text)
   and `scrub` (`--dry-run` counts first): rebuilds into a fresh file (old text would linger in FTS

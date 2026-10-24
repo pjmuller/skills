@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-24 — t3-maintenance archive + secret check for every user
+
+- Global template: one line "With skill `t3-maintenance`: a secret passed through a thread → `t3-thread-archive check` …; a miss → rule + synthetic test, PR to `pjmuller/skills`; settling redacts nothing". Why: every user's agent should test whether a credential that crossed a thread would survive the archive, and contribute the missing rule instead of shrugging.
+- t3-maintenance: "A miss → PR upstream" steps; no local rule file, because `threads.redaction`, `scrub` and stale detection assume one rule set and a patched installed copy blocks every `skills-refresh` update. Optional weekly `t3-schedule` reminder that reports the purge cohort and asks; purge itself stays manual.
+- Onboarding: README row and `t3-setup` install block offer t3-maintenance (purge frees disk and drops pasted secrets; the archive stays searchable).
+
 ## 2026-10-24 — bitwarden: explained Keychain prompts, 15-min re-copy, username-first
 
 - Keychain dialogs on every request had one cause: the ad-hoc signed broker is trusted by code hash, every rebuild changes it, and "Allow" (not "Always Allow") grants one read. The broker now probes silently; when macOS will ask, a bw-once window says so first ("Always Allow" both times), `touchid status` shows `keychain_prompt: true`, and the installer prints a note on rebuild. A local signing identity was rejected: re-trust would become silent for any same-user code.

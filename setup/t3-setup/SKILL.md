@@ -151,6 +151,7 @@ skills-refresh schedule --project <setup-repo>                   # daily: instal
 pnpm dlx skills add pjmuller/skills -s agents-md -y $A
 pnpm dlx skills add pjmuller/skills -s tone-of-voice -y $A       # when selected
 pnpm dlx skills add pjmuller/skills -s codexbar-setup -y $A      # when selected
+pnpm dlx skills add pjmuller/skills -s t3-maintenance -y $A      # when selected (offer it: purge frees disk and drops pasted secrets; the archive stays searchable), then its scripts/install
 pnpm dlx skills add pjmuller/skills -s t3-usage-windows -y $A    # when selected (+ t3-maintenance), then its scripts/install
 t3-usage-windows topup install                                   # macOS: open usage windows from 05:00, chain all day
 ```
