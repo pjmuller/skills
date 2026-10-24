@@ -84,6 +84,15 @@ flowchart LR
   scoped to one customer (one account or backup, reversible, regression risk rated low by the agent)
   may run on the operator's explicit go through an audited action or the repo's documented write path,
   read back afterwards; anything broader is a PR.
+- **Local actions for one-offs, ReplyPen actions for the routine.** A write that is rare or ad hoc
+  (a billing switch, a vendor API call, a one-customer fix) runs from the developer machine, not as a
+  new ReplyPen action: a small script in the wrapper's local-actions dir, reading the credential at
+  runtime from the store the wrapper names (never printed, copied or committed), dry-run by default
+  (exact planned calls + before-state), `--execute` with an idempotency key, read back, and a private
+  audit record (go, before/after, request ids). Example: switching a subscription to yearly
+  pay-by-invoice through the payment provider's API with the app's own key. Only what recurs becomes
+  a ReplyPen action. The operator's explicit go still gates every write; the wrapper says which
+  credentials and writes are in bounds.
 
 ## Teach the brain: you are its teacher
 
