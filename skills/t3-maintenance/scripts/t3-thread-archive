@@ -10,6 +10,8 @@
   scrub       re-redact the whole archive under the current rules (rebuild + verify + atomic swap);
               `--dry-run` only counts what it would redact
   stats       size and contents
+  check       stdin holds a secret the archive would redact? prints true/false (+ categories on
+              stderr), exit 0 = true, 1 = false; never prints values or touches the archive
 
 Every write redacts secrets first (t3_redact.py: rules, limits). Output shows counts per
 category, never values.
@@ -29,7 +31,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from collections import Counter
 
-from t3_archive import ARCHIVE, archive_threads, import_backup, open_archive, scan, scrub
+from t3_archive import ARCHIVE, archive_threads, import_backup, open_archive, redacted, scan, scrub
 from t3_store import DEFAULT_STORE, connect_readonly
 
 
@@ -70,6 +72,15 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    hits = Counter()
+    redacted(sys.stdin.buffer.read().decode(errors="replace"), hits)  # the call every archive write makes
+    print("true" if hits else "false")
+    if hits:
+        print(", ".join(f"{k} {n}" for k, n in hits.most_common()), file=sys.stderr)
+    return 0 if hits else 1
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     if not args.archive.exists():
         raise SystemExit(f"no archive at {args.archive}")
@@ -103,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     scr.add_argument("--dry-run", action="store_true", help="only count what would be redacted")
     scr.set_defaults(func=cmd_scrub)
     sub.add_parser("stats", help="size and contents").set_defaults(func=cmd_stats)
+    sub.add_parser("check", help="stdin: would the archive redact anything? true/false").set_defaults(func=cmd_check)
     args = parser.parse_args(argv)
     return args.func(args)
 

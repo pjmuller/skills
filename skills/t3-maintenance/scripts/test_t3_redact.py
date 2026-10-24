@@ -75,6 +75,8 @@ def positives() -> list[tuple[str, str, str]]:
     add("slack-webhook", "post to https://hooks.slack.com/services/{}", "T" + rand(10) + "/B" + rand(10) + "/" + rand(24))
     add("private-key", "{}", "-----BEGIN OPENSSH PRIVATE KEY-----\n" + rand(70) + "\n" + rand(70) + "\n-----END OPENSSH PRIVATE KEY-----")
     add("private-key", 'key = "{}"', "-----BEGIN RSA PRIVATE KEY-----\\n" + rand(64) + "\\n" + rand(40) + " …[+900 chars]")
+    add("treg-token", "treg key {} works", "tr" + "eg_" + rand(43, B62 + "-_"))
+    add("treg-token", '{{"treg": "{}"}}', "tr" + "eg_" + rand(43, B62 + "-_"))  # a bare label, not a secret-named key
     add("high-entropy", "the value {} was printed", rand(40))
     add("high-entropy", "aws secret {}", rand(30) + "/" + rand(9) + "+")
     return cases
@@ -100,6 +102,7 @@ NEGATIVES = [
     'parser.add_argument("--token", help="the API token to use")  "description": "Personal access token"',
     "Authorization: required for every call; Bearer authentication is described below",
     "drive-get 1" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0FeDcBa" + " --out a.md",
+    "sum(i.get('treg_cost_usd')) treg_fetch_fallback_for_blocked_pages_and_pdfs_budget",  # code, not keys
 ]
 
 
@@ -117,6 +120,16 @@ def test_redacts_and_keeps_context(category: str, text: str, secret: str) -> Non
 @pytest.mark.parametrize("text", NEGATIVES)
 def test_leaves_useful_text_alone(text: str) -> None:
     assert redact(text) == (text, {})
+
+
+def test_check_cli_answers_true_false_without_values() -> None:
+    """`t3-thread-archive check`: the archive's own redaction on stdin, values never echoed."""
+    cli = [sys.executable, str(Path(__file__).parent / "t3-thread-archive"), "check"]
+    secret = "tr" + "eg_" + rand(43, B62 + "-_")
+    found = subprocess.run(cli, input=f"note {secret} end", capture_output=True, text=True)
+    assert (found.returncode, found.stdout, found.stderr) == (0, "true\n", "treg-token 1\n")
+    clean = subprocess.run(cli, input="RAILS_ENV=production", capture_output=True, text=True)
+    assert (clean.returncode, clean.stdout) == (1, "false\n")
 
 
 def test_url_with_a_marker_stays_one_url() -> None:

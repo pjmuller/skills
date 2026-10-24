@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-24 — t3-maintenance: secret check, treg.to tokens
+
+- `t3-thread-archive check`: stdin → `true`/`false` through the archive's own redaction (categories on stderr, never values; exit 0/1). Agents can test whether a secret would survive the archive.
+- Redaction v2: treg.to API keys (`treg_` + 43 URL-safe chars) are a vendor token; standalone they slipped through as a "typed id". Existing archives: `t3-thread-archive sync --force`, then `scrub` (`--dry-run` first).
+
 ## 2026-10-23 — CI on every change; scheduler, purge, gitsync and bitwarden hardening
 
 - CI and the documented test command run the suite with `pytest-xdist -n 4` (about 3x faster); the bitwarden signal test runs in its own process so it is xdist-safe.

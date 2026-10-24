@@ -15,7 +15,8 @@ T3 >= 0.1 only. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`)
 - `t3-purge-threads` — hard-delete old threads + transcripts (secrets); `drop-v1` frees the frozen
   0.0.x `state.sqlite`.
 - `t3-thread-archive` — the searchable backup archive purged threads live on in
-  ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups, `scrub`.
+  ([below](#archive-t3-thread-archive)); `stats`, `sync`, `import` of old slim backups, `scrub`,
+  `check` (stdin → `true`/`false`: would the archive redact something?).
 - `t3-preview-gc` — free browser-preview renderers (macOS): `--apply` closes tabs idle past `--idle-hours`
   whose thread has no running turn (same path as `t3_preview_close`; frees the renderer since T3 0.1).
 - `scripts/t3_store.py` — shared read-only store access, schema notes, short ids.
@@ -116,7 +117,12 @@ FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](
   (vendor prefixes, secret-named assignments, auth headers/cookies, URL passwords/params, private
   keys, long random runs; commit hashes, UUIDs, paths, ids, plain config survive). Value →
   `[redacted:<category>]`; output shows counts, never values. Not a rotation: a leaked credential
-  stays leaked in T3's store, provider transcripts and the full backup.
+  stays leaked in T3's store, provider transcripts and the full backup. Settling or T3's own delete
+  redact nothing: raw text stays in the store until a purge.
+- `check` pipes stdin through the same `redacted()` call as every write: `true` + categories (stderr,
+  exit 0) or `false` (exit 1). A miss → new rule + synthetic regression case in
+  `scripts/test_t3_redact.py` (assembled at runtime, never a real or token-shaped literal), then the
+  rule-change steps below.
 - Text is redacted before any clip (a cut could drop `PASSWORD =` and keep the value). Rule change →
   bump `t3_redact.VERSION`, then `sync --force` (threads still in T3: re-cut from full source text)
   and `scrub` (`--dry-run` counts first): rebuilds into a fresh file (old text would linger in FTS

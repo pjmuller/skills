@@ -24,7 +24,7 @@ import math
 import re
 from collections import Counter
 
-VERSION = 1
+VERSION = 2  # 2: treg.to tokens
 
 
 def mark(category: str) -> str:
@@ -56,6 +56,7 @@ _VENDOR = [
                     r"|dp\.(?:st|ct|sa|scim)\.[A-Za-z0-9_.-]{20,}"),
     ("telegram-bot-token", r"\d{8,10}:AA[A-Za-z0-9_-]{33}"),
     ("rootcause-token", r"rc_[a-z]+_[A-Za-z0-9]{24,}"),
+    ("treg-token", r"treg_(?=[a-z_-]*[A-Z0-9])[A-Za-z0-9_-]{40,}"),  # treg.to: 43 URL-safe chars
     ("prefixed-secret", r"[a-z]{2,10}_(?:live|prod|secret)_[A-Za-z0-9]{16,}"),
 ]
 _VENDOR_ALT = "|".join(f"(?P<vnd{i}>{p})" for i, (_, p) in enumerate(_VENDOR))
@@ -178,7 +179,7 @@ URL_OR_RUN = re.compile(f"{_URL}|{_GENERIC}")  # one regex: a URL's path segment
 # a cheap literal pre-check before the full vendor regex (most texts hold no vendor prefix at all)
 _VENDOR_HINT = re.compile(r"AKIA|ASIA|AGPA|AIDA|AROA|ANPA|AIPA|gh[pousr]_|github_pat_|glpat-|xox|xapp-|sk-|xai-|pplx-"
                           r"|gsk_|hf_|sk_|rk_|whsec_|AIza|ya29\.|1//0|4/0A|GOCSPX-|eyJ|pk_|SG\.|npm_|pypi-|HRKU-"
-                          r"|_v1_|shp|dp\.|:AA|rc_|_live_|_prod_|_secret_")
+                          r"|_v1_|shp|dp\.|:AA|rc_|treg_|_live_|_prod_|_secret_")
 
 # not anchored: one match can hold several URLs (`sed "s#pg://a:b@h#pg://c:d@h#"`)
 _URL_USERINFO = re.compile(r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)([^\s:/@?#]*):([^\s/@?#]+)@", re.I)
