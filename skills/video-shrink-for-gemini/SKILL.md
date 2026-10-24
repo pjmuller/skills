@@ -70,8 +70,9 @@ Claude Design export, a ticket, a mockup), pass it as a context file: the pass s
 video to know what is on screen at which second, but names slides, frames and labels by their real
 titles/ids instead of guessing from pixels. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
 
-**Product feedback walkthrough** (someone clicks through an app and narrates what to change): keep
-the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
+**Product feedback walkthrough** (someone clicks through an app and narrates what to change): shrink
+with `--preset ui` (1 fps: at 0.5 fps a chip removed by Backspace or a 200 ms spinner falls between
+frames; API tokens follow duration, so it costs the same), keep the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
 carry it) so item times line up with server logs, and pass as context the owning screen's skill doc
 plus the app's UI copy (its i18n/strings file or the relevant templates): Gemini then quotes real
 labels and step names. Then follow [feedback-round](../recording-followups/feedback-round.md).

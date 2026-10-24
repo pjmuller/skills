@@ -40,7 +40,9 @@ it can be matched to server logs. End with `## Feedback items`: one numbered ent
 wish, praise or "leave it like this", each with timestamp, screen/URL, element, the speaker's words
 close to verbatim, and what was visible. The speaker's diagnosis is a claim, not a fact: under "what
 was visible" give the raw on-screen values (counts, order, labels) and never restate the claim as
-something you saw. No solutions.
+something you saw. Mark an item the speaker says to keep as it is `leave alone`. Then list, as items
+marked `unnarrated`, visible defects nobody mentioned (wrapped or overlapping labels, truncated text,
+a count that contradicts another, an error banner): a reviewer misses those while listening. No solutions.
 
 ## Vocabulary (spell these exactly; ASR and speech both get them wrong)
 

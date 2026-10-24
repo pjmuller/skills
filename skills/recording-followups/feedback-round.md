@@ -22,18 +22,28 @@ person with design taste keep, tweak or revert each preference change.
    55 s cross-project relink ran inside an OAuth callback). An independent plan opinion runs
    alongside with the same evidence and no proposals; reconcile when both are back.
 4. **BEFORE shots before any edit**: detached worktree at `origin/main`, seeded local app, fixed
-   viewport, scenes via [ui-before-after](../ui-before-after/SKILL.md). Reproduce the speaker's state
+   viewport, scenes via [ui-before-after](../ui-before-after/SKILL.md). Keep the before server running
+   until the report is built: a state found later (a failure screen, a phone width) still needs its
+   genuine before shot. Use the project's one-command shooter when it has one. Reproduce the speaker's state
    with synthetic look-alike data (long titles, realistic counts); never copy customer or production
    data into screenshots, scene files or tickets.
 5. **Implement.** The lead owns shared files and the core changes. Heavy repetitive work (catalogues,
    icon/asset sourcing, copy sweeps) goes to cheaper workers with exclusive file ownership and a brief
    that fits their sandbox ([Codex sandbox](../t3-manage-thread/workers.md#codex-sandbox-limits)).
    Taste changes stay small, scoped (a modifier class, one template branch) and listed one per line
-   in the project's design-deviation log, so each reverts alone.
+   in the project's design-deviation log, so each reverts alone. **Commit the bug fixes locally before
+   the first taste edit** (push both after review): splitting one mixed working tree into a fix commit
+   and a taste commit afterwards means hand-stripping hunks from shared files. A worker in its own
+   worktree commits there and the lead cherry-picks; an uncommitted diff re-applied with `git apply`
+   fails as a whole on the first file the lead also touched.
 6. **Verify.** Unit tests on the critical paths; the browser suite on unchanged `main` too, so
    pre-existing failures are not blamed on you; AFTER shots with the same scenes; one phone-width pass.
 7. **Ship.** Opposite-model review; commit bug fixes apart from taste changes; deploy; check live.
-8. **Report.** Compact before/after inline (`compact.html` through the host's HTML renderer), the full
+8. **Side effects of the walk itself.** A walk on a shared box (staging) with a real mailbox or
+   account can switch real processing on: drafts placed in a live inbox, a mailbox now watched twice.
+   Read the box's rows for what the walk created, pause it at once, and offer the project's teardown
+   (an account-removal tool, deleting a placed draft) as a decision: irreversible, so ask.
+9. **Report.** Compact before/after inline (`compact.html` through the host's HTML renderer), the full
    report in `~/Downloads`, a ticket for the taste owner: per change the screen, bug vs preference,
    before/after, file and how to revert. Side effects you found in production (data moved, flows
    switched on) are decisions for the user, asked as such.

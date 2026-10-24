@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shrink a screen recording so Gemini swallows it whole while speech stays transcribable.
-# Usage: shrink-video [--preset normal|compact|heavy|extreme] [--out DIR] [--max-bytes SIZE] [--crop JSON] FILE...
+# Usage: shrink-video [--preset normal|ui|compact|heavy|extreme] [--out DIR] [--max-bytes SIZE] [--crop JSON] FILE...
 #   FILE may be a bare name; it is looked up in ~/screenshots and ~/Downloads.
 #   --max-bytes SIZE (bytes, or K/M/G = KiB/MiB/GiB, e.g. 48M): if the output is larger, also
 #     write overlapping parts <name>.gemini.partNN.mp4, each <= SIZE, and <name>.chunks.md
@@ -29,6 +29,7 @@ done
 # on-screen text must stay readable. Native agy attachments have a 50 MiB cap.
 case "$preset" in
   normal)  fps=0.5;  width=1280; crf=24 ;;  # code/UI/slides matter: 1 frame / 2 s, near-source quality
+  ui)      fps=1;    width=1280; crf=24 ;;  # product walkthroughs: clicks, spinners and chips change within 2 s
   compact) fps=0.5; width=1280; crf=28 ;;  # same cadence, smaller file
   heavy)   fps=0.25; width=1280; crf=26 ;;  # talking + occasional screen: 1 frame / 4 s
   extreme) fps=0.2;  width=854;  crf=30 ;;  # picture only for orientation
