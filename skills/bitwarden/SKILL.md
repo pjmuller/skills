@@ -7,15 +7,22 @@ Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** on
 (`bw-once touchid enroll`: native window, master passwords sealed in the Secure Enclave): `list`/`copy` open one
 window (the human's phrase, your claim, the checked request) and need one fingerprint; every enrolled account is
 searched unless `--vault` is given: [touchid.md](touchid.md). Agent recipe:
-1. Own tab on the login page (T3: `incognito`), type the username if known, then **click the password field
-   before asking** (the paste then lands right after the touch, well inside the 30 s clipboard window).
+1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), type the username.
 2. Tell the human what the green box will say, then run in the background (it waits up to 5 min for them):
-   `bw-once copy --host H [--username U] --field password --thread "<title>" --why "<one line>"`. Title = your T3
-   thread's `title` from `t3_thread_list` (its first row is you: `currentThreadId`).
-3. Answer has `pick` (several logins, no `--username`)? Vaults are already locked: choose from `pick.candidates`
-   (vault, id, name, username) and run `bw-once pick --token <pick.token> --id <id>` within 60 s; no second touch.
-4. `preview_press Meta+V`, then check `value.length` only, then `bw-once clear`, then submit: **one call at a time**
-   (a parallel `clear` can beat the paste and leave the field empty); afterwards log out (session.md). Otherwise a fresh human Terminal
+   `bw-once copy --host H --username U --field password --thread "<title>" --why "<one line>"`. **Know the
+   account → always `--username`**; no `list` first (it costs a touch and shows every login on the host). Title =
+   your T3 thread's `title` from `t3_thread_list` (its first row is you: `currentThreadId`).
+3. Account unknown: same `copy` without `--username`. Answer has `pick` (several logins)? Vaults are already
+   locked: choose from `pick.candidates` (vault, id, name, username) and run `bw-once pick --token <pick.token>
+   --id <id>` within 60 s; no second touch. `list --host H [--username U]` only for metadata without a copy.
+4. After the answer: `preview_click` the password field **again** (the bw-once window took focus; a paste into
+   the field clicked before the touch landed nothing, 2026-10-23), `preview_press Meta+V`, check `value.length`
+   only, `bw-once clear`, submit: **one call at a time** (a parallel `clear` can beat the paste).
+5. Same password again within 15 min (Google asks twice; a gcloud OAuth right after): the same `copy` with the
+   same `--thread` and `--username`/`--id` → `recopy: true`, no touch (`recopy_until` in the first answer).
+6. `touchid status` (or `doctor`) shows `keychain_prompt: true` = broker rebuilt since its last Keychain trust:
+   tell the human first: a bw-once window, then up to two macOS dialogs, Mac login password, **Always Allow**.
+Afterwards log out (session.md). Otherwise a fresh human Terminal
 unlock per request, or a time-boxed **session holder** PJ unlocks once
 (`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
 commands serve from it; design, paste mechanics and never-list: [session.md](session.md)). Install with

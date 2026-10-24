@@ -26,7 +26,7 @@ bw-once touchid status | bw-once touchid forget
 ## How (all inside the compiled broker; the Python front end only forwards the request)
 
 - **Secrets**: one legacy Keychain item, default ACL = the broker binary that created it. Another or a modified
-  binary gets a visible macOS prompt (after a bw-once update: once, Mac login password, Always Allow). It holds
+  binary gets a visible macOS prompt (see Updates). It holds
   the phrase and a bundle `{vault: {email, password}}` sealed to a **Secure Enclave** key (`.biometryCurrentSet`):
   the enclave refuses without a fingerprint, and new or removed fingerprints invalidate it.
 - **Bitwarden**: the installer downloads Bitwarden's signed CLI from its GitHub release; the broker checks Apple's
@@ -40,8 +40,21 @@ bw-once touchid status | bw-once touchid forget
   window and waits 60 s on a private socket for `bw-once pick --token … --id …`; the window then shows the agent's
   choice. One touch either way; the agent can only choose among the host's logins the human approved. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
   itself, knowing only an owner token, clears that write after 30 s unless something newer was copied.
-- **Updates**: builds aren't reproducible, so the installer rebuilds the broker only when `broker.swift` changed.
-  A Keychain prompt for bw-broker is therefore expected only right after you updated bw-once: any other time, Deny.
+- **Updates**: builds aren't reproducible and the broker is ad-hoc signed, so its identity is its code hash: the
+  item's ACL and partition list name the hashes macOS was told to trust. The installer rebuilds only when
+  `broker.swift` changed; the first request after a rebuild then meets two macOS dialogs ("wants to use your
+  confidential information…", "wants to access key…", Mac login password each). **Always Allow** on both adds the
+  new hash: no dialog until the next rebuild. Plain "Allow" grants that one read, so both come back on every request
+  (cause of the 2026-10-23 "always these pop-ups": enrolled at 10:15, rebuilt 11:41, "Allow" each time). The broker
+  therefore probes silently first (`touchid status` → `keychain_prompt: true`) and, when macOS will ask, shows a
+  bw-once window saying so before the dialogs. A dialog without that window, or without a bw-once update: Deny.
+- **Re-copy (no touch)**: after a released username/password with `--thread`, the broker keeps only that one field
+  in memory for 15 min (vaults stay locked) on a private socket keyed by host + field + thread; the same thread naming
+  the same login (`--id`/`--username`) gets it again without a touch, each time in a small focus-free window with
+  the phrase. A newer copy for the same key replaces it. Why: one Google sign-in asks for the password twice and a
+  gcloud OAuth right after asks again. Cost:
+  for 15 min any same-user process that knows the thread title can re-fill the clipboard with that one password,
+  shown each time; the green box says so before the touch. TOTP is never re-copied (stale).
 - **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
   a saved password (changed) → setup window for that vault; then the request continues (second touch). Both show
   the phrase.
@@ -49,6 +62,9 @@ bw-once touchid status | bw-once touchid forget
 ## Boundary
 
 Raises the bar from "any process reads it" to "needs this Mac's enclave, your finger, and the genuine broker".
+A stable local signing identity (self-signed certificate) would stop the post-rebuild dialogs, but its key would sit
+in the same login keychain and `codesign` could use it for any binary: re-trust would become silent for malware too.
+Rejected 2026-10-24; the dialogs after a rebuild are the remaining signal.
 Same-user malware can still: ask for a real login (you see an honest window: read it), fake a whole window
 (no phrase), read the clipboard during its 30 s, record the screen, or **replace the broker and wait for you to
 approve its Keychain prompt** (it looks like the post-update prompt; with your login password it gets the

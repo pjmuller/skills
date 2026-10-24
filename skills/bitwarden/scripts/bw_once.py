@@ -142,7 +142,9 @@ def validate(request):
         request = {"days": SEND_DAYS_DEFAULT, **request}
     if op == "copy":
         request = {"id": None, "username": None, **request}
-    allowed = {"list": {"op", "host"}, "copy": {"op", "host", "id", "username", "field"},
+    if op == "list":
+        request = {"username": None, **request}
+    allowed = {"list": {"op", "host", "username"}, "copy": {"op", "host", "id", "username", "field"},
                "send-text": {"op", "input_file", "name", "views", "days"},
                "send-file": {"op", "input_file", "name", "views", "days"},
                "session-start": {"op", "ttl", "hosts", "reason"}, "session-stop": {"op"}, "session-status": {"op"},
@@ -162,13 +164,14 @@ def validate(request):
         request["reason"] = reason_text(request["reason"])
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
-    if op == "copy":
-        if request["id"] is not None:
-            request["id"] = item_id(request["id"])
+    if op in ("list", "copy"):
         if request["username"] is not None and (not isinstance(request["username"], str) or not request["username"]
                                                 or len(request["username"]) > 254
                                                 or any(ord(c) < 32 or ord(c) == 127 for c in request["username"])):
             raise Failure("Username must be 1-254 characters without control characters")
+    if op == "copy":
+        if request["id"] is not None:
+            request["id"] = item_id(request["id"])
         if request["field"] not in ("username", "password", "totp"):
             raise Failure("Unsupported credential field")
     if op.startswith("send-"):
@@ -392,7 +395,8 @@ def pick(vault, request):
 def operate(vault, request, payload):
     op = request["op"]
     if op == "list":
-        return {"items": exact_items(vault, request["host"])}, None
+        return {"items": [item for item in exact_items(vault, request["host"]) if request["username"] is None
+                          or str(item["username"] or "").lower() == request["username"].lower()]}, None
     if op == "copy":
         request = {**request, "id": pick(vault, request)}
         item = vault.json("get", "item", request["id"])
@@ -522,7 +526,7 @@ def broker(request):
         if not select.select([child.stdout], [], [], BROKER_SECONDS)[0]:
             raise ValueError
         result = json.loads(child.stdout.readline())
-        if "pick" not in result:
+        if "pick" not in result and "recopy_until" not in result:  # Else it keeps running (pick / re-copies).
             child.wait(10)
         return result
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -548,6 +552,34 @@ def submit_pick(token, item):
             return json.loads(read_line(client))
         except ValueError:
             raise Failure("Invalid pick answer") from None
+
+
+def recopy_socket(host_name, field, thread):
+    """Same name as the broker's `recopyKey`: host, field and thread hashed to fit an AF_UNIX path."""
+    key = hashlib.sha256("\n".join((host_name, field, thread)).encode()).hexdigest()[:32]
+    return cache_dir() / f"recopy-{key}.sock"
+
+
+def via_recopy(request, thread, vaults):
+    """The same thread re-copying the login the broker released minutes ago: no new touch. None → normal flow."""
+    if request["op"] != "copy" or request["field"] == "totp" or not thread or not (request.get("id") or request.get("username")):
+        return None
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(10)
+    try:
+        client.connect(str(recopy_socket(host(request["host"]), request["field"], thread)))
+    except OSError:
+        client.close()
+        return None
+    with client:
+        client.sendall(json.dumps({"host": host(request["host"]), "field": request["field"], "thread": thread,
+                                   "id": request.get("id") and item_id(request["id"]), "username": request.get("username"),
+                                   "vaults": [vault["name"] for vault in vaults]}).encode() + b"\n")
+        try:
+            answer = json.loads(read_line(client))
+        except (OSError, ValueError):
+            return None
+    return answer if answer.get("ok") else None
 
 
 def broker_vaults(name=None):
@@ -875,6 +907,7 @@ def main():
     commands.add_parser("clear", help="clear the clipboard now if it still holds a bw-once copy")
     listing = commands.add_parser("list")
     listing.add_argument("--host", required=True)
+    listing.add_argument("--username", help="only logins with this username (when you know the account)")
     copy = commands.add_parser("copy")
     copy.add_argument("--host", required=True)
     copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
@@ -957,6 +990,7 @@ def main():
             claim = {"thread": args.pop("thread"), "why": args.pop("why")}
             result = via_session(args)
             vaults = broker_vaults(explicit_vault)
+            result = result or via_recopy(args, claim["thread"], vaults)
             if not result and broker_enrolled(vaults):
                 # One Touch ID panel, every enrolled vault searched (or just --vault); no Terminal.
                 fields = {key: args[key] for key in ("op", "host", "field", "username", "id") if args.get(key)}

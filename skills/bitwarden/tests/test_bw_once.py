@@ -650,8 +650,9 @@ def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
 @macos_only
 def test_explicit_vault_restricts_the_broker_search(front):
     run, _ = front
-    sent = run("--vault", "work", "list", "--host", "admin.example.com")
+    sent = run("--vault", "work", "list", "--host", "admin.example.com", "--username", "user")
     assert sent["vaults"] == [{"name": "work", "email": "a@example.com"}] and sent["op"] == "list"
+    assert sent["username"] == "user"
 
 
 def test_not_enrolled_falls_back_to_the_terminal_without_claim_fields(front):

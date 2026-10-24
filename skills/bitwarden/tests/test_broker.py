@@ -9,6 +9,9 @@ import tempfile
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import bw_once  # noqa: E402  (the re-copy client must find the broker's socket)
+
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the broker is a macOS Swift binary")
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 HOST = "admin.example.com"
@@ -100,9 +103,10 @@ def world(broker, tmp_path):
         path.write_text(json.dumps({**json.loads(path.read_text()), **values}))
 
     def run(op, touch="ok", typed=None, names=("testa", "testb"), extra_env=None, **fields):
-        env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "1",
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "2",
                "BW_BROKER_TEST_STORE": str(tmp_path / "store.json"), "BW_BROKER_TEST_TOUCH": touch,
-               "BW_BROKER_TEST_TYPE": json.dumps(typed or {}), **(extra_env or {})}
+               "BW_BROKER_TEST_TYPE": json.dumps(typed or {}), "BW_BROKER_TEST_SOCKDIR": str(sockets),
+               "BW_BROKER_TEST_RECOPY_SECONDS": "0", **(extra_env or {})}
         request = {"op": op, "vaults": [vaults[n] for n in names], **fields}
         done = subprocess.run([str(broker / "bw-broker")], input=json.dumps(request).encode(), env=env,
                               capture_output=True, timeout=60)
@@ -110,7 +114,7 @@ def world(broker, tmp_path):
 
     def start(op, typed=None, names=("testa", "testb"), extra_env=None, **fields):
         """Like run, but returns the live process after its first answer (the pick flow keeps running)."""
-        env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "1",
+        env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "2",
                "BW_BROKER_TEST_STORE": str(tmp_path / "store.json"), "BW_BROKER_TEST_TOUCH": "ok",
                "BW_BROKER_TEST_TYPE": json.dumps(typed or {}), "BW_BROKER_TEST_SOCKDIR": str(sockets), **(extra_env or {})}
         child = subprocess.Popen([str(broker / "bw-broker")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -139,7 +143,10 @@ def world(broker, tmp_path):
         path = broker / "clip"
         return path.read_text() if path.exists() else None
 
-    return {"run": run, "start": start, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
+    def unclip():
+        (broker / "clip").unlink(missing_ok=True)
+
+    return {"run": run, "start": start, "unclip": unclip, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
 
 
 def enroll(world):
@@ -221,6 +228,98 @@ def test_list_returns_metadata_only(world):
     result, _ = world["run"]("list", host=HOST)
     assert result["items"] == [{"vault": "testa", "id": ID_A, "name": "Example", "username": "alice", "host": HOST}]
     assert "private" not in json.dumps(result) and SECRET_A not in json.dumps(result)
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
+    result, panel = world["run"]("list", host=HOST, username="BOB")
+    assert [item["username"] for item in result["items"]] == ["bob"] and "with username bob" in panel
+
+
+def test_keychain_prompt_after_a_rebuild_is_explained_before_the_request(world):
+    enroll(world)
+    assert "keychain_prompt" not in world["run"]("status")[0]
+    rebuilt = {"BW_BROKER_TEST_KEYCHAIN_PROMPT": "1"}
+    assert world["run"]("status", extra_env=rebuilt)[0]["keychain_prompt"] is True
+    result, panel = world["run"]("copy", host=HOST, field="password", username="alice", extra_env=rebuilt)
+    assert result["ok"] and panel.index("Always Allow") < panel.index("AGENT SAYS")
+
+
+def recopy(request, thread, vaults=("testa", "testb")):
+    return bw_once.via_recopy({"op": "copy", "host": HOST, "field": "password", "id": None, "username": None,
+                               **request}, thread, [{"name": name} for name in vaults])
+
+
+def test_same_thread_recopies_the_released_login_without_a_touch(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    child, result = world["start"]("copy", host=HOST, field="password", username="alice", thread="Sign-in",
+                                   extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "3"})
+    assert result["ok"] and "recopy_until" in result and world["clip"]() == SECRET_A
+    world["unclip"]()
+    assert recopy({"id": ID_A}, "Other thread") is None
+    assert recopy({"id": ID_A, "field": "username"}, "Sign-in") is None
+    assert recopy({"id": ID_B}, "Sign-in") is None and recopy({}, "Sign-in") is None
+    assert recopy({"id": ID_A}, "Sign-in", vaults=("testb",)) is None and world["clip"]() is None
+    again = recopy({"username": "Alice"}, "Sign-in")
+    assert again["ok"] and again["touch"] is False and again["id"] == ID_A and world["clip"]() == SECRET_A
+    assert SECRET_A not in json.dumps(again) and all(world["locked"](name) for name in MASTER)
+    assert child.wait(15) == 0 and not list(world["sockets"].glob("recopy-*.sock"))
+    stderr = child.stderr.read().decode()
+    assert stderr.count("touch:") == 1 and "Re-copies" in stderr and "re-copies end" in stderr
+    assert recopy({"id": ID_A}, "Sign-in") is None  # Expired.
+
+
+def recopy_client(world, thread="Sign-in"):
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(str(bw_once.recopy_socket(HOST, "password", thread)))
+    ask = json.dumps({"host": HOST, "field": "password", "thread": thread, "username": "alice",
+                      "vaults": ["testa", "testb"]}).encode() + b"\n"
+    return client, ask
+
+
+def test_a_trickled_recopy_request_cannot_outlive_the_deadline(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    child, _ = world["start"]("copy", host=HOST, field="password", username="alice", thread="Sign-in",
+                              extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "2"})
+    world["unclip"]()
+    client, ask = recopy_client(world)
+    import time
+    client.sendall(ask[:10]); time.sleep(1.2); client.sendall(ask[10:20]); time.sleep(1.2)
+    try:
+        client.sendall(ask[20:])
+        late = client.makefile().readline()
+    except OSError:
+        late = ""
+    assert (not late or json.loads(late)["ok"] is False) and world["clip"]() is None and child.wait(15) == 0
+
+
+def test_a_replaced_holder_never_overwrites_the_newer_copy(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    old, _ = world["start"]("copy", host=HOST, field="password", username="alice", thread="Sign-in",
+                            extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "10"})
+    client, ask = recopy_client(world)
+    client.sendall(ask[:10])  # Accepted by the old holder, request not finished yet.
+    world["configure"]("testa", items=[login(ID_A, "changed-secret", "alice")])
+    new, _ = world["start"]("copy", host=HOST, field="password", username="alice", thread="Sign-in",
+                            extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "2"})
+    assert world["clip"]() == "changed-secret"
+    client.sendall(ask[10:])
+    assert json.loads(client.makefile().readline())["ok"] is False and world["clip"]() == "changed-secret"
+    assert old.wait(15) == 0 and new.wait(15) == 0
+
+
+def test_picked_login_recopies_but_totp_and_threadless_copies_do_not(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
+    child, answer = world["start"]("copy", host=HOST, field="password", thread="Sign-in",
+                                   extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "2"})
+    assert "recopy_until" in world["pick"](answer["pick"]["token"], ID_B)
+    assert recopy({"id": ID_B}, "Sign-in")["vault"] == "testb" and recopy({"id": ID_A}, "Sign-in") is None
+    assert child.wait(15) == 0
+    for fields in ({"field": "totp", "username": "alice", "thread": "Sign-in"}, {"field": "password", "username": "alice"}):
+        result, panel = world["run"]("copy", host=HOST, extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "60"}, **fields)
+        assert result["ok"] and "recopy_until" not in result and "Re-copies" not in panel
 
 
 def test_cancel_never_unlocks(world):

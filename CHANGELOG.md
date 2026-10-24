@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-24 — bitwarden: explained Keychain prompts, 15-min re-copy, username-first
+
+- Keychain dialogs on every request had one cause: the ad-hoc signed broker is trusted by code hash, every rebuild changes it, and "Allow" (not "Always Allow") grants one read. The broker now probes silently; when macOS will ask, a bw-once window says so first ("Always Allow" both times), `touchid status` shows `keychain_prompt: true`, and the installer prints a note on rebuild. A local signing identity was rejected: re-trust would become silent for any same-user code.
+- Re-copy without a touch: after a released username/password with `--thread`, the same thread naming the same login (`--id`/`--username`) gets it again for 15 min (`recopy: true`), shown in a small focus-free window; the green box discloses it. Why: one Google sign-in plus gcloud OAuth asked three times for one approved password. TOTP excluded.
+- `list --username` narrows; the agent recipe says `copy --username` when the account is known (no `list` across every login) and to click the field again after the touch (the bw-once window takes focus; a paste landed nothing).
+
 ## 2026-10-24 — t3-maintenance: secret check, treg.to tokens
 
 - `t3-thread-archive check`: stdin → `true`/`false` through the archive's own redaction (categories on stderr, never values; exit 0/1). Agents can test whether a secret would survive the archive.

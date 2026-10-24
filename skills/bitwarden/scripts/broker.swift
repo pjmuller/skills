@@ -68,18 +68,32 @@ let pickSeconds: Double = {
     #endif
 }()
 
-/// One-shot private socket (0600, random name) on which the agent names the login it wants.
-func pickSocket(_ token: String) throws -> (Int32, String) {
+/// After a copy the same thread may re-copy that one login's username/password without a touch for this long
+/// (Google asks for the password twice in one sign-in; a gcloud OAuth right after asks again).
+let recopySeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_RECOPY_SECONDS"] ?? "900")!
+    #else
+    return 15 * 60
+    #endif
+}()
+
+func socketPath(_ name: String) -> String {
     #if BW_BROKER_TEST
     let directory = ProcessInfo.processInfo.environment["BW_BROKER_TEST_SOCKDIR"]!
     #else
     let directory = (ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()) + "/.cache/bw-once"
     #endif
-    let path = directory + "/pick-\(token).sock"
+    return directory + "/\(name).sock"
+}
+
+/// Private socket (0600): `pick-<random token>` (the agent names a login) or `recopy-<key>` (see `recopyKey`).
+func privateSocket(_ name: String) throws -> (Int32, String) {
+    let path = socketPath(name)
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
-    guard fd >= 0, path.utf8.count < MemoryLayout.size(ofValue: address.sun_path) else { throw Failure(message: "Cannot open the pick socket") }
+    guard fd >= 0, path.utf8.count < MemoryLayout.size(ofValue: address.sun_path) else { throw Failure(message: "Cannot open \(name)") }
     withUnsafeMutableBytes(of: &address.sun_path) { raw in
         _ = path.withCString { strncpy(raw.baseAddress!.assumingMemoryBound(to: CChar.self), $0, raw.count - 1) }
     }
@@ -88,17 +102,20 @@ func pickSocket(_ token: String) throws -> (Int32, String) {
     let bound = withUnsafePointer(to: &address) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
     }
-    guard bound == 0, listen(fd, 4) == 0 else { close(fd); throw Failure(message: "Cannot open the pick socket") }
+    guard bound == 0, listen(fd, 4) == 0 else { close(fd); throw Failure(message: "Cannot open \(name)") }
     return (fd, path)
 }
 
 func readRequestLine(_ fd: Int32, until deadline: Date) -> [String: Any]? {
-    let left = max(0.05, min(5, deadline.timeIntervalSinceNow))  // A slow client can't stretch the pick window.
-    var timeout = timeval(tv_sec: Int(left), tv_usec: Int32((left - Double(Int(left))) * 1_000_000))
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    // One absolute limit (≤5 s, never past the deadline): a client trickling bytes can't stretch a window.
+    let end = min(deadline, Date().addingTimeInterval(5))
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 1024)
     while !data.contains(10), data.count < 4096 {
+        let left = end.timeIntervalSinceNow
+        guard left > 0 else { return nil }
+        var timeout = timeval(tv_sec: Int(left), tv_usec: Int32((left - Double(Int(left))) * 1_000_000))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         let n = read(fd, &buffer, buffer.count)
         guard n > 0 else { break }
         data.append(contentsOf: buffer[0..<n])
@@ -175,16 +192,16 @@ func parseRequest(_ data: Data) throws -> Request {
             || (json["why"] != nil && !(json["why"] is NSNull) && request.why == nil) {
             throw Failure(message: "--thread (≤120) and --why (≤200) must be plain text")
         }
+        if let username = json["username"], !(username is NSNull) {
+            guard let value = text(username, max: 254) else { throw Failure(message: "Invalid username") }
+            request.username = value.lowercased()
+        }
     }
     if op == "copy" {
         guard let field = json["field"] as? String, ["username", "password", "totp"].contains(field) else {
             throw Failure(message: "Unsupported credential field")
         }
         request.field = field
-        if let username = json["username"], !(username is NSNull) {
-            guard let value = text(username, max: 254) else { throw Failure(message: "Invalid username") }
-            request.username = value.lowercased()
-        }
         if let id = json["id"], !(id is NSNull) {
             guard let value = (id as? String)?.lowercased(), UUID(uuidString: value) != nil else {
                 throw Failure(message: "Use an exact item UUID")
@@ -232,6 +249,48 @@ func keychainLoad() throws -> [String: Any]? {
             ? "Keychain access denied" : "Cannot read the bw-once Keychain item (\(status))")
     }
     return item
+}
+
+enum SilentRead { case loaded([String: Any]?), needsPrompt }
+
+/// The item without any macOS dialog, or `.needsPrompt` when reading it would ask for the login password: the ACL
+/// and partition list name the ad-hoc code hash of the build that created (or was "Always Allow"ed for) it, and
+/// every rebuild changes that hash. `kSecUseAuthenticationUIFail` is ignored by legacy ACLs (still shows the
+/// dialog, checked 2026-10-24); the old per-process switch is out of the headers but still exported.
+func keychainLoadSilently() -> SilentRead {
+    #if BW_BROKER_TEST
+    if testEnv["BW_BROKER_TEST_KEYCHAIN_PROMPT"] == "1" { return .needsPrompt }
+    #endif
+    typealias Toggle = @convention(c) (DarwinBoolean) -> OSStatus
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecKeychainSetUserInteractionAllowed") else {
+        return .needsPrompt  // Can't probe: explain anyway rather than risk an unexplained prompt.
+    }
+    let allowUI = unsafeBitCast(symbol, to: Toggle.self)
+    _ = allowUI(false)
+    defer { _ = allowUI(true) }
+    return (try? keychainLoad()).map { .loaded($0) } ?? .needsPrompt
+}
+
+/// Runs `body` with the item. When macOS must ask first (right after a broker rebuild), a bw-once window says so
+/// before the dialogs appear, so they get "Always Allow" (once per build) instead of a one-off "Allow" that
+/// brings them back on every request.
+func withKeychainItem(_ body: @escaping (Result<[String: Any]?, Error>) -> Void) {
+    if case .loaded(let item) = keychainLoadSilently() { return body(.success(item)) }
+    let built = (try? FileManager.default.attributesOfItem(atPath: here.appendingPathComponent("bw-broker").path))?[.modificationDate]
+        as? Date
+    let notice = Panel(title: "bw-once · macOS asks for Keychain access")
+    notice.line("bw-once's broker was rebuilt" + (built.map { " on " + DateFormatter.localizedString(
+        from: $0, dateStyle: .medium, timeStyle: .short) } ?? "") + " (a bw-once update). macOS now asks, up to "
+        + "twice, for your Mac login password before it may open its saved item.")
+    notice.line("Type it and choose Always Allow both times: until the next update, requests then need only Touch ID.",
+                size: 13)
+    notice.line("Not expecting a bw-once update? Choose Deny.", color: .systemOrange)
+    notice.show()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {  // Drawn before the system dialog covers it.
+        let result = Result { try keychainLoad() }
+        notice.window.close()
+        body(result)
+    }
 }
 
 func keychainSave(_ item: [String: Any]) throws {
@@ -687,7 +746,8 @@ final class Panel: NSObject, NSWindowDelegate {
         buttons.addArrangedSubview(button)
     }
 
-    func show() {
+    /// `activate: false`: an informational window that never takes focus from what the human is typing.
+    func show(activate: Bool = true) {
         status.textColor = .secondaryLabelColor
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(buttons)
@@ -709,9 +769,9 @@ final class Panel: NSObject, NSWindowDelegate {
         window.layoutIfNeeded()
         window.setContentSize(stack.fittingSize)
         window.center()
-        NSApp.activate(ignoringOtherApps: true)
+        if activate { NSApp.activate(ignoringOtherApps: true) }
         window.orderFrontRegardless()
-        window.makeKey()
+        if activate { window.makeKey() }
         if let first = fields.values.first { window.makeFirstResponder(first) }
     }
 
@@ -729,6 +789,16 @@ final class Panel: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) { onCancel() }
+
+    /// Close for good: empty the password fields and drop the buttons, whose handlers capture this panel and the
+    /// passwords typed or already known (a retain cycle would otherwise keep them for the process lifetime).
+    func dispose() {
+        onCancel = {}
+        fields.values.forEach { $0.stringValue = "" }
+        fields = [:]
+        buttons.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        window.close()
+    }
 }
 
 final class ClosureButton: NSButton {
@@ -765,10 +835,18 @@ func enroll(_ request: Request, known: [String: [String: String]] = [:], mergeEx
     let binary: String
     do { binary = try bitwardenBinary() } catch let error as Failure { fail(error.message) } catch { fail("\(error)") }
     // An unreadable item (e.g. the post-update Keychain prompt denied) must never turn into a new phrase.
-    let existing: [String: Any]?
-    do { existing = try keychainLoad() } catch let error as Failure {
-        fail(error.message + "; nothing changed (allow the Keychain prompt, or `bw-once touchid forget` to start over)")
-    } catch { fail("Cannot read the bw-once Keychain item; nothing changed") }
+    withKeychainItem { loaded in
+        let existing: [String: Any]?
+        do { existing = try loaded.get() } catch let error as Failure {
+            fail(error.message + "; nothing changed (allow the Keychain prompt, or `bw-once touchid forget` to start over)")
+        } catch { fail("Cannot read the bw-once Keychain item; nothing changed") }
+        enrollPanel(request, existing: existing, binary: binary, known: known, mergeExisting: mergeExisting,
+                    reason: reason, then: then)
+    }
+}
+
+func enrollPanel(_ request: Request, existing: [String: Any]?, binary: String, known: [String: [String: String]],
+                 mergeExisting: Bool, reason: String?, then: (() -> Void)?) {
     let phrase = (existing?["phrase"] as? String) ?? newPhrase()
     let saved = Set(((existing?["vaults"] as? [[String: String]]) ?? []).compactMap { $0["name"] })
     let panel = Panel(title: "bw-once · Touch ID setup")
@@ -832,8 +910,7 @@ func enroll(_ request: Request, known: [String: [String: String]] = [:], mergeEx
                                   "vaults": bundle.keys.sorted().map { ["name": $0, "email": bundle[$0]!["email"]!] }])
                 let names = bundle.keys.sorted()
                 onMain {
-                    panel.onCancel = {}
-                    panel.window.close()
+                    panel.dispose()  // A request continues after a renewal (and may hold re-copies for minutes).
                     if let then { then() } else { finish(["ok": true, "enrolled": names]) }
                 }
             } catch {
@@ -853,22 +930,130 @@ func enroll(_ request: Request, known: [String: [String: String]] = [:], mergeEx
 func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
     var what: String
     switch request.op {
-    case "list": what = "names and usernames of matching logins (no secrets)"
+    case "list": what = "names and usernames of matching logins" + (request.username.map { " with username \($0)" } ?? "")
+        + " (no secrets)"
     default:
         what = "\(request.field) of " + (request.username.map { "login \($0)" } ?? request.id.map { "item \($0)" }
             ?? (request.field == "totp" ? "the only matching login"
                 : "one matching login; if several match, the agent picks one (shown here)"))
     }
-    return [("Releases", what), ("Exact host", request.host), ("Searches", vaults.joined(separator: ", ")),
-            ("Goes to", request.op == "copy" ? "clipboard, cleared after \(clipboardSeconds) s" : "the agent (metadata)")]
+    var rows = [("Releases", what), ("Exact host", request.host), ("Searches", vaults.joined(separator: ", ")),
+                ("Goes to", request.op == "copy" ? "clipboard, cleared after \(clipboardSeconds) s" : "the agent (metadata)")]
+    if recopyAllowed(request) {
+        rows.append(("Re-copies", "the same login's \(request.field) for this thread, \(Int(recopySeconds / 60)) min, no touch "
+                     + "(each one shown)"))
+    }
+    return rows
+}
+
+func recopyAllowed(_ request: Request) -> Bool {
+    request.op == "copy" && request.field != "totp" && request.thread != nil  // A TOTP code goes stale.
+}
+
+/// Socket name shared with the front end (`bw_once.recopy_socket`): host, field and thread, hashed to fit the path.
+func recopyKey(host: String, field: String, thread: String) -> String {
+    "recopy-" + SHA256.hash(data: Data([host, field, thread].joined(separator: "\n").utf8))
+        .map { String(format: "%02x", $0) }.joined().prefix(32)
+}
+
+struct RecopySocket { let fd: Int32, path: String, inode: ino_t }
+
+/// The release itself: binds the re-copy socket (replacing an older holder's for the same key, which notices and
+/// exits) and writes the clipboard under one lock, so of two releases for one key the later wins both. Bound before
+/// the answer, so the agent's next call already finds it.
+func deliverAndOpenRecopy(_ request: Request, _ secret: String) throws -> RecopySocket? {
+    guard recopyAllowed(request) else { try deliver(secret); return nil }
+    let key = recopyKey(host: request.host, field: request.field, thread: request.thread ?? "")
+    return try withRecopyLock(key) {
+        unlink(socketPath(key))
+        var socket: RecopySocket?
+        if let (fd, path) = try? privateSocket(key) {
+            var own = stat()
+            stat(path, &own)
+            socket = RecopySocket(fd: fd, path: path, inode: own.st_ino)
+        }
+        do { try deliver(secret) } catch {
+            if let socket { close(socket.fd); unlink(socket.path) }
+            throw error
+        }
+        return socket
+    }
+}
+
+/// Replacement (new holder binds) and delivery (a holder checks it still owns the path, then copies) take this
+/// lock, so a replaced holder can never overwrite the newer login's clipboard write.
+func withRecopyLock<T>(_ key: String, _ body: () throws -> T) rethrows -> T {
+    let fd = open(String(socketPath(key).dropLast(5)) + ".lock", O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
+    if fd >= 0 { flock(fd, LOCK_EX) }
+    defer { if fd >= 0 { close(fd) } }
+    return try body()
+}
+
+func ownsPath(_ socket: RecopySocket) -> Bool {
+    var current = stat()
+    return stat(socket.path, &current) == 0 && current.st_ino == socket.inode
+}
+
+/// After a release: keep only that login's field in memory and re-copy it for the same thread, host and field
+/// when the agent names the same login (`--id` or `--username`), each time in a small window that takes no
+/// focus. A newer copy for the same key replaces this holder. Vaults stay locked throughout. Never returns.
+func holdForRecopies(_ socket: RecopySocket, _ request: Request, _ meta: [String: Any], _ secret: String, phrase: String,
+                     until deadline: Date) -> Never {
+    var value: String? = secret
+    let (server, path) = (socket.fd, socket.path)
+    let until = DateFormatter.localizedString(from: deadline, dateStyle: .none, timeStyle: .short)
+    let name = meta["name"] as? String ?? "?", username = meta["username"] as? String
+    var shown = Date.distantPast
+    let key = recopyKey(host: request.host, field: request.field, thread: request.thread ?? "")
+    while Date() < deadline {
+        guard ownsPath(socket) else { break }  // Replaced or removed.
+        var poller = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
+        guard poll(&poller, 1, Int32(min(500, max(1, deadline.timeIntervalSinceNow * 1000)))) > 0 else { continue }
+        let client = accept(server, nil, nil)
+        guard client >= 0 else { continue }
+        let ask = readRequestLine(client, until: deadline) ?? [:]
+        let id = (ask["id"] as? String)?.lowercased(), user = (ask["username"] as? String)?.lowercased()
+        guard (ask["host"] as? String)?.lowercased() == request.host, ask["field"] as? String == request.field,
+              ask["thread"] as? String == request.thread, id != nil || user != nil,
+              id == nil || id == meta["id"] as? String, user == nil || user == username?.lowercased(),
+              (ask["vaults"] as? [String])?.contains(meta["vault"] as? String ?? "") == true, let secret = value else {
+            reply(client, ["ok": false, "miss": true])
+            continue
+        }
+        let delivered: Result<Void, Error>? = withRecopyLock(key) {
+            guard Date() < deadline, ownsPath(socket) else { return nil }
+            return Result { try deliver(secret) }
+        }
+        guard case .success = delivered else {
+            reply(client, delivered == nil ? ["ok": false, "miss": true] : ["ok": false, "error": "Clipboard delivery failed"])
+            continue
+        }
+        reply(client, ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds, "recopy": true,
+                       "touch": false, "recopy_until": ISO8601DateFormatter().string(from: deadline)].merging(meta) { $1 })
+        shown = Date()
+        onMain {
+            let notice = Panel(title: "bw-once · re-copy (no touch)")
+            notice.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 11)
+            notice.line(phrase, size: 18, mono: true)
+            notice.line("Copied \(request.field) of \(name) (\(username ?? "no username"), \(meta["vault"] as? String ?? "?")) "
+                        + "again for thread \(request.thread ?? "?"). You approved this login with Touch ID; re-copies end \(until).")
+            notice.show(activate: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { notice.window.close() }
+        }
+    }
+    value = nil
+    close(server)
+    withRecopyLock(key) { if ownsPath(socket) { unlink(path) } }
+    Thread.sleep(forTimeInterval: max(0, 4.5 + shown.timeIntervalSinceNow))  // Let a last notice finish.
+    exit(0)
 }
 
 /// Vaults are locked; only the matching logins' field values live here. Never returns.
 func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: Panel, gate: Gate,
-               base: [String: Any]) -> Never {
+               base: [String: Any], phrase: String) -> Never {
     var choices = choices
     let token = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-    let (server, path) = (try? pickSocket(token)) ?? (-1, "")
+    let (server, path) = (try? privateSocket("pick-\(token)")) ?? (-1, "")
     if server < 0 { fail("Cannot open the pick socket; nothing released") }
     func closeSocket() { close(server); unlink(path) }  // Every exit path below; exit() skips defers.
     func label(_ meta: [String: Any]) -> String {
@@ -896,16 +1081,23 @@ func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: 
         let (meta, value) = choices[index]
         choices = []
         closeSocket()
-        do { try deliver(value) } catch {
+        let recopyUntil = Date().addingTimeInterval(recopySeconds)
+        let recopy: RecopySocket?
+        do { recopy = try deliverAndOpenRecopy(request, value) } catch {
             reply(client, ["ok": false, "error": "Clipboard delivery failed"])
             fail("Clipboard delivery failed")
         }
-        reply(client, ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds].merging(meta) { $1 })
+        var answer: [String: Any] = ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds]
+        if recopy != nil { answer["recopy_until"] = ISO8601DateFormatter().string(from: recopyUntil) }
+        reply(client, answer.merging(meta) { $1 })
         onMain {
             panel.onCancel = {}
             panel.setStatus("✓ Agent picked \(label(meta)) · copied \(request.field) · vault locked", color: .systemGreen)
-            DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) { exit(0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
+                if recopy != nil { panel.window.close() } else { exit(0) }
+            }
         }
+        if let recopy { holdForRecopies(recopy, request, meta, value, phrase: phrase, until: recopyUntil) }
         while true { sleep(60) }  // The main queue exits.
     }
     choices = []
@@ -921,12 +1113,18 @@ func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: 
 
 func serveRequest(_ request: Request) {
     let binary: String
-    let item: [String: Any]
-    do {
-        binary = try bitwardenBinary()
-        guard let loaded = try keychainLoad() else { fail("Touch ID not set up; run `bw-once touchid enroll`") }
-        item = loaded
-    } catch let error as Failure { fail(error.message) } catch { fail("\(error)") }
+    do { binary = try bitwardenBinary() } catch let error as Failure { fail(error.message) } catch { fail("\(error)") }
+    withKeychainItem { loaded in
+        let item: [String: Any]
+        do {
+            guard let value = try loaded.get() else { fail("Touch ID not set up; run `bw-once touchid enroll`") }
+            item = value
+        } catch let error as Failure { fail(error.message) } catch { fail("\(error)") }
+        serveRequest(request, item: item, binary: binary)
+    }
+}
+
+func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     let enrolled = Set(((item["vaults"] as? [[String: String]]) ?? []).compactMap { $0["name"] })
     let vaults = request.vaults.filter { enrolled.contains($0.name) }
     let skipped = request.vaults.filter { !enrolled.contains($0.name) }.map { ["vault": $0.name, "reason": "not enrolled"] }
@@ -1055,7 +1253,10 @@ func serveRequest(_ request: Request) {
                                          "unavailable": unavailable]
             var secret: String?
             if request.op == "list" {
-                result["items"] = candidates.map(metadata)
+                result["items"] = candidates.filter { entry in
+                    request.username == nil
+                        || (((entry.1["login"] as? [String: Any])?["username"] as? String) ?? "").lowercased() == request.username
+                }.map(metadata)
             } else {
                 let picked = candidates.filter { entry in
                     let login = entry.1["login"] as? [String: Any]
@@ -1100,9 +1301,13 @@ func serveRequest(_ request: Request) {
             guard Date() < answerDeadline else {
                 throw Failure(message: "Request took over \(Int(answerSeconds)) s; nothing released, ask again")
             }
-            if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result) }
+            let phrase = item["phrase"] as? String ?? "?"
+            if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result, phrase: phrase) }
             guard gate.commit() else { fail("Request cancelled") }  // Closed during the search: release nothing.
-            if let value = secret { try deliver(value) }
+            let recopyUntil = Date().addingTimeInterval(recopySeconds)
+            let recopy = try secret.flatMap { try deliverAndOpenRecopy(request, $0) }
+            let kept = recopy == nil ? nil : secret
+            if recopy != nil { result["recopy_until"] = ISO8601DateFormatter().string(from: recopyUntil) }
             secret = nil
             onMain {
                 panel.onCancel = {}
@@ -1110,7 +1315,16 @@ func serveRequest(_ request: Request) {
                     : "Copied \(request.field) of \(result["name"] as? String ?? "?") (\(result["username"] as? String ?? "no username"), "
                       + "\(result["vault"] as? String ?? "?"))"
                 panel.setStatus("✓ \(what) · vault locked", color: .systemGreen)
-                DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) { finish(result) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
+                    guard let recopy, let kept else { finish(result) }
+                    emit(result)  // The front end returns now; this process keeps only the one released field.
+                    panel.window.close()
+                    var meta = result
+                    ["ok", "copied", "clear_after_seconds", "recopy_until", "searched", "unavailable"].forEach { meta[$0] = nil }
+                    DispatchQueue.global().async {
+                        holdForRecopies(recopy, request, meta, kept, phrase: phrase, until: recopyUntil)
+                    }
+                }
             }
         } catch {
             let message = (error as? Failure)?.message ?? "Request failed; nothing released"
@@ -1138,7 +1352,9 @@ do { request = try parseRequest(FileHandle.standardInput.readDataToEndOfFile()) 
 switch request.op {
 case "status":
     let names = keychainVaults()
-    finish(["ok": true, "enrolled": names != nil, "vaults": names ?? []])
+    var status: [String: Any] = ["ok": true, "enrolled": names != nil, "vaults": names ?? []]
+    if names != nil, case .needsPrompt = keychainLoadSilently() { status["keychain_prompt"] = true }
+    finish(status)
 case "forget":
     SecItemDelete(keychainQuery() as CFDictionary)
     finish(["ok": true, "enrolled": false])
