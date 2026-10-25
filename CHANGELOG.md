@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-25 — clickup-core: attach several files in reading order
+
+- clickup-core 0.2.2: `attach ID a.png b.png c.png` uploads last-first, so ClickUp (newest first) shows and steps through them in the given order; SKILL.md: real screenshots beat mockups. Why: a 7-screenshot test ticket read backwards in the viewer, and the mockups confused the reader once real staging screens existed.
+
 ## 2026-10-25 — google-workspace-core: account-stable links
 
 - google-workspace-core: `gws_core.links` (`gmail_url`, `gmail_thread_url`, `gmail_draft_url`, `with_account`) + [links.md](skills/google-workspace-core/references/links.md). Every link handed to a human names the account by `authuser=<email>`, never `/u/<N>/`. Why: N is sign-in order, so a sign-out/sign-in reshuffle opened the wrong mailbox; `thread_url` now delegates here.

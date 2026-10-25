@@ -1517,13 +1517,24 @@ def upload_attachment(tid, filename, name=None):
 
 
 def cmd_attach(a):
-    result = upload_attachment(a.id, a.file, a.name)
+    files = a.file if isinstance(a.file, list) else [a.file]
+    if len(files) > 1:
+        if a.name or a.embed:
+            sys.exit("--name/--embed take one file; attach several files without them")
+        # ClickUp lists attachments newest first: upload last-first so the task shows (and the
+        # viewer's arrows step through) them in the order given.
+        results = {f: upload_attachment(a.id, f) for f in reversed(files)}
+        rows = [{**results[f], "reference": f"[[file:{results[f].get('title') or Path(f).name}]]"} for f in files]
+        out(rows, a.json, "\n".join(f"{r.get('url')}\nreference: {r['reference']}" for r in rows))
+        return
+    file = files[0]
+    result = upload_attachment(a.id, file, a.name)
     if a.embed:
         kind, ops = embed_ops(result)
         write_task_content(a.id, appended_ops_content(a.id, ops))
         verify_embed(a.id, ops[0])
         result["embedded"] = kind
-    result["reference"] = f"[[file:{result.get('title') or a.name or Path(a.file).name}]]"
+    result["reference"] = f"[[file:{result.get('title') or a.name or Path(file).name}]]"
     out(result, a.json, f"{result.get('url') or json.dumps(result)}\nreference: {result['reference']}")
 
 
@@ -1649,7 +1660,7 @@ def main(argv=None):
             s.add_argument("--verdict", choices=["ok", "to-test"], required=True)
             s.add_argument("--comment", action="store_true")
         if cmd == "attach":
-            s.add_argument("file")
+            s.add_argument("file", nargs="+", help="several files: shown in this order (uploaded last-first)")
             s.add_argument("--name")
             s.add_argument("--embed", action="store_true")
         if cmd == "field":

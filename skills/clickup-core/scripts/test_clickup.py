@@ -435,6 +435,25 @@ class FileReferenceCommandTests(unittest.TestCase):
                 self.assertEqual(buf.getvalue().strip().splitlines()[-1], "reference: [[file:report.pdf]]")
 
 
+    def test_attach_several_uploads_last_first_so_clickup_shows_given_order(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        g = MODULE["cmd_attach"].__globals__
+        self.addCleanup(g.__setitem__, "upload_attachment", g["upload_attachment"])
+        uploaded = []
+        g["upload_attachment"] = lambda tid, f, name=None: uploaded.append(f) or {"title": f.rsplit("/", 1)[-1], "url": "u"}
+        buf = StringIO()
+        with redirect_stdout(buf):
+            MODULE["cmd_attach"](SimpleNamespace(id="t1", file=["/tmp/1.png", "/tmp/2.png", "/tmp/3.png"],
+                                                 name=None, embed=False, json=True))
+        self.assertEqual(uploaded, ["/tmp/3.png", "/tmp/2.png", "/tmp/1.png"])
+        self.assertEqual([r["reference"] for r in json.loads(buf.getvalue())],
+                         ["[[file:1.png]]", "[[file:2.png]]", "[[file:3.png]]"])
+        with self.assertRaises(SystemExit):
+            MODULE["cmd_attach"](SimpleNamespace(id="t1", file=["/tmp/1.png", "/tmp/2.png"], name="x", embed=False, json=True))
+
+
 class LinksBeforeCodeBlockTests(unittest.TestCase):
     """ClickUp strips explicit description links that precede a code block (readback 2026-10-05)."""
 
