@@ -560,7 +560,7 @@ def recopy_socket(host_name, field, thread):
     return cache_dir() / f"recopy-{key}.sock"
 
 
-def via_recopy(request, thread, vaults):
+def via_recopy(request, thread, vaults, to="clipboard"):
     """The same thread re-copying the login the broker released minutes ago: no new touch. None → normal flow."""
     if request["op"] != "copy" or request["field"] == "totp" or not thread or not (request.get("id") or request.get("username")):
         return None
@@ -574,12 +574,34 @@ def via_recopy(request, thread, vaults):
     with client:
         client.sendall(json.dumps({"host": host(request["host"]), "field": request["field"], "thread": thread,
                                    "id": request.get("id") and item_id(request["id"]), "username": request.get("username"),
-                                   "vaults": [vault["name"] for vault in vaults]}).encode() + b"\n")
+                                   "vaults": [vault["name"] for vault in vaults], "to": to}).encode() + b"\n")
         try:
             answer = json.loads(read_line(client))
         except (OSError, ValueError):
             return None
     return answer if answer.get("ok") else None
+
+
+FILL_SELECTORS = {"password": "input[type=password]", "username": "input[autocomplete~=username], input[type=email]",
+                  "totp": "input[autocomplete=one-time-code]"}
+
+
+def fill_js(url, selector):
+    """For `preview_evaluate` in the login tab: fetch the one-time value straight into the field; returns its length only."""
+    return ("(async () => { const field = document.querySelector(%s); if (!field) return {ok: false, error: 'no field'};"
+            " const answer = await fetch(%s, {cache: 'no-store', credentials: 'omit'}).catch(() => null);"
+            " if (!answer || !answer.ok) return {ok: false, error: 'fetch blocked (page CSP?) or expired'};"
+            " const value = await answer.text(); field.focus();"
+            " Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, value);"
+            " field.dispatchEvent(new Event('input', {bubbles: true})); field.dispatchEvent(new Event('change', {bubbles: true}));"
+            " return {ok: true, length: field.value.length}; })()") % (json.dumps(selector), json.dumps(url))
+
+
+def with_fill_js(result, selector=None):
+    """A page delivery's one-time URL → the `preview_evaluate` snippet (copy and pick answers alike)."""
+    if result.get("fill_url"):
+        result["fill_js"] = fill_js(result.pop("fill_url"), selector or FILL_SELECTORS[result.get("copied", "password")])
+    return result
 
 
 def broker_vaults(name=None):
@@ -913,9 +935,13 @@ def main():
     copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
     copy.add_argument("--username", help="pick the exact-host login with this username (no --id needed)")
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
+    copy.add_argument("--to", choices=("clipboard", "page"), default="clipboard",
+                      help="page: one fetch by the https://<host> page via the returned fill_js (Touch ID broker only)")
+    copy.add_argument("--selector", help="CSS selector of the field fill_js fills (default per --field)")
     chosen = commands.add_parser("pick", help="after a copy listed several logins: name the one to release")
     chosen.add_argument("--token", required=True)
     chosen.add_argument("--id", required=True)
+    chosen.add_argument("--selector", help="CSS selector for fill_js after a `copy --to page` (default per field)")
     for command in (listing, copy):
         command.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
         command.add_argument("--why", help="one line: why this login is needed (shown as the agent's claim)")
@@ -950,7 +976,7 @@ def main():
             print(json.dumps(clear_clipboard()))
             return
         if args["op"] == "pick":
-            result = submit_pick(args["token"], args["id"])
+            result = with_fill_js(submit_pick(args["token"], args["id"]), args["selector"])
             print(json.dumps(result))
             raise SystemExit(0 if result.get("ok") else 1)
         explicit_vault = args["vault"]
@@ -988,14 +1014,17 @@ def main():
                     legacy.unlink()  # Superseded per-vault enrolment files (pre-broker).
         elif args["op"] in ("list", "copy"):
             claim = {"thread": args.pop("thread"), "why": args.pop("why")}
-            result = via_session(args)
+            to, selector = args.pop("to", "clipboard"), args.pop("selector", None)
             vaults = broker_vaults(explicit_vault)
-            result = result or via_recopy(args, claim["thread"], vaults)
+            result = None if to == "page" else via_session(args)  # Session and Terminal flows deliver to the clipboard.
+            result = result or via_recopy(args, claim["thread"], vaults, to)
             if not result and broker_enrolled(vaults):
                 # One Touch ID panel, every enrolled vault searched (or just --vault); no Terminal.
                 fields = {key: args[key] for key in ("op", "host", "field", "username", "id") if args.get(key)}
-                result = broker({**fields, **claim, "vaults": vaults})
-            result = result or launch(args)
+                result = broker({**fields, **claim, **({"to": to} if args["op"] == "copy" else {}), "vaults": vaults})
+            if not result and to == "page":
+                raise Failure("--to page needs the Touch ID broker (bw-once touchid enroll)")
+            result = with_fill_js(result or launch(args), selector)
         elif args["op"]:
             result = launch(args)
         else:

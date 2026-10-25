@@ -7,21 +7,29 @@ Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** on
 (`bw-once touchid enroll`: native window, master passwords sealed in the Secure Enclave): `list`/`copy` open one
 window (the human's phrase, your claim, the checked request) and need one fingerprint; every enrolled account is
 searched unless `--vault` is given: [touchid.md](touchid.md). Agent recipe:
-1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), type the username.
-2. Tell the human what the green box will say, then run in the background (it waits up to 5 min for them):
-   `bw-once copy --host H --username U --field password --thread "<title>" --why "<one line>"`. **Know the
-   account → always `--username`**; no `list` first (it costs a touch and shows every login on the host). Title =
-   your T3 thread's `title` from `t3_thread_list` (its first row is you: `currentThreadId`).
-3. Account unknown: same `copy` without `--username`. Answer has `pick` (several logins)? Vaults are already
+1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), type the username
+   (`preview_type` works in a background tab).
+2. **Before asking for a touch, pick the delivery**: `preview_evaluate` this probe in the tab:
+   `(async () => { let blocked = false; document.addEventListener('securitypolicyviolation', () => { blocked = true; }); await fetch('http://127.0.0.1:9/', {mode: 'no-cors'}).catch(() => {}); await new Promise(r => setTimeout(r, 100)); return {page_fill: !blocked}; })()`
+   `page_fill: true` → `--to page` (any tab, hidden too). `false` (the page's CSP blocks loopback: GitHub, Sentry)
+   → clipboard, which T3 pastes only into the tab the human is viewing: `preview_status` → `visible: false` means
+   tell the human first to open this thread's browser panel and leave it in front; else the touch is wasted.
+3. `bw-once touchid status`: `update_touch: true` = bw-once was updated: a window with their phrase asks one extra
+   touch first. `keychain_prompt: true` = one-time move to per-build Keychain items: macOS asks for the Mac login
+   password (any button). Say so in the same line as the green box.
+4. Tell the human what the green box will say, then run in the background (it waits up to 5 min for them):
+   `bw-once copy --host H --username U --field password --to page --thread "<title>" --why "<one line>"`.
+   **Know the account → always `--username`**; no `list` first (it costs a touch and shows every login on the host).
+   Title = your T3 thread's `title` from `t3_thread_list` (its first row is you: `currentThreadId`).
+5. Account unknown: same `copy` without `--username`. Answer has `pick` (several logins)? Vaults are already
    locked: choose from `pick.candidates` (vault, id, name, username) and run `bw-once pick --token <pick.token>
    --id <id>` within 60 s; no second touch. `list --host H [--username U]` only for metadata without a copy.
-4. After the answer: `preview_click` the password field **again** (the bw-once window took focus; a paste into
-   the field clicked before the touch landed nothing, 2026-10-23), `preview_press Meta+V`, check `value.length`
-   only, `bw-once clear`, submit: **one call at a time** (a parallel `clear` can beat the paste).
-5. Same password again within 15 min (Google asks twice; a gcloud OAuth right after): the same `copy` with the
+6. **Page**: `preview_evaluate` the answer's `fill_js` as is (`--selector` changes the field; default per `--field`)
+   within 60 s → `{ok, length}`, never the value; then submit. `ok: false` → the same `copy` with `--to clipboard`
+   (re-copy, no touch). **Clipboard**: `preview_click` the field **again** (the bw-once window took focus),
+   `preview_press Meta+V`, check `value.length` only, `bw-once clear`, submit: **one call at a time**.
+7. Same password again within 15 min (Google asks twice; a gcloud OAuth right after): the same `copy` with the
    same `--thread` and `--username`/`--id` → `recopy: true`, no touch (`recopy_until` in the first answer).
-6. `touchid status` (or `doctor`) shows `keychain_prompt: true` = broker rebuilt since its last Keychain trust:
-   tell the human first: a bw-once window, then up to two macOS dialogs, Mac login password, **Always Allow**.
 Afterwards log out (session.md). Otherwise a fresh human Terminal
 unlock per request, or a time-boxed **session holder** PJ unlocks once
 (`bw-once session start --ttl 60m --host sentry.io`, then the same `list`/`copy`
@@ -70,13 +78,17 @@ no notes, seeds, raw item dumps or arbitrary consumers. CLI locks and verifies
 before any result or clipboard delivery. A private request result contains only
 metadata or Send link, never session/password. Raw CLI failures are suppressed.
 
+`--to page` (Touch ID broker only): no clipboard; a detached broker child serves the value once over
+`127.0.0.1` (random port and path, 60 s) only to a request whose `Origin` is exactly `https://<host>`; the
+returned `fill_js` fetches it into the field. Any same-user process that learns the URL and fakes that header
+could fetch it too: the same exposure as the clipboard, for one fetch.
+
 Clipboard carries transient/concealed markers and a 30-second clear timer that
 checks its write's `changeCount` and owner marker. Human paste, or the agent's
 `preview_press Meta+V` into a **preverified tab/host**, keeps the value out of model text; then `bw-once clear` (clears only while the clipboard still holds a
 bw-once write, reading its type list, never the value). Never read `pbpaste`, use a text-entry
-tool with the secret, or snapshot/reveal the populated field. No browser-fill
-automation is included. Type the (non-secret) username from the result with `preview_type`; only the
-password or TOTP crosses the clipboard. Browser context and logout: [session.md](session.md#browser-context-for-agent-logins). Clipboard observers can still read it, and apps may ignore
+tool with the secret, or snapshot/reveal the populated field; `fill_js` (page delivery) is the only fill helper. Type the (non-secret) username from the result with `preview_type`; only the
+password or TOTP crosses the clipboard or the page fill. Browser context and logout: [session.md](session.md#browser-context-for-agent-logins). Clipboard observers can still read it, and apps may ignore
 markers; count-check/clear is best effort, not an atomic clipboard transaction.
 
 Send approval shows the exact escaped text, or file name/bytes/SHA-256, plus name,

@@ -641,10 +641,22 @@ def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
     sent = run("copy", "--host", "admin.example.com", "--username", "user", "--field", "password",
                "--thread", "Invoice run", "--why", "download invoices")
     assert sent == {"op": "copy", "host": "admin.example.com", "username": "user", "field": "password",
-                    "thread": "Invoice run", "why": "download invoices",
+                    "thread": "Invoice run", "why": "download invoices", "to": "clipboard",
                     "vaults": [{"name": "other", "email": "b@example.com", "appdata": os.path.realpath("/tmp/x")},
                                {"name": "work", "email": "a@example.com"}]}
     assert launched == []
+
+
+def test_pick_answer_gets_fill_js_with_the_selector():
+    answer = bw.with_fill_js({"ok": True, "copied": "totp", "fill_url": "http://127.0.0.1:5/t"}, None)
+    assert "fill_url" not in answer and "one-time-code" in answer["fill_js"]
+    assert '"#otp"' in bw.with_fill_js({"copied": "totp", "fill_url": "http://127.0.0.1:5/t"}, "#otp")["fill_js"]
+
+
+def test_fill_js_fetches_into_the_field_and_returns_only_the_length():
+    script = bw.fill_js("http://127.0.0.1:5/tok", "#pass'word")
+    assert '"http://127.0.0.1:5/tok"' in script and '"#pass\'word"' in script
+    assert "length: field.value.length" in script and "return value" not in script and "{ok: true, length" in script
 
 
 @macos_only

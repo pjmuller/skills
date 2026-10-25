@@ -25,8 +25,8 @@ bw-once touchid status | bw-once touchid forget
 
 ## How (all inside the compiled broker; the Python front end only forwards the request)
 
-- **Secrets**: one legacy Keychain item, default ACL = the broker binary that created it. Another or a modified
-  binary gets a visible macOS prompt (see Updates). It holds
+- **Secrets**: one legacy Keychain item per broker build (account `broker-<cdhash>`), default ACL = that build.
+  Another or a modified binary gets a visible macOS prompt (see Updates). It holds
   the phrase and a bundle `{vault: {email, password}}` sealed to a **Secure Enclave** key (`.biometryCurrentSet`):
   the enclave refuses without a fingerprint, and new or removed fingerprints invalidate it.
 - **Bitwarden**: the installer downloads Bitwarden's signed CLI from its GitHub release; the broker checks Apple's
@@ -40,14 +40,18 @@ bw-once touchid status | bw-once touchid forget
   window and waits 60 s on a private socket for `bw-once pick --token … --id …`; the window then shows the agent's
   choice. One touch either way; the agent can only choose among the host's logins the human approved. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
   itself, knowing only an owner token, clears that write after 30 s unless something newer was copied.
-- **Updates**: builds aren't reproducible and the broker is ad-hoc signed, so its identity is its code hash: the
-  item's ACL and partition list name the hashes macOS was told to trust. The installer rebuilds only when
-  `broker.swift` changed; the first request after a rebuild then meets two macOS dialogs ("wants to use your
-  confidential information…", "wants to access key…", Mac login password each). **Always Allow** on both adds the
-  new hash: no dialog until the next rebuild. Plain "Allow" grants that one read, so both come back on every request
-  (cause of the 2026-10-23 "always these pop-ups": enrolled at 10:15, rebuilt 11:41, "Allow" each time). The broker
-  therefore probes silently first (`touchid status` → `keychain_prompt: true`) and, when macOS will ask, shows a
-  bw-once window saying so before the dialogs. A dialog without that window, or without a bw-once update: Deny.
+  `--to page` instead: a detached copy serves the value once on `127.0.0.1` (random port + path, 60 s) to
+  `Origin: https://<host>` only; the agent's `fill_js` fetches it into the field. Why: T3 drops Cmd+V into a tab
+  the human isn't viewing (by design, it guards the clipboard), so the 2026-10-25 Juumo paste landed nothing.
+- **Updates** (2026-10-25): macOS binds a legacy item to the cdhash of the ad-hoc build that created it, so every
+  rebuild used to meet two Mac-password dialogs, and their default button "Allow" (one read) brought them back on
+  every request. Now each build keeps its own item: the installer keeps the replaced build as `bw-broker.prev`
+  (identical builds aren't replaced: builds are reproducible), and at the next request that old build shows a
+  window with the phrase and, after one Touch ID, hands its item to the new build (only when the caller's running
+  code is the installed `bw-broker`), which saves its own and deletes the old ones (delete is path-bound, read is
+  hash-bound: checked). `touchid status` → `update_touch: true`. macOS asks for the password only when no build can
+  hand over (`keychain_prompt: true`: the one-time move to this scheme, or a lost `.prev`); any button works.
+  A dialog without a bw-once update window, or without a bw-once update: Deny.
 - **Re-copy (no touch)**: after a released username/password with `--thread`, the broker keeps only that one field
   in memory for 15 min (vaults stay locked) on a private socket keyed by host + field + thread; the same thread naming
   the same login (`--id`/`--username`) gets it again without a touch, each time in a small focus-free window with
@@ -62,15 +66,15 @@ bw-once touchid status | bw-once touchid forget
 ## Boundary
 
 Raises the bar from "any process reads it" to "needs this Mac's enclave, your finger, and the genuine broker".
-A stable local signing identity (self-signed certificate) would stop the post-rebuild dialogs, but its key would sit
-in the same login keychain and `codesign` could use it for any binary: re-trust would become silent for malware too.
-Rejected 2026-10-24; the dialogs after a rebuild are the remaining signal.
+A self-signed signing identity doesn't help: it keeps the ACL across rebuilds, but without an Apple Team ID the
+item's partition list still names the cdhash (checked 2026-10-25), and its key in the login keychain would let any
+`codesign` call re-sign malware. The hand-over window (phrase + touch) is now the update signal.
 Same-user malware can still: ask for a real login (you see an honest window: read it), fake a whole window
 (no phrase), read the clipboard during its 30 s, record the screen, or **replace the broker and wait for you to
 approve its Keychain prompt** (it looks like the post-update prompt; with your login password it gets the
-phrase and the sealed passwords, and a window with your real phrase). Apple Developer ID signing ($99/yr)
-closes exactly that: the item would be bound to a signing team, so no click can hand it to another binary,
-and updates stop prompting; colleagues get a ready-signed app. Without a session or enrolment, `bw-once` falls back to the human Terminal flow in [SKILL.md](SKILL.md).
+phrase and the sealed passwords, and a window with your real phrase), or place itself at `bw-broker` and wait
+for you to approve the update window. Apple Developer ID signing ($99/yr) in CI closes that: the item would be
+bound to a signing team that no local process can sign for; colleagues get a ready-signed app. Without a session or enrolment, `bw-once` falls back to the human Terminal flow in [SKILL.md](SKILL.md).
 
 ## Not built
 

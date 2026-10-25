@@ -4,8 +4,11 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import shutil
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -102,13 +105,13 @@ def world(broker, tmp_path):
         path = Path(vaults[name]["appdata"]) / "config.json"
         path.write_text(json.dumps({**json.loads(path.read_text()), **values}))
 
-    def run(op, touch="ok", typed=None, names=("testa", "testb"), extra_env=None, **fields):
+    def run(op, touch="ok", typed=None, names=("testa", "testb"), extra_env=None, binary=broker / "bw-broker", **fields):
         env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "BW_BROKER_TEST_BW": str(broker / "bw"), "BW_BROKER_TEST_TIMEOUT": "2",
                "BW_BROKER_TEST_STORE": str(tmp_path / "store.json"), "BW_BROKER_TEST_TOUCH": touch,
                "BW_BROKER_TEST_TYPE": json.dumps(typed or {}), "BW_BROKER_TEST_SOCKDIR": str(sockets),
                "BW_BROKER_TEST_RECOPY_SECONDS": "0", **(extra_env or {})}
         request = {"op": op, "vaults": [vaults[n] for n in names], **fields}
-        done = subprocess.run([str(broker / "bw-broker")], input=json.dumps(request).encode(), env=env,
+        done = subprocess.run([str(binary)], input=json.dumps(request).encode(), env=env,
                               capture_output=True, timeout=60)
         return json.loads(done.stdout), done.stderr.decode()
 
@@ -146,7 +149,7 @@ def world(broker, tmp_path):
     def unclip():
         (broker / "clip").unlink(missing_ok=True)
 
-    return {"run": run, "start": start, "unclip": unclip, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
+    return {"run": run, "start": start, "binary": broker / "bw-broker", "unclip": unclip, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
 
 
 def enroll(world):
@@ -233,13 +236,85 @@ def test_list_returns_metadata_only(world):
     assert [item["username"] for item in result["items"]] == ["bob"] and "with username bob" in panel
 
 
-def test_keychain_prompt_after_a_rebuild_is_explained_before_the_request(world):
+def installed(world, tmp_path, previous=True):
+    """A rebuilt broker (build "new") next to the build that enrolled ("old"), as the installer leaves them."""
+    target = tmp_path / "lib"
+    target.mkdir()
+    shutil.copy2(world["binary"], target / "bw-broker")
+    if previous:
+        shutil.copy2(world["binary"], target / "bw-broker.prev")
+    return target, {"BW_BROKER_TEST_BUILD": "new", "BW_BROKER_TEST_PREV_BUILD": "old"}
+
+
+def items(world):
+    return sorted(p.name for p in world["store"].parent.glob(world["store"].name + "*") if ".item-" in p.name)
+
+
+def test_update_hands_the_item_over_with_one_touch_and_no_keychain_dialog(world, tmp_path):
+    result, _ = world["run"]("enroll", typed=MASTER, extra_env={"BW_BROKER_TEST_BUILD": "old"})
+    assert result["ok"] and items(world) == ["store.json.item-broker-old"]
+    target, env = installed(world, tmp_path)
+    assert world["run"]("status", binary=target / "bw-broker", extra_env=env)[0]["update_touch"] is True
+    result, log = world["run"]("copy", host=HOST, field="password", username="alice", binary=target / "bw-broker",
+                               extra_env=env)
+    assert result["ok"] and (target / "clip").read_text() == SECRET_A and "keychain dialog" not in log
+    assert log.index("bw-once was updated") < log.index("AGENT SAYS") and log.count("touch:") == 2
+    assert items(world) == ["store.json.item-broker-new"] and not (target / "bw-broker.prev").exists()
+    status = world["run"]("status", binary=target / "bw-broker", extra_env=env)[0]
+    assert "update_touch" not in status and "keychain_prompt" not in status
+
+
+def test_declined_update_releases_nothing_and_keeps_the_old_item(world, tmp_path):
+    world["run"]("enroll", typed=MASTER, extra_env={"BW_BROKER_TEST_BUILD": "old"})
+    target, env = installed(world, tmp_path)
+    result, _ = world["run"]("copy", host=HOST, field="password", username="alice", touch="cancel",
+                             binary=target / "bw-broker", extra_env=env)
+    assert result == {"ok": False, "error": "bw-once update not approved; nothing released"}
+    assert not (target / "clip").exists()
+    assert items(world) == ["store.json.item-broker-old"] and (target / "bw-broker.prev").exists()
+
+
+def test_without_a_previous_build_macos_asks_once_then_never_again(world, tmp_path):
+    world["run"]("enroll", typed=MASTER, extra_env={"BW_BROKER_TEST_BUILD": "old"})
+    target, env = installed(world, tmp_path, previous=False)
+    assert world["run"]("status", binary=target / "bw-broker", extra_env=env)[0]["keychain_prompt"] is True
+    result, log = world["run"]("copy", host=HOST, field="password", username="alice", binary=target / "bw-broker",
+                               extra_env=env)
+    assert result["ok"] and "Allow is enough" in log and log.index("keychain dialog") < log.index("AGENT SAYS")
+    assert items(world) == ["store.json.item-broker-new"]
+    _, log = world["run"]("copy", host=HOST, field="password", username="alice", binary=target / "bw-broker", extra_env=env)
+    assert "keychain dialog" not in log and "Allow is enough" not in log
+
+
+def test_page_delivery_serves_once_to_the_exact_host_origin_and_never_the_clipboard(world):
     enroll(world)
-    assert "keychain_prompt" not in world["run"]("status")[0]
-    rebuilt = {"BW_BROKER_TEST_KEYCHAIN_PROMPT": "1"}
-    assert world["run"]("status", extra_env=rebuilt)[0]["keychain_prompt"] is True
-    result, panel = world["run"]("copy", host=HOST, field="password", username="alice", extra_env=rebuilt)
-    assert result["ok"] and panel.index("Always Allow") < panel.index("AGENT SAYS")
+    result, panel = world["run"]("copy", host=HOST, field="password", username="alice", to="page")
+    assert result["ok"] and world["clip"]() is None and "clear_after_seconds" not in result
+    assert f"a page on https://{HOST} only" in panel and result["fill_url"].startswith("http://127.0.0.1:")
+    url = result["fill_url"]
+
+    def fetch(origin, path=url):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(path, headers={"Origin": origin}), timeout=5) as answer:
+                return answer.status, answer.read().decode(), answer.headers["Access-Control-Allow-Origin"]
+        except urllib.error.HTTPError as error:
+            return error.code, "", None
+
+    assert fetch("https://evil.example")[0] == 403 and fetch(f"https://{HOST}", url + "x")[0] == 403
+    assert fetch(f"http://{HOST}")[0] == 403  # https only
+    assert fetch(f"https://{HOST}") == (200, SECRET_A, f"https://{HOST}")
+    try:
+        fetch(f"https://{HOST}")
+        assert False, "served twice"
+    except OSError:
+        pass  # One fetch, then the server is gone.
+
+
+def test_page_delivery_refuses_a_swapped_server_binary_and_pick_gets_fill_js(world):
+    enroll(world)
+    result, _ = world["run"]("copy", host=HOST, field="password", username="alice", to="page",
+                             extra_env={"BW_BROKER_TEST_SWAPPED_CHILD": "1"})
+    assert result["ok"] is False and "fill_url" not in result and world["clip"]() is None
 
 
 def recopy(request, thread, vaults=("testa", "testb")):

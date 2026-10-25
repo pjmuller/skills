@@ -3,9 +3,10 @@
 // unsealing the master passwords, Bitwarden's signed CLI over a private socket, exact-host filtering, lock +
 // verify, clipboard delivery. stdin: one request JSON; stdout: one result JSON (metadata only).
 //
-// Storage: one legacy Keychain item whose ACL trusts only this binary (another or a modified binary gets a
-// visible macOS prompt), holding the phrase and a bundle of master passwords sealed to a Secure Enclave key
-// that only works after Touch ID (`.biometryCurrentSet`, enforced by the enclave).
+// Storage: one legacy Keychain item per broker build whose ACL trusts only that build (another or a modified binary
+// gets a visible macOS prompt; an update hands it over with one Touch ID), holding the phrase and a bundle of master
+// passwords sealed to a Secure Enclave key that only works after Touch ID (`.biometryCurrentSet`, enforced by the
+// enclave).
 import AppKit
 import CryptoKit
 import Darwin
@@ -17,11 +18,21 @@ import Security
 
 struct Failure: Error { let message: String }
 
+#if BW_BROKER_TEST
+// Test build only (pytest compiles it with -D BW_BROKER_TEST): fake CLI, file store, fake enclave, hidden panel.
+let testEnv = ProcessInfo.processInfo.environment
+#endif
+
 let bitwardenRequirement =
     "anchor apple generic and identifier \"bw\" and certificate leaf[subject.OU] = \"LTZ2PFU5D6\""
+#if BW_BROKER_STAGING
+let keychainService = "bw-once-staging"
+#else
 let keychainService = "bw-once"
+#endif
 let keychainAccount = "broker"
 let clipboardSeconds = 30
+let fillSeconds = 60  // `--to page`: one fetch by the approved host's page within this.
 var stdoutWritten = false
 #if BW_BROKER_TEST
 let resultSeconds = 0.0
@@ -148,7 +159,7 @@ struct Vault {
 struct Request {
     let op: String
     let vaults: [Vault]
-    var host = "", field = "", username: String? = nil, id: String? = nil
+    var host = "", field = "", username: String? = nil, id: String? = nil, to = "clipboard"
     var thread: String? = nil, why: String? = nil
 }
 
@@ -202,6 +213,10 @@ func parseRequest(_ data: Data) throws -> Request {
             throw Failure(message: "Unsupported credential field")
         }
         request.field = field
+        if let to = json["to"], !(to is NSNull) {
+            guard let value = to as? String, ["clipboard", "page"].contains(value) else { throw Failure(message: "--to clipboard|page") }
+            request.to = value
+        }
         if let id = json["id"], !(id is NSNull) {
             guard let value = (id as? String)?.lowercased(), UUID(uuidString: value) != nil else {
                 throw Failure(message: "Use an exact item UUID")
@@ -212,33 +227,83 @@ func parseRequest(_ data: Data) throws -> Request {
     return request
 }
 
-// MARK: - Keychain (legacy file keychain: the default ACL trusts only the creating binary)
+// MARK: - Keychain (legacy file keychain, one item per broker build)
+//
+// macOS binds a legacy item to the code hash (cdhash) of the ad-hoc signed build that created it (ACL + partition
+// list): that build reads and deletes it without a dialog; any other build, so every rebuilt broker, needs the Mac
+// login password, and a one-off "Allow" (the dialog's default button) asks again on every request (2026-10-25). A
+// build can't grant another one access (the partition list keeps only its creator) and a self-signed certificate
+// gets no Team ID, so its partition is still the cdhash (both checked 2026-10-25). Hence one item per build
+// (account "broker-<cdhash>"): after an update the previous build (bw-broker.prev, kept by the installer) shows the
+// phrase and hands its item over after one Touch ID; the new build saves its own and deletes the old ones (deleting
+// is bound to the creator's path, not its hash: checked 2026-10-25). macOS asks for the password only when no
+// previous build can read an item silently (the first move to this scheme).
 
-func keychainQuery() -> [String: Any] {
-    [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService,
-     kSecAttrAccount as String: keychainAccount, kSecUseDataProtectionKeychain as String: false]
-}
-
-/// Enrolled vault names from the item's comment attribute: no ACL prompt, no secret (also after an update).
-func keychainVaults() -> [String]? {
+let ownAccount: String = {
     #if BW_BROKER_TEST
-    guard let item = try? keychainLoad() else { return nil }
-    return ((item["vaults"] as? [[String: String]]) ?? []).compactMap { $0["name"] }
+    let previous = CommandLine.arguments[0].hasSuffix(".prev")
+    return "broker-" + (testEnv[previous ? "BW_BROKER_TEST_PREV_BUILD" : "BW_BROKER_TEST_BUILD"] ?? "test")
     #endif
-    var query = keychainQuery()
-    query[kSecReturnAttributes as String] = true
-    var result: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-          let attributes = result as? [String: Any] else { return nil }
-    return ((attributes[kSecAttrComment as String] as? String) ?? "").split(separator: ",").map(String.init)
+    var me: SecCode?
+    SecCodeCopySelf([], &me)
+    return "broker-" + (me.flatMap { cdhash(unsafeBitCast($0, to: SecStaticCode.self)) } ?? "unsigned")
+}()
+
+func cdhash(_ code: SecStaticCode) -> String? {
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+          let unique = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data else { return nil }
+    return unique.map { String(format: "%02x", $0) }.joined()
 }
 
-func keychainLoad() throws -> [String: Any]? {
+func keychainQuery(_ account: String? = ownAccount) -> [String: Any] {
+    var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService,
+                                kSecUseDataProtectionKeychain as String: false]
+    query[kSecAttrAccount as String] = account
+    return query
+}
+
+#if BW_BROKER_TEST
+func testStore(_ account: String) -> String {
+    account == "broker-test" ? testEnv["BW_BROKER_TEST_STORE"]! : testEnv["BW_BROKER_TEST_STORE"]! + ".item-" + account
+}
+#endif
+
+/// Every build's item, newest first: account and enrolled vault names (comment attribute). No dialog, no secret.
+func keychainItems() -> [(account: String, vaults: [String])] {
     #if BW_BROKER_TEST
-    guard let data = FileManager.default.contents(atPath: testEnv["BW_BROKER_TEST_STORE"]!) else { return nil }
+    let store = URL(fileURLWithPath: testEnv["BW_BROKER_TEST_STORE"]!)
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: store.deletingLastPathComponent().path)) ?? []
+    return names.sorted().compactMap { name in
+        let prefix = store.lastPathComponent + ".item-"
+        guard let account = name == store.lastPathComponent ? "broker-test"
+                : name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : nil else { return nil }
+        let item = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: testStore(account)))))
+        return (account, (((item as? [String: Any])?["vaults"] as? [[String: String]]) ?? []).compactMap { $0["name"] })
+    }
+    #endif
+    var query = keychainQuery(nil)
+    query[kSecReturnAttributes as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitAll
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let rows = result as? [[String: Any]] else {
+        return []
+    }
+    func modified(_ row: [String: Any]) -> Date { row[kSecAttrModificationDate as String] as? Date ?? .distantPast }
+    return rows.sorted { modified($0) > modified($1) }.map {
+        (($0[kSecAttrAccount as String] as? String) ?? "",
+         (($0[kSecAttrComment as String] as? String) ?? "").split(separator: ",").map(String.init))
+    }
+}
+
+/// May show the macOS dialog when `account` is another build's item.
+func keychainLoad(_ account: String = ownAccount) throws -> [String: Any]? {
+    #if BW_BROKER_TEST
+    guard let data = FileManager.default.contents(atPath: testStore(account)) else { return nil }
+    if account != ownAccount { FileHandle.standardError.write(Data("keychain dialog: \(account)\n".utf8)) }
     return try JSONSerialization.jsonObject(with: data) as? [String: Any]
     #endif
-    var query = keychainQuery()
+    var query = keychainQuery(account)
     query[kSecReturnData as String] = true
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -253,53 +318,164 @@ func keychainLoad() throws -> [String: Any]? {
 
 enum SilentRead { case loaded([String: Any]?), needsPrompt }
 
-/// The item without any macOS dialog, or `.needsPrompt` when reading it would ask for the login password: the ACL
-/// and partition list name the ad-hoc code hash of the build that created (or was "Always Allow"ed for) it, and
-/// every rebuild changes that hash. `kSecUseAuthenticationUIFail` is ignored by legacy ACLs (still shows the
-/// dialog, checked 2026-10-24); the old per-process switch is out of the headers but still exported.
-func keychainLoadSilently() -> SilentRead {
+/// The item without any macOS dialog, or `.needsPrompt`. `kSecUseAuthenticationUIFail` is ignored by legacy ACLs
+/// (still shows the dialog, checked 2026-10-24); the old per-process switch is out of the headers but still exported.
+func keychainLoadSilently(_ account: String = ownAccount) -> SilentRead {
     #if BW_BROKER_TEST
-    if testEnv["BW_BROKER_TEST_KEYCHAIN_PROMPT"] == "1" { return .needsPrompt }
+    if account != ownAccount { return .needsPrompt }
+    return (try? .loaded(keychainLoad(account))) ?? .needsPrompt
     #endif
+    // Can't probe: explain anyway rather than risk an unexplained prompt. Not `try? load()`: it flattens "none".
+    return withoutKeychainDialogs { (try? .loaded(keychainLoad(account))) ?? .needsPrompt } ?? .needsPrompt
+}
+
+func withoutKeychainDialogs<T>(_ body: () -> T) -> T? {
     typealias Toggle = @convention(c) (DarwinBoolean) -> OSStatus
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecKeychainSetUserInteractionAllowed") else {
-        return .needsPrompt  // Can't probe: explain anyway rather than risk an unexplained prompt.
+        return nil
     }
     let allowUI = unsafeBitCast(symbol, to: Toggle.self)
     _ = allowUI(false)
     defer { _ = allowUI(true) }
-    return (try? keychainLoad()).map { .loaded($0) } ?? .needsPrompt
+    return body()
 }
 
-/// Runs `body` with the item. When macOS must ask first (right after a broker rebuild), a bw-once window says so
-/// before the dialogs appear, so they get "Always Allow" (once per build) instead of a one-off "Allow" that
-/// brings them back on every request.
+/// Runs `body` on the main queue with this build's item, taking it over from the previous build after an update.
 func withKeychainItem(_ body: @escaping (Result<[String: Any]?, Error>) -> Void) {
-    if case .loaded(let item) = keychainLoadSilently() { return body(.success(item)) }
+    switch keychainLoadSilently() {
+    case .loaded(let item?):
+        try? FileManager.default.removeItem(at: previousBuild)  // E.g. a reinstall of the same build.
+        return body(.success(item))
+    case .needsPrompt: return body(Result { try keychainLoad() })  // Ours but unreadable: never a new phrase.
+    case .loaded(nil): break
+    }
+    guard let stale = keychainItems().first(where: { $0.account != ownAccount }) else { return body(.success(nil)) }
+    DispatchQueue.global().async {
+        do {
+            if let item = try takeOver() { return onMain { body(.success(item)) } }
+        } catch { return onMain { body(.failure(error)) } }
+        #if BW_BROKER_STAGING
+        return onMain { body(.failure(Failure(message: "staging: macOS would ask"))) }
+        #endif
+        onMain { promptedTakeOver(stale.account, body) }
+    }
+}
+
+let previousBuild = here.appendingPathComponent("bw-broker.prev")
+
+/// Asks the previous build (`{"op":"handoff"}`) for its item: nil when there is none that can read it silently (or
+/// it predates the hand-over); throws when the human cancelled its window.
+func takeOver(check: Bool = false) throws -> [String: Any]? {
+    guard FileManager.default.isExecutableFile(atPath: previousBuild.path) else { return nil }
+    let child = Process()
+    child.executableURL = previousBuild
+    #if BW_BROKER_TEST
+    child.environment = testEnv
+    #else
+    child.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()]
+    #endif
+    let input = Pipe(), output = Pipe()
+    child.standardInput = input
+    child.standardOutput = output
+    try child.run()
+    input.fileHandleForWriting.write(Data((check ? #"{"op":"handoff-check"}"# : #"{"op":"handoff"}"#).utf8))
+    try? input.fileHandleForWriting.close()
+    let answer = try? JSONSerialization.jsonObject(with: output.fileHandleForReading.readDataToEndOfFile()) as? [String: Any]
+    guard answer?["ok"] as? Bool == true else {
+        child.waitUntilExit()
+        if answer?["declined"] as? Bool == true { throw Failure(message: "bw-once update not approved; nothing released") }
+        return nil
+    }
+    if check { return [:] }
+    child.waitUntilExit()
+    guard let item = answer?["handoff"] as? [String: Any] else { return nil }
+    try keychainSave(item)
+    return item
+}
+
+/// No previous build could hand over: macOS asks once for the login password (Allow is enough: we save our own).
+func promptedTakeOver(_ account: String, _ body: @escaping (Result<[String: Any]?, Error>) -> Void) {
     let built = (try? FileManager.default.attributesOfItem(atPath: here.appendingPathComponent("bw-broker").path))?[.modificationDate]
         as? Date
     let notice = Panel(title: "bw-once · macOS asks for Keychain access")
     notice.line("bw-once's broker was rebuilt" + (built.map { " on " + DateFormatter.localizedString(
         from: $0, dateStyle: .medium, timeStyle: .short) } ?? "") + " (a bw-once update). macOS now asks, up to "
         + "twice, for your Mac login password before it may open its saved item.")
-    notice.line("Type it and choose Always Allow both times: until the next update, requests then need only Touch ID.",
-                size: 13)
+    notice.line("Allow is enough: bw-once then keeps its own copy, and later updates need only Touch ID.", size: 13)
     notice.line("Not expecting a bw-once update? Choose Deny.", color: .systemOrange)
     notice.show()
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {  // Drawn before the system dialog covers it.
-        let result = Result { try keychainLoad() }
+        let result = Result { () throws -> [String: Any]? in
+            guard let item = try keychainLoad(account) else { return nil }
+            try keychainSave(item)
+            return item
+        }
         notice.window.close()
         body(result)
     }
 }
 
+/// The old build's side (`{"op":"handoff"}` on stdin): only the installed bw-broker (running code checked) may ask;
+/// one Touch ID in a window with the phrase releases this build's item to it.
+func handOver(check: Bool) {
+    guard case .loaded(let item?) = keychainLoadSilently() else { fail("Nothing to hand over") }
+    let installed = here.appendingPathComponent("bw-broker")
+    #if !BW_BROKER_TEST
+    var parent: SecCode?
+    var file: SecStaticCode?
+    guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid: getppid()] as CFDictionary, [], &parent)
+            == errSecSuccess, let parent, SecCodeCheckValidity(parent, [], nil) == errSecSuccess,
+          SecStaticCodeCreateWithPath(installed as CFURL, [], &file) == errSecSuccess, let file,
+          let running = cdhash(unsafeBitCast(parent, to: SecStaticCode.self)), running == cdhash(file) else {
+        fail("Hand-over refused: the caller is not the installed bw-broker")
+    }
+    #endif
+    if check { finish(["ok": true]) }
+    let built = (try? FileManager.default.attributesOfItem(atPath: installed.path))?[.modificationDate] as? Date
+    let panel = Panel(title: "bw-once · update")
+    panel.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 11)
+    panel.line(item["phrase"] as? String ?? "?", size: 18, mono: true)
+    panel.line("bw-once was updated" + (built.map { " (" + DateFormatter.localizedString(from: $0, dateStyle: .medium,
+        timeStyle: .short) + ")" } ?? "") + ". Touch ID lets the new version use your saved Bitwarden passwords; no "
+        + "Mac password needed. The request itself follows in its own window.")
+    panel.line("Not expecting a bw-once update? Cancel.", color: .systemOrange)
+    let context = LAContext()
+    panel.onCancel = { context.invalidate(); finish(["ok": false, "declined": true]) }
+    panel.button("Cancel") { panel.window.close() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 300) { panel.window.close() }
+    #if !BW_BROKER_STAGING
+    panel.show()
+    #endif
+    panel.setStatus("Touch ID to approve…")
+    approveWithTouch(context, reason: "let the updated bw-once use your saved passwords") { approved in
+        onMain {
+            guard approved else { return panel.window.close() }
+            panel.onCancel = {}
+            finish(["ok": true, "handoff": item])
+        }
+    }
+}
+
+func approveWithTouch(_ context: LAContext, reason: String, _ done: @escaping (Bool) -> Void) {
+    #if BW_BROKER_TEST
+    FileHandle.standardError.write(Data("touch: \(reason)\n".utf8))
+    return done(testEnv["BW_BROKER_TEST_TOUCH"] != "cancel")
+    #elseif BW_BROKER_STAGING
+    return done(true)
+    #endif
+    context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, _ in done(ok) }
+}
+
+/// Saves this build's item and drops older builds' (and the previous build itself): no longer needed.
 func keychainSave(_ item: [String: Any]) throws {
     let data = try JSONSerialization.data(withJSONObject: item)
     #if BW_BROKER_TEST
-    try data.write(to: URL(fileURLWithPath: testEnv["BW_BROKER_TEST_STORE"]!))
+    try data.write(to: URL(fileURLWithPath: testStore(ownAccount)))
+    keychainItems().filter { $0.account != ownAccount }.forEach { try? FileManager.default.removeItem(atPath: testStore($0.account)) }
+    try? FileManager.default.removeItem(at: previousBuild)
     return
     #endif
-    SecItemDelete(keychainQuery() as CFDictionary)
+    keychainDelete()
     var add = keychainQuery()
     add[kSecValueData as String] = data
     add[kSecAttrLabel as String] = "bw-once (Touch ID broker)"
@@ -307,6 +483,21 @@ func keychainSave(_ item: [String: Any]) throws {
         .joined(separator: ",")
     let status = SecItemAdd(add as CFDictionary, nil)
     guard status == errSecSuccess else { throw Failure(message: "Cannot save the Keychain item (\(status))") }
+    _ = withoutKeychainDialogs {
+        for other in keychainItems() where other.account != ownAccount { SecItemDelete(keychainQuery(other.account) as CFDictionary) }
+    }
+    try? FileManager.default.removeItem(at: previousBuild)
+}
+
+/// This build's item, or with `all` every build's (all created at this path, so no dialog either).
+func keychainDelete(all: Bool = false) {
+    #if BW_BROKER_TEST
+    for account in all ? keychainItems().map(\.account) : [ownAccount] { try? FileManager.default.removeItem(atPath: testStore(account)) }
+    return
+    #endif
+    _ = withoutKeychainDialogs {
+        for account in all ? keychainItems().map(\.account) : [ownAccount] { SecItemDelete(keychainQuery(account) as CFDictionary) }
+    }
 }
 
 // MARK: - Secure Enclave bundle
@@ -387,11 +578,6 @@ func newPhrase() -> String {
 }
 
 // MARK: - Bitwarden's signed CLI, one `bw serve` per vault over a private socketpair
-
-#if BW_BROKER_TEST
-// Test build only (pytest compiles it with -D BW_BROKER_TEST): fake CLI, file store, fake enclave, hidden panel.
-let testEnv = ProcessInfo.processInfo.environment
-#endif
 
 func bitwardenBinary() throws -> String {
     #if BW_BROKER_TEST
@@ -606,7 +792,14 @@ func matches(_ item: [String: Any], host: String) -> Bool {
 
 let ownerType = NSPasteboard.PasteboardType("org.bw-once.owner")
 
-func deliver(_ secret: String) throws {
+/// The released value to its destination; returns what the agent needs (the clear timer, or the one-time fill URL).
+func deliver(_ secret: String, _ request: Request, to: String? = nil) throws -> [String: Any] {
+    if (to ?? request.to) == "page" { return try deliverToPage(secret, host: request.host) }
+    try copyToClipboard(secret)
+    return ["clear_after_seconds": clipboardSeconds]
+}
+
+func copyToClipboard(_ secret: String) throws {
     #if BW_BROKER_TEST
     try Data(secret.utf8).write(to: here.appendingPathComponent("clip"))
     return
@@ -637,6 +830,112 @@ func deliver(_ secret: String) throws {
     var env: [UnsafeMutablePointer<CChar>?] = [strdup("PATH=/usr/bin:/bin"), nil]
     defer { (argv + env).forEach { free($0) } }
     _ = posix_spawn(&pid, me, &actions, &attributes, &argv, &env)  // Best effort, like any clipboard clear.
+}
+
+// MARK: - Page fill (`--to page`): no clipboard, works in a background browser tab
+
+/// The value goes to a detached copy of this binary that serves it once over loopback, only to a page whose Origin is
+/// exactly https://<host> and only at an unguessable path; the agent's `preview_evaluate` fetches it straight into
+/// the field and returns its length. The clipboard path needs a focused tab: T3 drops Cmd+V into a hidden one.
+func deliverToPage(_ secret: String, host: String) throws -> [String: Any] {
+    let token = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    // Own session (like the clipboard clear timer): outlives this process and the agent tool's process group.
+    var toChild: [Int32] = [0, 0], fromChild: [Int32] = [0, 0]
+    guard pipe(&toChild) == 0, pipe(&fromChild) == 0 else { throw Failure(message: "Page delivery failed") }
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_adddup2(&actions, toChild[0], 0)
+    posix_spawn_file_actions_adddup2(&actions, fromChild[1], 1)
+    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+    let me = here.appendingPathComponent("bw-broker").path
+    var argv: [UnsafeMutablePointer<CChar>?] = [strdup(me), strdup("--serve-once"), nil]
+    var env: [UnsafeMutablePointer<CChar>?] = [strdup("PATH=/usr/bin:/bin"), nil]
+    defer { (argv + env).forEach { free($0) } }
+    var pid: pid_t = 0
+    let spawned = posix_spawn(&pid, me, &actions, &attributes, &argv, &env) == 0
+    close(toChild[0])
+    close(fromChild[1])
+    let input = FileHandle(fileDescriptor: toChild[1], closeOnDealloc: true)
+    let output = FileHandle(fileDescriptor: fromChild[0], closeOnDealloc: true)
+    // The path can be swapped after our own start: only a child running this very build gets the value.
+    guard spawned, isThisBuild(pid) else {
+        if spawned { kill(pid, SIGKILL) }
+        throw Failure(message: "Page delivery failed")
+    }
+    input.write(try JSONSerialization.data(withJSONObject: ["value": secret, "token": token, "origin": "https://" + host]))
+    try? input.close()
+    guard let port = Int(String(decoding: output.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)) else { throw Failure(message: "Page delivery failed") }
+    return ["fill_url": "http://127.0.0.1:\(port)/\(token)", "fill_expires_in": fillSeconds]
+}
+
+func isThisBuild(_ pid: pid_t) -> Bool {
+    #if BW_BROKER_TEST
+    return testEnv["BW_BROKER_TEST_SWAPPED_CHILD"] != "1"
+    #endif
+    var code: SecCode?
+    return SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess
+        && code.flatMap { SecCodeCheckValidity($0, [], nil) == errSecSuccess
+            ? cdhash(unsafeBitCast($0, to: SecStaticCode.self)) : nil }.map { "broker-" + $0 } == ownAccount
+}
+
+/// `bw-broker --serve-once` (stdin: value, token, origin): prints its port, answers one matching GET, then exits.
+func serveOnce() -> Never {
+    guard let job = try? JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as? [String: String],
+          let value = job["value"], let token = job["token"], let origin = job["origin"] else { exit(2) }
+    let server = socket(AF_INET, SOCK_STREAM, 0)
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+    guard withUnsafeMutablePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(server, $0, size) == 0 && listen(server, 8) == 0 && getsockname(server, $0, &size) == 0 } }) else { exit(1) }
+    print(UInt16(bigEndian: address.sin_port))
+    fflush(stdout)
+    let null = open("/dev/null", O_WRONLY)
+    dup2(null, 1)
+    let deadline = Date().addingTimeInterval(Double(fillSeconds))
+    while Date() < deadline {
+        var poller = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
+        guard poll(&poller, 1, 500) > 0 else { continue }
+        let client = accept(server, nil, nil)
+        guard client >= 0 else { continue }
+        var timeout = timeval(tv_sec: 0, tv_usec: 250_000)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var head = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while head.count < 16_384, head.range(of: Data("\r\n\r\n".utf8)) == nil, Date() < deadline {
+            let count = read(client, &buffer, buffer.count)
+            if count <= 0 { break }
+            head.append(buffer, count: count)
+        }
+        let lines = String(decoding: head, as: UTF8.self).components(separatedBy: "\r\n")
+        let start = lines.first?.split(separator: " ").map(String.init) ?? []
+        let headers = Dictionary(lines.dropFirst().compactMap { line -> (String, String)? in
+            guard let colon = line.firstIndex(of: ":") else { return nil }
+            return (line[..<colon].lowercased(), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
+        }, uniquingKeysWith: { first, _ in first })
+        // Exact origin (the approved host's page over https) and path; a preflight (private network) never consumes.
+        let allowed = start.count == 3 && start[1] == "/" + token && headers["origin"] == origin && Date() < deadline
+        let method = start.first ?? ""
+        let body = allowed && method == "GET" ? value : ""
+        var reply = allowed && method == "GET" ? "HTTP/1.1 200 OK\r\n" : allowed && method == "OPTIONS"
+            ? "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Private-Network: true\r\n"
+            : "HTTP/1.1 403 Forbidden\r\n"
+        if allowed { reply += "Access-Control-Allow-Origin: \(origin)\r\nVary: Origin\r\n" }
+        reply += "Cache-Control: no-store\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\n"
+            + "Connection: close\r\n\r\n" + body
+        _ = reply.withCString { write(client, $0, strlen($0)) }
+        close(client)
+        if !body.isEmpty { exit(0) }
+    }
+    exit(0)
 }
 
 /// `bw-broker --clear-after SECONDS TOKEN CHANGECOUNT`: clear only our unchanged write (a newer copy stays).
@@ -938,10 +1237,12 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
                 : "one matching login; if several match, the agent picks one (shown here)"))
     }
     var rows = [("Releases", what), ("Exact host", request.host), ("Searches", vaults.joined(separator: ", ")),
-                ("Goes to", request.op == "copy" ? "clipboard, cleared after \(clipboardSeconds) s" : "the agent (metadata)")]
+                ("Goes to", request.op != "copy" ? "the agent (metadata)" : request.to == "page"
+                    ? "a page on https://\(request.host) only (one fetch within \(fillSeconds) s), not the clipboard"
+                    : "clipboard, cleared after \(clipboardSeconds) s")]
     if recopyAllowed(request) {
-        rows.append(("Re-copies", "the same login's \(request.field) for this thread, \(Int(recopySeconds / 60)) min, no touch "
-                     + "(each one shown)"))
+        rows.append(("Re-copies", "the same login's \(request.field) for this thread (page or clipboard), "
+                     + "\(Int(recopySeconds / 60)) min, no touch (each one shown)"))
     }
     return rows
 }
@@ -961,8 +1262,8 @@ struct RecopySocket { let fd: Int32, path: String, inode: ino_t }
 /// The release itself: binds the re-copy socket (replacing an older holder's for the same key, which notices and
 /// exits) and writes the clipboard under one lock, so of two releases for one key the later wins both. Bound before
 /// the answer, so the agent's next call already finds it.
-func deliverAndOpenRecopy(_ request: Request, _ secret: String) throws -> RecopySocket? {
-    guard recopyAllowed(request) else { try deliver(secret); return nil }
+func deliverAndOpenRecopy(_ request: Request, _ secret: String) throws -> (RecopySocket?, [String: Any]) {
+    guard recopyAllowed(request) else { return (nil, try deliver(secret, request)) }
     let key = recopyKey(host: request.host, field: request.field, thread: request.thread ?? "")
     return try withRecopyLock(key) {
         unlink(socketPath(key))
@@ -972,11 +1273,10 @@ func deliverAndOpenRecopy(_ request: Request, _ secret: String) throws -> Recopy
             stat(path, &own)
             socket = RecopySocket(fd: fd, path: path, inode: own.st_ino)
         }
-        do { try deliver(secret) } catch {
+        do { return (socket, try deliver(secret, request)) } catch {
             if let socket { close(socket.fd); unlink(socket.path) }
             throw error
         }
-        return socket
     }
 }
 
@@ -1020,23 +1320,24 @@ func holdForRecopies(_ socket: RecopySocket, _ request: Request, _ meta: [String
             reply(client, ["ok": false, "miss": true])
             continue
         }
-        let delivered: Result<Void, Error>? = withRecopyLock(key) {
+        let to = ask["to"] as? String == "page" ? "page" : "clipboard"
+        let delivered: Result<[String: Any], Error>? = withRecopyLock(key) {
             guard Date() < deadline, ownsPath(socket) else { return nil }
-            return Result { try deliver(secret) }
+            return Result { try deliver(secret, request, to: to) }
         }
-        guard case .success = delivered else {
-            reply(client, delivered == nil ? ["ok": false, "miss": true] : ["ok": false, "error": "Clipboard delivery failed"])
+        guard case .success(let destination) = delivered else {
+            reply(client, delivered == nil ? ["ok": false, "miss": true] : ["ok": false, "error": "Delivery failed"])
             continue
         }
-        reply(client, ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds, "recopy": true,
-                       "touch": false, "recopy_until": ISO8601DateFormatter().string(from: deadline)].merging(meta) { $1 })
+        reply(client, ["ok": true, "copied": request.field, "recopy": true, "touch": false,
+                       "recopy_until": ISO8601DateFormatter().string(from: deadline)].merging(meta) { $1 }.merging(destination) { $1 })
         shown = Date()
         onMain {
             let notice = Panel(title: "bw-once · re-copy (no touch)")
             notice.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 11)
             notice.line(phrase, size: 18, mono: true)
-            notice.line("Copied \(request.field) of \(name) (\(username ?? "no username"), \(meta["vault"] as? String ?? "?")) "
-                        + "again for thread \(request.thread ?? "?"). You approved this login with Touch ID; re-copies end \(until).")
+            notice.line((to == "page" ? "Sent " : "Copied ") + "\(request.field) of \(name) (\(username ?? "no username"), \(meta["vault"] as? String ?? "?")) "
+                        + "again (\(to == "page" ? "to the https://\(request.host) page" : "clipboard")) for thread \(request.thread ?? "?"). You approved this login with Touch ID; re-copies end \(until).")
             notice.show(activate: false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { notice.window.close() }
         }
@@ -1082,12 +1383,12 @@ func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: 
         choices = []
         closeSocket()
         let recopyUntil = Date().addingTimeInterval(recopySeconds)
-        let recopy: RecopySocket?
-        do { recopy = try deliverAndOpenRecopy(request, value) } catch {
-            reply(client, ["ok": false, "error": "Clipboard delivery failed"])
-            fail("Clipboard delivery failed")
+        let recopy: RecopySocket?, destination: [String: Any]
+        do { (recopy, destination) = try deliverAndOpenRecopy(request, value) } catch {
+            reply(client, ["ok": false, "error": "Delivery failed"])
+            fail("Delivery failed")
         }
-        var answer: [String: Any] = ["ok": true, "copied": request.field, "clear_after_seconds": clipboardSeconds]
+        var answer: [String: Any] = ["ok": true, "copied": request.field].merging(destination) { $1 }
         if recopy != nil { answer["recopy_until"] = ISO8601DateFormatter().string(from: recopyUntil) }
         reply(client, answer.merging(meta) { $1 })
         onMain {
@@ -1290,7 +1591,6 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     }
                     result.merge(metadata(chosen)) { $1 }
                     result["copied"] = request.field
-                    result["clear_after_seconds"] = clipboardSeconds
                 }
             }
             candidates = []
@@ -1305,14 +1605,16 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result, phrase: phrase) }
             guard gate.commit() else { fail("Request cancelled") }  // Closed during the search: release nothing.
             let recopyUntil = Date().addingTimeInterval(recopySeconds)
-            let recopy = try secret.flatMap { try deliverAndOpenRecopy(request, $0) }
+            let delivered = try secret.map { try deliverAndOpenRecopy(request, $0) }
+            let recopy = delivered?.0
+            result.merge(delivered?.1 ?? [:]) { $1 }
             let kept = recopy == nil ? nil : secret
             if recopy != nil { result["recopy_until"] = ISO8601DateFormatter().string(from: recopyUntil) }
             secret = nil
             onMain {
                 panel.onCancel = {}
                 let what = request.op == "list" ? "\((result["items"] as? [Any])?.count ?? 0) login(s) listed"
-                    : "Copied \(request.field) of \(result["name"] as? String ?? "?") (\(result["username"] as? String ?? "no username"), "
+                    : (request.to == "page" ? "Sent " : "Copied ") + "\(request.field) of \(result["name"] as? String ?? "?") (\(result["username"] as? String ?? "no username"), "
                       + "\(result["vault"] as? String ?? "?"))"
                 panel.setStatus("✓ \(what) · vault locked", color: .systemGreen)
                 DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
@@ -1320,7 +1622,8 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     emit(result)  // The front end returns now; this process keeps only the one released field.
                     panel.window.close()
                     var meta = result
-                    ["ok", "copied", "clear_after_seconds", "recopy_until", "searched", "unavailable"].forEach { meta[$0] = nil }
+                    ["ok", "copied", "clear_after_seconds", "fill_url", "fill_expires_in", "recopy_until", "searched", "unavailable"]
+                        .forEach { meta[$0] = nil }
                     DispatchQueue.global().async {
                         holdForRecopies(recopy, request, meta, kept, phrase: phrase, until: recopyUntil)
                     }
@@ -1343,25 +1646,50 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
 // MARK: - Main
 
 if CommandLine.arguments.dropFirst().first == "--clear-after" { clearLater(CommandLine.arguments) }
+if CommandLine.arguments.dropFirst().first == "--serve-once" { serveOnce() }
+
+let input = FileHandle.standardInput.readDataToEndOfFile()
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+switch (try? JSONSerialization.jsonObject(with: input) as? [String: Any])?["op"] as? String {
+case "handoff": handOver(check: false); app.run()
+case "handoff-check": handOver(check: true)
+#if BW_BROKER_STAGING
+// Staging build (own Keychain service, no touches): checks per-build items and the hand-over on the real Keychain.
+case "staging-seed":
+    do { try keychainSave(["v": 1, "phrase": "staging only", "sealed": [:], "vaults": [["name": "staging"]]]) } catch {
+        fail("\(error)")
+    }
+    finish(["ok": true, "account": ownAccount])
+case "staging-page":
+    do { finish(["ok": true].merging(try deliverToPage("staging-value", host: "httpbin.org")) { $1 }) } catch { fail("\(error)") }
+case "staging-load":
+    withKeychainItem { loaded in finish(["ok": (try? loaded.get()) != nil, "account": ownAccount]) }
+    app.run()
+#endif
+default: break
+}
 
 let request: Request
-do { request = try parseRequest(FileHandle.standardInput.readDataToEndOfFile()) } catch let error as Failure {
+do { request = try parseRequest(input) } catch let error as Failure {
     fail(error.message)
 } catch { fail("Invalid broker request") }
 
 switch request.op {
 case "status":
-    let names = keychainVaults()
-    var status: [String: Any] = ["ok": true, "enrolled": names != nil, "vaults": names ?? []]
-    if names != nil, case .needsPrompt = keychainLoadSilently() { status["keychain_prompt"] = true }
+    let items = keychainItems()
+    let own = items.first { $0.account == ownAccount }
+    var status: [String: Any] = ["ok": true, "enrolled": !items.isEmpty, "vaults": (own ?? items.first)?.vaults ?? []]
+    if own == nil && !items.isEmpty {
+        // After an update: the previous build hands over with one touch, else macOS asks for the login password.
+        status[(try? takeOver(check: true)) != nil ? "update_touch" : "keychain_prompt"] = true
+    }
     finish(status)
 case "forget":
-    SecItemDelete(keychainQuery() as CFDictionary)
-    finish(["ok": true, "enrolled": false])
+    keychainDelete(all: true)
+    finish(["ok": true, "enrolled": !keychainItems().isEmpty])
 default:
     guard SecureEnclave.isAvailable else { fail("This Mac has no Secure Enclave / Touch ID") }
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
     signal(SIGTERM, SIG_IGN)  // The front end's timeout kill would skip the lock; the panel owns cleanup.
     if request.op == "enroll" { enroll(request) } else { serveRequest(request) }
     app.run()
