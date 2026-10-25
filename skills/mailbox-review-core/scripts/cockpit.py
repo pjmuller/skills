@@ -678,6 +678,16 @@ def md_url(url):
     return quote(url, safe=":/?#=&%.-_~@+,;")
 
 
+def md_label(url):
+    return MD_SPECIAL.sub(r'\\\1', html.escape(url, quote=False))
+
+
+def source_url(account, location):
+    # A Gmail thread link keeps its #all/<id> fragment (no secret in it); other URLs lose query+fragment.
+    thread = re.fullmatch(r'https://mail\.google\.com/mail/[^#\s]*#[a-z]+/([0-9a-f]{12,20})', str(location))
+    return gmail_url(account, thread.group(1)) if thread else safe_url(location)
+
+
 def md_link(label, url):
     return f'[{label}]({md_url(url)})'
 
@@ -718,10 +728,9 @@ def render(args):
             for n, source in enumerate(item['sources'])])
         for block in blocks:
             source = item['sources'][block['source']]
-            url = safe_url(source['location'])
+            url = source_url(index['account'], source['location'])
             evidence += ['', f'*{md(block["title"], 60)}*',
-                         '- ' + (md_link(MD_SPECIAL.sub(r'\\\1', html.escape(url, quote=False)), url)
-                                 if url else md_code(source['location']))]
+                         '- ' + (md_link(md_label(url), url) if url else md_code(source['location']))]
             evidence += [f'  - {md(point, None)}' for point in block['points']]
         if 'technical_evidence' not in item:
             evidence += ['', 'Since run: ' + md(item['changed_since_run'], None)]
@@ -754,8 +763,10 @@ def render(args):
             bug = item['bug']
             out += [f'**{md(bug["title"], 160)}** · {thread_link(item["thread_id"])}  ',
                     f'Affected: {md(bug["affected"], 300)} · owner: {md(bug["owner"], 160)}  ',
-                    f'Fix: {md(bug["fix_direction"], 600)}'
-                    + (f' · {md_code(bug["thread"], 300)}' if bug.get('thread') else ''),
+                    f'Fix: {md(bug["fix_direction"], 600)}' + (
+                        '' if not bug.get('thread') else
+                        f' · {md_link(md_label(safe_url(bug["thread"])), safe_url(bug["thread"]))}'
+                        if safe_url(bug['thread']) else f' · {md_code(bug["thread"], 300)}'),
                     '', '<details><summary>Evidence</summary>', '',
                     *[f'- {md(e, 300)}' for e in bug['evidence']], '', '</details>', '']
     gaps = [f'- {md(gap["gap"], 200)} · unblock: {md(gap["unblock"], 200)} · {thread_link(item["thread_id"])}'

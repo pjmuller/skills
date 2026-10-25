@@ -325,6 +325,16 @@ class Tests(unittest.TestCase):
             self.assertIn('Sheet &lt;b&gt;drops&lt;/b&gt; rows', report)
             self.assertIn('What limited this review', report)
             self.assertIn('Ask the developer for read-only logs', report)
+            finding['bug']['thread'] = 'https://github.com/o/r/pull/7?token=x'
+            finding['sources'].append({'kind': 'mail', 'fact': 'Earlier answer',
+                                       'location': 'https://mail.google.com/mail/?authuser=x#all/19ffaa328bcf306a'})
+            finding['technical_evidence'] = [{'source': 1, 'title': 'Mail', 'points': ['Earlier answer.']}]
+            c.save(bundle / 'findings.json', [finding])
+            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                        out=str(bundle / 'report.md')))
+            report = (bundle / 'report.md').read_text()
+            self.assertIn('[https://github.com/o/r/pull/7](https://github.com/o/r/pull/7)', report)
+            self.assertIn(c.gmail_url(ACCOUNT, '19ffaa328bcf306a') + ')', report)
 
     def test_markdown_escaping_secret_links_and_confirmed_action(self):
         detail, finding = fixture()
