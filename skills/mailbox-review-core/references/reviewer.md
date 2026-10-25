@@ -42,6 +42,8 @@ Keep the header action to one short statement, normally 8–14 words; retain ess
 
 Keep exact provenance in `sources`: file paths and lines (including Go files), read-only commands, record IDs and URLs. New findings must emit `technical_evidence`: select 2–4 relevant source/result blocks (one if only one source matters), each with a zero-based `source` index, short `title` (≤60 characters), and 1–4 supported `points` (≤160 characters each). Prefer 8–14-word fragments; include material changes and caveats, omit chronology dumps and repeated facts. Source locations appear separately, so do not repeat them in points. The same accordion then shows these selected blocks instead of the raw source prose. Raw sources and `changed_since_run` stay in the private finding. Legacy findings render their original source/result blocks without invented paraphrases.
 
-Optional fields `brain_proposal` (what the brain lacked so the next run answers alone), `replacement_body` (correcting an untouched AI draft), `bug` (confirmed product bug), `dx_gaps` (what limited your research) and `case_thread` (the case's owner thread): open [optional-fields.md](optional-fields.md) before emitting either.
+A thread the index marks `stale` (no person wrote for 14 days) is an old case: no deep research, one action (discard, or the debt we owe), `due_by` only for a dated promise of ours.
+
+Optional fields `due_by`, `brain_proposal` (what the brain lacked so the next run answers alone), `replacement_body` (correcting an untouched AI draft), `bug` (confirmed product bug), `dx_gaps` (what limited your research) and `case_thread` (the case's owner thread): open [optional-fields.md](optional-fields.md) before emitting either.
 
 A concise card needs subject + one short action. Do not make a card for every successful/simple email or reproduce sensitive content. The evidence accordion starts closed; URLs in the report must not carry bearer tokens.

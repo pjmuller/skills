@@ -658,6 +658,50 @@ class Tests(unittest.TestCase):
         self.assertEqual(c.fingerprint(thread), c.fingerprint(bumped))
         self.assertNotEqual(c.fingerprint(thread), c.fingerprint(edited))
 
+    def test_customer_age_ignores_tool_notifications_and_autoreplies(self):
+        day = 86_400_000
+        fresh = int(c.datetime.now(c.timezone.utc).timestamp() * 1000)
+        thread = {'id': 'abc', 'messages': [
+            message('person', at=fresh - 30 * day),
+            message('clickup', 'ProBackup <notifications@tasks.example.test>', at=fresh - day),
+            message('auto', 'Autoreply <autoreply+noreply@example.test>', at=fresh)]}
+        row = c.summary(thread, {'runs': []}, ACCOUNT, [])
+        self.assertEqual(row['customer_at'], str(fresh - 30 * day))
+        self.assertTrue(row['stale'])
+        thread['messages'].append(message('again', at=fresh))
+        self.assertFalse(c.summary(thread, {'runs': []}, ACCOUNT, [])['stale'])
+        robots = {'id': 'abc', 'messages': [message('cal', 'Calendly <notifications@calendly.test>', at=fresh)]}
+        self.assertTrue(c.summary(robots, {'runs': []}, ACCOUNT, [])['stale'])
+
+    def test_stale_case_collapses_unless_our_promise_is_due(self):
+        detail, finding = fixture()
+        del finding['replacement_body']
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            c.save(bundle / 'details/abc.json', detail)
+            collected = c.now()
+            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': collected, 'threads': [
+                {'thread_id': 'abc', 'subject': 'Old case', 'state': 'draft_ready',
+                 'customer_at': '1751760000000', 'stale': True}],
+                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
+                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
+
+            def report(item):
+                c.save(bundle / 'findings.json', [item])
+                c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                            out=str(bundle / 'report.md')))
+                return (bundle / 'report.md').read_text()
+
+            text = report(finding)
+            self.assertIn('No reviewed actions to surface.', text)
+            self.assertIn('1 old case: no customer mail for 14+ days', text)
+            self.assertIn('customer last wrote 2025-07-06', text)
+            due = dict(finding, due_by=(c.date.fromisoformat(collected[:10]) + c.timedelta(days=3)).isoformat())
+            text = report(due)
+            self.assertNotIn('old case', text)
+            self.assertIn('Send the verified reply', text.split('### Do first')[1])
+            with self.assertRaises(c.Refused):
+                report(dict(finding, due_by='next week'))
 
 if __name__ == '__main__':
     unittest.main()

@@ -32,9 +32,15 @@ flowchart LR
    `continuation --history <earlier bundles>` says per Gmail thread new / unchanged / changed and
    carries back earlier cases that got new mail; `t3-mail-link find` names an existing case owner.
    Read before resuming, never duplicate running work, never resume a reviewer child.
-3. Leave answered, no-inbound and confident simple drafts alone. Pick uncertain or consequential ones,
-   stale ones included; a draft without a run is low priority (stale/discard unless consequential).
-   Health flags help prioritize; keywords or a green run never decide answer quality.
+3. **This week's mail first.** The cockpit answers "what do I send, fix or decide today", not a backlog
+   audit. `index.json` marks a thread `stale` when no person has written for 14 days (`customer_at`:
+   our own mail, tool notifications, auto-replies and bounces don't count). A stale case gets no reviewer
+   and no deep research: a short finding with one action (usually "discard the draft", or the open debt
+   we owe: money, a promised document, an unanswered data-loss report) that the report folds into "old
+   cases". Only new customer mail, or a dated promise of ours due within 7 days (`due_by`), brings it
+   back to the top; a renewal date recurs and never counts. Among fresh threads, leave answered,
+   no-inbound and confident simple drafts alone; pick uncertain or consequential ones. Health flags help
+   prioritize; keywords or a green run never decide answer quality.
 4. `detail` for every thread you will write a finding for. One **Opus, high effort, in-harness
    subagent** per customer (group that customer's threads) with [the reviewer recipe](references/reviewer.md)
    plus the wrapper's grounding brief. A Codex coordinator hands the set to a Claude worker; never

@@ -12,7 +12,7 @@ import signal
 from pathlib import Path
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import getaddresses
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -23,6 +23,11 @@ def _cli() -> str:
 
 GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me'
 PRIMARY_ACTION_ROWS = 7
+# The cockpit is about this week's mail: a case whose customer has been silent this long is an old case
+# (one collapsed line, no research) unless a dated promise of ours falls due within DUE_SOON_DAYS.
+STALE_DAYS = 14
+DUE_SOON_DAYS = 7
+ROBOT_LOCALPART = re.compile(r'no-?reply|do-?not-?reply|notification|mailer-daemon|postmaster|auto-?reply|bounce', re.I)
 
 
 class Refused(Exception):
@@ -147,6 +152,20 @@ def fingerprint(thread):
     return digest({'id': thread.get('id'), 'messages': stable(thread.get('messages', []))})
 
 
+def automated(h):
+    return (any(h.get(k) for k in ('list-id', 'list-unsubscribe', 'x-campaign', 'x-ac-message-id')) or
+            h.get('auto-submitted', '').lower() not in ('', 'no') or
+            h.get('precedence', '').lower() in ('bulk', 'list', 'junk'))
+
+
+def from_customer(message):
+    """A person wrote it: tool notifications (ClickUp, Calendly), auto-replies and bounces don't count."""
+    h = headers(message)
+    senders = addresses(h.get('from', ''))
+    return bool(senders) and not automated(h) and not any(
+        ROBOT_LOCALPART.search(a.split('@')[0]) for a in senders)
+
+
 def mail_state(thread, account):
     inbound, replies, notes, uncertain = [], [], [], []
     for message in sorted(thread.get('messages', []), key=stamp):
@@ -160,11 +179,7 @@ def mail_state(thread, account):
         elif addresses(h.get('to', '')) == {account}:
             notes.append(message)
         elif 'SENT' in labels:
-            automated = (any(h.get(k) for k in ('list-id', 'list-unsubscribe',
-                                               'x-campaign', 'x-ac-message-id')) or
-                         h.get('auto-submitted', '').lower() not in ('', 'no') or
-                         h.get('precedence', '').lower() in ('bulk', 'list', 'junk'))
-            if automated or not addresses(h.get('to', '')):
+            if automated(h) or not addresses(h.get('to', '')):
                 uncertain.append(message)
             else:
                 replies.append(message)
@@ -174,7 +189,9 @@ def mail_state(thread, account):
     answered = bool(latest and any(stamp(m) > stamp(latest) for m in replies))
     ambiguous = bool(latest and any(stamp(m) > stamp(latest) for m in uncertain))
     ambiguous_sender = bool(latest and account in addresses(headers(latest).get('from', '')))
-    return {'latest_inbound': latest, 'answered': answered, 'ambiguous_outbound': ambiguous,
+    customer = [m for m in inbound if from_customer(m)]
+    return {'latest_inbound': latest, 'latest_customer': customer[-1] if customer else None,
+            'answered': answered, 'ambiguous_outbound': ambiguous,
             'ambiguous_sender': ambiguous_sender,
             'notes': notes, 'replies': replies, 'unanswered': bool(latest and not answered)}
 
@@ -204,6 +221,7 @@ def summary(thread, evidence, account, draft_stubs):
     state = mail_state(thread, account)
     run = latest_run(evidence)
     inbound = state['latest_inbound'] or {}
+    customer_at = (state['latest_customer'] or {}).get('internalDate')
     if state['answered']:
         status = 'answered'
     elif not state['unanswered']:
@@ -222,10 +240,26 @@ def summary(thread, evidence, account, draft_stubs):
             headers((thread.get('messages') or [{}])[0]).get('subject', '(no subject)'), 180),
             'inbound_preview': safe_text(inbound.get('snippet', ''), 360),
             'inbound_at': inbound.get('internalDate'), 'state': status,
+            'customer_at': customer_at, 'stale': stale(customer_at),
             'note_count': len(state['notes']), 'run_id': (run or {}).get('run_id'),
             'run_finished_at': (run or {}).get('finished_at'), 'run_health': (run or {}).get('health', {}),
             'has_note': (run or {}).get('has_note', False), 'draft_count': len(draft_stubs),
             'gmail_url': gmail_url(account, thread['id'])}
+
+
+def stale(customer_at):
+    """No mail from a person for STALE_DAYS (or never, e.g. a tool-notification thread)."""
+    if not customer_at:
+        return True
+    age = datetime.now(timezone.utc) - datetime.fromtimestamp(int(customer_at) / 1000, timezone.utc)
+    return age > timedelta(days=STALE_DAYS)
+
+
+def due_soon(item, collected_at):
+    """A dated promise of ours (refund, document, deadline) due within DUE_SOON_DAYS, or overdue."""
+    if not item.get('due_by'):
+        return False
+    return date.fromisoformat(item['due_by']) - date.fromisoformat(collected_at[:10]) <= timedelta(days=DUE_SOON_DAYS)
 
 
 def gmail_url(account, thread_id):
@@ -591,6 +625,8 @@ def check_finding(item, detail_data, require_fresh=True):
             and all(isinstance(g, dict) and all(isinstance(g.get(k), str) and g[k].strip() and len(g[k]) <= 200
                                                 for k in ('gap', 'unblock')) for g in item['dx_gaps'])):
         raise Refused('DX gaps need one to five {gap, unblock} short strings')
+    if 'due_by' in item and not (isinstance(item['due_by'], str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', item['due_by'])):
+        raise Refused('due_by must be a YYYY-MM-DD date of a promise we made')
     if 'case_thread' in item and not (isinstance(item['case_thread'], str) and 0 < len(item['case_thread']) <= 300):
         raise Refused('Case thread must be a short T3 thread link or id')
     if item['draft_id'] is not None and item['draft_id'] not in [
@@ -704,17 +740,25 @@ def render(args):
                   if (bundle / 'continuation.json').exists() else {})
     subjects = {t['thread_id']: md(repair_mojibake(str(t.get('subject') or t['thread_id'])), 160)
                 for t in index['threads']}
+    by_thread = {t['thread_id']: t for t in index['threads']}
 
     def thread_link(tid):
         if tid not in subjects:
             raise Refused('Report finding is outside collected scope')
         return md_link(subjects[tid], gmail_url(index['account'], tid))
 
-    cards, compact = [], []
+    cards, compact, old = [], [], []
     for item in ordered:
         if not item['actionable']:
             continue
         tid = item['thread_id']
+        thread = by_thread.get(tid, {})
+        if thread.get('stale') and not due_soon(item, index['collected_at']):
+            last = thread.get('customer_at')
+            when = (datetime.fromtimestamp(int(last) / 1000, timezone.utc).strftime('%Y-%m-%d')
+                    if last else 'never')
+            old.append(f'- {thread_link(tid)} · customer last wrote {when}: {md(item["action"], 280)}')
+            continue
         correction_path = bundle / 'corrections' / f'{tid}.json'
         correction = read(correction_path) if correction_path.exists() else {}
         corrected = (' · draft corrected, readback verified ' + md(correction.get('at', '')[:16], 40)
@@ -756,6 +800,9 @@ def render(args):
     if rest:
         out += [f'<details><summary>{len(rest)} more action{"s" if len(rest) != 1 else ""}</summary>', '',
                 *rest, '', '</details>', '']
+    if old:
+        out += [f'<details><summary>{len(old)} old case{"s" if len(old) != 1 else ""}: '
+                f'no customer mail for {STALE_DAYS}+ days</summary>', '', *old, '', '</details>', '']
     bugs = [i for i in ordered if i.get('bug')]
     if bugs:
         out += ['### Confirmed product bugs', '']
