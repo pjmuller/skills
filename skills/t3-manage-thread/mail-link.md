@@ -22,6 +22,9 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   lineage; a delegated-task id embeds a command id, not its parent). So: don't filter
   that line away (`| grep`, `| tail -1`, `2>/dev/null` with `--json`). Quotes, docs, `cat`/`grep`
   output and lines in messages never claim (`mail_events`: claiming command + own line only).
+- **Draft → sent keeps the claim.** Sending (Gmail web or API) changes the message id, never the
+  thread id, so the draft's `Mail-ref` stays valid: nothing to re-link when the user says "sent".
+  The poller applies new claims on its next run; `poll` applies them now. Check with `list`.
 - **Rules** (`apply_event`): latest claim wins (hand-off keeps the seen set); routing threads
   (title starts with 🧭; legacy titles containing "dispatch") never own; deleted owner → case dropped; unwatched account or a Gmail id the
   account doesn't have → ignored. Baseline = messages up to the claim; later inbound wakes.
