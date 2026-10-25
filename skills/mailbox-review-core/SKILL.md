@@ -1,6 +1,6 @@
 ---
 name: mailbox-review-core
-description: "Review a ReplyPen-watched Google mailbox from a developer machine: research every unsent ReplyPen draft, correct the wrong ones, open a fix thread per confirmed product bug, and hand the operator one Gmail-linked page plus a ledger. Read the project's mailbox-review wrapper first; it binds mailbox, accounts, repos and policy."
+description: "Review a ReplyPen-watched Google mailbox from a developer machine: research every unsent ReplyPen draft, replace weak ones with a better version, open a fix thread per confirmed product bug, and hand the operator an inline Markdown report (Gmail links, folded evidence) plus a ledger. Read the project's mailbox-review wrapper first; it binds mailbox, accounts, repos and policy."
 ---
 
 # Mailbox review (core)
@@ -11,7 +11,7 @@ evidence. A successful run is evidence, never proof the answer is right.
 
 Needs authenticated `rp`, `uv`, and a [google-workspace-core](../google-workspace-core/SKILL.md) account
 wrapper. **The project wrapper owns:** `--project`, Google mailbox UUID, GWS wrapper path, output dir,
-grounding commands and repos, team/personas, whether draft corrections are on by default, how to tell
+grounding commands and repos, team/personas, whether draft corrections are switched off, how to tell
 which operator runs it (developer vs product owner), where bug threads go. Never put those here.
 
 ```mermaid
@@ -45,12 +45,17 @@ flowchart LR
    in the owning repo, its brief carrying the case's `Mail-ref` line; second opinion inside it via
    `delegate_task`) that finds the fix; shipping per
    "Go deep" below. Explain at the operator's level (the wrapper says who is who).
-6. Save the merged findings as `<bundle>/findings.json` (the next run's history), `validate`, then `apply --allow-draft-corrections` for wrong or
-   obsolete drafts **when the wrapper (or this request) authorizes corrections**. Render the page to
-   the operator's artifact dir (normally `~/Downloads`): seven prioritized rows, rest collapsed;
-   subject + one action; closed accordions for owner and technical evidence; brain proposals in their
-   own section ([optional fields](references/optional-fields.md)), landed per "Teach the brain"
-   below. No raw mail or tokenized URLs.
+6. Save the merged findings as `<bundle>/findings.json` (the next run's history), `validate`, then
+   `apply --allow-draft-corrections` wherever you have a **better version** of an untouched ReplyPen
+   draft (wrong, obsolete, incomplete, or just clearer): no operator go needed, unless the wrapper
+   switches corrections off. A claim that depends on a human step (pay, refund, setting) gets a leading
+   `[[✏️ Before sending: …]]` note in the draft. `render --out <bundle>/report.md`, read it and **paste it
+   verbatim as the body of your final T3 reply** (T3 renders Markdown, `<details>` accordions and
+   Gmail links inline; no HTML page, no `html_render`); the file stays in the bundle as the archive.
+   It holds up to seven prioritized cards (subject link + one action, a closed "Why · evidence"
+   accordion), the rest as one-line links in a closed accordion, then bugs, review limits and brain
+   proposals ([optional fields](references/optional-fields.md)), landed per "Teach the brain" below.
+   No raw mail or tokenized URLs.
 7. End with a fresh `collect` and a ≤10-bullet ledger: send · decide · discard. Sending and deleting
    need the operator's explicit go in that conversation; verify in Gmail afterwards. Brain lessons
    waiting for a publish go are a "decide" bullet. A new reply where no draft is left: GWS
@@ -66,7 +71,7 @@ flowchart LR
   cause and a step the customer can take today. Only facts that stay unknowable go to the developer:
   one ticket of one-line questions, drafted reply attached.
 - **Say what limited you.** A missing env var, credential, CLI, repo or access, or a query that timed
-  out → `dx_gaps` on the finding (page section "What limited this review"), naming who can grant it
+  out → `dx_gaps` on the finding (report section "What limited this review"), naming who can grant it
   (wrapper), so the operator asks for it and the next run goes deeper. Never settle silently for a
   shallower answer.
 - **Escalate only what research cannot settle** (rare; each names the exact question):

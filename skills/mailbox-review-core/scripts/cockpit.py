@@ -6,7 +6,9 @@ import base64
 import hashlib
 import html
 import json
+import os
 import shutil
+import signal
 from pathlib import Path
 import re
 import subprocess
@@ -47,10 +49,20 @@ def read(path):
 
 
 def cli_json(argv):
+    # Own session + group kill: `subprocess.run(timeout=)` kills only the child, and a grandchild
+    # (uv -> python, rp helpers) holding the pipe open would block communicate() forever.
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=180)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise Refused(f'Command unavailable or timed out: {Path(argv[0]).name}') from exc
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+    except OSError as exc:
+        raise Refused(f'Command unavailable: {Path(argv[0]).name}') from exc
+    try:
+        stdout, _ = proc.communicate(timeout=180)
+    except subprocess.TimeoutExpired as exc:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise Refused(f'Command timed out: {Path(argv[0]).name}') from exc
+    result = subprocess.CompletedProcess(argv, proc.returncode, stdout)
     if result.returncode:
         # Neither stderr nor stdout is safe to print: either can contain credentials or mail.
         raise Refused(f'Command failed (exit {result.returncode}); check login/scopes locally')
@@ -585,9 +597,8 @@ def check_finding(item, detail_data, require_fresh=True):
             d['id'] for d in detail_data.get('drafts', [])]:
         raise Refused('Finding references an unknown Gmail draft')
     if 'replacement_body' in item:
-        if item['verdict'] != 'incorrect' or not isinstance(item['replacement_body'], str) or not (
-                item['replacement_body'].strip()):
-            raise Refused('Correction requires demonstrably incorrect content and a complete body')
+        if not isinstance(item['replacement_body'], str) or not item['replacement_body'].strip():
+            raise Refused('Correction requires a complete replacement body')
         draft = matched_draft(detail_data, item['draft_id'])
         original = plain_body(draft['message'])
         marker = re.search(r'(?m)^(?:On .+wrote:|Op .+schreef.*:|> |--+ Original Message)', original)
@@ -637,131 +648,142 @@ def safe_url(url):
         return ''
 
 
+MD_SPECIAL = re.compile(r'([\\`*_\[\]#|~])')
+
+
+def repair_mojibake(text):
+    """Undo UTF-8 that was decoded as CP1252 once or twice (subjects like 'PrÃ¼fung')."""
+    for _ in range(2):
+        try:
+            fixed = text.encode('cp1252').decode('utf-8')
+        except UnicodeError:
+            break
+        if fixed == text:
+            break
+        text = fixed
+    return text
+
+
+def md(value, limit=240):
+    """Untrusted text as inert one-line Markdown: no raw HTML, links, emphasis, headings or new blocks."""
+    text = ' '.join(safe_text(value, limit).split())
+    return MD_SPECIAL.sub(r'\\\1', html.escape(text, quote=False))
+
+
+def md_code(value, limit=None):
+    return '`' + ' '.join(safe_text(value, limit).split()).replace('`', "'") + '`'
+
+
+def md_url(url):
+    return quote(url, safe=":/?#=&%.-_~@+,;")
+
+
+def md_link(label, url):
+    return f'[{label}]({md_url(url)})'
+
+
 def render(args):
     bundle = Path(args.bundle)
     index = read(bundle / 'index.json')
     items = findings(bundle, args.findings, require_fresh=False)
     expired = evidence_expired(index) or any(evidence_expired(
         read(bundle / 'details' / f'{item["thread_id"]}.json')) for item in items)
-    freshness_note = '<p><strong>Refresh evidence before acting.</strong> This report contains evidence older than four hours.</p>' if expired else ''
     rank = {'today': 0, 'soon': 1, 'waiting': 2}
+    ordered = sorted(items, key=lambda i: rank[i['priority']])
     continuity = ({r['thread_id']: r for r in read(bundle / 'continuation.json')['threads']}
                   if (bundle / 'continuation.json').exists() else {})
-    rows = []
-    for item in sorted(items, key=lambda i: rank[i['priority']]):
+    subjects = {t['thread_id']: md(repair_mojibake(str(t.get('subject') or t['thread_id'])), 160)
+                for t in index['threads']}
+
+    def thread_link(tid):
+        if tid not in subjects:
+            raise Refused('Report finding is outside collected scope')
+        return md_link(subjects[tid], gmail_url(index['account'], tid))
+
+    cards, compact = [], []
+    for item in ordered:
         if not item['actionable']:
             continue
         tid = item['thread_id']
-        entry = next((t for t in index['threads'] if t['thread_id'] == tid), None)
-        if entry is None:
-            raise Refused('Report finding is outside collected scope')
         correction_path = bundle / 'corrections' / f'{tid}.json'
         correction = read(correction_path) if correction_path.exists() else {}
-        corrected = ('<small>Draft corrected · readback verified at '
-                     + html.escape(correction.get('at', '')) + '</small>'
+        corrected = (' · draft corrected, readback verified ' + md(correction.get('at', '')[:16], 40)
                      if correction.get('status') == 'corrected' else '')
-        sources = []
+        link = continuity.get(tid)
+        case = ('' if not link else ' · new case' if link['status'] == 'new' else
+                f' · reused case, {md(link["status"], 20)} since {md(link["prior"]["reviewed_at"][:10], 10)}')
+        evidence = [f'- {md(fact, 420)}' for fact in item.get('owner_evidence', [item['why']])]
         blocks = item.get('technical_evidence', [
             {'source': n, 'title': source['kind'].capitalize(), 'points': [source['fact']]}
             for n, source in enumerate(item['sources'])])
         for block in blocks:
             source = item['sources'][block['source']]
             url = safe_url(source['location'])
-            location = (f'<a href="{html.escape(url, quote=True)}">{html.escape(url)}</a>' if url else
-                        '<pre><code>' + html.escape(safe_text(source['location'], None)) + '</code></pre>')
-            points = ''.join(f'<li>{html.escape(safe_text(point, None))}</li>' for point in block['points'])
-            sources.append('<section class="source-block"><h3>' + html.escape(safe_text(block['title'], 60))
-                           + '</h3>' + location + '<ul>' + points + '</ul></section>')
+            evidence += ['', f'*{md(block["title"], 60)}*',
+                         '- ' + (md_link(MD_SPECIAL.sub(r'\\\1', html.escape(url, quote=False)), url)
+                                 if url else md_code(source['location']))]
+            evidence += [f'  - {md(point, None)}' for point in block['points']]
         if 'technical_evidence' not in item:
-            sources.append('<p>Since run: ' + html.escape(safe_text(item['changed_since_run'], None)) + '</p>')
+            evidence += ['', 'Since run: ' + md(item['changed_since_run'], None)]
         # The marker lets a later T3 search (t3-mail-link find) tie this case back to its Gmail thread.
-        case_line = f'Mail-ref: gmail:{tid} {index["account"]}'
+        case_line = md_code(f'Mail-ref: gmail:{tid} {index["account"]}')
         if item.get('case_thread'):
-            case_line += '\nCase thread: ' + safe_text(item['case_thread'], 300)
-        sources.append('<pre><code>' + html.escape(case_line) + '</code></pre>')
-        link = continuity.get(tid)
-        case = ('' if not link else ' · new case' if link['status'] == 'new' else
-                ' · reused case, ' + html.escape(link['status']) + ' since ' + html.escape(link['prior']['reviewed_at'][:10]))
-        owner_points = item.get('owner_evidence', [item['why']])
-        owner_evidence = ''.join(f'<li>{html.escape(safe_text(fact, 420))}</li>' for fact in owner_points)
-        rows.append(f'<article><header class="action-header"><div><a href="{html.escape(gmail_url(index["account"], tid), quote=True)}">'
-                    f'{html.escape(entry["subject"])}</a><small>{html.escape(item["priority"])}{case}</small>'
-                    f'</div><div>{corrected}<strong>{html.escape(safe_text(item["action"], 280))}</strong></div></header>'
-                    '<details><summary>Product owner evidence</summary><ul>'
-                    + owner_evidence + '</ul></details>'
-                    '<details><summary>Technical evidence</summary>'
-                    + ''.join(sources) + '</details></article>')
-    primary_rows = rows[:PRIMARY_ACTION_ROWS]
-    remaining_rows = rows[PRIMARY_ACTION_ROWS:]
-    remaining = ('<details class="more-actions"><summary>'
-                 + f'{len(remaining_rows)} more action' + ('s' if len(remaining_rows) != 1 else '')
-                 + '</summary>' + ''.join(remaining_rows) + '</details>'
-                 if remaining_rows else '')
+            case_line += ' · Case thread: ' + md_code(item['case_thread'], 300)
+        evidence += ['', case_line]
+        cards.append([f'**{thread_link(tid)}** · {item["priority"]}{case}{corrected}  ',
+                      md(item['action'], 280), '', '<details><summary>Why · evidence</summary>', '',
+                      *evidence, '', '</details>', ''])
+        compact.append(f'- {thread_link(tid)} · {item["priority"]}: {md(item["action"], 280)}{corrected}')
+
+    out = [f'## Mailbox today · {md(index["account"])} · {md(index["collected_at"][:10])}', '']
+    if expired:
+        out += ['**Refresh evidence before acting.** This report contains evidence older than four hours.', '']
+    out += ['### Do first', '']
+    for card in cards[:PRIMARY_ACTION_ROWS]:
+        out += card
+    if not cards:
+        out += ['No reviewed actions to surface.', '']
+    rest = compact[PRIMARY_ACTION_ROWS:]
+    if rest:
+        out += [f'<details><summary>{len(rest)} more action{"s" if len(rest) != 1 else ""}</summary>', '',
+                *rest, '', '</details>', '']
+    bugs = [i for i in ordered if i.get('bug')]
+    if bugs:
+        out += ['### Confirmed product bugs', '']
+        for item in bugs:
+            bug = item['bug']
+            out += [f'**{md(bug["title"], 160)}** · {thread_link(item["thread_id"])}  ',
+                    f'Affected: {md(bug["affected"], 300)} · owner: {md(bug["owner"], 160)}  ',
+                    f'Fix: {md(bug["fix_direction"], 600)}'
+                    + (f' · {md_code(bug["thread"], 300)}' if bug.get('thread') else ''),
+                    '', '<details><summary>Evidence</summary>', '',
+                    *[f'- {md(e, 300)}' for e in bug['evidence']], '', '</details>', '']
+    gaps = [f'- {md(gap["gap"], 200)} · unblock: {md(gap["unblock"], 200)} · {thread_link(item["thread_id"])}'
+            for item in ordered for gap in item.get('dx_gaps', [])]
+    if gaps:
+        out += ['### What limited this review', '', 'Grant these and the next run goes deeper.', '', *gaps, '']
     proposals = []
-    for item in sorted(items, key=lambda i: rank[i['priority']]):
+    for item in ordered:
         bp = item.get('brain_proposal')
-        if not bp:
-            continue
-        entry = next(t for t in index['threads'] if t['thread_id'] == item['thread_id'])
-        detail_note = ('<pre><code>' + html.escape(safe_text(bp['detail'], None)) + '</code></pre>'
-                       if bp.get('detail') else '')
-        proposals.append(f'<li><a href="{html.escape(gmail_url(index["account"], item["thread_id"]), quote=True)}">'
-                         f'{html.escape(entry["subject"])}</a> · <code>{html.escape(safe_text(bp["target"], 200))}</code>'
-                         f'<br><strong>{html.escape(safe_text(bp["change"], 400))}</strong>'
-                         f'<small>{html.escape(safe_text(bp["why"], 300))}</small>{detail_note}</li>')
-    bugs, gaps = [], []
-    for item in sorted(items, key=lambda i: rank[i['priority']]):
-        entry = next(t for t in index['threads'] if t['thread_id'] == item['thread_id'])
-        link = (f'<a href="{html.escape(gmail_url(index["account"], item["thread_id"]), quote=True)}">'
-                f'{html.escape(entry["subject"])}</a>')
-        bug = item.get('bug')
-        if bug:
-            thread = (f'<p>Fix: {html.escape(safe_text(bug["thread"], 300))}</p>' if bug.get('thread') else '')
-            bugs.append(f'<li>{link}<br><strong>{html.escape(safe_text(bug["title"], 160))}</strong>'
-                        f'<small>Affected: {html.escape(safe_text(bug["affected"], 300))} · '
-                        f'owner: {html.escape(safe_text(bug["owner"], 160))}</small><details><summary>Evidence and fix direction'
-                        '</summary><ul>' + ''.join(f'<li>{html.escape(safe_text(e, 300))}</li>' for e in bug['evidence'])
-                        + f'</ul><p>{html.escape(safe_text(bug["fix_direction"], 600))}</p>{thread}</details></li>')
-        for gap in item.get('dx_gaps', []):
-            gaps.append(f'<li>{html.escape(safe_text(gap["gap"], 200))}<small>Unblock: '
-                        f'{html.escape(safe_text(gap["unblock"], 200))} · {link}</small></li>')
-    bug_section = ('<section class="brain"><h2>Confirmed product bugs</h2><ol>' + ''.join(bugs)
-                   + '</ol></section>' if bugs else '')
-    gap_section = ('<section class="brain"><h2>What limited this review</h2><p>Grant these and the next run '
-                   'goes deeper.</p><ul>' + ''.join(gaps) + '</ul></section>' if gaps else '')
-    brain = ('<section class="brain"><h2>Proposed brain changes</h2><p>Not applied; the owner decides.</p><ol>'
-             + ''.join(proposals) + '</ol></section>' if proposals else '')
+        if bp:
+            proposals.append(f'- {thread_link(item["thread_id"])} · {md_code(bp["target"], 200)}: '
+                             f'**{md(bp["change"], 400)}** · {md(bp["why"], 300)}'
+                             + (f' · {md_code(bp["detail"])}' if bp.get('detail') else ''))
+    if proposals:
+        out += ['### Proposed brain changes', '', 'Not applied; the owner decides.', '', *proposals, '']
     reviewed = {i['thread_id'] for i in items}
     unresolved = sum(t['state'] not in ('answered', 'no_unanswered_inbound') and
                      t['thread_id'] not in reviewed for t in index['threads'])
     c = index['coverage']
-    report = ('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" '
-              'content="width=device-width,initial-scale=1"><title>Mailbox today</title><style>'
-              'body{font:16px/1.45 system-ui;color:#18232c;max-width:1000px;margin:40px auto;padding:0 20px}'
-              'h1{font-size:28px;margin-bottom:4px}p,small{color:#56616a}'
-              'article{border-top:1px solid #dce2e7;padding:14px 0}.action-header{display:grid;'
-              'grid-template-columns:32% 1fr;gap:24px}a{color:#155c9b}small{display:block}'
-              'details{font-size:14px;margin-top:8px;overflow-wrap:anywhere}'
-              '.source-block{background:#f6f8fa;border-left:3px solid #dce2e7;padding:10px 14px;margin:12px 0}'
-              '.source-block h3{font-size:14px;margin:0 0 4px}.source-block>a,pre{font:12px/1.5 monospace}'
-              'pre{white-space:pre-wrap;margin:4px 0}.brain{border-top:2px solid #dce2e7;margin-top:24px}'
-              '.brain h2{font-size:20px}.brain li{margin:10px 0}'
-              '@media(max-width:600px){.action-header{grid-template-columns:1fr;gap:4px}}'
-              '@media print{body{font-size:11px;margin:12px}details{display:none}}</style><h1>Mailbox today</h1><p>'
-              + html.escape(index['account']) + ' · ' + html.escape(index['collected_at'][:10]) + '</p>'
-              + freshness_note
-              + (''.join(primary_rows) or '<p>No reviewed actions to surface.</p>')
-              + remaining + bug_section + gap_section + brain + '<p>'
-              + f'Draft threads {c["checked_threads"]}/{c["discovered_threads"]} checked · '
-              + f'{c["uncovered_threads"]} discovered threads uncovered'
-              + ('; additional unlisted threads unknown (pagination capped)' if c['list_truncated'] else '')
-              + f' · {unresolved} unresolved threads not reviewed · {c["standalone_drafts_excluded"]} standalone drafts excluded'
-              + (f' · {c["carried_threads"]} earlier cases carried in' if c.get('carried_threads') else '') + '.'
-              + '</p></html>')
+    out.append(f'Draft threads {c["checked_threads"]}/{c["discovered_threads"]} checked · '
+               f'{c["uncovered_threads"]} discovered threads uncovered'
+               + ('; additional unlisted threads unknown (pagination capped)' if c['list_truncated'] else '')
+               + f' · {unresolved} unresolved threads not reviewed · {c["standalone_drafts_excluded"]} standalone drafts excluded'
+               + (f' · {c["carried_threads"]} earlier cases carried in' if c.get('carried_threads') else '') + '.')
     output = Path(args.out).expanduser()
-    output.write_text(report)
+    output.write_text('\n'.join(out) + '\n')
     output.chmod(0o600)
-    print(json.dumps({'report': str(output), 'action_rows': len(rows), 'unreviewed': unresolved}))
+    print(json.dumps({'report': str(output), 'action_rows': len(cards), 'unreviewed': unresolved}))
 
 
 def apply(args):

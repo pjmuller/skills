@@ -292,11 +292,11 @@ class Tests(unittest.TestCase):
                 'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
                              'list_truncated': False, 'standalone_drafts_excluded': 0}})
             c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            report = (bundle / 'report.html').read_text()
+                                        out=str(bundle / 'report.md')))
+            report = (bundle / 'report.md').read_text()
             self.assertIn('Proposed brain changes', report)  # Shown even for non-actionable threads.
             self.assertIn('Add &lt;b&gt;workaround&lt;/b&gt;', report)
-            self.assertIn('/private/x.brain.md', report)
+            self.assertIn('`/private/x.brain.md`', report)
 
     def test_bug_and_dx_gaps_validate_and_render_escaped(self):
         detail, finding = fixture()
@@ -319,99 +319,119 @@ class Tests(unittest.TestCase):
                 'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
                              'list_truncated': False, 'standalone_drafts_excluded': 0}})
             c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            report = (bundle / 'report.html').read_text()
+                                        out=str(bundle / 'report.md')))
+            report = (bundle / 'report.md').read_text()
             self.assertIn('Confirmed product bugs', report)
             self.assertIn('Sheet &lt;b&gt;drops&lt;/b&gt; rows', report)
             self.assertIn('What limited this review', report)
             self.assertIn('Ask the developer for read-only logs', report)
 
-    def test_html_escaping_secret_links_and_confirmed_action(self):
+    def test_markdown_escaping_secret_links_and_confirmed_action(self):
         detail, finding = fixture()
         del finding['replacement_body']
         finding['verdict'] = 'confirmed'
-        finding['owner_evidence'] = ['Refund pending <script>evil</script>',
+        finding['owner_evidence'] = ['Refund pending <script>evil</script> [x](https://evil.test) **bold**',
                                      'See https://example.test/private?token=owner-secret']
         long_location = 'internal/' + 'deep-path/' * 22 + 'billing/refund.go:187'
         long_fact = 'Verified detail. ' * 30 + 'Caveat: no refund has been issued.'
         long_delta = 'No changes observed. ' * 30 + 'Caveat: customer confirmation is still missing.'
         finding['changed_since_run'] = long_delta
-        finding['sources'].append({'kind': 'code', 'location': long_location,
-                                   'fact': long_fact})
+        finding['sources'].append({'kind': 'code', 'location': long_location, 'fact': long_fact})
         with tempfile.TemporaryDirectory() as temp:
             bundle = Path(temp)
             c.save(bundle / 'details/abc.json', detail)
             c.save(bundle / 'findings.json', [finding])
             c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': '<script>subject</script>', 'state': 'draft_ready'}],
+                {'thread_id': 'abc', 'subject': '<script>subject</script> DPA-PrÃ¼fung', 'state': 'draft_ready'}],
                 'coverage': {'discovered_threads': 3, 'checked_threads': 1, 'uncovered_threads': 2, 'list_truncated': True,
                              'standalone_drafts_excluded': 4}})
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            report = (bundle / 'report.html').read_text()
+            render = lambda: (c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                                          out=str(bundle / 'report.md'))),
+                              (bundle / 'report.md').read_text())[1]
+            report = render()
+            self.assertIn('### Do first', report)
             self.assertIn('Send the verified reply', report)
-            self.assertIn('&lt;script&gt;', report)
+            self.assertIn(f'**[&lt;script&gt;subject&lt;/script&gt; DPA-Prüfung](https://mail.google.com/mail/'
+                          f'?authuser={ACCOUNT.replace("@", "%40")}#all/abc)** · today', report)
             self.assertNotIn('<script>', report)
-            self.assertNotIn('token=secret', report)
-            self.assertNotIn('owner-secret', report)
+            self.assertIn('\\[x\\](\\[link\\] \\*\\*bold\\*\\*', report)  # no live link or emphasis
+            for secret in ('token=secret', 'owner-secret', 'evil.test'):
+                self.assertNotIn(secret, report)
             self.assertIn('unlisted threads unknown', report)
-            self.assertNotIn('<table', report)
-            self.assertIn('<article><header class="action-header">', report)
-            self.assertIn('</header><details><summary>Product owner evidence', report)
-            header = re.search(r'<header.*?</header>', report, re.S).group(0)
-            self.assertIn('Send the verified reply', header)
-            self.assertNotIn('onerror', header)  # Reason belongs below the header.
-            sections = dict(re.findall(r'<details><summary>(.*?)</summary>(.*?)</details>', report, re.S))
-            self.assertEqual(set(sections), {'Product owner evidence', 'Technical evidence'})
-            self.assertNotRegex(report, r'<details\b[^>]*\bopen\b')
-            self.assertIn('Refund pending &lt;script&gt;evil&lt;/script&gt;', sections['Product owner evidence'])
-            self.assertNotIn('onerror', sections['Product owner evidence'])
-            self.assertNotIn('Independent fact', sections['Product owner evidence'])
-            self.assertNotIn(long_location, sections['Product owner evidence'])
-            self.assertNotIn('Refund pending', sections['Technical evidence'])
-            self.assertIn(long_location, sections['Technical evidence'])
-            self.assertIn(long_fact, sections['Technical evidence'])
-            self.assertIn(long_delta, sections['Technical evidence'])
-            self.assertIn('<pre><code>' + long_location + '</code></pre>', sections['Technical evidence'])
+            sections = re.findall(r'<details><summary>(.*?)</summary>\n\n(.*?)\n</details>', report, re.S)
+            self.assertEqual([title for title, _ in sections], ['Why · evidence'])
+            body = sections[0][1]
+            self.assertIn('Refund pending &lt;script&gt;evil&lt;/script&gt;', body)
+            self.assertIn('`' + long_location + '`', body)
+            self.assertIn(long_fact.strip(), body)
+            self.assertIn(long_delta.strip(), body)
+            self.assertIn(f'`Mail-ref: gmail:abc {ACCOUNT}`', body)
+            header = report.split('<details>')[0]
+            self.assertNotIn('onerror', header)  # Reason belongs inside the accordion.
             finding['technical_evidence'] = [
                 {'source': 1, 'title': 'Billing <script>evil</script>', 'points': ['Refund pending.']},
                 {'source': 0, 'title': 'Run', 'points': ['See https://example.test/check?token=point-secret']}]
             c.save(bundle / 'findings.json', [finding])
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            selected = (bundle / 'report.html').read_text()
-            self.assertIn('Billing &lt;script&gt;evil&lt;/script&gt;', selected)
-            self.assertIn(long_location, selected)
+            selected = render()
+            self.assertIn('*Billing &lt;script&gt;evil&lt;/script&gt;*', selected)
+            self.assertIn('[https://example.test/check](https://example.test/check)', selected)
             self.assertIn('Refund pending.', selected)
-            self.assertIn('href="https://example.test/check"', selected)
             for omitted in (long_fact, long_delta, 'Independent fact', 'point-secret', 'token=secret'):
                 self.assertNotIn(omitted, selected)
             del finding['technical_evidence']
             del finding['owner_evidence']
             c.save(bundle / 'findings.json', [finding])
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            legacy = (bundle / 'report.html').read_text()
-            owner_section = re.search(r'<summary>Product owner evidence</summary>(.*?)</details>',
-                                      legacy, re.S).group(1)
-            self.assertIn('&lt;img src=x onerror=evil()&gt;', owner_section)
-            self.assertNotIn('Independent fact', owner_section)
-            self.assertNotIn(long_location, owner_section)
-            self.assertEqual(owner_section.count('&lt;img src=x onerror=evil()&gt;'), 1)
+            legacy = render()
+            self.assertEqual(legacy.count('&lt;img src=x onerror=evil()&gt;'), 1)
             detail['collected_at'] = '2020-01-01T00:00:00+00:00'
             c.save(bundle / 'details/abc.json', detail)
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            self.assertIn('Refresh evidence before acting.', (bundle / 'report.html').read_text())
+            self.assertIn('Refresh evidence before acting.', render())
             with self.assertRaises(c.Refused):
                 c.findings(bundle, bundle / 'findings.json')
             c.save(bundle / 'index.json', {'threads': []})
             with self.assertRaises(c.Refused):
                 c.findings(bundle, bundle / 'findings.json', require_fresh=False)
-        self.assertEqual(c.safe_url('https://example.test/reviews (fetch blocked); another source'), '')
-        self.assertEqual(c.safe_url('https://example.test/reviews'), 'https://example.test/reviews')
-        self.assertEqual(c.safe_url('javascript:alert(1)'), '')
-        self.assertEqual(c.safe_url('https://example.test:bad/'), '')
+
+    def test_replacement_allowed_for_any_verdict(self):
+        # A better version may replace any untouched AI draft, not only a wrong one.
+        detail, finding = fixture()
+        for verdict in ('confirmed', 'uncertain', 'needs_human'):
+            c.check_finding(dict(finding, verdict=verdict), detail)
+        with self.assertRaisesRegex(c.Refused, 'complete replacement body'):
+            c.check_finding(dict(finding, replacement_body='  '), detail)
+
+    def test_cli_timeout_kills_grandchildren(self):
+        with patch.object(c.subprocess.Popen, 'communicate',
+                               side_effect=[c.subprocess.TimeoutExpired('x', 180), ('', '')]), \
+                patch.object(c.os, 'killpg') as killpg, self.assertRaisesRegex(c.Refused, 'timed out'):
+            c.cli_json(['sleep', '5'])
+        killpg.assert_called_once()
+
+    def test_more_actions_collapse_and_corrected_marker(self):
+        detail, finding = fixture()
+        del finding['replacement_body']
+        with tempfile.TemporaryDirectory() as temp:
+            bundle = Path(temp)
+            threads, items = [], []
+            for n in range(c.PRIMARY_ACTION_ROWS + 2):
+                tid = f'a{n}'
+                thread = dict(detail['gmail'], id=tid)
+                c.save(bundle / f'details/{tid}.json', dict(detail, gmail=thread, fingerprint=c.fingerprint(thread)))
+                items.append(dict(finding, thread_id=tid, evidence_fingerprint=c.fingerprint(thread),
+                                  priority='waiting' if n == 0 else 'today', action=f'Action {n}'))
+                threads.append({'thread_id': tid, 'subject': f'Subject {n}', 'state': 'draft_ready'})
+            c.save(bundle / 'corrections/a0.json', {'status': 'corrected', 'at': '2026-10-25T17:39:50+00:00'})
+            c.save(bundle / 'findings.json', items)
+            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': threads,
+                'coverage': {'discovered_threads': 9, 'checked_threads': 9, 'uncovered_threads': 0,
+                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
+            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
+                                        out=str(bundle / 'report.md')))
+            report = (bundle / 'report.md').read_text()
+            self.assertEqual(report.count('<summary>Why · evidence</summary>'), c.PRIMARY_ACTION_ROWS)
+            self.assertIn('<details><summary>2 more actions</summary>', report)
+            more = report.split('more actions</summary>')[1]
+            self.assertIn('· waiting: Action 0 · draft corrected, readback verified 2026-10-25T17:39', more)
 
     def run_apply(self, draft_html=fake_render(AI_MD), rendered=True, readback_html=None, draft_text=AI_MD):
         detail, finding = fixture()
@@ -614,10 +634,10 @@ class Tests(unittest.TestCase):
             c.save(bundle / 'continuation.json', {'threads': [
                 {'thread_id': 'abc', 'status': 'changed', 'prior': {'reviewed_at': '2026-10-22T10:00:00'}}]})
             c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.html')))
-            report = (bundle / 'report.html').read_text()
+                                        out=str(bundle / 'report.md')))
+            report = (bundle / 'report.md').read_text()
             self.assertIn('reused case, changed since 2026-10-22', report)
-            self.assertIn(f'Mail-ref: gmail:abc {ACCOUNT}\nCase thread: t3-thread://v1/mcp:aaaa', report)
+            self.assertIn(f'`Mail-ref: gmail:abc {ACCOUNT}` · Case thread: `t3-thread://v1/mcp:aaaa`', report)
             self.assertIn('1 earlier cases carried in', report)
 
     def test_history_id_bump_is_not_a_change(self):

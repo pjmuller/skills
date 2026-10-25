@@ -47,7 +47,7 @@ flowchart LR
 4. A standalone thread you launch for a case gets the exact `Mail-ref: gmail:<id> <account>` line in
    its brief and owns the case: run `t3-mail-link --config … claim <id> --for <its thread id>` (the
    explicit `owner=` wins over the 🧭 coordinator, which never owns). Put its link in the finding's
-   `case_thread`; the page prints it beside the Mail-ref line.
+   `case_thread`; the report prints it beside the Mail-ref line.
 5. Concurrency: one coordinator per mailbox. Before routing, `t3_thread_list` for another running
    `🧭 … review` of the same mailbox → stop and report it. Different mailboxes are independent. The
    request key makes a repeated resume a no-op; an accepted-but-unconfirmed send → read the owner

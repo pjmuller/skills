@@ -12,7 +12,7 @@ cockpit.py detail --bundle <directory> --thread-id <gmail-hex-id>
 cockpit.py validate --bundle <directory> --findings <findings.json>
 cockpit.py apply --bundle <directory> --findings <findings.json> \
   --thread-id <gmail-hex-id> --allow-draft-corrections
-cockpit.py render --bundle <directory> --findings <findings.json> --out <report.html>
+cockpit.py render --bundle <directory> --findings <findings.json> --out <directory>/report.md
 ```
 
 `collect` paginates all draft stubs (default maximum 20 pages) and reads the threads holding them, newest draft first; undrafted inbox mail is out of scope. Only `--max-threads` full threads are read. Standalone compose drafts are excluded and counted. Coverage reports draft threads discovered/checked, then the discovered-but-unchecked count; when listing is capped, **additional unlisted threads are unknown**. Gmail estimates are not exact totals. Increase the bound deliberately if the uncovered backlog warrants it.
