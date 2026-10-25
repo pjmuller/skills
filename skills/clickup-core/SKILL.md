@@ -120,6 +120,11 @@ Appends go through ClickUp's private v1 Quill content and verify on readback, fa
   attachment filenames are auto-linked (ClickUp would turn `x.md` into a dead domain link).
 - ClickUp strips every description link that has a code block after it, on every save; description
   writes refuse that up front. Put code blocks before links, or reference files in a comment.
+- Diagrams: a flow or relationship (old vs new mechanism, who hands off to whom) reads faster as a
+  small Mermaid diagram: ≤8 boxes, product words, no code names. ClickUp doesn't render Mermaid
+  fences, so `uv run scripts/mermaid_png.py flow.mmd` (local render, PNG) → `attach` → place
+  `![[file:flow.png]]` inline next to the text it explains, not only in the attachment list. Open
+  the PNG yourself before attaching; ask the reader for a screenshot the first time a layout is new.
 - Several screenshots: one `attach ID a.png b.png c.png` in reading order (it uploads last-first;
   ClickUp lists newest first). Real screenshots beat mockups: attach a mockup only when no real
   screen exists yet.
