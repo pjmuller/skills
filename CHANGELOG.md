@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-25 — clickup-core: ✨ on AI-written comments
+
+- clickup-core 0.2.3: `comment`, `handoff` and `review --comment` start the comment with `✨ ` (own line before a leading code block/table; never doubled); `--no-ai-label` for a human's own words. Why: every comment shows the token owner as author, so readers could not tell agent text from the operator's; ClickUp's comment API has no AI/author-badge field (unlike WhatsApp's native AI label).
+
 ## 2026-10-25 — google-workspace-core: account inventory and cross-mailbox Gmail lookup
 
 - `gws.py accounts list [--check] | discover ROOT… | locate REF` over a per-user inventory (`~/.config/google-workspace/accounts.json` or `$GWS_ACCOUNTS`): wrapper config paths plus `gmail_lookup`, the user's standing permission to try exact references in that mailbox. Why: a pasted Gmail link rarely names its mailbox, and agents either stopped at the first token or improvised across credentials.

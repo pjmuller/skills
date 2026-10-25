@@ -920,10 +920,27 @@ def render(comment: dict) -> str:
     return "".join(part_text(p) for p in comment["comment"])
 
 
+# ClickUp's comment API has no AI/bot/author-badge field (create comment: comment_text/comment,
+# assignee, notify_all only, checked 2026-10-25), and a comment always shows the token owner as author.
+# So AI-written comments lead with a ✨ text marker. A first line that is code or a table gets the
+# marker on its own line, else it would land inside the block.
+AI_MARK = "✨"
+
+
+def ai_marked(parts: list[dict]) -> list[dict]:
+    if render({"comment": parts}).lstrip().startswith(AI_MARK):
+        return parts
+    # comment_parts emits a leading code block as [body, {"\n", code-block}].
+    own_line = parts[0].get("type") == "table-embed" or (
+        len(parts) > 1 and "code-block" in (parts[1].get("attributes") or {}))
+    return [{"text": AI_MARK + ("\n" if own_line else " ")}] + parts
+
+
 def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, quiet: bool = False,
-                 prefix: str | None = None, reply_to: str | None = None):
+                 prefix: str | None = None, reply_to: str | None = None, ai: bool = True):
     """``prefix`` puts the mention at the TOP: ``<prefix> @mention\n<text>`` (e.g. "# Review").
-    ``reply_to`` = thread root comment id: post as a threaded reply instead of a task comment."""
+    ``reply_to`` = thread root comment id: post as a threaded reply instead of a task comment.
+    ``ai`` = the text is agent-written: lead with ✨ (``--no-ai-label`` for a human's own words)."""
     if mention and prefix is not None:
         parts: list[dict] = ([{"text": prefix + " "}] if prefix else []) + [
             {"type": "tag", "user": {"id": mention}}]
@@ -934,7 +951,9 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
         parts = comment_parts(text.rstrip() + " " if mention else text)
         if mention:
             parts.append({"type": "tag", "user": {"id": mention}})
-    base = f"/comment/{reply_to}/reply" if reply_to else f"/task/{task_id}/comment"
+    if ai:
+        parts = ai_marked(parts)
+    base =f"/comment/{reply_to}/reply" if reply_to else f"/task/{task_id}/comment"
     created = api("POST", base, data=json.dumps({"comment": parts, "notify_all": False}))
     comments = api("GET", base)["comments"]
     posted = next((c for c in comments if str(c["id"]) == str(created["id"])), None)
@@ -1455,7 +1474,8 @@ def cmd_comment(a):
     refuse_literal_mention(a.text, a.mention)
     text = link_attachments(a.text, get_task(a.id))
     post_comment(a.id, text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
-                 reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None)
+                 reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None,
+                 ai=not getattr(a, "no_ai_label", False))
 
 
 def cmd_comments(a):
@@ -1477,7 +1497,7 @@ def cmd_handoff(a):
     text = link_attachments(a.text, current)
     if current["status"]["status"] != status:
         api("PUT", f"/task/{a.id}", data=json.dumps({"status": status}))
-    post_comment(a.id, text, mention, False, quiet=a.json)
+    post_comment(a.id, text, mention, False, quiet=a.json, ai=not a.no_ai_label)
     read_back(a.id, a.json)
 
 
@@ -1501,7 +1521,7 @@ def cmd_review(a):
     api("PUT", f"/task/{a.id}", data=json.dumps({"status": status, "content": content}))
     verify_task_content(a.id, content)
     if a.comment:
-        post_comment(a.id, text, mention, False, quiet=a.json, prefix="")
+        post_comment(a.id, text, mention, False, quiet=a.json, prefix="", ai=not a.no_ai_label)
     read_back(a.id, a.json)
 
 
@@ -1650,6 +1670,9 @@ def main(argv=None):
             s.add_argument("--rem-assignee", action="append")
         if cmd in ("comment", "handoff", "review"): s.add_argument("--text", required=cmd != "review")
         if cmd in ("comment", "handoff", "review"): s.add_argument("--mention")
+        if cmd in ("comment", "handoff", "review"):
+            s.add_argument("--no-ai-label", action="store_true",
+                           help="the text is a human's own words: no leading ✨ AI marker on the comment")
         if cmd == "comment":
             s.add_argument("--mention-first", metavar="PREFIX",
                            help="put the --mention at the top, after PREFIX ('' = mention leads); requires --mention")

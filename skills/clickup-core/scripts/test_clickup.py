@@ -323,6 +323,42 @@ class CommentThreadTests(unittest.TestCase):
         MODULE["post_comment"]("869ej1uy0", "hi", 101, False, quiet=True, reply_to="901")
         self.assertEqual(self.calls, [("POST", "/comment/901/reply"), ("GET", "/comment/901/reply")])
 
+    def posted_parts(self, **kw):
+        sent = []
+        orig = self.fake_api
+        def api(method, path, **k):
+            if method == "POST":
+                sent.append(json.loads(k["data"]))
+            return orig(method, path, **k)
+        MODULE["post_comment"].__globals__["api"] = api
+        MODULE["post_comment"]("869ej1uy0", kw.pop("text", "hi"), kw.pop("mention", 101), False, quiet=True,
+                               reply_to="901", **kw)
+        return sent[0]
+
+    def test_ai_comment_leads_with_sparkle_once_and_keeps_mention_and_notify(self):
+        body = self.posted_parts(text="**Ready** to test: [demo](https://example.com)")
+        self.assertEqual(body["comment"][0], {"text": "✨ "})
+        self.assertFalse(body["notify_all"])
+        self.assertIn({"text": "Ready", "attributes": {"bold": True}}, body["comment"])
+        self.assertIn({"type": "tag", "user": {"id": 101}}, body["comment"])
+        marked = MODULE["ai_marked"]
+        self.assertEqual(marked(body["comment"]), body["comment"])  # idempotent
+        self.assertEqual(self.posted_parts(text="✨ already marked")["comment"][0], {"text": "✨ already marked "})
+
+    def test_mention_first_and_block_starts(self):
+        lead = self.posted_parts(text="please check", prefix="")["comment"]
+        self.assertEqual(lead[:2], [{"text": "✨ "}, {"type": "tag", "user": {"id": 101}}])
+        code = self.posted_parts(text="```\nmake test\n```", mention=None)["comment"]
+        self.assertEqual(code[0], {"text": "✨\n"})
+        table = self.posted_parts(text="| a | b |\n|---|---|\n| 1 | 2 |", mention=None)["comment"]
+        self.assertEqual((table[0], table[1]["type"]), ({"text": "✨\n"}, "table-embed"))
+        heading = self.posted_parts(text="# Review\nok", mention=None)["comment"]
+        self.assertEqual(heading[:2], [{"text": "✨ "}, {"text": "Review"}])
+
+    def test_human_comment_is_unmarked(self):
+        body = self.posted_parts(text="my own words", ai=False)
+        self.assertNotIn("✨", json.dumps(body, ensure_ascii=False))
+
     def test_comments_thread_prints_root_then_replies(self):
         from contextlib import redirect_stdout
         from io import StringIO

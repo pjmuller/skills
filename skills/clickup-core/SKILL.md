@@ -37,6 +37,9 @@ Semantics `--help` doesn't show:
   in one fetch. Default matches name + description; `--titles-only` limits it to names.
 - `update --description[-file]` replaces the body; `--append-description[-file]` preserves native
   embeds. Never rebuild a body from `description`/`markdown_description` (lossy projections).
+- Agent-written comments (`comment`, `handoff`, `review --comment`) lead with ✨ so readers see AI
+  wrote them; ClickUp has no native AI/author badge for API comments. `--no-ai-label` only for
+  a human's own words. Never type ✨ yourself (an existing leading ✨ is not doubled).
 - `comment --mention ALIAS` always names the recipient; `--mention-first PREFIX` only moves it to
   the top. `--reply-to` / `comments --thread` take the thread root (`?comment=` URL or id).
 - `handoff` / `review` implement the wrapper's `[policy]` workflow; recipients must be unambiguous.
