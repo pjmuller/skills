@@ -41,7 +41,8 @@ def test_api_and_cli(tmp_path, capsys):
     from whatsapp_bridge import main
     path = tmp_path / 'a.txt'
     path.write_text('synthetic')
-    with patch('whatsapp_bridge._call', return_value={'id': 'accepted'}) as call:
+    with patch('whatsapp_bridge._call', return_value={'id': 'accepted'}) as call, \
+            patch('whatsapp_bridge.store.STATE', tmp_path):
         with pytest.raises(ValueError):
             send_document('me', path)
         call.assert_not_called()
@@ -53,6 +54,13 @@ def test_api_and_cli(tmp_path, capsys):
         with patch('sys.argv', ['wa', 'send-document', '+32470123456', str(path), '--filename', 'other.txt']):
             main()
         assert call.call_args.kwargs['filename'] == 'other.txt'
+        (tmp_path / 'settings.json').write_text('{"ai_label_default": true}')
+        with patch('sys.argv', ['wa', 'send-image', '+32470123456', str(path)]):
+            main()
+        assert call.call_args.kwargs['ai_label'] is True
+        with patch('sys.argv', ['wa', 'send-image', '+32470123456', str(path), '--no-ai-label']):
+            main()
+        assert call.call_args.kwargs['ai_label'] is False
         assert 'accepted' in capsys.readouterr().out
 
 

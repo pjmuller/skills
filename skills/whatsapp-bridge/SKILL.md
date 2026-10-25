@@ -26,7 +26,7 @@ Media download keys are stored per message (`media`/`kind` columns) since 2026-1
 ## Safety (hard rules)
 
 - Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,120363…@g.us,…` (explicit international numbers or verbatim group JIDs from `wa contacts`; no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes.
-- WhatsApp's native **AI badge** is off by default and opt-in per send (`wa send … --ai-label` / `send_text(…, ai_label=True)`). Works in 1:1 chats and groups (our build patch adds `NEONIZE_BOT_TAG=always`; upstream only badges 1:1).
+- WhatsApp's native **AI badge**: per send `--ai-label` / `--no-ai-label` (API `ai_label=True/False`); without either, the user's default `{"ai_label_default": true}` in `~/.config/whatsapp-bridge/settings.json`, else off. When to badge is the wrapper's policy. Works in 1:1 chats and groups (our build patch adds `NEONIZE_BOT_TAG=always`; upstream only badges 1:1).
 - E2E tests default exclusively to the paired account’s self chat: resolve `me`, verify the own identity against the wrapper, then pass that explicit number. Use harmless synthetic files, minimal sends, and no recipient expansion for tests.
 - Prefer long prompts/reports as `.md`/`.txt` attachments with short explanatory captions, rather than enormous chat bodies. See [attachment commands and receipts](reply-workflow.md#attachments).
 - Never bulk-send, never widen the allowlist just to make a test pass, never auto-retry an uncertain send (a worker crash can mean it went out).

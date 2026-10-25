@@ -160,26 +160,39 @@ def transcribe_voice_notes(chat: str, n: int = 3, ids: list[str] | None = None, 
     return notes
 
 
-def send_text(target: str, text: str, ai_label: bool = False) -> str:
+def default_ai_label() -> bool:
+    """Per-user default for the AI badge: `ai_label_default` in ~/.config/whatsapp-bridge/settings.json (else off)."""
+    from .store import STATE
+    try:
+        value = json.loads((STATE / "settings.json").read_text()).get("ai_label_default", False)
+    except FileNotFoundError:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError("settings.json ai_label_default must be true or false")
+    return value
+
+
+def send_text(target: str, text: str, ai_label: bool | None = None) -> str:
     """Send once to an explicit international number or allowlisted group JID; return message ID.
 
-    ai_label=True asks WhatsApp to show its native "AI" badge on this one message.
+    ai_label=True/False shows or hides WhatsApp's native "AI" badge on this one message;
+    None uses default_ai_label().
     """
     from .store import normalize_target
     target = normalize_target(target)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text must not be empty")
-    return _call("send", ai_label=ai_label, target=target, text=text)
+    return _call("send", ai_label=default_ai_label() if ai_label is None else ai_label, target=target, text=text)
 
 
 def send_document(target: str, path: str | Path, caption: str = "", *,
                   filename: str | None = None, mimetype: str | None = None,
-                  ai_label: bool = False) -> dict:
+                  ai_label: bool | None = None) -> dict:
     """Send one local document; return an acceptance receipt (not proof of delivery)."""
     return _send_attachment("document", target, path, caption, filename, mimetype, ai_label)
 
 
-def send_image(target: str, path: str | Path, caption: str = "", *, ai_label: bool = False) -> dict:
+def send_image(target: str, path: str | Path, caption: str = "", *, ai_label: bool | None = None) -> dict:
     """Send one local JPEG/PNG image; return an acceptance receipt."""
     return _send_attachment("image", target, path, caption, None, None, ai_label)
 
@@ -189,7 +202,8 @@ def _send_attachment(kind, target, path, caption, filename, mimetype, ai_label):
     from .store import normalize_target
     target = normalize_target(target)
     metadata, _ = attachment(path, kind, caption, filename, mimetype)
-    return _call("send_" + kind, ai_label=ai_label, target=target, **metadata)
+    return _call("send_" + kind, ai_label=default_ai_label() if ai_label is None else ai_label,
+                 target=target, **metadata)
 
 
 def main():
@@ -217,13 +231,14 @@ def main():
     send = sub.add_parser("send", help="send to an international number or an allowlisted group JID")
     send.add_argument("target", help="+32470123456 or 120363...@g.us")
     send.add_argument("text")
-    send.add_argument("--ai-label", action="store_true", help="opt into WhatsApp's native AI badge for this message")
+    badge_help = "show/hide WhatsApp's native AI badge on this message (default: settings.json ai_label_default, else off)"
+    send.add_argument("--ai-label", action=argparse.BooleanOptionalAction, default=None, help=badge_help)
     for kind in ("document", "image"):
         media = sub.add_parser("send-" + kind, help="send one local " + kind)
         media.add_argument("target", help="resolved international number or allowlisted group JID")
         media.add_argument("path")
         media.add_argument("--caption", default="")
-        media.add_argument("--ai-label", action="store_true")
+        media.add_argument("--ai-label", action=argparse.BooleanOptionalAction, default=None, help=badge_help)
         if kind == "document":
             media.add_argument("--filename")
             media.add_argument("--mimetype")

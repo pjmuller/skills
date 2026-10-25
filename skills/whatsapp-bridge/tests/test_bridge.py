@@ -19,11 +19,24 @@ class SafetyTests(unittest.TestCase):
             self.assertNotIn('ai_label', run.call_args.kwargs['input'])
 
     def test_ai_label_is_per_send_and_off_by_default(self):
-        with patch('whatsapp_bridge._call', return_value='id') as call:
+        with tempfile.TemporaryDirectory() as tmp, patch('whatsapp_bridge.store.STATE', Path(tmp)), \
+                patch('whatsapp_bridge._call', return_value='id') as call:
             send_text('+32470123456', 'hi')
             self.assertFalse(call.call_args.kwargs['ai_label'])
             send_text('+32470123456', 'hi', ai_label=True)
             self.assertTrue(call.call_args.kwargs['ai_label'])
+
+    def test_ai_label_user_default_and_explicit_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('whatsapp_bridge.store.STATE', Path(tmp)), \
+                patch('whatsapp_bridge._call', return_value='id') as call:
+            (Path(tmp) / 'settings.json').write_text('{"ai_label_default": true}')
+            send_text('+32470123456', 'hi')
+            self.assertTrue(call.call_args.kwargs['ai_label'])
+            send_text('+32470123456', 'hi', ai_label=False)
+            self.assertFalse(call.call_args.kwargs['ai_label'])
+            (Path(tmp) / 'settings.json').write_text('{"ai_label_default": "yes"}')
+            with self.assertRaises(ValueError):
+                send_text('+32470123456', 'hi')
 
     def test_group_targets_need_explicit_allowlist_entry(self):
         group = '120363421529066560@g.us'
