@@ -394,8 +394,19 @@ def cmd_gmail_get(a, ws):
     print_open_url(ws, message.get("threadId"), a.json)
 
 
+def thread_of(ws, ref: str) -> str:
+    """Offline id when the ref carries one; otherwise (Print all of mail you started: thread-a + msg-f
+    refs, Show original, drafts) a metadata lookup in this account."""
+    from .accounts import locate, parse_ref
+
+    try:
+        return thread_id_from(ref)
+    except WorkspaceError:
+        return locate(ws, parse_ref(ref))
+
+
 def cmd_gmail_thread(a, ws):
-    thread = ws.gmail.thread(thread_id_from(a.id))
+    thread = ws.gmail.thread(thread_of(ws, a.id))
     views = [ws.gmail.view(message, trim=not a.full) for message in thread.get("messages", [])]
     human = "\n\n---\n\n".join(format_message(view, a.max_chars, heading=True) for view in views)
     out(thread, a.json, human or "(empty thread)")
@@ -423,7 +434,7 @@ def print_open_url(ws, thread_id: str | None, as_json: bool) -> None:
 
 
 def cmd_gmail_url(a, ws):
-    thread_id = thread_id_from(a.ref)
+    thread_id = thread_of(ws, a.ref)
     url = thread_url(ws.config.account, thread_id)
     out({"threadId": thread_id, "url": url}, a.json, url)
 
@@ -698,6 +709,72 @@ def cmd_slides_export_pdf(a, ws):
     out({"out": a.out, "bytes": len(content)}, a.json, f"exported -> {write_out(a.out, content)}")
 
 
+# --- account inventory (no --config: spans the user's wrappers) ---------------
+
+def cmd_accounts_list(a, _ws):
+    from .accounts import inventory_path, load_inventory
+
+    rows, facts = [["ACCOUNT", "GMAIL READ", "LOOKUP", "STATUS", "CONFIG"]], []
+    for account in load_inventory():
+        status = account.error or "ok"
+        if a.check and not account.error:
+            status = _live_status(account)
+        email = account.config.account if account.config else "?"
+        facts.append({"account": email, "config": str(account.config_path), "gmail_read": account.gmail_readable,
+                      "gmail_lookup": account.gmail_lookup, "status": status, "note": account.note})
+        rows.append([email, "yes" if account.gmail_readable else "no", "yes" if account.gmail_lookup else "no",
+                     trunc(status, 50), str(account.config_path)])
+    out(facts, a.json, f"{inventory_path()}\n{table(rows)}")
+
+
+def _live_status(account) -> str:
+    """Identity (+ Gmail profile when readable) through the wrapper's own offline token; no secrets."""
+    import httpx
+
+    try:
+        with Workspace(account.config) as ws:
+            email = ws.whoami()["email"]
+            if account.gmail_readable:
+                email = str(ws.gmail.profile().get("emailAddress") or "").lower()
+            return "verified" if email == account.config.account.lower() else f"authorized as {email or 'unknown'}"
+    except (WorkspaceError, httpx.HTTPError, OSError) as exc:
+        return f"error: {str(exc).splitlines()[0]}"
+
+
+def cmd_accounts_discover(a, _ws):
+    from .accounts import discover, inventory_path, load_inventory
+
+    try:
+        listed = {str(acc.config_path.resolve()) for acc in load_inventory()}
+    except WorkspaceError:
+        listed = set()
+    found = discover([Path(r) for r in a.roots])
+    for row in found:
+        row["in_inventory"] = str(Path(row["config"]).resolve()) in listed
+    rows = [["ACCOUNT", "GMAIL READ", "LISTED", "CONFIG"]] + [
+        [r["account"], "yes" if r["gmail_read"] else "no", "yes" if r["in_inventory"] else "no", r["config"]]
+        for r in found]
+    out(found, a.json, f"{table(rows)}\nAdd wanted rows to {inventory_path()}; gmail_lookup is the user's call.")
+
+
+def cmd_accounts_locate(a, _ws):
+    from .accounts import load_inventory, locate_any, parse_ref
+
+    ref = parse_ref(a.ref)
+    if not ref.exact:
+        raise WorkspaceError("only exact references (Print all / Show original / ids) are looked up across "
+                             "accounts; for an FMfcg… link use t3-mail-link or the tab's account")
+    hit = locate_any(ref, load_inventory())
+    try:
+        account = hit.account.config.account.lower()
+        result = {"account": account, "config": str(hit.account.config_path), "gmail_thread": hit.gmail_thread,
+                  "url": thread_url(account, hit.gmail_thread), "checked": hit.checked}
+        out(result, a.json, f"{account}  thread {hit.gmail_thread}\nOpen: {result['url']}\n" + "\n".join(
+            f"  {c['account']}: {c['result']}" for c in hit.checked))
+    finally:
+        hit.workspace.close()
+
+
 # --- parser -----------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -751,6 +828,23 @@ def build_parser() -> argparse.ArgumentParser:
     command = add("doctor", cmd_doctor, "secret-safe credential diagnostics for this config")
     command.add_argument("--live", action="store_true",
                          help="refresh in memory and verify the account after offline checks pass")
+
+    accounts = sub.add_parser("accounts", help="the user's account inventory (no --config needed)",
+                              description="List, verify and search the user's Workspace wrappers "
+                                          "($GWS_ACCOUNTS or ~/.config/google-workspace/accounts.json).")
+    accounts_sub = accounts.add_subparsers(
+        dest="accounts_cmd", required=True,
+        parser_class=lambda **kw: argparse.ArgumentParser(parents=[common], **kw))
+    command = accounts_sub.add_parser("list", help="inventory rows: account, Gmail read scope, lookup permission")
+    command.set_defaults(fn=cmd_accounts_list, no_config=True)
+    command.add_argument("--check", action="store_true", help="verify each identity with its own offline token")
+    command = accounts_sub.add_parser("discover", help="suggest inventory rows: wrapper configs under ROOTS")
+    command.set_defaults(fn=cmd_accounts_discover, no_config=True)
+    command.add_argument("roots", nargs="+")
+    command = accounts_sub.add_parser(
+        "locate", help="read-only: which gmail_lookup mailbox holds this exact Gmail reference")
+    command.set_defaults(fn=cmd_accounts_locate, no_config=True)
+    command.add_argument("ref")
 
     # generic
     add("whoami", cmd_whoami, "show the authenticated Google account and granted scopes")
@@ -1141,8 +1235,14 @@ def main(argv: list[str] | None = None) -> None:
     config_arg = getattr(args, "config", None)
     workspace = None
     try:
-        workspace = Workspace(load_config(config_arg))
-        args.fn(args, workspace)
+        if getattr(args, "no_config", False):
+            if config_arg:  # an explicit account must never widen to the whole inventory
+                raise WorkspaceError("`accounts` spans the inventory and takes no --config; for one account use "
+                                     "gmail-thread/gmail-url with --config")
+            args.fn(args, None)
+        else:
+            workspace = Workspace(load_config(config_arg))
+            args.fn(args, workspace)
     except WorkspaceError as exc:
         sys.exit(f"error: {exc}")
     except httpx.RequestError as exc:

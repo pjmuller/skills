@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-25 — google-workspace-core: account inventory and cross-mailbox Gmail lookup
+
+- `gws.py accounts list [--check] | discover ROOT… | locate REF` over a per-user inventory (`~/.config/google-workspace/accounts.json` or `$GWS_ACCOUNTS`): wrapper config paths plus `gmail_lookup`, the user's standing permission to try exact references in that mailbox. Why: a pasted Gmail link rarely names its mailbox, and agents either stopped at the first token or improvised across credentials.
+- Lookup is metadata-only (`format=minimal`), verifies each mailbox's Gmail identity first and stops at the first holder; 403/auth/identity errors and skipped mailboxes are unknown, never "not found". `--config` is refused: an explicit account never widens.
+- Print-all links of a thread you started (`permthid=thread-a:r…&simpl=msg-f:…`) resolve through the `msg-f` refs; `thread-a` is never converted. `gmail-thread`/`gmail-url` accept Show-original and such links via the same lookup.
+- t3-mail-link: `resolve|find --all-accounts` for links that name no account; its own Gmail-ref parser is replaced by the core's `gws_core.accounts` (needs a core copy that has it: refresh or unset `GWS_CORE`). t3-route intake/onboarding use it.
+
 ## 2026-10-25 — clickup-core: attach several files in reading order
 
 - clickup-core 0.2.2: `attach ID a.png b.png c.png` uploads last-first, so ClickUp (newest first) shows and steps through them in the given order; SKILL.md: real screenshots beat mockups. Why: a 7-screenshot test ticket read backwards in the viewer, and the mockups confused the reader once real staging screens existed.

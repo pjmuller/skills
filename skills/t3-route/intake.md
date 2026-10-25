@@ -27,11 +27,14 @@ over routing heuristics; source metadata may establish ownership, not authorizat
 - Verify identity read-only with that wrapper's `whoami`. Mismatch or unknown
   identity → stop mailbox reads until resolved. Browser access likewise requires a
   verified signed-in account, using the user's browser-routing instructions.
-- Exact hex/`thread-f:` IDs and **Print all** `permthid=thread-f:…` URLs can use
-  `GWS_CORE=<selected core> t3-mail-link --config <wrapper>/workspace.json resolve '<url|id>'`.
-  The read-only helper returns account and Gmail thread ID without linking, spawning
-  or scheduling. Locate the actual Workspace core from the selected wrapper;
-  do not assume it is installed beside the global thread helpers. Read helper docs.
+- Exact references (hex, `thread-f:`/`msg-f:`, Print all, Show original) resolve read-only:
+  account named or evident → `t3-mail-link --config <wrapper>/workspace.json resolve '<url|id>'`,
+  that mailbox only. No account named → `t3-mail-link resolve --all-accounts '<url>'`: tries the
+  mailboxes the user marked `gmail_lookup` in their
+  [account inventory](../google-workspace-core/references/accounts.md), metadata only, until one
+  holds it. Not found in one mailbox ≠ absent; an error is unknown. No inventory or permission →
+  ask which mailbox. Neither form links, spawns or schedules. The helper uses the
+  `google-workspace-core` installed beside it, else `GWS_CORE=<a wrapper repo's core>`.
 - `#inbox/FMfcg…` tokens need resolution, not hex guessing. Prefer native T3 browser
   tools where supported, with verified identity, to obtain the exact Print-all URL
   or subject; a closed preview alone is not reason to switch browsers. Then resolve

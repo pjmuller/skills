@@ -8,6 +8,7 @@ wakes it through [`t3-relay`](relay.md), after a triage gate. The agent drafts a
 ```bash
 t3-mail-link --config <wrapper>/workspace.json resolve '<gmail url | hex id>'      # or --search 'from:… subject:…'
 t3-mail-link --config <wrapper>/workspace.json find '<gmail url | hex id>' [--exclude MY_T3_ID] [--json]
+t3-mail-link resolve|find --all-accounts '<gmail url | id>'                         # link names no account
 t3-mail-link --config <wrapper>/workspace.json claim '<gmail url | hex id>' [--for T3_ID]
 t3-mail-link --config <wrapper>/workspace.json release '<gmail url | hex id>'
 t3-mail-link --config <wrapper>/workspace.json schedule [--policy FILE]             # watch the account, arm the poller
@@ -34,9 +35,13 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   `release` when the case is closed or no longer yours.
 - **Resolve** verifies the authenticated account, then prints JSON with `account`, `gmail_thread` and
   `marker`; no state, draft or thread. Exactly one reference or `--search`; ambiguous → fail closed.
+  `--all-accounts` (instead of `--config`): the user's account inventory decides which mailboxes may be
+  tried; first verified holder wins, errors stay unknown
+  ([accounts](../google-workspace-core/references/accounts.md)). Parsing and lookup are the core's.
 - **URL ids**: best = the mail's ⋮ → **Print all** URL (`permthid=thread-f:…`). Also exact, no
   browser: hex, `thread-f:`/`msg-f:`, ⋮ → **Show original** (`msg-f:` received; `msg-a:r…` = written
-  in Gmail web, via the drafts API). `#inbox/FMfcg…` web ids: the helper prints a 💡 Print-all hint
+  in Gmail web, via the drafts API). Print all of a thread you started (`thread-a:r…`) resolves
+  through its `simpl=msg-f:` refs; `thread-a` itself is never guessed. `#inbox/FMfcg…` web ids: the helper prints a 💡 Print-all hint
   (relay it), reads the Chrome tab title for subject + account, then searches. Several matches →
   candidates, exit 3: ask the user.
 - **Find the owner** (`find`, read-only): resolve, then search T3

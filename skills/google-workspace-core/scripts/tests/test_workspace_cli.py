@@ -8,7 +8,7 @@ from gws_core.cli import build_parser, cmd_api, main
 from gws_core.errors import WorkspaceError
 
 EXPECTED_COMMANDS = {
-    "auth", "doctor", "whoami", "token", "api",
+    "accounts", "auth", "doctor", "whoami", "token", "api",
     "drive-list", "drive-search", "drive-get", "drive-create", "drive-copy", "drive-upload",
     "drive-replace", "drive-trash", "drive-download", "drive-export",
     "doc-read", "doc-outline", "doc-replace", "doc-insert", "doc-batch",
@@ -64,7 +64,7 @@ def test_config_can_come_from_the_environment(monkeypatch, write_config):
 def test_every_subcommand_is_wired_to_an_implementation():
     parser = build_parser()
     for name, sub in commands(parser).items():
-        if name == "auth":
+        if name in ("auth", "accounts"):
             for action in sub._actions:
                 if action.choices:
                     assert all(callable(item.get_default("fn")) for item in action.choices.values())

@@ -1,4 +1,5 @@
-"""t3-mail-link pure logic: Gmail ref parsing, Chrome titles, new-inbound detection, link dedupe."""
+"""t3-mail-link: Chrome titles, new-inbound detection, link dedupe, read-only resolve. Ref parsing and the
+multi-mailbox lookup are google-workspace-core's (its test_workspace_accounts.py)."""
 import importlib.machinery
 import importlib.util
 import json
@@ -14,32 +15,13 @@ loader = importlib.machinery.SourceFileLoader("mail_link", str(Path(__file__).wi
 spec = importlib.util.spec_from_loader("mail_link", loader)
 ml = importlib.util.module_from_spec(spec)
 loader.exec_module(ml)
+ml.core()
+from gws_core import ApiError  # noqa: E402  (the sibling core, as t3-mail-link loads it)
+from gws_core.accounts import parse_ref  # noqa: E402
 
 
-@pytest.mark.parametrize("ref, expected", [
-    ("19e875318442de06", ("hex", "19e875318442de06")),
-    ("https://mail.google.com/mail/u/0/#all/19E875318442DE06", ("hex", "19e875318442de06")),
-    ("thread-f:1866870901077892614", ("hex", format(1866870901077892614, "x"))),
-    ("msg-f:1866870901077892614", ("hex", format(1866870901077892614, "x"))),
-    ("1866870901077892614", ("hex", format(1866870901077892614, "x"))),
-    ("https://mail.google.com/mail/u/0/?ik=abc123&view=om&permmsgid=msg-f:1866870901077892614",
-     ("hex", format(1866870901077892614, "x"))),
-    ("https://mail.google.com/mail/u/0/?ik=abc123&view=om&permmsgid=msg-a:r-8150541756871935074",
-     ("draft", "r-8150541756871935074")),
-    ("https://mail.google.com/mail/u/0/?ik=abc123&view=pt&search=all&permthid=thread-f%3A1866870901077892614&simpl=msg-f%3A1",
-     ("hex", format(1866870901077892614, "x"))),
-    ("https://mail.google.com/mail/u/0/#inbox/FMfcgzQhWTsMxrbPlmQHFRGDvlgCtzdB",
-     ("web", "FMfcgzQhWTsMxrbPlmQHFRGDvlgCtzdB")),
-    ("https://mail.google.com/mail/u/1/#label/Clients%2FAcme/FMfcgzQgMCgKhphcthGsbxmQxBCTXKMQ",
-     ("web", "FMfcgzQgMCgKhphcthGsbxmQxBCTXKMQ")),
-])
-def test_parse_gmail_ref(ref, expected):
-    assert ml.parse_gmail_ref(ref) == expected
-
-
-def test_parse_gmail_ref_rejects_garbage():
-    with pytest.raises(SystemExit):
-        ml.parse_gmail_ref("https://mail.google.com/mail/u/0/#inbox")
+def not_found(*a, **kw):
+    raise ApiError(404, "GET", a[1] if len(a) > 1 else "", "Requested entity was not found.")
 
 
 def test_chrome_title():
@@ -299,7 +281,6 @@ def resolver(tmp_path, monkeypatch):
     monkeypatch.setenv("T3CODE_HOME", str(tmp_path))
     monkeypatch.setenv("GWS_CONFIG", str(tmp_path / "workspace.json"))
     monkeypatch.setattr(ml, "workspace", lambda config: ws)
-    monkeypatch.setitem(sys.modules, "gws_core", SimpleNamespace(ApiError=RuntimeError))
     for name in ("locked_state", "save_texts", "t3_thread", "cmd_draft"):
         monkeypatch.setattr(ml, name, lambda *a, **kw: pytest.fail("resolve must not mutate or access T3"))
     monkeypatch.setattr(ml.subprocess, "run", lambda *a, **kw: pytest.fail("no subprocess in offline resolve"))
@@ -327,7 +308,7 @@ def test_resolve_exact_reference(resolver, capsys, ref):
     resolver.api.side_effect = lambda *a, **kw: {"id": a[1].rsplit("/", 1)[-1]}
     assert ml.main(["resolve", ref]) == 0
     parsed = json.loads(capsys.readouterr().out)
-    gmail_id = ml.parse_gmail_ref(ref)[1]
+    gmail_id = parse_ref(ref).threads[0]
     assert parsed == {"account": "ann@example.com", "gmail_thread": gmail_id,
                       "marker": f"Mail-ref: gmail:{gmail_id} ann@example.com"}
     resolver.whoami.assert_called_once_with()
@@ -335,17 +316,62 @@ def test_resolve_exact_reference(resolver, capsys, ref):
     resolver.gmail.get.assert_not_called()
 
 
-def test_resolve_message_and_draft_are_reads(resolver, capsys):
-    resolver.api.side_effect = RuntimeError("message id is not a thread id")
-    resolver.gmail.get.return_value = {"threadId": "thread-from-message"}
-    assert ml.main(["resolve", "19e875318442de06"]) == 0
+def routed(routes):
+    """ws.api stand-in: metadata-only GETs; ids not in ROUTES answer 404."""
+    def api(method, url, **kw):
+        assert method == "GET" and kw["params"] == {"format": "minimal"}
+        key = url.rsplit("/users/me/", 1)[1]
+        if key not in routes:
+            not_found(method, url)
+        return routes[key]
+    return api
+
+
+def test_resolve_message_and_draft_are_metadata_reads(resolver, capsys):
+    resolver.api.side_effect = routed({"messages/19e875318442de06": {"threadId": "thread-from-message"}})
+    assert ml.main(["resolve", "19e875318442de06"]) == 0  # bare id: thread 404 → message
     assert json.loads(capsys.readouterr().out)["gmail_thread"] == "thread-from-message"
-    resolver.gmail.get.assert_called_once_with("19e875318442de06")
-    resolver.gmail.get_draft.return_value = {"message": {"threadId": "thread-from-draft"}}
+    resolver.api.side_effect = routed({"drafts/r-12": {"message": {"threadId": "thread-from-draft"}}})
     assert ml.main(["resolve", "https://mail.google.com/mail/u/0/?permmsgid=msg-a:r-12"]) == 0
     assert json.loads(capsys.readouterr().out)["gmail_thread"] == "thread-from-draft"
-    resolver.gmail.get_draft.assert_called_once_with("r-12")
-    assert {call[0] for call in resolver.gmail.method_calls} == {"get", "get_draft"}
+    assert resolver.gmail.method_calls == []
+
+
+def test_resolve_print_link_of_a_thread_you_started_uses_its_received_messages(resolver, capsys):
+    m1, m2 = format(1800000000000000001, "x"), format(1800000000000000002, "x")
+    resolver.api.side_effect = routed({f"messages/{m2}": {"threadId": "started-thread"}})
+    url = ("https://mail.google.com/mail/u/0/?ik=x&view=pt&search=all&permthid=thread-a:r-7363"
+           "&simpl=msg-f:1800000000000000001&simpl=msg-f:1800000000000000002")
+    assert ml.main(["resolve", url]) == 0
+    assert json.loads(capsys.readouterr().out)["gmail_thread"] == "started-thread"
+    assert [c.args[1].rsplit("/", 1)[1] for c in resolver.api.call_args_list] == [m1, m2]  # no thread-a guess
+
+
+def test_resolve_not_found_points_at_all_accounts(resolver):
+    resolver.api.side_effect = not_found
+    with pytest.raises(SystemExit, match="--all-accounts"):
+        ml.main(["resolve", "msg-f:1800000000000000001"])
+
+
+def test_all_accounts_resolves_in_the_holding_mailbox_without_config(resolver, monkeypatch, capsys):
+    hit = SimpleNamespace(workspace=resolver, gmail_thread="pb-thread", checked=[
+        {"account": "ann@example.com", "result": "not found"}, {"account": "ann@example.com", "result": "match"}],
+        account=SimpleNamespace(config=SimpleNamespace(account="Ann@Example.com")))
+    seen = {}
+    monkeypatch.setattr("gws_core.accounts.load_inventory", lambda: ["inventory"])
+    monkeypatch.setattr("gws_core.accounts.locate_any", lambda ref, accounts: seen.update(ref=ref) or hit)
+    monkeypatch.setattr(ml, "workspace", lambda config: pytest.fail("--all-accounts never uses GWS_CONFIG"))
+    assert ml.main(["resolve", "--all-accounts", "msg-f:1800000000000000001"]) == 0
+    assert json.loads(capsys.readouterr().out)["gmail_thread"] == "pb-thread"
+    assert seen["ref"].messages == (format(1800000000000000001, "x"),)
+
+
+@pytest.mark.parametrize("argv", [["--config", "x.json", "resolve", "--all-accounts", "19e875318442de06"],
+                                  ["resolve", "--all-accounts", "--search", "subject:offer"]])
+def test_all_accounts_refuses_an_explicit_account_or_content_search(resolver, argv):
+    with pytest.raises(SystemExit) as exc:
+        ml.main(argv)
+    assert exc.value.code == 2
 
 
 def test_resolve_search_and_ambiguity(resolver, capsys):

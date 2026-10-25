@@ -31,7 +31,7 @@ Don't filter that line away; never put it in the mail itself.
 They, plus `gmail-get`/`gmail-thread`, also print `Open: <normal Gmail link>`: put it in every
 report about a mail so the human can click straight to the thread. A pasted print link
 (`view=pt&permthid=thread-f:…`) or Mail-ref → `gmail-url <ref>` gives that link; `gmail-thread`
-accepts the same refs. Every link you hand out names the account by email, never `/u/<N>/`
+accepts the same refs (Show original and `thread-a` print links via a metadata lookup). Every link you hand out names the account by email, never `/u/<N>/`
 (sign-in order, reshuffles): [links](references/links.md) (`gws_core.links`, drafts, Docs, Console).
 
 Conventions: compact text output, `--json` for the raw payload (machine callers always pass it).
@@ -48,6 +48,8 @@ contract in [integration](references/integration.md#importable-api)).
 - [Drafts and access checks](references/drafts.md): why every draft carries an HTML twin
   (Gmail web hard-wraps plain-only drafts on Send), From = default send-as, `--attach`
   files (invoice PDFs), editing existing drafts, what an access check proves.
+- [Account inventory](references/accounts.md): `gws.py accounts` lists the user's wrappers; a link
+  that names no account → `accounts locate` tries each `gmail_lookup` mailbox, metadata only.
 - [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` → local `grep`;
   query cheat sheet.
 - [Troubleshooting](references/troubleshooting.md): `doctor`, first-machine setup.

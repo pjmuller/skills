@@ -34,6 +34,7 @@ Build a small private capability note from the selected wrappers, not a new regi
 | Project roots/ownership | registered T3 projects and repository entrypoints; avoid auxiliary worktrees as default destinations |
 | ClickUp wrapper/config | wrapper policy, configured workspace/list hints, `whoami`; a service token is a **service identity**, not the operator |
 | Workspace wrapper/account | `workspace.json` account + required `scopes`, selected credential references, `whoami` identity + actual granted `scopes` from tokeninfo, observation date |
+| Account inventory | `gws.py accounts discover <code root>` suggests rows; the user marks which mailboxes `gmail_lookup` may try for links that name no account ([inventory](../google-workspace-core/references/accounts.md)); `accounts list --check` |
 | Browser fallback | user's profile-routing policy and signed-in identity, only when needed |
 | Thread helpers | installed command paths/check results and relevant search capability |
 
