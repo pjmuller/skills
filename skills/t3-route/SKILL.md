@@ -45,7 +45,9 @@ independent subworkers authorized by the task remain available.
    work; disclose unavailable evidence rather than inventing it.
 4. Before spawning, verify whether an existing execution thread owns this task.
    Exclude the routing thread; confirm scope from its actual brief/progress. Reuse a
-   matching live or settled thread. Age alone does not justify another copy.
+   matching live or settled thread, unless an explicit user rule requires a fresh run.
+   For fresh periodic reports, carry durable rules and relevant baselines, not the old
+   session as a backlog. Age alone does not justify another copy.
 
 Low-risk intake includes read-only investigation, drafts in this conversation and
 launching. A bare link does not authorize external drafts, sending, refunds, ticket
@@ -124,3 +126,5 @@ Verify the tool result; report destination/title and actual account/model or whi
 thread was reused and why. Routing failures stay visible; apply the per-task
 lifecycle decision above and authorized wrapper playbooks.
 For durable user corrections, read [corrections.md](corrections.md).
+Before a requested router reset, review lessons once and use the
+[replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.

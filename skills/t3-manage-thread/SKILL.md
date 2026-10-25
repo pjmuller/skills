@@ -23,6 +23,8 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 - Opposite-model review: [code-review.md](code-review.md) · tickets/findings as threads: [dispatch-workers.md](dispatch-workers.md) · rate limits: [limits.md](limits.md) · browser / computer use: [browser.md](browser.md).
 - Fleet audit, purge, old threads: [t3-maintenance](../t3-maintenance/SKILL.md), [t3-find-thread](../t3-find-thread/SKILL.md) · scheduled threads: [t3-schedule](../t3-schedule/SKILL.md).
 
+Routing-thread replacement (learn → launch → pin → retire): [routing-reset.md](routing-reset.md).
+
 ## Model tier
 
 Standalone threads (`t3_thread_launch`, `t3-relay launch`, `t3-schedule`) orchestrate: Opus (Claude) or Astra (OpenAI) by default; explicit choices win (incl. Sol).
