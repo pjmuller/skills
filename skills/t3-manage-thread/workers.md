@@ -36,6 +36,7 @@ neither, and report "not run: needs network/Docker" instead of waiting. The lead
 - `orchestrator_capabilities` (cached health) and `t3-pick-instance` (capacity) don't prove execution. Codex **status-probe timeout** ≠ expired auth: with explicit `providerInstanceId`, `delegate_task` re-probes once before refusing, so keep the account. Transient-timeout refusal → one retry after 30 s, same `clientRequestId`; accepted → inspect its `taskId`, never resend blindly.
 - Failed run → read the provider error: `ENOTFOUND` = DNS; "model at capacity" = model availability, not quota; only an auth error warrants checking credentials, after rechecking connectivity/status.
 - Resume a failed standalone owner only if authorized and still failed/inactive; keep its prompt, never duplicate a launch or restart active/completed work.
+- Replacing a live owner (user-requested model switch or authorized recovery): read it, ask it to stop safely, and start replacement work only after observing its turn end; a stop ping proves only "asked". Carry its partial artifacts into the handoff.
 
 ### Recover a limit-interrupted owner
 
@@ -53,6 +54,7 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 ```
 
 - Visible thread. Fire-and-forget only on the user's go or a routing policy: append the [completion footer](settle-thread.md#completion-footer-for-t3_thread_launch).
+- Pass `runtimeMode` deliberately (user's choice, else the operator's default): omitted, it inherits the caller's mode (possibly `full-access`), not the app's new-thread default. It can't exceed the caller's ([ceiling](permission-ceiling.md)); never broaden it to get past an approval failure.
 - `projectId` = repo owning the work (not yours → say so in the brief). Default workspace: project **root**, not your worktree.
 - **No retry key**: error or lost response → check `t3_thread_list` before relaunching.
 - Report `[title](t3-thread://v1/<threadId>)`, `threadId` verbatim incl. prefix (`t3-thread://v1/mcp:287f…`): never strip `mcp:` or URL-encode.

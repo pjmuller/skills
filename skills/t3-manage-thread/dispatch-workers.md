@@ -1,12 +1,12 @@
 # Dispatching worker threads (project-agnostic)
 
 Handing a ticket, finding or meeting item to its own T3 thread is the normal way to get
-work done; project wrappers (DentAI `standup-dispatch`, Redcell `transcript-orchestrator`)
-add their sources and policies on top of these rules, not instead of them.
+work done; project wrappers (a standup or transcript dispatcher) add their sources and policies on top of these rules, not instead of them.
 
 ## Title
 
-`<emoji> <3–6 words the user recognises>`, in the user's language. A dispatched ticket/item is
+`<emoji> <3–6 words the user recognises>`, in the user's language (an operator's own title
+convention wins). A dispatched ticket/item is
 standalone work: `📤` ([workers.md](workers.md#which-one)); `🏓` marks `delegate_task` children only.
 No ticket IDs, repo names or phase words in the
 title: they mean nothing at sidebar width; the ID belongs in the brief. Good:
@@ -16,11 +16,10 @@ fleet views; use the two above.
 
 ## Who runs the thread
 
-Spawn a **thinker**, not an implementer: Fable (Claude) or Astra (Codex) at medium, chosen by
-subscription capacity ([limits.md](limits.md)). The thread reads, plans, decides, delegates
-coding to Opus sub-agents / Sol High workers per the operator's global rules, and verifies.
-Size (S/M/L) goes in the brief as context and never picks the model. Exception: security
-work is routed per the project's own rules (Redcell: never Fable).
+Spawn an orchestrating **lead**, not an implementer: the operator's default lead model (explicit
+choices win), account by capacity ([limits.md](limits.md)). The thread reads, plans, decides,
+delegates coding to workers per the operator's global rules, and verifies. Size (S/M/L) goes in
+the brief as context and never picks the model. Security work routes per the project's own rules.
 
 ## Brief
 

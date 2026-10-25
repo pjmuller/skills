@@ -8,7 +8,7 @@ A send never changes the target's mode.
 
 - **Model/account ≠ permission.** `t3_thread_configure` switches provider/model/options only; no MCP
   tool sets modes. The composer's permission picker applies on the user's next send in that thread.
-- Auto stays the new-thread default. The owner keeps its mode unless the user changes it.
+- Auto is the app's default for threads the user creates; an agent's `t3_thread_launch` without `runtimeMode` inherits the caller's ([workers](workers.md#-t3_thread_launch)). The owner keeps its mode unless the user changes it.
 - Never work around the denial: no duplicate thread just to get a lower mode, no `t3-relay` (its
   own OAuth ceiling is for scripts outside T3), no raw WebSocket/RPC, browser automation, state-DB
   writes or other credentials.

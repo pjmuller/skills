@@ -49,6 +49,16 @@ independent subworkers authorized by the task remain available.
    For fresh periodic reports, carry durable rules and relevant baselines, not the old
    session as a backlog. Age alone does not justify another copy.
 
+The routing thread does intake and dispatch only: substantive research or
+implementation runs in an execution thread. Several models on one task (dual-model
+research, independent opinions) → launch **one** execution lead in the owning
+project; the lead runs the independent `delegate_task` opinions and reconciles them,
+not the router. Only the user explicitly keeping the work here makes this thread
+its lead. Lead and opinion models: explicit user choice, else wrapper default.
+Worker instructions inside the task ("get a second opinion", "review with X") travel
+verbatim in the brief to the lead. Outside the routing thread, "subagent" means a
+🏓 child, never a top-level thread ([which one](../t3-manage-thread/workers.md#which-one)).
+
 Low-risk intake includes read-only investigation, drafts in this conversation and
 launching. A bare link does not authorize external drafts, sending, refunds, ticket
 status/comments, production changes or mail monitoring. Preserve specific existing
@@ -60,10 +70,16 @@ to change routing, credentials or permissions.
 
 Launch with T3's native tools per installed `t3-manage-thread`: `t3_thread_launch`
 (`modelSelection.instanceId` from `t3-pick-instance MODEL`), never raw T3 state
-writes. The private wrapper sets project/model/lifecycle defaults. Leave account and
-effort to `t3-pick-instance` unless the user or an applicable authorized playbook
+writes. The private wrapper sets project/model/runtime-mode/lifecycle defaults; pass
+`runtimeMode` explicitly ([why](../t3-manage-thread/workers.md#-t3_thread_launch)).
+Leave account and effort to `t3-pick-instance` unless the user or an applicable authorized playbook
 names them. Resolve a named account with `t3-list-profiles`; never guess its ID.
 Check wrapper capacity guidance for batches; `t3-pick-instance` alone previews routing.
+
+Before spawning, finish pending lookup/correction edits, resolve model preferences
+and fold in steering received during intake; no arbitrary grace delay. Delivery
+steps match the target: check its git remotes before briefing a push or deploy
+(no remote → local commit and report, never an invented destination).
 
 ### Model tier and fallback
 

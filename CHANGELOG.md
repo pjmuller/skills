@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-25 — t3-route: router boundary and launch mechanics in the core
+
+- t3-route: the routing thread does intake/dispatch only; multi-model research launches one execution lead that runs the independent `delegate_task` opinions and reconciles them (models: user choice, else wrapper default). Spawn preflight (finish lookup edits, fold in steering, match delivery to the target's remotes). Why: these lived only in one private wrapper, so other operators' routers missed them.
+- t3-route intake: owner-absent checks (message timestamps, launch receipts) and `/u/N` ≠ mailbox identity; corrections: "would another operator's router need it?" decides core vs wrapper.
+- t3-manage-thread: launches pass `runtimeMode` explicitly (omitted, it inherits the caller's mode, not the app default); replacing a live owner waits for its observed stop. Router reset titles keep `🧭`: `t3-mail-link` relies on it to keep routers from owning mail cases. dispatch-workers defers lead model and titles to the operator instead of naming models/projects.
+- monologue: share-page UUID can differ from the API note id; on 404 scan the date and match.
+
 ## 2026-10-24 — t3-maintenance archive + secret check for every user
 
 - Global template: one line "With skill `t3-maintenance`: a secret passed through a thread → `t3-thread-archive check` …; a miss → rule + synthetic test, PR to `pjmuller/skills`; settling redacts nothing". Why: every user's agent should test whether a credential that crossed a thread would survive the archive, and contribute the missing rule instead of shrugging.

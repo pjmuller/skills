@@ -15,10 +15,11 @@ Cross-cutting lessons may use a small private reference if none fits; keep it bo
 Read the existing rule first, preserve unrelated policy, and allow later correction
 or removal. Do not save these lessons in harness-native memory.
 
-Distinguish policy from a reusable defect: private account/path/person/workspace
-details belong locally; a generic behavior failure belongs in the canonical public
-source with a neutral reproduction and relevant review/tests. Neutral wording alone
-does not prove a rule is universal. Do not mutate installed copies, create public
+Split before writing: would another operator's router need the mechanic? Yes → the
+canonical public core (`t3-route` or `t3-manage-thread`) with a neutral reproduction
+and relevant review/tests; the wrapper keeps only its private value (model, account,
+path, person, workspace) and a link. Neutral wording alone does not prove a rule is
+universal; a user's standing preference stays private. Do not mutate installed copies, create public
 issues containing private evidence, or automatically publish a private example.
 
 Verify the owning edit by reading it back and replaying the corrected case without

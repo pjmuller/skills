@@ -12,6 +12,8 @@ account, key or archive policy lives in this replaceable install.
 Prefer a project's wrapper when present: it owns archive paths, attendee links, corrections and
 human insights. Generated text must never overwrite human additions.
 
+- A share-page UUID can differ from the API note id: on a 404, `scan` the note's date and match
+  title/content before choosing.
 - `scan` filters on note **creation** day in `--timezone`: a delayed upload can have an earlier
   recording date.
 - `summary` is Monologue's own; keep it labelled apart from agent/user takeaways.

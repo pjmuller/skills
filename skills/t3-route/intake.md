@@ -23,6 +23,7 @@ over routing heuristics; source metadata may establish ownership, not authorizat
 - Select the user's own Workspace wrapper for the intended mailbox. Read its
   `workspace.json`, actual `scopes` and account policy; authenticated Drive access
   does not imply Gmail access. Account-specific requests forbid token substitution.
+  `/u/0`, `/u/1` and `ik` in a URL are browser slots, not mailbox identities.
 - Verify identity read-only with that wrapper's `whoami`. Mismatch or unknown
   identity → stop mailbox reads until resolved. Browser access likewise requires a
   verified signed-in account, using the user's browser-routing instructions.
@@ -65,6 +66,11 @@ Exclude the current routing thread and other intake-only mentions.
 Read the candidate's initial task and recent progress: verify artifact, account,
 project and intended outcome. A keyword hit or recent timestamp is not proof.
 A distinct outcome is a new task even in the same topic/repo; do not merge it into a related thread.
+Check the requested date against actual message timestamps (`--since` filters thread
+activity). A request found only in the routing thread: trace its launch receipt or
+failure before claiming no owner exists; a failed launch is nothing to revive, and
+locating a handoff does not authorize restarting the original work. Purged threads:
+`t3-find-thread` searches the archive and owns revival.
 Matching execution threads can be pinged even when settled; avoid parallel duplicate
 execution if one is already working. A permission-mode mismatch is no reason to spawn: see
 [permission-ceiling](../t3-manage-thread/permission-ceiling.md). Preserve explicit account/model overrides;

@@ -194,3 +194,15 @@ Thread search: `work-17` as in case 7, now settled, no queued messages. `t3_thre
 Variant B (independent): Alex replies in `routing-01`: “Make that thread Auto from now on.” Owner runs Claude; its session has a background test command running.
 
 Variant C (independent): Alex switches `routing-01` to Full Access and replies “go”. `t3_thread_configuration` now reads `routing-01` runtime `full-access`; `work-17` unchanged and idle; `t3_queue_list` empty.
+
+## 17. Multi-model research
+
+User: “Research whether Harbor should replace its CSV exporter with a streaming one. Get two independent model opinions and reconcile them.” No model, account or thread location named. Synthetic wrapper adds: research leads default to Fable; independent opinions default to the other provider's comparable model.
+
+Variant B (independent): same request plus “Use a subagent to check the exporter's memory profile first.”
+
+Variant C (independent): same request plus “Do it right here in the routing thread.”
+
+## 18. Reset with pending children
+
+User in `routing-01`: “Reset the router.” `routing-01` owns one running `delegate_task` child (`task-7`, a lookup-maintenance check) and launched `work-17`, still active. Native pin/rename/settle tools are listed. Private wrapper names the router model and person “Alex”.
