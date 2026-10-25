@@ -200,3 +200,15 @@ def test_gmail_thread_runs_with_its_own_display_flags(capsys):
     args.json = False
     cmd_gmail_thread(args, ws)
     assert seen["trim"] is False and "x" * 50 + "\n…[truncated]" in capsys.readouterr().out
+
+
+def test_links_name_the_account_by_email_never_by_slot():
+    from gws_core.links import gmail_draft_url, gmail_url, with_account
+    assert gmail_url("Ops@Example.com", "drafts") == "https://mail.google.com/mail/?authuser=ops@example.com#drafts"
+    assert gmail_draft_url("ops@example.com", "1a172010846bc05a") == \
+        "https://mail.google.com/mail/?authuser=ops@example.com#drafts?compose=1a172010846bc05a"
+    assert with_account("https://script.google.com/u/2/home/projects/abc/edit", "ops@example.com") == \
+        "https://script.google.com/home/projects/abc/edit?authuser=ops@example.com"
+    assert with_account("https://console.cloud.google.com/apis/credentials?authuser=2&project=p#x",
+                        "ops@example.com") == \
+        "https://console.cloud.google.com/apis/credentials?project=p&authuser=ops@example.com#x"

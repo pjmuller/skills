@@ -18,9 +18,10 @@ from email.utils import formataddr, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .errors import ApiError, WorkspaceError
+from .links import gmail_thread_url
 from .session import GMAIL, Session
 
 HEADER_ORDER = ("Date", "From", "To", "Cc", "Reply-To", "Subject", "Message-ID", "References")
@@ -32,9 +33,8 @@ HEX_ID_RE = re.compile(r"[0-9a-f]{15,16}")
 
 
 def thread_url(account: str, thread_id: str) -> str:
-    """Normal Gmail view of a thread. authuser=<email> picks the mailbox whatever its /u/N slot;
-    /mail/u/<email>/ answers 404 and the print view (view=pt) is not what humans want to open."""
-    return f"https://mail.google.com/mail/?authuser={quote(account.lower(), safe='@')}#all/{thread_id}"
+    """Normal Gmail view of a thread (not the print view, view=pt). Shape: links.py."""
+    return gmail_thread_url(account, thread_id)
 
 
 def thread_id_from(value: str) -> str:
