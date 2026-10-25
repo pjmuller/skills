@@ -53,6 +53,41 @@ def voice_candidates(store, request, own):
     return picked
 
 
+def send_attachment(client, store, request, own):
+    """Called under the session lock; authorize before reading/uploading, never retry."""
+    from .attachments import attachment
+    from neonize.utils.jid import build_jid
+    target = normalize_target(request["target"])
+    check_recipient(target, own)
+    kind = request["operation"].removeprefix("send_")
+    meta, data = attachment(request["path"], kind, request.get("caption", ""),
+                            request.get("filename"), request.get("mimetype"), read=True)
+    store.reserve_send()
+    try:
+        # Bytes prevent Neonize interpreting a local path as a URL.
+        if kind == "document":
+            message = client.build_document_message(data, filename=meta["filename"], mimetype=meta["mimetype"])
+        else:
+            message = client.build_image_message(data)
+        media = getattr(message, kind + "Message")
+        # Set caption after building to avoid automatic @mention expansion.
+        media.caption = meta["caption"]
+        user, _, server = target.partition("@")
+        chat = target if server else target + "@s.whatsapp.net"
+        response = client.send_message(build_jid(user, server or "s.whatsapp.net"), message)
+    except Exception:
+        raise RuntimeError("Attachment send failed; outcome may be unknown. Check history before retrying.") from None
+    receipt = {"id": response.ID, "chat": chat, "timestamp": response.Timestamp,
+               "kind": kind, "filename": meta["filename"], "mimetype": media.mimetype,
+               "bytes": len(data), "status": "accepted"}
+    try:
+        store.put(chat, response.ID, response.Timestamp, own + "@s.whatsapp.net", True,
+                  meta["caption"] or "[non-text message]", "sent", *media_keys(message))
+    except Exception:
+        receipt["warning"] = "Accepted, but local history write failed. Do not resend."
+    return receipt
+
+
 def execute(request):
     from neonize.client import NewClient
     from neonize.events import ConnectedEv, HistorySyncEv, MessageEv, LoggedOutEv
@@ -218,6 +253,8 @@ def execute(request):
                 raise RuntimeError("Login required or timed out; run wa login and scan its QR")
         own = normalize_number(client.get_me().JID.User)
         op = request["operation"]
+        if op in {"send_document", "send_image"}:
+            return send_attachment(client, store, request, own)
         if op == "send":
             target = normalize_target(request["target"])
             check_recipient(target, own)

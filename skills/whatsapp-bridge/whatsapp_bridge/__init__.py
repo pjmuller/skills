@@ -35,12 +35,16 @@ def _check_n(n):
 def _call(operation: str, ai_label: bool = False, **kwargs):
     # Text travels over stdin, never shell interpolation or process arguments.
     # WhatsApp's AI badge is opt-in per send; "always" (our Neonize patch) also stamps group sends.
-    result = subprocess.run(
-        [sys.executable, "-m", "whatsapp_bridge.worker"],
-        input=json.dumps({"operation": operation, **kwargs}),
-        text=True, stdout=subprocess.PIPE, timeout=300,
-        env={**os.environ, "NEONIZE_BOT_TAG": "always" if ai_label else "off"},
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "whatsapp_bridge.worker"],
+            input=json.dumps({"operation": operation, **kwargs}),
+            text=True, stdout=subprocess.PIPE,
+            timeout=900 if operation in {"send_document", "send_image"} else 300,
+            env={**os.environ, "NEONIZE_BOT_TAG": "always" if ai_label else "off"},
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("WhatsApp worker timed out; send outcome may be unknown. Check history; do not retry blindly.") from None
     for line in reversed(result.stdout.splitlines()):
         if line.startswith("WA_RESULT="):
             response = json.loads(line.removeprefix("WA_RESULT="))
@@ -168,6 +172,26 @@ def send_text(target: str, text: str, ai_label: bool = False) -> str:
     return _call("send", ai_label=ai_label, target=target, text=text)
 
 
+def send_document(target: str, path: str | Path, caption: str = "", *,
+                  filename: str | None = None, mimetype: str | None = None,
+                  ai_label: bool = False) -> dict:
+    """Send one local document; return an acceptance receipt (not proof of delivery)."""
+    return _send_attachment("document", target, path, caption, filename, mimetype, ai_label)
+
+
+def send_image(target: str, path: str | Path, caption: str = "", *, ai_label: bool = False) -> dict:
+    """Send one local JPEG/PNG image; return an acceptance receipt."""
+    return _send_attachment("image", target, path, caption, None, None, ai_label)
+
+
+def _send_attachment(kind, target, path, caption, filename, mimetype, ai_label):
+    from .attachments import attachment
+    from .store import normalize_target
+    target = normalize_target(target)
+    metadata, _ = attachment(path, kind, caption, filename, mimetype)
+    return _call("send_" + kind, ai_label=ai_label, target=target, **metadata)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -194,6 +218,15 @@ def main():
     send.add_argument("target", help="+32470123456 or 120363...@g.us")
     send.add_argument("text")
     send.add_argument("--ai-label", action="store_true", help="opt into WhatsApp's native AI badge for this message")
+    for kind in ("document", "image"):
+        media = sub.add_parser("send-" + kind, help="send one local " + kind)
+        media.add_argument("target", help="resolved international number or allowlisted group JID")
+        media.add_argument("path")
+        media.add_argument("--caption", default="")
+        media.add_argument("--ai-label", action="store_true")
+        if kind == "document":
+            media.add_argument("--filename")
+            media.add_argument("--mimetype")
     args = parser.parse_args()
     try:
         if args.command == "login":
@@ -214,6 +247,11 @@ def main():
                 raise ValueError("--hint needs --transcribe")
             result = (transcribe_voice_notes(args.chat, args.n, args.ids, args.hint) if args.transcribe
                       else download_voice_notes(args.chat, args.n, args.ids))
+        elif args.command == "send-document":
+            result = send_document(args.target, args.path, args.caption, filename=args.filename,
+                                   mimetype=args.mimetype, ai_label=args.ai_label)
+        elif args.command == "send-image":
+            result = send_image(args.target, args.path, args.caption, ai_label=args.ai_label)
         else:
             result = send_text(args.target, args.text, ai_label=args.ai_label)
         print(json.dumps(result, ensure_ascii=False, indent=2))

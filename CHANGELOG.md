@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-25 — WhatsApp attachments
+
+- whatsapp-bridge: native `send-document` / `send-image` CLI and Python APIs, local file validation, short captions and acceptance receipts; existing allowlist, locking, pacing and AI badge policy preserved.
+- Self-chat-only E2E policy and document-first guidance for long prompts/reports replace throwaway send scripts.
+
 ## 2026-10-25 — t3-route: router boundary and launch mechanics in the core
 
 - t3-route: the routing thread does intake/dispatch only; multi-model research launches one execution lead that runs the independent `delegate_task` opinions and reconciles them (models: user choice, else wrapper default). Spawn preflight (finish lookup edits, fold in steering, match delivery to the target's remotes). Why: these lived only in one private wrapper, so other operators' routers missed them.

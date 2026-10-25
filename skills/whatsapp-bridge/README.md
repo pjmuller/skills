@@ -10,4 +10,4 @@ Why Neonize: [Baileys](https://github.com/WhiskeySockets/Baileys) is maintained 
 
 ## Checks
 
-`uv run --with pytest pytest -q` (mocked; no paired account) plus `scripts/install --check`. Live verification: pair, send `test from whatsapp-bridge` to your own explicit number, reconnect and read it back, then read one authorized contact's last five messages. Never commit private messages or QR/session material.
+`uv run --with pytest pytest -q` (mocked; no paired account) plus `scripts/install --check`. Live verification: resolve `me`, verify the paired own identity against the wrapper, send minimal synthetic attachments only to that explicit self number, reconnect and inspect those IDs. Never expand recipients for tests. Platform acceptance and local `sent` records are not independent receipt evidence. Attachment commands/API: [workflow](reply-workflow.md#attachments).
