@@ -1575,7 +1575,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     guard choices.count > 1 else { throw Failure(message: "Requested field is missing on the matching logins") }
                 }
                 guard picked.count == 1 || !choices.isEmpty, let chosen = picked.first else {
-                    throw Failure(message: (picked.isEmpty ? "No exact-host login matches" : "\(picked.count) logins match; pass --username or --id")
+                    throw Failure(message: (picked.isEmpty ? "No exact-host login matches; check the saved Website URI: a parent domain does not match a subdomain. This does not establish that the account is absent from the vault" : "\(picked.count) logins match; pass --username or --id")
                         + (candidates.isEmpty ? "" : "; candidates: "
                         + candidates.map { "\($0.0.name)/\($0.1["name"] as? String ?? "?")/\((($0.1["login"] as? [String: Any])?["username"] as? String) ?? "-")" }
                         .joined(separator: ", ")))

@@ -41,6 +41,20 @@ installer adds Bitwarden's signed CLI for everything else), `uv`, `curl`, and Xc
 dropped the login (refresh token expired after months without sync): `bw-once [--vault N] login` opens the human
 Terminal for official `bw login` (password + 2FA typed there; PJ's work 2FA is a YubiKey OTP), then locks.
 
+## No exact-host match
+
+This means no login matched the requested hostname and username, **not** that the account is absent from the
+vault. Inspect the saved Website (URI) metadata before concluding that. A login saved as `https://example.com`
+does not match `accounts.example.com`, even if the Bitwarden extension offers it through base-domain matching.
+Item names and the vault owner's email do not determine the login host or username. Do not automatically widen
+matching to parent domains, sibling subdomains or lookalike suffixes.
+
+If the user identifies the correct entry with a different saved host, explain the mismatch. Prefer adding the
+exact login origin as another Website URI with the user's approval. Alternatively, when the user has explicitly
+identified that credential for the destination, request the saved host with `--username` and `--to clipboard`,
+then paste only into the verified intended login page using the clipboard procedure above. `--to page` binds
+its delivery to the requested host: never rewrite its origin check or `fill_js` to bridge different hosts.
+
 **Several accounts** (e.g. work + a separate company vault): `~/.config/bw-once/vaults.json` names one CLI context per
 account (`email`, optional `appdata` = separate CLI data dir, `server`, one `"default": true`). `--vault N` goes
 before the command; every request, socket, lock and audit line is per vault, and a context signed in as another

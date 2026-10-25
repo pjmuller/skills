@@ -387,6 +387,9 @@ def pick(vault, request):
         return request["id"]
     found = [item for item in exact_items(vault, request["host"])
              if request["username"] is None or str(item["username"] or "").lower() == request["username"].lower()]
+    if not found:
+        raise Failure("No exact-host login matches; check the saved Website URI: a parent domain does not match a subdomain. "
+                      "This does not establish that the account is absent from the vault")
     if len(found) != 1:
         raise Failure(f"{len(found)} exact-host logins match; pass --username or --id (from `list`)")
     return found[0]["id"]
