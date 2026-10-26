@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-26 — audit follow-ups: shorter schedule list, skill usage, claude-swap removed
+
+- `t3-schedule list` (text/markdown) hides finished one-shot jobs; `--all` shows them, `--json` stays complete. Why: 266 of 323 jobs were retired; "what's scheduled?" cost ~34k tokens per call (135 KB → 20 KB).
+- `t3-my-prompts --skills` counts distinct threads per installed skill (SKILL.md read, Skill tool, or a shipped command; invocations only, never tool output), with maintenance threads in the skill's own repo apart and unused skills listed. Why: see which skills are used, over- or underused, on any machine.
+- Removed: codexbar-setup's legacy claude-swap path (`codexbar-profiles`, `claude-swap.md`); `codexbar-claude-usage` (t3-limits stand-in) replaces it, and `scripts/install` drops the old link and `com.t3-skills.codexbar-profiles.{sync,expiry}` jobs.
+- `agents-md/global-template.md`: the auto-mode repair line reads as one clause ("…; data loss, production data, credentials, spend or private data → propose instead"); the preamble's review-doc line is gone (global.md merge step 4 already says it). Why: same rules, the double parenthetical read as one garbled clause.
+
 ## 2026-10-26 — skills audit: trigger descriptions, progressive disclosure, safe code cleanup
 
 - Every `description` rewritten as a when-to-invoke trigger with user phrases and a "not for → sibling" line (total 1790 → ~1450 words, loaded in every session). SKILL.md entrypoints −26% (most-used 13: −34%), all docs −14%; rare paths moved to focused files (`t3-maintenance/{purge,archive,fleet}.md`, `mailbox-review-core/references/{go-deep,lessons}.md`, `claude-cloud/protocol.md`, `data-enrichment/references/capture.md`, `codexbar-setup/claude-swap.md`); model/account policy owned only by `t3-manage-thread/routing.md`, titles/briefs only by `workers.md`. Why: skills grew organically; capable agents need trigger + map + hard rules, not restated `--help`.

@@ -397,7 +397,7 @@ def test_pause_resume_keeps_registration_and_skips_catch_up(tmp_path, monkeypatc
     assert "nothing due" in capsys.readouterr().out
     runner = mod.paths("nightly")["sh"].read_text()
     assert runner.count("pause_check") >= 3 and runner.index("pause_check") < runner.index("until t3_up")
-    mod.cmd_list(argparse.Namespace(json=False, markdown=False))
+    mod.cmd_list(argparse.Namespace(json=False, markdown=False, all=False))
     assert f"paused until {until}" in capsys.readouterr().out
     assert mod.main(["resume", "nightly"]) == 0
     stored = json.loads(src.read_text())
@@ -521,7 +521,7 @@ def test_missing_prompt_marks_job_and_list_renders(tmp_path, monkeypatch, capsys
     assert early["missing"] == "prompt not found (early.prompt.md)"
     now = datetime(2026, 9, 9, 7, 0)
     assert [s["name"] for s in mod.specs() if mod.due_now(s, now, None)] == ["late"]
-    for flags in ({"json": False, "markdown": True}, {"json": False, "markdown": False}, {"json": True, "markdown": False}):
+    for flags in ({"json": False, "markdown": True, "all": False}, {"json": False, "markdown": False, "all": True}, {"json": True, "markdown": False, "all": False}):
         mod.cmd_list(type("A", (), flags))
     assert "prompt not found" in capsys.readouterr().out
 
@@ -705,6 +705,25 @@ def test_pending_resumes(tmp_path, monkeypatch):
     assert names == ["pending", "weekly"]
 
 
+def test_list_hides_finished_jobs_unless_all(tmp_path, monkeypatch, capsys):
+    import argparse
+    import json
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name, extra in {"live": {}, "done": {"retired": "fired 2026-09-01"}}.items():
+        p = mod.paths(name)
+        p["spec"].parent.mkdir(parents=True, exist_ok=True)
+        p["spec"].write_text(json.dumps({"name": name, "at": "10:00", "days": None, "once": "2026-10-27", **extra}))
+        mod.prompt_path(json.loads(p["spec"].read_text())).write_text("prompt")
+    for markdown in (False, True):
+        mod.cmd_list(argparse.Namespace(json=False, markdown=markdown, all=False))
+        out = capsys.readouterr().out
+        assert "live" in out and "done" not in out.replace("1 finished jobs hidden", "") and "1 finished jobs hidden" in out
+    mod.cmd_list(argparse.Namespace(json=False, markdown=True, all=True))
+    assert "| done |" in capsys.readouterr().out
+    mod.cmd_list(argparse.Namespace(json=True, markdown=False, all=False))
+    assert {s["name"] for s in json.loads(capsys.readouterr().out)} == {"live", "done"}
+
+
 def test_fire_unconfirmed_leaves_marker_and_never_refires(tmp_path, monkeypatch, capsys):
     rc, _ = fire(tmp_path, monkeypatch, {}, relay_rc=mod.PENDING_EXIT)
     marker = mod.paths("job")["pending"]
@@ -872,5 +891,5 @@ def test_unreadable_local_spec_and_markers_isolate_one_job(tmp_path, monkeypatch
     assert by_name["bad"]["missing"].startswith("local spec unreadable")
     assert mod.last_fire("good") is None and mod.due_now(by_name["good"], datetime.now().replace(hour=6), None)
     mod.cmd_catch_up(argparse.Namespace(dry_run=True))
-    mod.cmd_list(argparse.Namespace(json=False, markdown=False))
+    mod.cmd_list(argparse.Namespace(json=False, markdown=False, all=False))
     assert "bad" in capsys.readouterr().out

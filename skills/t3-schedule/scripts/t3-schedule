@@ -1061,8 +1061,10 @@ def cmd_list(args: argparse.Namespace) -> int:
             spec["flag"] = job_flag(spec)
         print(json.dumps(rows, indent=2))
         return 0
+    retired = 0 if args.all else sum(1 for spec in rows if spec.get("retired"))
+    rows = rows if args.all else [spec for spec in rows if not spec.get("retired")]
     if not rows:
-        print("No scheduled jobs.")
+        print("No scheduled jobs." + (f" ({retired} finished hidden: --all)" if retired else ""))
         return 0
     me = machine_identity()
     print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h")
@@ -1083,6 +1085,8 @@ def cmd_list(args: argparse.Namespace) -> int:
                 f"| {pause_label(spec) or 'active'} | {spec.get('retired') or ('yes' if loaded(name) else 'NO')} | {last_run(paths(name)['log'])} "
                 f"| {job_flag(spec) or ('repo' if spec.get('source') else 'local')} | {prompt[:120]}{'…' if len(prompt) > 120 else ''} |"
             )
+        if retired:
+            print(f"\n{retired} finished jobs hidden (`--all`).")
         return 0
     for spec in rows:
         name = spec["name"]
@@ -1101,6 +1105,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         if flag := job_flag(spec):
             print(f"{'':<28} ! {flag}")
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
+    if retired:
+        print(f"\n{retired} finished jobs hidden (--all)")
     return 0
 
 
@@ -1610,6 +1616,7 @@ def build_parser() -> argparse.ArgumentParser:
     ls = sub.add_parser("list", help="jobs, loaded state, last run")
     ls.add_argument("--json", action="store_true")
     ls.add_argument("--markdown", action="store_true", help="one markdown table (for agents reporting to the user)")
+    ls.add_argument("--all", action="store_true", help="include finished (retired) jobs; --json always does")
     ls.set_defaults(func=cmd_list)
 
     rm = sub.add_parser("remove", help="bootout + delete a job")

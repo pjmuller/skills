@@ -21,7 +21,7 @@ the missed slot at wake, the catch-up poller covers the rest.
 t3-schedule add --name check-deploy --once 2026-10-20 --at 10:00 --resume-thread <threadId> \
   --prompt-file ~/notes/what-to-check.md
 t3-schedule add --name nightly --at 07:30 --weekdays --project ~/code/x/app -- "Run the nightly report."
-t3-schedule list --markdown   # answer "what's scheduled?" with this
+t3-schedule list --markdown   # answer "what's scheduled?" with this (finished jobs: --all)
 ```
 
 ## Jobs

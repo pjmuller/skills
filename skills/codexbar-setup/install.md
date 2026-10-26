@@ -50,8 +50,7 @@ Set the Claude provider's `claudeSwapExecutablePath` to the absolute path of
 `codexbar-claude-usage --list --json` lists every T3 Claude provider with usage, and
 `claude-swap-retained-usage.json` (below) updates. Readings come from `t3-limits`
 ([limits.md](../t3-manage-thread/limits.md)); per-model caps only while a `/login` token is valid.
-Then retire claude-swap polling and any `codexbar-profiles` jobs ([claude-swap.md](claude-swap.md));
-keep the credentials.
+Then retire claude-swap polling (`scripts/install` removes the old `codexbar-profiles` jobs); keep the credentials.
 
 **Quota-only view**: Settings → Menu → Multi-account layout → **Stacked** (global). The default
 Segmented layout's inactive-account chips **activate credentials**

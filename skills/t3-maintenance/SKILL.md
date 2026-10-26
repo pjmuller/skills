@@ -11,7 +11,7 @@ T3 >= 0.1. Helpers in `scripts/`, on PATH via `scripts/install` (`--check`); fla
 | --- | --- | --- |
 | `t3-fleet list` | one line per thread across projects; `--stalled` = delegated tasks stuck or never delivered | `--limited` / `--lineage`: [fleet.md](fleet.md) |
 | `t3-drafts` | unsent composer text (the user's sticky notes: "DONE", "TODO read") | |
-| `t3-my-prompts` | the user's own prompts, for recurring-instruction mining | [below](#prompt-patterns-t3-my-prompts) |
+| `t3-my-prompts` | the user's own prompts, for recurring-instruction mining; `--skills` = threads per installed skill (use vs maintenance, unused ones too) | [below](#prompt-patterns-t3-my-prompts) |
 | `t3-purge-threads` | hard-delete old threads + transcripts; `drop-v1` frees the frozen 0.0.x `state.sqlite` | [purge.md](purge.md) |
 | `t3-thread-archive` | searchable archive purged threads live on in; `check` = would it redact stdin? | [below](#archive-t3-thread-archive) |
 | `t3-preview-gc` | close preview tabs idle past `--idle-hours` of threads with no running turn (macOS) | |

@@ -434,6 +434,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--include-agent", action="store_true", help="disable agent-authorship filtering")
     ap.add_argument("--stats", action="store_true", help="show source/filter/projection sizes only")
     ap.add_argument("--mark-run", action="store_true", help="record this successful run's end time")
+    ap.add_argument("--skills", action="store_true",
+                    help="skill usage instead of prompts: distinct threads whose tool calls used each installed skill")
     ap.add_argument("--store", type=Path, default=DEFAULT_STORE, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.budget < 200:
@@ -453,6 +455,13 @@ def main(argv: list[str] | None = None) -> None:
         since = until - timedelta(days=args.days)
     if since >= until:
         ap.error("window start must be before now")
+
+    if args.skills:
+        import skill_usage
+        skills, thread_count = skill_usage.count(args.store, since, until)
+        output = skill_usage.render(skills, thread_count, since, until, args.json)
+        (args.out.write_text(output) if args.out else sys.stdout.write(output))
+        return
 
     raw = load_messages(args.store, since, until, args.project)
     deleted_dropped = sum(msg.deleted for msg in raw)

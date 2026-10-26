@@ -3,7 +3,6 @@
 Merge base for a cross-project file: adapt the [role and Git workflow](roles.md),
 fill `{…}` and merge per
 [global.md](global.md#merge-the-template-into-someones-existing-file). The file starts below the rule.
-Review rules it points to: [code-review.md](../t3-manage-thread/code-review.md) (harness-neutral; its "In T3" section only with T3).
 
 ---
 
@@ -32,7 +31,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - Production: reading is free (SELECTs, traces, logs, simulations; personal fields only into a chmod-600 file, ids in chat). Any production write → confirm first, naming target and change.
 - Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.
 - With skill `t3-maintenance`: a secret passed through a thread → `t3-thread-archive check` (stdin → `true`/`false`, never prints values) tells whether the archive would redact it. A miss → rule + synthetic regression test, PR to `pjmuller/skills` (its "A miss" steps). Settling redacts nothing: raw text stays in T3 until a purge.
-- Auto-mode denial or “this should be allowed” → skill `auto-mode-policy` and the private setup policy pointer. Use existing authorization; a scoped user correction authorizes its durable repair across configured profiles without another “go” or Full Access. Me switching to Full Access to clear a 🔓 counts as that correction: finish, then repair the rule unasked, worded as the broad intent (widen/merge, few north-star rules) (data loss, production data, credentials, spend, private data → propose instead). No bypass through another tool; unresolved boundary → 🔓 name it once.
+- Auto-mode denial or “this should be allowed” → skill `auto-mode-policy` and the private setup policy pointer. Use existing authorization; a scoped user correction authorizes its durable repair across configured profiles without another “go” or Full Access. Me switching to Full Access to clear a 🔓 counts as that correction: finish, then repair the rule unasked, worded as the broad intent (widen/merge, few north-star rules); data loss, production data, credentials, spend or private data → propose instead. No bypass through another tool; unresolved boundary → 🔓 name it once.
 - Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
 - External facts (pricing, features, versions, dates): verify on the web and cite.
 - Files for me → `~/Downloads`. Thread titles ≤5 words, no ticket IDs.

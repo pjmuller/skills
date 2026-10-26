@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-commands=(codexbar-profiles codexbar-claude-usage)
+commands=(codexbar-claude-usage)
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
 [[ "${1:-}" != --check ]] || echo "source $script_dir"
 if [[ "${1:-}" == --check ]]; then
@@ -39,6 +39,15 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$HOME/.local/bin"
+# Removed legacy claude-swap sync (codexbar-profiles): drop its link and launchd jobs.
+legacy="$HOME/.local/bin/codexbar-profiles"
+[[ -L "$legacy" && "$(readlink "$legacy")" == "$script_dir/codexbar-profiles" ]] && rm "$legacy" && echo "removed $legacy"
+for job in sync expiry; do
+  plist="$HOME/Library/LaunchAgents/com.t3-skills.codexbar-profiles.$job.plist"
+  [[ -f "$plist" ]] || continue
+  launchctl bootout "gui/$(id -u)/com.t3-skills.codexbar-profiles.$job" 2>/dev/null || true
+  rm "$plist" && echo "removed legacy job $plist"
+done
 for command_name in "${commands[@]}"; do
   target="$HOME/.local/bin/$command_name"
   if [[ -e "$target" || -L "$target" ]]; then
