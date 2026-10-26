@@ -152,5 +152,6 @@ tolerated, any word change refused), a unique draft, unchanged thread/run/messag
 evidence; recipients, attachments and quotes are preserved, the original saved and read back. Gmail
 cannot lock thread and draft together: a residual race exists, never call it race-free.
 
-Schedule only when asked, machine-local, one fresh 🧭 thread per workday ([schedule](references/schedule.md)).
+Schedule only when asked: a repo job each machine opts into, one fresh 🧭 thread per workday
+([schedule](references/schedule.md)).
 Never borrow a colleague's credentials.
