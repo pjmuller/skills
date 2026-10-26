@@ -30,6 +30,9 @@ a document people must understand without a speaker; a handout may need more con
   have to reverse-engineer the scenario. Preserve qualifications that change the conclusion.
 - Ground claims, numbers and quotations in sources. Keep source links with the relevant slide
   or notes. Label invented examples and illustrative data; never pass them off as evidence.
+- Spoken or dictated words read poorly verbatim: on the slide, restate the speaker's point tightly
+  without quote marks and keep the verbatim source in notes or source files. Quote exactly only when
+  the wording itself is the point.
 
 For a substantial new deck, sketch headlines and the intended visual before building. For a
 small edit, preserve the working narrative. An outline is a working aid, not an approval gate.

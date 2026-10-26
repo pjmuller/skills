@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-26 — slides: paraphrase spoken quotes
+
+- Dictated or spoken words go on a slide as a tight restatement without quote marks; the verbatim source stays in notes or source files. Why: PJ's speech-to-text quotes read poorly on a teaching slide.
+
+## 2026-10-26 — code review: round budget, scope guard, verdict line; one review doc
+
+- `t3-manage-thread/code-review.md`: max 3 review rounds (4–5 only while an evidence-backed security/auth/data/money blocker stays open), stop when a round returns only nits, budget end/silence ≠ approval; findings labelled `blocker`/`should`/`nit` with stable ids; builder re-grades severity, cuts diff growth, reworks or escalates a wrong approach instead of patching the symptom; a misread only warrants an edit when the code is genuinely misleading; final report carries `Review: <model>, <N> rounds, <verdict>`. Why: Theo's sol-loop (youtube 5Bmp9cz1JN8) plus 16–26 Oct T3 data: 12 of 327 reviews ran past 3 rounds, one ran 11; builders summarising away the reviewer's dissent.
+- Doc made harness-neutral with an "In T3" section; `agents-md/code-review-template.md` removed and its links point at the one doc. Why: the copy drifted within 10 days (missing confidence/skip/YAGNI rules, stale reuse-and-settle advice) and had no known reader.
+
 ## 2026-10-26 — contributing: direct commits for small, clearly shared changes
 
 - AGENTS.md "Direct commit or pull request": collaborators with write access push small, confident, broadly useful fixes straight to `main`; uncertain or consequential changes go to a PR left open for the owner's review; personal/company config stays out of the core. Why: the owner's company teams now contribute, and a PR per typo stalled on one reviewer.
