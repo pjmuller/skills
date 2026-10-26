@@ -124,6 +124,8 @@ ends with a feedback block. Tool-free fallback: clone this repo and read `setup/
 
 ## Contributing
 
-Collaborators push a branch to this repo and open a pull request (`gh pr create`); `main` only
-takes pull requests (ruleset, admin bypass for releases). Everyone else forks. Add a CHANGELOG line
-under "Unreleased"; releases are tags, see [Update](#update).
+Maintained mainly for the teams of the owner's companies; collaborators have write access. Small,
+clearly-better-for-everyone changes go straight to `main` after the checks in [AGENTS.md](AGENTS.md);
+anything uncertain or consequential goes through a pull request for human review. `main` refuses
+deletion and force-push. Everyone else forks and opens a PR. Add a CHANGELOG line; releases are
+tags, see [Update](#update).

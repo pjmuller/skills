@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-26 — contributing: direct commits for small, clearly shared changes
+
+- AGENTS.md "Direct commit or pull request": collaborators with write access push small, confident, broadly useful fixes straight to `main`; uncertain or consequential changes go to a PR left open for the owner's review; personal/company config stays out of the core. Why: the owner's company teams now contribute, and a PR per typo stalled on one reviewer.
+
 ## 2026-10-26 — slides: final reply ends with absolute file paths
 
 - The final reply lists the absolute path of each delivered file, the exported PDF first. Why: PJ opens the result in one click instead of hunting for it.

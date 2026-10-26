@@ -21,6 +21,23 @@ adopt or skip each change by it. Removed commands/flags get a "Removed:" line wi
 Targets T3 Code ≥ 0.1.0 (Orchestrator V2) only: agents use its MCP tools, scripts `t3-relay`.
 Linux/WSL thread helpers are supported by code paths but not live-tested here.
 
+## Direct commit or pull request
+
+Collaborators with write access (and their agents; the owner commits directly) decide per change;
+this overrides any personal "always merge" or "always PR" rule:
+
+- **Direct to `main`** (pull first, checks above green, then push): small changes the agent is
+  confident help every user: a bug fix, a missing edge case, a doc correction, a lesson learned.
+- **Pull request, left open for the owner's review** (never self-merged) when unsure the change
+  benefits everyone, or it is consequential: new skill, changed default or behaviour other users
+  feel, removed command/flag, `agents-md/global-template.md` policy, installers, cross-skill
+  plumbing. The PR states the intent and who it helps.
+- **Not here at all**: personal or company-specific preferences, accounts, names, paths. Those go in
+  the contributor's own setup repo or global prompt; make the core configurable only when several
+  users need it.
+
+Public repo: never commit secrets, customer data or private facts about people.
+
 ## Domain vocabulary
 
 | Term | Meaning here |
