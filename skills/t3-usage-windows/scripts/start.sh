@@ -3,13 +3,13 @@ set -uo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME]
+Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME[,...]]
 
 Launches one cheap warm-up turn (Luna/Haiku, low effort) per enabled Codex and
 Claude profile via t3-relay; each warm-up thread settles itself.
 
-  --only  restrict to these provider instance ids ("codex", "claudeAgent",
-          "claudeAgent_work", ...). Unknown/disabled ids warn on stderr.
+  --profile  exact instance ids first, else id/display-name substrings (comma list)
+  --only     exact instance ids only ("codex", "claudeAgent", ...); unknown ids warn
 EOF
   exit "${1:-2}"
 }

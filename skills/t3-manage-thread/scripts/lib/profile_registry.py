@@ -1,6 +1,5 @@
 """Native T3 profile discovery, without account-specific aliases."""
 import json
-import sys
 from pathlib import Path
 
 
@@ -75,17 +74,3 @@ def compatible(instances, preferred, model_family):
         return siblings[0]
     raise ValueError(f"Choose --profile explicitly for {model_family}: "
                      f"{', '.join(candidates) or 'no enabled profiles'}")
-
-
-if __name__ == "__main__":
-    try:
-        instances = registry(sys.argv[2])
-        if sys.argv[1] == "resolve":
-            print(resolve(instances, sys.argv[3], sys.argv[4]))
-        elif sys.argv[1] == "enabled":
-            print(str(enabled(instances.get(sys.argv[3], {}))).lower())
-        else:
-            print(family(instances.get(sys.argv[3], {})))
-    except (OSError, ValueError) as error:
-        print(error, file=sys.stderr)
-        raise SystemExit(2)

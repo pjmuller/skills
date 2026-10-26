@@ -1,18 +1,16 @@
 # Finding mail without reading it all
 
-Deterministic listing/export; the agent's own `grep` does the fuzzy part. Pass Gmail's query
-language through untouched; no filter layer on top.
+Deterministic listing/export; your own `grep` does the fuzzy part. Gmail's query language passes
+through untouched.
 
-1. **List** metadata: `gmail-search '<query>' -n 200` (date, from, subject, id per line). Iterate on
-   the query here; it's cheap.
-2. **Export**: `gmail-export '<query>' -o /tmp/gmail/<topic> -n 200 [--by-thread]` → one Markdown
-   file per message (headers, id, thread, attachments, body minus quoted chains/signatures) plus
-   date-sorted `index.md`. `--by-thread` = one file per conversation, for answers spread over
-   replies. Reruns with a wider query only fetch new ids.
-3. **Grep locally** (`grep -ril`, `rg -C2`), read only the files that matter. Full chain or PDFs:
-   `gmail-thread`, `gmail-attachments`, or `gmail-export --attachments`.
-4. **Clean up**: the export is a private-mail copy. After answering, ask whether everything was
-   found and the folder may go; on yes `rm -rf` it. Never delete silently, never leave it unasked.
+1. **List**: `gmail-search '<query>' -n 200` (date, from, subject, id per line). Iterate the query here.
+2. **Export**: `gmail-export '<query>' -o /tmp/gmail/<topic> -n 200 [--by-thread]` → one Markdown file
+   per message (or per conversation), quoted chains and signatures stripped, plus a date-sorted
+   `index.md`. Reruns only fetch new ids.
+3. **Grep locally** (`rg -C2`), read only what matters. Full chain or PDFs: `gmail-thread`,
+   `gmail-attachments`, `gmail-export --attachments`.
+4. **Clean up**: the export is a private-mail copy. After answering, ask whether it may go; on yes
+   `rm -rf` it. Never delete silently, never leave it unasked.
 
 ## Gmail query cheat sheet
 
@@ -46,10 +44,10 @@ Gotchas that cost the most time:
 - Recurring facts hide in periodic mail (one invoice per period); the decision sits in the first
   thread and a change in a later reply. Compare across periods before answering.
 - `in:inbox` misses archived mail; use `in:anywhere` when a count looks low.
-- `-n` defaults are small; listing paginates at 500/page.
+- `-n` defaults are small.
 - Per-user quota: big `--by-thread` sweeps back off and report failed ids; rerun to fetch the rest.
-- Dutch/French/German reply markers are stripped; a surviving quoted chain means an unusual
-  client: use `--full` or `gmail-thread`.
+- A surviving quoted chain (Dutch/French/German markers are stripped) means an unusual client:
+  `--full` or `gmail-thread`.
 
 Deeper: [operators](https://support.google.com/mail/answer/7190) ·
 [API filtering](https://developers.google.com/gmail/api/guides/filtering) ·

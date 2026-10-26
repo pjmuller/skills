@@ -1,7 +1,6 @@
 """Native registry + real spawn selection block, without live thread mutations."""
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path

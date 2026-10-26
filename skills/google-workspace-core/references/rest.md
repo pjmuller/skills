@@ -1,9 +1,9 @@
 # REST workflow details
 
 Read structure before content: `slides-outline` → `slides-slide`; `doc-outline` → `doc-read`;
-`sheet-meta` → bounded `sheet-read`. Re-read what you edited. Docs batches: apply index-changing
-edits from the highest index down. Below: API behaviour the commands absorb, relevant when you drop
-to `slides-batch` / `doc-batch` / `sheet-batch` / `api`. Implementations in `scripts/gws_core/`.
+`sheet-meta` → bounded `sheet-read`. Re-read what you edited. Docs batches: index-changing edits
+from the highest index down. Below: API behaviour the commands absorb, relevant when you drop to
+`slides-batch` / `doc-batch` / `sheet-batch` / `api` (code in `scripts/gws_core/`).
 
 **Slides** (`slides.py`, `slides_ref.py`)
 - Fresh placeholders inherit layout defaults, not the deck's run colours; `slides-add` copies
@@ -13,10 +13,9 @@ to `slides-batch` / `doc-batch` / `sheet-batch` / `api`. Implementations in `scr
   `slides-add --after X` calls land in reverse order; use one `--spec` list.
 - `slides-set-text` (delete ALL + insert) loses run-level styling; prefer `slides-replace`.
 - `createImage` fetches without our credentials, so private Drive files fail ("should be publicly
-  accessible"). `slides-image` grants a temporary anyone-reader permission and revokes it in a
-  `finally`. `size` needs both width and height; units are pt (slide 720×405; 1 pt = 12700 EMU).
+  accessible"); `slides-image` grants a temporary anyone-reader permission, revoked in a `finally`. `size` needs both width and height; units are pt (slide 720×405; 1 pt = 12700 EMU).
 - `updateSlidesPosition.insertionIndex` counts the deck before the move, moved slides included;
-  `slides-move --to N` computes it. Don't hand-compute.
+  `slides-move --to N` computes it.
 - Raw text: `shape.text.textElements[]` (`textRun` / `paragraphMarker` / `autoText`); `\n` ends a
   paragraph, `\v` is a soft break. Text can nest in `elementGroup.children`. Slides `insertText`
   takes `objectId` + `insertionIndex` (Docs: `location.index`); table cells need `cellLocation`

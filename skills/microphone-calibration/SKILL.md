@@ -1,6 +1,6 @@
 ---
 name: microphone-calibration
-description: Find the best macOS input gain for a microphone before dictation or recording - the speaker repeats one sentence after a beep at several gains; levels, clipping, noise, SNR and local speech-to-text accuracy go into a Markdown report with playable clips. Also single A/B samples (device, placement, filter) at a fixed level. Use for "test my microphone", mic gain/volume calibration, noisy or clipped dictation, comparing microphones.
+description: "Use for \"test my microphone\", \"what input volume should my mic use\", dictation coming out noisy, clipped, quiet or misheard, or comparing microphones, placements or filters (macOS). Ends with a recommended input gain."
 ---
 
 # Microphone calibration
@@ -21,8 +21,8 @@ Same sentence, distance, posture and loudness every take; only back-to-back take
    Without a TTY (every agent shell) the capture opens in a **Terminal.app window**: it shows the
    sentence, waits for Enter, then per take sets the gain, says "Take N", records a quiet second
    (noise floor), beeps, and records `--seconds` of speech. Agent apps without microphone access
-   record digital silence, which is why capture never runs in the agent's own shell. First use:
-   macOS asks to allow Terminal's microphone. Run `run` in the background; it waits up to `--wait`.
+   record digital silence, hence never capture in the agent's own shell. First use: macOS asks to
+   allow Terminal's microphone. Run `run` in the background; it waits up to `--wait`.
 4. The original gain is restored after the last take, on Ctrl-C and when the window closes. A
    killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (or later
    `mic-calibrate gain --device NAME VALUE`) only after the speaker agrees.
@@ -40,8 +40,8 @@ case-insensitive substring. Other system audio settings stay untouched.
   level and SNR (loudest channel, beep frames removed by their 1 kHz tone). The pick is a
   **tested** level: no clipping, peak ≤ -3 dBFS, SNR within 3 dB of the best, then peak nearest
   -9 dBFS; transcript errors break ties. Refine with a narrower sweep around it (e.g. `0.6,0.7,0.8`).
-- **Expect** SNR to barely change: input gain raises voice and room noise together. Gain mostly
-  decides clipping (too high) versus a weak signal (too low); distance and room decide SNR.
+- **Expect** SNR to barely change: gain raises voice and room noise together. Gain decides clipping
+  versus a weak signal; distance and room decide SNR.
 - **STT**: `transcribe-local` (sibling `video-shrink-for-gemini`, local Whisper; nothing uploaded),
   same settings per take, the sentence is never passed as a hint. Equal transcripts do not mean
   equal audio, and the speaker's own dictation engine may behave differently.

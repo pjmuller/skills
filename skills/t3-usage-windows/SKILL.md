@@ -1,6 +1,6 @@
 ---
 name: t3-usage-windows
-description: "Start provider usage windows with cheap turns and chain them through the day. Use for warming accounts, daytime top-ups, window status, or banked Codex resets. Rate-limited threads need nothing: T3 0.1 marks them Limited and auto-resumes at reset."
+description: "Use for \"warm up my accounts\", \"start the usage windows\", \"when do my windows reset\", the daytime top-up daemon, or spending a banked Codex reset. Not rate-limited threads (T3 resumes them at reset)."
 ---
 
 # T3 usage windows
@@ -8,26 +8,22 @@ description: "Start provider usage windows with cheap turns and chain them throu
 A usage window is a provider's rolling quota period (commonly five hours), opened by a model turn.
 Opening one early makes its reset come earlier; a turn inside an active window doesn't restart it.
 
-`t3-usage-windows <verb>`; flags: `--help` per subcommand.
+`t3-usage-windows <verb>` (`--help` per verb):
 
-- `start` — one `t3-relay launch` per enabled Codex/Claude profile (Luna/Haiku, low effort,
+- `start`: one `t3-relay launch` per enabled Codex/Claude profile (Luna/Haiku, low effort,
   `scripts/start.sh`); each warm-up thread settles itself. `--dry-run` prints the commands.
-- `topup install|status|remove|run` — launchd tick every 10 min, 05:00–21:00 (`scripts/topup.py`).
+- `topup install|status|remove|run`: launchd tick every 10 min, 05:00–21:00 (`scripts/topup.py`).
   Expired session windows get `start`; accounts without a session window (Codex: weekly only) get
-  one turn per local day from 05:00 (state file beside the log). Needs T3 running; never wakes the
-  Mac. Preview: `topup run --dry-run [--ignore-hours]`.
-- `status` — quota windows (`t3-limits`).
-- `reset` — banked reset credits of the logged-in Codex account (`scripts/reset_credit.py`).
+  one turn per local day from 05:00. Needs T3 running; never wakes the Mac. Preview:
+  `topup run --dry-run [--ignore-hours]`.
+- `status`: quota windows (`t3-limits`).
+- `reset`: banked reset credits of the logged-in Codex account (`scripts/reset_credit.py`).
   **Hard rule:** `--apply` spends a scarce credit (resets five-hour + weekly window), only with
   explicit user authorization. Unrelated to Luna Reserve or API credits.
 
-Rate-limited threads: T3 resumes them at reset. For authorized recovery onto another
-account, inventory with `t3-fleet list --limited` and follow
+Rate-limited threads: authorized recovery onto another account → `t3-fleet list --limited`, then
 [t3-manage-thread recovery](../t3-manage-thread/workers.md#recover-a-limit-interrupted-owner).
-Never infer completion solely from the sidebar status.
+Never infer completion from the sidebar status alone.
 
-## Install
-
-Needs `t3-relay` ([relay.md](../t3-manage-thread/relay.md)),
-`t3-pick-instance`, `t3-limits` ([t3-manage-thread](../t3-manage-thread/SKILL.md)) on PATH, then
-`scripts/install` and `--check`. Quirks, logs: [notes.md](notes.md).
+Needs `t3-relay`, `t3-pick-instance`, `t3-limits` ([t3-manage-thread](../t3-manage-thread/SKILL.md))
+on PATH; then `scripts/install` (`--check`). Quirks, logs: [notes.md](notes.md).

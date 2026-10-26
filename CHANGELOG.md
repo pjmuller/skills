@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-26 — skills audit: trigger descriptions, progressive disclosure, safe code cleanup
+
+- Every `description` rewritten as a when-to-invoke trigger with user phrases and a "not for → sibling" line (total 1790 → ~1450 words, loaded in every session). SKILL.md entrypoints −26% (most-used 13: −34%), all docs −14%; rare paths moved to focused files (`t3-maintenance/{purge,archive,fleet}.md`, `mailbox-review-core/references/{go-deep,lessons}.md`, `claude-cloud/protocol.md`, `data-enrichment/references/capture.md`, `codexbar-setup/claude-swap.md`); model/account policy owned only by `t3-manage-thread/routing.md`, titles/briefs only by `workers.md`. Why: skills grew organically; capable agents need trigger + map + hard rules, not restated `--help`.
+- README skill table ordered most-used first; adds recording-followups, claude-auto-mode, ui-before-after.
+- Code, no CLI change: dead helpers removed (`clickup.set_description`, `loom.find_loom_urls`, `profile_registry` `__main__`, unused constants), t3-schedule `add` reuses `write_artefacts`, topup `profile_rows`; clickup-core lock gains `websocket-client` (`chat session` failed under `uv run --locked`); `t3-open-thread --link` escapes `|`; `t3-find-thread --include-archived` (no-op) hidden from help; recording-watcher briefs name `transcribe-gemini` as the video route. Public docs no longer name individuals.
+
 ## 2026-10-26 — slides: paraphrase spoken quotes
 
 - Dictated or spoken words go on a slide as a tight restatement without quote marks; the verbatim source stays in notes or source files. Why: PJ's speech-to-text quotes read poorly on a teaching slide.

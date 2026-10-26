@@ -19,7 +19,7 @@ loader = SourceFileLoader("scheduler_smoke", str(Path(__file__).with_name("t3-sc
 spec = spec_from_loader(loader.name, loader)
 mod = module_from_spec(spec)
 sys.modules[loader.name] = mod
-loader.exec_module(mod)
+loader.exec_module(mod)  # not load_module(): removed in Python 3.15
 mod.scheduler_check()
 name = "native-smoke-" + uuid.uuid4().hex[:12]
 p = mod.paths(name)

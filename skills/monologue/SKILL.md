@@ -1,6 +1,6 @@
 ---
 name: monologue
-description: Read Monologue notes, original summaries and speaker-labelled transcripts through its public API; retrieve temporary audio URLs when audio inspection is requested. Use for a Monologue note UUID, the Monologue notes created on a given day, or rendering a Monologue transcript to Markdown.
+description: "Use for a Monologue note UUID or link, the Monologue notes of a given day, or a Monologue transcript/summary as Markdown (speaker turns, timestamps, temporary audio URL)."
 ---
 
 `scripts/monologue_api.py`: read-only client, CLI (`scan --date`, `get UUID`; `--help`) and

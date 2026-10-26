@@ -423,8 +423,8 @@ def build_brief(cfg, call, workspace, hits, verdict, transcript_path):
     if verdict == "likely":
         media = (f"Screen sharing is likely, so first get a visual narration per "
                  f"{SKILL_DIR.parent}/video-shrink-for-gemini/SKILL.md "
-                 + ("(Fathom: `download-fathom URL --out <call dir>`, then shrink + native agy Gemini)"
-                    if call.source == "fathom" else "(Leexi: `download-leexi`, then shrink + native agy Gemini)")
+                 + ("(Fathom: `download-fathom URL --out <call dir>`, then shrink + `transcribe-gemini`)"
+                    if call.source == "fathom" else "(Leexi: `download-leexi`, then shrink + `transcribe-gemini`)")
                  + f"; store it beside the transcript in {transcript_path.parent}. Then run the follow-ups on transcript + "
                  f"narration; every downstream brief points at that verified narration file (it carries a provenance header), "
                  f"never at the raw transcript.md, so no later thread watches the video again.")

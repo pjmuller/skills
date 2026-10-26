@@ -1,44 +1,36 @@
-# Forward geocoding
+# Forward geocoding (`scripts/geocode.py`)
 
-`uv run scripts/geocode.py 'ADDRESS' [--provider mapbox|geopunt] [--limit 1..5]`
-(paths relative to this skill). One request, 20s timeout, no retries, batches or saved responses.
-JSON stdout contains `provider`, `query`, `storage`, `attribution` and `results` with named
-`lat`/`lng`, `label`, `type`, `accuracy` (nullable), `id`. Review candidates: a street/city match is not
-an address match. Exit 0 = candidates, 3 = no match, 1 = JSON error on stderr, 2 = CLI usage.
+`uv run scripts/geocode.py 'ADDRESS' [--provider mapbox|geopunt] [--limit 1..5] [--country be]`:
+one request, 20 s timeout, no retries or batches. JSON stdout: `provider`, `query`, `storage`,
+`attribution`, `results[]` (`lat`, `lng`, `label`, `type`, nullable `accuracy`, `id`). A street or
+city match is not an address match: review candidates. Exit 0 = candidates, 3 = no match,
+1 = JSON error on stderr, 2 = usage.
 
 ## Choose storage before calling
 
-- **Mapbox (default): ephemeral only.** Needs `MAPBOX_TOKEN` from your scoped mise env.
-  Always sends `permanent=false`, `autocomplete=false`, default limit 1; optional `--country be`.
-  No permanent mode. Consume stdout in memory; never redirect, tee, log, cache, commit or save
-  results, including derived/offset coordinates. Only use with a Mapbox map.
-  The usual paid-enrichment cache rule does **not** apply here.
-- **Geopunt (`--provider geopunt`): stored website coordinates.** Official Digitaal Vlaanderen
-  Geolocation v4, no key; **Flanders and Brussels only**, not Wallonia or worldwide.
-  Results may be saved. Preserve helper-emitted attribution and original location type/source ID.
-  Flemish Basisregisters data uses Modellicentie Gratis Hergebruik; show
-  `Bron: Digitaal Vlaanderen` on maps. Brussels UrbIS is open data; retain `Bron: UrbIS / Paradigm`
-  for `urbis_` matches. Unknown source types fail until their storage rights are checked.
-  No automatic provider fallback: a miss stays a miss.
+- **Mapbox (default): ephemeral only.** Scoped `MAPBOX_TOKEN` from your mise env; always
+  `permanent=false`, no permanent mode. Consume stdout in memory; **never redirect, tee, log, cache,
+  commit or save results, derived/offset coordinates included**, and use them only on a Mapbox map.
+  The usual "store paid results" rule does not apply here.
+- **Geopunt (`--provider geopunt`): storable.** Digitaal Vlaanderen Geolocation v4, no key,
+  **Flanders and Brussels only**. Keep the emitted attribution, location type and source id with the
+  stored coordinates; maps show `Bron: Digitaal Vlaanderen` (Modellicentie Gratis Hergebruik) or, for
+  `urbis_` matches, `Bron: UrbIS / Paradigm`. Unknown source types fail until their storage rights
+  are checked. No automatic fallback between providers: a miss stays a miss.
 
 ```sh
-# Persistable address lookup; keep this JSON as provenance alongside your website data.
-uv run scripts/geocode.py --provider geopunt 'Martelarenplein 7, 3000 Leuven' > location.json
+uv run scripts/geocode.py --provider geopunt 'Martelarenplein 7, 3000 Leuven' > location.json  # provenance
 ```
 
-Small, deliberate lookups only. Send public addresses, not confidential/personal data.
-A website should ship stored Geopunt coordinates rather than query this service per visitor.
-For other regions choose and verify a storage-permitting provider explicitly.
-The public Nominatim service is not a generic fallback for agent-built geocoding tools;
-its policy also requires identification, attribution, caching and traffic limits.
+Small, deliberate lookups of public addresses only. Websites ship stored Geopunt coordinates, never
+a per-visitor query. Other regions: pick and verify a storage-permitting provider explicitly; public
+Nominatim is not a generic fallback (its policy demands identification, attribution, caching, limits).
 
-Primary contracts checked 2026-10-19:
-
-- [Mapbox storage, request flags, map-use restriction](https://docs.mapbox.com/api/search/geocoding/).
-- [Geopunt coverage and response fields](https://geo.api.vlaanderen.be/geolocation/),
-  [v4 parameters](https://geo.api.vlaanderen.be/geolocation/help/Api/GET-v4-Location_q_latlon_xy_type_c).
-- [Service terms defer to dataset licenses](https://www.vlaanderen.be/digitaal-vlaanderen/onze-diensten-en-platformen/geografische-webdiensten/gebruiksrecht-en-privacyverklaring-geografische-webdiensten),
-  [Basisregisters license](https://docs.basisregisters.vlaanderen.be/docs/api-documentation.html),
-  [Flemish license terms](https://data.vlaanderen.be/doc/licentie/),
-  [UrbIS open data](https://be.brussels/en/about-region/urbis-data).
-- [Public Nominatim policy](https://operations.osmfoundation.org/policies/nominatim/).
+Contracts checked 2026-10-19: [Mapbox geocoding](https://docs.mapbox.com/api/search/geocoding/) ·
+[Geopunt](https://geo.api.vlaanderen.be/geolocation/)
+([v4 params](https://geo.api.vlaanderen.be/geolocation/help/Api/GET-v4-Location_q_latlon_xy_type_c)) ·
+[service terms](https://www.vlaanderen.be/digitaal-vlaanderen/onze-diensten-en-platformen/geografische-webdiensten/gebruiksrecht-en-privacyverklaring-geografische-webdiensten) ·
+[Basisregisters license](https://docs.basisregisters.vlaanderen.be/docs/api-documentation.html) ·
+[Flemish license](https://data.vlaanderen.be/doc/licentie/) ·
+[UrbIS open data](https://be.brussels/en/about-region/urbis-data) ·
+[Nominatim policy](https://operations.osmfoundation.org/policies/nominatim/).

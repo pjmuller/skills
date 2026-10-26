@@ -1,28 +1,13 @@
 # Continue from T3
 
-A review runs daily; most live threads were seen before. T3 is the memory: `Mail-ref` claims (who owns
-a case), case threads, reviewer threads and each day's 🧭 report. Continue a case's **conclusion and
-owner**, not yesterday's reviewer session. No state file, no registry, no sending.
+Most live threads were seen before. Continue a case's **conclusion and owner** from T3, not
+yesterday's reviewer session. No state file, no registry, no sending.
 
-```mermaid
-flowchart LR
-  I[index.json row: t3 + new_since_t3] --> O{owner?}
-  O -->|running| W[report it; one idempotent delta]
-  O -->|idle / settled| S{substantive new mail<br/>or unfinished work?}
-  S -->|yes| R[resume owner]
-  S -->|courtesy only| N[no wake]
-  O -->|no owner, mentioned| M{new_since_t3}
-  M -->|0| K[carry: one line from<br/>the newest mention]
-  M -->|>0| D[reviewer seeded with<br/>the earlier conclusion]
-  O -->|unknown to T3| F[new case]
-```
-
-1. `collect` tags each row: `t3.owner` (latest claim, children mapped to their root; 🧭 threads never
-   own), `t3.mentions` (newest first: the 🧭 reports, case and reviewer threads that named this Gmail
-   thread) and `new_since_t3`. `t3: null` = T3 never saw it; `coverage.t3_index: unavailable` = the
-   lookup failed (say so; fall back to `t3-mail-link --config … find <id>` per live thread). One
-   pass covers every row; per-thread `find` (3-9 s, full-text + subject search) only for a new
-   thread you suspect T3 handled under another id.
+1. Row tags: `t3.owner` (latest claim, children mapped to their root; 🧭 threads never own),
+   `t3.mentions` (newest first: 🧭 reports, case and reviewer threads naming this Gmail thread),
+   `new_since_t3`. `t3: null` = T3 never saw it (new case). `coverage.t3_index: unavailable` = lookup failed: say
+   so, fall back to `t3-mail-link --config … find <id>` per live thread. Otherwise use `find` (3-9 s,
+   full-text + subject) only for a new thread you suspect T3 handled under another id.
 2. Route (read the owner's or newest mention's latest result first; `t3_thread_read`):
 
 | Situation | Do |

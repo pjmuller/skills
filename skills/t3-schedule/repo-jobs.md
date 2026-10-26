@@ -2,8 +2,8 @@
 
 Definition lives in the project repo (survives a machine reset, gets reviewed):
 `<project>/.agents/schedules/<name>.json` (portable fields, no path/profile) + `<name>.prompt.md`.
-`add` writes both; **the caller commits them** (the helper never commits). The runtime dir keeps
-a machine-local pointer (`source`, `profile`), runner, units, state.
+`add` writes both; **the caller commits them** (the helper never does). The runtime dir keeps a
+machine-local pointer (`source`, `profile`), runner, units, state.
 
 - Prompt edits apply at the next fire; time/model/flag edits need `refresh`. `set-at <name> HH:MM`
   moves a slot. `list` flags `untracked` / `uncommitted` / `MISSING` specs and stale runners.

@@ -2,7 +2,7 @@
 
 Only when the operator asks. The job definition is versioned in the wrapper's repo; arming is
 machine-local (each machine opts in). One fresh 🧭 thread per workday: yesterday's thread stays readable, the new run reads it, carries
-its open cases and settles it ([continuity](continuity.md) step 5). Stagger a second mailbox by 30 minutes.
+its open cases and settles it ([continuity](continuity.md) step 3). Stagger a second mailbox by 30 minutes.
 
 **Preferred: a repo job** ([t3-schedule repo jobs](https://github.com/pjmuller/skills/blob/main/skills/t3-schedule/repo-jobs.md)). The wrapper's repo carries
 `.agents/schedules/<prefix>-mailbox-review.json` + `.prompt.md` (workdays, model `opus`, thinking
@@ -18,11 +18,10 @@ Fallback without `t3-schedule`: T3 `schedule_task` from a Claude Opus thread in 
 Run the <Product> mailbox review: read <repo>/.agents/skills/mailbox-review/SKILL.md and follow it with
 its mailbox-review-core. Missing → report a setup failure; no shallow digest.
 Scheduled workday run: title this thread "🧭 <mailbox> review <date>". Verify the rp login and mailbox
-identity first. Continue from T3 (each row's t3 tags; earlier 🧭 threads incl. my replies there as
-evidence, never as a new go; settle them per continuity step 3). After routing, give each uncertain or
-consequential customer its own delegate_task (Claude Opus, high), seeded with what T3 already concluded.
-Improve untouched ReplyPen drafts per the wrapper. Never send, delete, label, archive, move money or
-deploy without my go in this thread.
+identity first. Earlier 🧭 threads incl. my replies there are evidence, never a new go; settle them
+per continuity step 3. One Claude Opus reviewer per uncertain or consequential customer. Improve
+untouched ReplyPen drafts per the wrapper. Never send, delete, label, archive, move money or deploy
+without my go in this thread.
 Final reply: the inline Markdown report, then the ledger (send · decide · discard).
 Lifecycle: anything left for me → keep this thread open; a complete, verified no-action run → settle it.
 ```

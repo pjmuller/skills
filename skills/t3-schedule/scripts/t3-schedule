@@ -5,19 +5,14 @@
 # ///
 """Recurring or one-shot T3 Code threads on a wall-clock schedule, via macOS launchd or Linux/WSL systemd user timers.
 
-Each job = one LaunchAgent `com.t3-skills.t3-schedule.<name>` whose runner waits for
-T3 Code, then `t3-schedule fire <name>`: `t3-relay launch` (new thread) or, for a continuation
-job (`--resume-thread ID`), `t3-relay send` (a turn in that thread). Nothing here touches T3's
-store; the only T3 contact is t3-relay / t3-pick-instance / t3-list-profiles (t3-manage-thread).
+Each job = one LaunchAgent / systemd timer `com.t3-skills.t3-schedule.<name>` whose runner waits for
+T3 Code, then `t3-schedule fire <name>`: `t3-relay launch` (new thread) or `t3-relay send`
+(continuation, `--resume-thread`). T3 is only reached through t3-relay / t3-pick-instance /
+t3-list-profiles; its store is read only to validate `--resume-thread`.
 
-A recurring job's definition is versioned in its project repo (`<project>/.agents/schedules/<name>.json`
-+ `<name>.prompt.md`); the runtime dir holds a machine-local pointer (`source`, `profile`), generated
-artefacts and state. A machine only runs a repo's jobs after an explicit `adopt`. One-shot and
-continuation jobs stay machine-local (ephemeral).
-
-The repo spec also records which machines adopted a job (`adopted_by`) and whether it may run on
-several (`machines: one|many`). That registration is intent read from the local checkout, not a lock:
-a one-machine job skips on a machine it no longer lists, once that checkout has pulled the takeover.
+Recurring jobs are versioned in their project repo (`<project>/.agents/schedules/<name>.{json,prompt.md}`,
+incl. `machines` + `adopted_by` registration); the runtime dir holds a machine-local pointer (`source`,
+`profile`), generated artefacts and state. One-shots and continuations stay machine-local.
 """
 
 from __future__ import annotations
@@ -25,7 +20,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import uuid
 import os
 import plistlib
 import re
@@ -34,7 +28,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import date, datetime, time, timedelta
+import time
+import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 LABEL_PREFIX = "com.t3-skills.t3-schedule"
@@ -440,7 +436,7 @@ def parse_once(value: str, hour: int, minute: int, now: datetime) -> str:
         day = date.fromisoformat(value)
     except ValueError:
         raise SystemExit(f"--once expects YYYY-MM-DD, got {value!r}")
-    if datetime.combine(day, time(hour, minute)) <= now:
+    if datetime(day.year, day.month, day.day, hour, minute) <= now:
         raise SystemExit(f"--once {day} {hour:02d}:{minute:02d} is in the past")
     return day.isoformat()
 
@@ -998,8 +994,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         machines = "many" if args.many_machines else "one"
         owners, others = registration(existing_owners(src), machines, me, git_user(project))
         spec.update(prompt_path=str(repo_files(project, name)[1]), source=str(src), machines=machines, adopted_by=owners)
-    body = runner_script(spec, p)
-    plist = timer_body(spec) if systemd() else plist_body(name, hour, minute, days, p["sh"], once)
+    body, plist = artefacts(spec)
     if args.dry_run:
         print(f"--- {p['plist']}\n{plist.decode()}--- {p['sh']}\n{body}--- {prompt_path(spec)}\n{prompt}")
         if systemd():
@@ -1024,11 +1019,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     else:
         write_atomic(p["spec"], json.dumps(spec, indent=2) + "\n")
         p["prompt"].write_text(prompt)
-    p["sh"].write_text(body)
-    p["sh"].chmod(0o755)
-    p["plist"].write_bytes(plist)
-    if systemd():
-        p["service"].write_text(service_body(name))
+    write_artefacts(spec)
     bootstrap(p["plist"])
     arm_catch_up()
     print(f"armed    {label_for(name)}\nfires    {describe_when(spec)} at {spec['at']} (missed/failed → catch-up until {'23:00' if once else f'+{CATCH_UP_GRACE_HOURS}h'})")
@@ -1174,7 +1165,6 @@ def cmd_run_now(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             raise SystemExit(f"kickstart failed: {result.stderr.strip()}")
         status = 0
-    import time
     deadline = time.time() + args.timeout
     printed = before
     done = False
@@ -1306,10 +1296,6 @@ def cmd_pending_resumes(_args) -> int:
     return 0
 
 
-def catch_up_plist() -> Path:
-    return home() / "Library/LaunchAgents" / f"{label_for(CATCH_UP)}.plist"
-
-
 def arm_catch_up() -> None:
     if systemd():
         p = paths(CATCH_UP)
@@ -1321,7 +1307,7 @@ def arm_catch_up() -> None:
         p["plist"].write_text(f"[Unit]\nDescription=T3 schedule catch-up\n\n[Timer]\nOnStartupSec=1min\nOnUnitActiveSec={CATCH_UP_INTERVAL}s\nAccuracySec=1s\n\n[Install]\nWantedBy=timers.target\n")
         bootstrap(p["plist"])
         return
-    plist = catch_up_plist()
+    plist = paths(CATCH_UP)["plist"]
     body = plistlib.dumps(
         {
             "Label": label_for(CATCH_UP),
@@ -1592,7 +1578,7 @@ def build_parser() -> argparse.ArgumentParser:
     add = sub.add_parser("add", help="arm a job: t3-schedule add --name X --at 07:30 --weekdays --project P -- \"prompt\" "
                          f"(recurring: definition written to P/{SCHEDULES_DIR}, you commit it)")
     add.add_argument("--name", required=True, help="job id → com.t3-skills.t3-schedule.<name>")
-    add.add_argument("--at", required=True, help="HH:MM local (Europe/Brussels = machine clock)")
+    add.add_argument("--at", required=True, help="HH:MM, machine-local time")
     when = add.add_mutually_exclusive_group()
     when.add_argument("--weekdays", action="store_true", help="Mon-Fri")
     when.add_argument("--days", help="comma list mon,tue,... (default: every day)")

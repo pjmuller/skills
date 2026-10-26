@@ -1,42 +1,36 @@
 # The global (user-level) file
 
-`~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`: the operating contract between one
-human and every agent on their machine. How to report, how far to go alone, how
-to verify, whom to delegate to, which tools this machine uses, where the repos
-are. It is loaded into every session of every repo, so every line is paid for
-always and competes with the repo's own instructions for attention.
+`~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`: the operating contract between one human and
+every agent on their machine (reporting, autonomy, verification, delegation, tooling, repo map).
+Loaded into every session of every repo, so every line is always paid for and competes with the
+repo's own instructions.
 
 Admission test per line: **true in every repo, and would removing it cause a
 mistake or a detour?** Both yes → keep. Otherwise move it down or delete it.
 
-Starting point or merge base: [global-template.md](global-template.md).
-Adapt [role and Git workflow](roles.md); a product owner gets more operational
-help, not a lower code-quality bar.
+Starting point or merge base: [global-template.md](global-template.md); adapt the
+[role and Git workflow](roles.md).
 
 ## Mechanics worth knowing
 
-- Keep one canonical file in a versioned, private setup repo; symlink
-  `~/.claude/CLAUDE.md`, each `CLAUDE_CONFIG_DIR/CLAUDE.md`, and
-  each `CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) to it. Resolve the symlink and edit the target; commit there.
-- State that repo-specific guidance wins over personal defaults. Codex discovers
-  global guidance from each `CODEX_HOME`, preferring `AGENTS.override.md` over
-  `AGENTS.md`; deeper project guidance takes precedence. [Official discovery
-  rules](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
-- Prose is advisory, not an enforcement mechanism: remove contradictory rules
-  rather than relying on a "repo wins" sentence alone.
-- Codex caps the *whole chain* (`project_doc_max_bytes`, 32 KiB by default) and
-  truncates silently from the end, so a fat global file cuts the repo's file.
-  Check what loaded: Claude `/context`; Codex: ask it to summarize its instructions.
+- One canonical file in a versioned private setup repo; `~/.claude/CLAUDE.md`, each
+  `CLAUDE_CONFIG_DIR/CLAUDE.md` and each `CODEX_HOME/AGENTS.md` symlink to it. Edit and commit
+  the target.
+- State that repo guidance wins over personal defaults, but remove contradictions rather than
+  rely on that sentence. Codex reads each `CODEX_HOME`, preferring `AGENTS.override.md` over
+  `AGENTS.md`; deeper project guidance wins
+  ([discovery rules](https://learn.chatgpt.com/docs/agent-configuration/agents-md)).
+- Codex caps the *whole chain* (`project_doc_max_bytes`, 32 KiB default) and truncates
+  silently from the end: a fat global file cuts the repo's. Check what loaded: Claude
+  `/context`; Codex: ask it to summarize its instructions.
 - Adherence drops as instruction count grows, with a bias toward earlier lines.
   Budget: ≤ 6k tokens (~24 KB); behaviour-defining rules first, lookup facts last.
-- Portable progressive disclosure = a plain pointer with a trigger: "doing X →
-  read `/abs/path.md` first". Works in both harnesses. `@import` and
-  `~/.claude/rules/` are Claude-only, and imports load eagerly (no saving).
-  Use absolute paths: the working directory differs per session. Point into an
-  installed skill (`~/.agents/skills/<skill>/…` refreshes daily via `skills-refresh`;
-  repo-local ones in the setup repo) or the user's own setup repo, never a loose copy.
-- One file, several harnesses/models: put the harness in the heading and tell
-  the others to skip the block ("Claude Code only; Codex: skip").
+- Portable progressive disclosure = a pointer with a trigger: "doing X → read `/abs/path.md`
+  first". `@import` and `~/.claude/rules/` are Claude-only and load eagerly (no saving).
+  Absolute paths (cwd differs per session), into an installed skill
+  (`~/.agents/skills/<skill>/…`, refreshed daily by `skills-refresh`; repo-local ones in the
+  setup repo) or the user's setup repo, never a loose copy.
+- Harness-specific block: name the harness in the heading ("Claude Code only; Codex: skip").
 
 ## What belongs where
 
@@ -51,29 +45,28 @@ help, not a lower code-quality bar.
 
 ## Writing lines that get followed
 
-- State intent and the reason; a capable model generalizes from "why" and needs
-  no capitals. Emphasis works on one line; on ten it works on none.
-- Keep an example where it saves hitting a wall: the exact spawn command with
-  its flags, speech-to-text aliases, a status-emoji legend. Drop examples of
-  things a frontier model gets right unprompted.
+The [repo-entrypoint lenses](SKILL.md#choose-what-earns-space) apply (intent and reason over
+capitals, an incident's reason in a clause, not the story). Global-specific:
+
+- Emphasis works on one line; on ten it works on none.
+- Keep an example where it saves hitting a wall (exact spawn command, speech-to-text aliases,
+  status-emoji legend); drop examples of what a frontier model gets right unprompted.
 - Thresholds and mechanisms are proxies; name the intent next to them.
-- No volatile values (IDs, versions, dates of verification) in the always-loaded
-  file; they go stale silently. Pointer file instead.
-- A rule born from an incident carries its reason in a clause, not the story.
-- Personal facts are fine in the private file; they never travel to a shared template.
+- Volatile values (IDs, versions, verification dates) go stale silently → pointer file.
+- Personal facts are fine in the private file, never in a shared template.
 
 ## Prune
 
-1. Measure tokens (`uv run --with tiktoken python -c …`, `o200k_base` is close enough).
-2. Read `git log -p` of the file: what was added for which incident, and does
-   the cause still exist (old harness behaviour, abandoned workflow, weaker models)?
+1. Measure tokens (tiktoken `o200k_base` is close enough).
+2. `git log -p` the file: what was added for which incident; does the cause still exist (old
+   harness behaviour, abandoned workflow, weaker models)?
 3. Classify every line: keep · tighten · pointer file · move to repo/skill ·
    enforce with a hook · delete (model does it anyway, duplicate, stale).
-4. Uncertain deletions are experiments: remove, run a representative task in a
-   fresh headless session (`claude -p`, `codex exec`), compare behaviour *and*
-   tokens spent getting there. A line that saves three failed attempts earns its place.
-5. For a large trim, have another frontier model compare before/after for lost
-   behaviour. Report what was cut and why in a few lines; the diff is the record.
+4. Uncertain deletions are experiments: remove, run a representative task headless
+   (`claude -p`, `codex exec`), compare behaviour *and* tokens spent. A line that saves three
+   failed attempts earns its place.
+5. Large trim → another frontier model compares before/after for lost behaviour. Report cuts
+   and why in a few lines; the diff is the record.
 
 Signals between prunes: a rule is repeatedly ignored → file too long, or the rule
 wants a hook. The agent asks what the file already says → wording is ambiguous.
@@ -81,19 +74,17 @@ The same correction given twice in chat → it is a missing line.
 
 ## Merge the template into someone's existing file
 
-Their facts and preferences survive; the template adds behaviour they lack.
-For a colleague handoff, prepare the merged content here, with their repo map
-inline. The receiving agent saves, links and verifies it; don't delegate a second
-redesign. Keep setup/symlink instructions in the installer, outside the prompt.
-Adapt the [role](roles.md) without creating a second competing Git policy.
+Their facts and preferences survive; the template adds behaviour they lack. For a colleague,
+prepare the merged content here (their repo map inline); their agent saves, links and verifies
+it, no second redesign. Setup/symlink steps stay in the installer, outside the prompt. Adapt the
+[role](roles.md) without a second competing Git policy.
 
-1. Read existing copies (configured Claude/Codex homes, symlink targets and
-   global overrides). Back up contents and link destinations outside Git before
-   replacing them; check for missing personal rules. Leave project overrides alone.
-2. Keep verbatim: identity, role, language, repos, accounts, tooling they
-   actually use. Fill template placeholders from evidence (`gh api user`,
-   `ls ~/code/*`, `mise ls`, `brew list`), not guesses; ask only for what the
-   machine cannot tell you.
+1. Read existing copies (Claude/Codex homes, symlink targets, global overrides). Back up
+   contents and link destinations outside Git before replacing; check for missing personal
+   rules. Leave project overrides alone.
+2. Keep verbatim: identity, role, language, repos, accounts, tooling they actually use. Fill
+   placeholders from evidence (`gh api user`, `ls ~/code/*`, `mise ls`, `brew list`); ask only
+   what the machine cannot tell you.
    Browser routing: purpose → profile → verified account, preserving their fallback.
    Missing setup → offer [browser onboarding](https://github.com/pjmuller/skills/blob/main/setup/t3-setup/browser-profiles.md);
    keep import steps and volatile IDs outside the global prompt.
@@ -105,12 +96,11 @@ Adapt the [role](roles.md) without creating a second competing Git policy.
    their setup repo and link its absolute path. Never copy another person's machine path.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
-6. Verify links resolve to the tracked source and fresh harness sessions load
-   it. Every pointer must exist on this machine; missing → install the owning
-   skill at its scope, else drop the line (`scripts/check-pointers <file>` lists them).
-   Commit/push under the setup repo's rules; report source, commit/PR and any
-   unresolved difference or failed check. Don't change accounts or working
-   tooling as part of prompt installation.
+6. Verify links resolve to the tracked source and fresh sessions load it. Every pointer must
+   exist on this machine (`scripts/check-pointers <file>` lists misses): install the owning
+   skill at its scope, else drop the line. Commit/push under the setup repo's rules; report
+   source, commit/PR and unresolved differences or failed checks. Never change accounts or
+   working tooling as part of prompt installation.
 
 Re-sync later: the daily [skills-refresh](../t3-manage-thread/skills-refresh.md) job
 detects a template change between the marker and the installed release tag (never
@@ -123,10 +113,9 @@ check of step 6; set the marker to the tag even when everything was skipped.
 
 ## Port a live file's improvements into a shared template
 
-The owner iterates on their private file; the template follows on request.
-Walk `git log -p <last-ported>.. -- <live file>` hunk by hunk: a behaviour rule
-any colleague would want → port it, reworded neutrally; a personal fact (path,
-account, company, ID, colleague name) → placeholder or skip; a removal → remove
-it from the template too unless it was personal. Record the new last-ported
-commit beside the live file, not in the public template. Re-read the template
-top to bottom afterwards: it must still stand on its own and hold nothing private.
+On request, walk `git log -p <last-ported>.. -- <live file>` hunk by hunk: a behaviour rule
+any colleague would want → port, reworded neutrally; a personal fact (path, account, company,
+ID, colleague name) → placeholder or skip; a removal → remove from the template too unless it
+was personal. Record the new last-ported commit beside the live file, not in the public
+template. Reread the template top to bottom: it must stand alone and hold nothing private.
+Template edits are policy: PR plus a CHANGELOG why line ([AGENTS.md](../../AGENTS.md)).

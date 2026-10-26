@@ -36,5 +36,5 @@ Review makes the change correct, not bigger. Max 3 rounds: round 1 = full diff, 
 - Report line: `Review: <model>, <N> rounds, <verdict>; declined: S2 (why)`. An override is never "approved".
 
 ## In T3
-- Reviewer = 🏓 [`delegate_task`](workers.md#-delegate_task), `task: "Read and execute /abs/path/review-brief.md"`, `role: "review"`, target `t3-pick-instance sol|opus`, account by [capacity](routing.md) unless the user names one; every round a new `delegate_task`; children need no settle. Revisions may use `isolation: "worktree"`.
+- Reviewer = 🏓 [`delegate_task`](workers.md#-delegate_task) (`role: "review"`, task = brief path, target `t3-pick-instance sol|opus`), one per round; revisions may use `isolation: "worktree"`.
 - **Silent ≠ stuck:** testcontainer loops look idle for 10+ min (cut-off reviewers lost real findings): check `task_status` (`workState`) or `t3_thread_read` its childThreadId before cancelling.

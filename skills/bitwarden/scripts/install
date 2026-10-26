@@ -50,7 +50,7 @@ chmod 700 "$target/clipboard.new" "$target/bw-once"
 mv "$target/clipboard.new" "$target/clipboard"
 # Hardened runtime: no injected libraries in the process that holds unsealed master passwords. Each build keeps its
 # own Keychain item; the build it replaces stays as bw-broker.prev until it handed its item over (one Touch ID in a
-# bw-once window at the next request), so an update never asks for the Mac password (touchid.md#updates).
+# bw-once window at the next request), so an update never asks for the Mac password (touchid.md, Updates).
 if [ ! -x "$target/bw-broker" ] || ! cmp -s "$source_dir/broker.swift" "$target/broker.built.swift" \
    || ! cmp -s "$source_dir/public_suffix_list.dat" "$target/public_suffix_list.built.dat" \
    || ! cmp -s "$source_dir/build_broker.py" "$target/build_broker.built.py"; then

@@ -1,6 +1,6 @@
 ---
 name: gitsync
-description: "Git hygiene across your recently active repos: find shared checkouts that are dirty, ahead, behind or diverged, fast-forward the clean ones, delegate one child task per repo that needs judgment (commit + push finished work, gitignore generated files, protect live work), then verify landed/protected/blocked. Use for \"/gitsync\", \"sync my repos\", \"is everything pushed\", \"commit the leftovers\", \"clean git state\", \"dirty worktrees in my active repos\", a weekly git-hygiene job, or one repo: \"/gitsync <path>\"."
+description: "Use for \"/gitsync [path]\", \"sync my repos\", \"is everything pushed?\", \"commit the leftovers\", dirty or unpushed shared checkouts across recently active repos, or a weekly git-hygiene job. Not for sweeping auxiliary worktrees."
 ---
 
 # gitsync
@@ -9,9 +9,9 @@ INTENT: every shared checkout level with its remote, so the next agent starts cl
 lost, nobody's live work touched. Needs T3 Code ≥ 0.1 (`delegate_task`) and `t3-fleet`
 ([t3-maintenance](../t3-maintenance/SKILL.md)). `scripts/install` links `gitsync`; `--check` verifies deps.
 
-Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`, ranked by
-interactive vs scheduled (`⏰`) threads. The script surveys, claims and verifies; the orchestrating
-T3 thread delegates (only an agent can call `delegate_task`). Children follow [worker.md](worker.md).
+Repos = T3 threads of the last 14 days ∪ `--root` repos with recent commits ∪ `--always`. The script
+surveys, claims and verifies; the orchestrating thread delegates (only an agent can call
+`delegate_task`). Children follow [worker.md](worker.md).
 
 ```bash
 R=~/.local/state/gitsync/$(date +%F); ME=<t3_thread_list currentThreadId>   # existing run dir today = resume it
@@ -32,9 +32,9 @@ gitsync status $R --markdown            # after children finish: landed / protec
   or child runs. Another orchestrator's claim → `held_elsewhere` (survey: `owned`): report, never compete.
   A rerun by the same owner resumes with the same request ids. `status` releases finished claims.
 - **Verify** each child yourself: its final answer (`task_status`) names commits and leftovers; `status` re-reads
-  git. `landed` = upstream, nothing ahead or stale; `protected` needs a reason (fresh path, live thread);
-  `local` = no upstream; `unverified` = git unreadable. Fleet unreadable → every command refuses.
+  git (`landed` = upstream, nothing ahead or stale; `protected` only with a named reason). Fleet
+  unreadable → every command refuses.
 - **Report** per repo before → after (clean/synced, landed with sha, protected with owner, blocked with the
   decision the user owns). Self-settle only once `status` shows no `running`/`pending`.
 
-Auxiliary `git worktree` directories are a different job (a worktree sweep); this skill lands main checkouts.
+Auxiliary `git worktree` directories are a different job (a worktree sweep).

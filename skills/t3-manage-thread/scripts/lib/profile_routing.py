@@ -150,7 +150,6 @@ def assess(account, model, now):
             (r.resets_at is None and r.used_percent != 0) for r in rows):
         candidate.status, candidate.detail = "unknown", "no usable windows (missing % or past reset)"
         return candidate
-    candidate.headroom = min(100 - r.used_percent for r in rows)
     weekly = [r for r in rows if (r.length_seconds or 0) >= WEEKLY_CLASS_SECONDS] or rows
     rated = [(hourly_headroom(r, now), r.window) for r in weekly]
     rated = [(rate, window) for rate, window in rated if rate is not None]

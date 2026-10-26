@@ -1,61 +1,56 @@
 ---
 name: google-workspace-core
-description: Use when an agent reads or writes Google Drive, Docs, Sheets, Slides or Gmail (search, export, drafts) through the shared CLI or Python client. Read the repository's Workspace wrapper first; its workspace.json supplies the account, scopes and credential locations.
+description: "Use for Google Drive, Docs, Sheets, Slides or Gmail work: a pasted Google link, a Doc as Markdown, a Sheet range, a deck edit, searching or exporting old mail, a Gmail draft. Read the repository's Workspace wrapper first; it names the account and scopes."
 ---
 
-Split: the repository's wrapper owns the account, scopes, credential locations and what may be
-written or sent. This core owns config loading, auth, the command surface and generic
-implementations; it has no account defaults. Never borrow one account's token for another.
+The repository's wrapper owns the account, scopes, credential locations and what may be written or
+sent. This core owns config, auth, the commands and their implementations; it has no account
+defaults. **Never borrow one account's token for another.**
 
 ```sh
-uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json --help   # also $GWS_CONFIG
+uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json --help   # or $GWS_CONFIG
 uv run --script <core>/scripts/gws.py --config <wrapper>/workspace.json whoami
 ```
 
-`--help` needs no credentials. Every account gets the same commands (Drive, Docs, Sheets incl.
-native Tables, Slides, Gmail, plus raw `api`); availability is not authorization. A command still
-needs the account's scopes, the user's request and the wrapper's policy.
+`--help` needs no credentials. Every account has the same commands (Drive, Docs, Sheets incl.
+native Tables, Slides, Gmail, raw `api`); availability is not authorization: a command also needs
+the account's scopes, the user's request and the wrapper's policy.
 
 Hard rules:
 
-- Data commands refresh an existing offline token and verify the account; only `auth mint` opens
-  browser consent. `auth export-env` / `auth export-token` print secrets: provisioning only, never
-  log, paste or commit. Never cat/grep `token.json`, `client.json` or a `.env`; use `doctor`.
-- Only requested writes; preserve unrelated content; read the result back. Drive deletion is
-  trash; `slides-delete` needs `--yes`; Gmail sends are not idempotent. Never send mail or edit a
+- **Secrets:** data commands refresh an existing offline token and verify the account; only `auth
+  mint` opens browser consent. `auth export-env` / `auth export-token` print secrets: provisioning
+  only, never log, paste or commit. Never cat/grep `token.json`, `client.json` or a `.env`; use `doctor`.
+- **Writes:** only requested ones; preserve unrelated content; read the result back. Drive deletion
+  is trash; `slides-delete` needs `--yes`; Gmail sends are not idempotent. Never send mail or edit a
   document just to prove access.
 
-Gmail draft/send commands print `Mail-ref: gmail:<thread id> <account>` on their own line: in T3
-that claims the mail case for the running thread, so replies wake it ([mail cases](https://github.com/pjmuller/skills/blob/main/skills/t3-manage-thread/mail-link.md)).
-Don't filter that line away; never put it in the mail itself.
-They, plus `gmail-get`/`gmail-thread`, also print `Open: <normal Gmail link>`: put it in every
-report about a mail so the human can click straight to the thread. Draft commands
-(`gmail-draft`, `-draft-update`, `-draft-get`, `-draft-list`) print `Draft: <link>` too: the draft
-open in compose. **Every report that creates, edits or reads back a draft hands that `Draft:` link
-to the human**, not only the thread; a draft without its link means a second round trip. A pasted print link
-(`view=pt&permthid=thread-f:…`) or Mail-ref → `gmail-url <ref>` gives that link; `gmail-thread`
-accepts the same refs (Show original and `thread-a` print links via a metadata lookup). Every link you hand out names the account by email, never `/u/<N>/`
-(sign-in order, reshuffles): [links](references/links.md) (`gws_core.links`, drafts, Docs, Console).
+Gmail output lines to pass on, never filter:
 
-Conventions: compact text output, `--json` for the raw payload (machine callers always pass it).
-Commands take a Google URL or bare id. Slide arguments take a 1-based number, an objectId or a
-pasted `?slide=id.X` URL (which alone names deck and slide); `slides-resolve` translates.
+- `Mail-ref: gmail:<thread id> <account>` (draft/send commands): in T3 it claims the mail case for
+  the running thread so replies wake it ([mail cases](https://github.com/pjmuller/skills/blob/main/skills/t3-manage-thread/mail-link.md)).
+  Never put it in the mail itself.
+- `Open: <Gmail link>` (also `gmail-get`/`gmail-thread`): in every report about a mail.
+- `Draft: <compose link>` (`gmail-draft`, `-draft-update`, `-draft-get`, `-draft-list`): **every
+  report that creates, edits or reads back a draft hands it to the human**; the thread link alone
+  costs a second round trip.
 
-Python callers import the same client instead of re-implementing OAuth:
-`from gws_core import Workspace, credentials, load_config` (usage in `scripts/gws_core/__init__.py`;
-contract in [integration](references/integration.md#importable-api)).
+A pasted print link (`view=pt&permthid=thread-f:…`) or Mail-ref → `gmail-url <ref>`; `gmail-thread`
+takes the same refs. Links you hand out name the account by email, never `/u/<N>/`: [links](references/links.md).
 
-- [Wrapper configuration and migration](references/integration.md): `workspace.json`, install
-  contract, credential resolution, importable API.
-- [REST details](references/rest.md): read order, Slides/Docs/Sheets/Drive API gotchas.
-- [Drafts and access checks](references/drafts.md): why every draft carries an HTML twin
-  (Gmail web hard-wraps plain-only drafts on Send), From = default send-as, `--attach`
-  files (invoice PDFs), editing existing drafts, what an access check proves.
-- [Account inventory](references/accounts.md): `gws.py accounts` lists the user's wrappers; a link
-  that names no account → `accounts locate` tries each `gmail_lookup` mailbox, metadata only.
-- [Finding mail](references/gmail-search.md): `gmail-search` → `gmail-export` → local `grep`;
-  query cheat sheet.
-- [Troubleshooting](references/troubleshooting.md): `doctor`, first-machine setup.
+Conventions: compact text, `--json` for the raw payload (machine callers always pass it). Commands
+take a Google URL or bare id; slide arguments a 1-based number, objectId or pasted `?slide=id.X` URL
+(`slides-resolve` translates). Python callers import the client instead of re-implementing OAuth:
+`from gws_core import Workspace, credentials, load_config` ([importable API](references/integration.md#importable-api)).
 
-Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`. `scripts/install --check`
+Open when needed:
+
+- New wrapper, `workspace.json` keys, credential resolution → [integration](references/integration.md)
+- Dropping to `*-batch` / `api`; Slides, Docs, Sheets, Drive API gotchas → [rest](references/rest.md)
+- Writing or editing a draft (HTML twin, From, `--attach`), what an access check proves → [drafts](references/drafts.md)
+- Gmail link that names no account; the user's mailbox inventory → [accounts](references/accounts.md)
+- Finding old mail (`gmail-search` → `gmail-export` → grep), query cheat sheet → [gmail-search](references/gmail-search.md)
+- Credential errors, 403, first machine → [troubleshooting](references/troubleshooting.md)
+
+Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`; `scripts/install --check`
 verifies dependencies.

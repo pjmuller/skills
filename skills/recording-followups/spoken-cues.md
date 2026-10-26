@@ -26,7 +26,7 @@ requested outcome: “research” authorizes research, not its recommended build
 ## How the thread processing the call reacts
 
 - OWNER = the speaker unless "for/voor X". Same person as this machine's operator → spawn here
-  (a standalone thread in the owning repo, per current t3-manage-thread guidance) or create the ticket. Another teammate → always
+  (a standalone thread in the owning repo) or create the ticket. Another teammate → always
   a ClickUp handoff in their queue, even for "spawn": their agent runs it on their machine.
 - The brief/ticket carries the exact quote, speaker, call link and mm:ss, plus the scope as said;
   normal permission limits still apply (no deploys, external messages or spending beyond repo rules).
