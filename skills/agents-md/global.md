@@ -100,10 +100,9 @@ Adapt the [role](roles.md) without creating a second competing Git policy.
 3. Same rule in both → the tighter wording. Conflict → theirs wins; list it.
 4. Drop template sections for tools they lack (T3 threads, a second harness,
    deploy rights). Keep the template's model names; they are refreshed upstream.
-   For review instructions outside the global prompt, adapt the
-   [review-flow mini template](code-review-template.md) into their setup repo
-   and link its absolute path. With T3 installed, resolve the full review guide
-   from their installation; never copy another person's machine path.
+   Review rules: with T3, resolve the full [review guide](../t3-manage-thread/code-review.md)
+   from their installation; without T3, copy it minus its "In T3" section into
+   their setup repo and link its absolute path. Never copy another person's machine path.
 5. Apply Prune to the result. End the file with
    `<!-- template: pjmuller/skills@<short-sha> -->`.
 6. Verify links resolve to the tracked source and fresh harness sessions load

@@ -3,7 +3,7 @@
 Merge base for a cross-project file: adapt the [role and Git workflow](roles.md),
 fill `{…}` and merge per
 [global.md](global.md#merge-the-template-into-someones-existing-file). The file starts below the rule.
-Optional supporting file: [review-flow mini template](code-review-template.md).
+Review rules it points to: [code-review.md](../t3-manage-thread/code-review.md) (harness-neutral; its "In T3" section only with T3).
 
 ---
 

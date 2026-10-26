@@ -15,8 +15,8 @@ repo (write, prune, merge the [template](global-template.md), port improvements)
 has its own economics: [global.md](global.md). Product-owner/developer adaptation
 and agent-owned Git housekeeping: [roles.md](roles.md). Handoffs between people, agents
 and roles (relay prompt, dev → non-technical, bug report → dev): [handoff.md](handoff.md).
-Independent review and reasoned pushback: [mini template](code-review-template.md);
-full T3 mechanics: [review procedure](../t3-manage-thread/code-review.md).
+Independent review and reasoned pushback: [review procedure](../t3-manage-thread/code-review.md)
+(harness-neutral; T3 mechanics in its last section).
 
 Bundled files are templates; the person's live prompt stays outside this
 installation (skill updates replace it). Where to register: [README](../../README.md#registration-scope).
