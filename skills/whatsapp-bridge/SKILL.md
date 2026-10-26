@@ -41,6 +41,7 @@ Expired/unlinked session → `wa login --window` again. Linux/WSL2: plain `wa lo
 `~/.config/whatsapp-bridge/media/` (never marks played); `--transcribe` hands each file to
 [transcribe-gemini](../video-shrink-for-gemini/SKILL.md) (~$0.02 / 5 min) with a verbatim prompt plus the hint
 (language + names/jargon to spell exactly; wrappers keep per-contact hints).
+`--id` also fetches images/documents (screenshots, PDFs) for reading; `-n` scans audio only.
 Rows synced before 2026-10 (shown `[non-text message]`) lack media keys: the worker asks the **own phone** to resend
 them (peer protocol message, `scripts/neonize-peer-request.patch`; nothing reaches the chat). Error "not resent yet"
 → rerun (seconds to minutes). Download error after resend = media expired on WhatsApp's servers.

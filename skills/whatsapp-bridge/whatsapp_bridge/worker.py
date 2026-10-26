@@ -2,6 +2,7 @@
 import fcntl
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -218,22 +219,24 @@ def execute(request):
         for row in rows:
             if request.get("ids") is None and len(notes) == request["n"]:
                 break
-            if row["kind"] not in (None, "audio"):
-                if request.get("ids"):
-                    notes.append({"id": row["id"], "error": f"not audio ({row['kind']})"})
-                continue
+            if row["kind"] not in (None, "audio") and not request.get("ids"):
+                continue  # exact ids fetch any media (images, documents); the latest-n scan is audio only
             note = {k: row[k] for k in ("id", "chat", "timestamp", "sender", "from_me", "text")}
             if row["media"] is None:
                 if request.get("ids"):
                     notes.append({**note, "error": "phone has not resent this message yet (it can take minutes); rerun"})
                 continue  # A legacy non-text row the phone did not resend: not provably audio.
             message = Message.FromString(row["media"])
-            mime = message.audioMessage.mimetype.split(";")[0].strip()
-            path = folder / f"{row['timestamp']}-{row['id']}{AUDIO_SUFFIX.get(mime, '.bin')}"
+            field = next(f for f in MEDIA_FIELDS if message.HasField(f))
+            part = getattr(message, field)
+            mime = part.mimetype.split(";")[0].strip()
+            suffix = AUDIO_SUFFIX.get(mime) or mimetypes.guess_extension(mime) or ".bin"
+            path = folder / f"{row['timestamp']}-{row['id']}{suffix}"
             try:
                 path.write_bytes(client.download_any(message))
-                notes.append({**note, "path": str(path), "seconds": message.audioMessage.seconds,
-                              "voice": message.audioMessage.PTT})
+                extra = ({"seconds": part.seconds, "voice": part.PTT} if field == "audioMessage"
+                         else {"kind": MEDIA_FIELDS[field], "mimetype": mime})
+                notes.append({**note, "path": str(path), **extra})
             except Exception as exc:
                 notes.append({**note, "error": f"download failed (media may have expired): {exc}"})
         return notes[::-1]

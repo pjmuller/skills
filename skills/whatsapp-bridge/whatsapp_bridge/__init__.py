@@ -155,7 +155,7 @@ def transcribe_voice_notes(chat: str, n: int = 3, ids: list[str] | None = None, 
     """download_voice_notes + a "transcript" per downloaded note (Gemini; hint boosts names and jargon)."""
     notes = download_voice_notes(chat, n, ids)
     for note in notes:
-        if "path" in note:
+        if "path" in note and "seconds" in note:  # audio only; --id may also fetch images
             note["transcript"] = transcribe_audio(note["path"], hint)
     return notes
 
