@@ -29,6 +29,8 @@ PRIOR_KEYS = ('verdict', 'priority', 'action', 'draft_id', 'run_id', 'memory', '
 # The cockpit is about this week's mail: a case whose customer has been silent this long is an old case
 # (one collapsed line, no research) unless a dated promise of ours falls due within DUE_SOON_DAYS.
 STALE_DAYS = 14
+# Follow-ups: threads we wrote in within this window whose newest mail is an unanswered reply.
+FOLLOWUP_DAYS = 14
 DUE_SOON_DAYS = 7
 LESSON_STATUS = {'proposed': 'waiting for a go', 'approved': 'go given, landing', 'landed': 'landed',
                  'declined': 'declined'}
@@ -103,6 +105,20 @@ class Client:
         for key, value in params.items():
             args += ['--param', f'{key}={value}']
         return self.gws(*args)
+
+    def undrafted_run_threads(self, days, max_pages=20):
+        """Thread ids of this project's email runs in the last `days` that left no draft, newest first."""
+        ids, before = [], None
+        for _ in range(max_pages):
+            page = self.rc('run', 'list', '--kind', 'email', '--days', str(days), '--limit', '100',
+                           *(['--before', before] if before else []))
+            runs = page.get('runs', []) if isinstance(page, dict) else page
+            ids += [r['thread_id'] for r in runs if not r.get('simulation') and not r.get('has_draft')
+                    and re.fullmatch(r'[0-9a-f]+', str(r.get('thread_id', '')))]
+            if len(runs) < 100:
+                return list(dict.fromkeys(ids)), False
+            before = runs[-1].get('run_id')
+        return list(dict.fromkeys(ids)), True
 
     def pages(self, path, key, max_pages=20, **params):
         items, token = [], None
@@ -285,8 +301,7 @@ def collect(args):
     account = verify_mailbox(client)
     config['account'] = account
     save(out / 'config.json', config)
-    # Scope: threads holding an unsent draft, i.e. where ReplyPen (or a human) answered. Triage of
-    # undrafted inbox mail is trusted, so it is neither listed nor read.
+    # Scope 1: threads holding an unsent draft (ReplyPen or a human started an answer).
     drafts, drafts_more = client.pages('drafts', 'drafts', max_pages=args.max_pages)
     standalone = [d for d in drafts if d.get('message', {}).get('threadId') ==
                   d.get('message', {}).get('id')]
@@ -296,23 +311,66 @@ def collect(args):
         if draft not in standalone and msg.get('threadId'):
             by_thread.setdefault(msg['threadId'], []).append(draft)
     ids = list(by_thread)
-    save(out / 'inventory.json', {'draft_thread_ids': sorted(ids), 'draft_list_truncated': drafts_more})
+    # Scope 2, follow-ups without a draft whose newest mail is an unanswered message from a person:
+    # threads where we replied to someone in the last FOLLOWUP_DAYS (self-addressed ReplyPen notes don't
+    # count: they sit on nearly every processed thread), plus threads ReplyPen ran on in that window
+    # without leaving a draft (declined, error, answered without draft). Courtesy vs. work owed is the
+    # coordinator's call.
+    sent, sent_more = client.pages('threads', 'threads', max_pages=args.max_pages,
+                                   q=f'in:sent -to:{account} newer_than:{FOLLOWUP_DAYS}d')
+    undrafted, runs_more = client.undrafted_run_threads(FOLLOWUP_DAYS, max_pages=args.max_pages)
+    from_runs = set(undrafted)
+    candidates = list(dict.fromkeys(tid for tid in [t.get('id') for t in sent] + undrafted
+                                    if tid and tid not in by_thread))
+    sent_more = sent_more or runs_more
+    save(out / 'inventory.json', {'draft_thread_ids': sorted(ids), 'draft_list_truncated': drafts_more,
+                                  'followup_candidate_ids': sorted(candidates),
+                                  'followup_list_truncated': sent_more})
     rows, failures = [], []
+
+    def keep(tid, thread, stubs, scope):
+        evidence = google_evidence(client.rc('run', 'thread', tid), tid)
+        save(out / 'threads' / f'{tid}.json', {'gmail': thread, 'rc': evidence, 'draft_stubs': stubs,
+             'fingerprint': fingerprint(thread), 'collected_at': now(), 'scope': scope})
+        row = {**summary(thread, evidence, account, stubs), 'scope': scope}
+        if scope == 'followup' and row['state'] == 'draft_ready':  # the run drafted, but no Gmail draft is left
+            row['state'] = 'no_draft'
+        rows.append(row)
+
     for tid in ids[:args.max_threads]:
         try:
+            keep(tid, client.gws('gmail-thread', tid), by_thread.get(tid, []), 'draft')
+        except Refused:
+            failures.append(tid)
+    followups = 0
+    not_in_mailbox = 0
+    for tid in candidates[:args.max_followups]:
+        try:
             thread = client.gws('gmail-thread', tid)
-            evidence = google_evidence(client.rc('run', 'thread', tid), tid)
-            save(out / 'threads' / f'{tid}.json', {'gmail': thread, 'rc': evidence,
-                 'draft_stubs': by_thread.get(tid, []), 'fingerprint': fingerprint(thread),
-                 'collected_at': now()})
-            rows.append(summary(thread, evidence, account, by_thread.get(tid, [])))
+        except Refused:
+            if tid in from_runs and tid not in {t.get('id') for t in sent}:
+                not_in_mailbox += 1  # a run on another mailbox of the project (e.g. Intercom)
+            else:
+                failures.append(tid)
+            continue
+        try:
+            if any('DRAFT' in m.get('labelIds', []) for m in thread.get('messages', [])):
+                continue  # a draft the listing missed: never treat it as undrafted
+            state = mail_state(thread, account)
+            if not (state['unanswered'] and state['latest_inbound'] is state['latest_customer']):
+                continue  # answered, or the newest inbound is a tool notification / auto-reply
+            keep(tid, thread, [], 'followup')
+            followups += 1
         except Refused:
             failures.append(tid)
     index = {'collected_at': now(), 'account': account, 'project': args.project,
              'mailbox_id': args.mailbox_id, 'coverage': {
-                 'scope': 'draft_threads', 'discovered_threads': len(ids), 'checked_threads': len(rows),
-                 'uncovered_threads': max(0, len(ids) - args.max_threads) + len(failures),
-                 'list_truncated': drafts_more,
+                 'scope': 'draft_threads+followups', 'discovered_threads': len(ids),
+                 'checked_threads': len(rows) - followups,
+                 'uncovered_threads': max(0, len(ids) - args.max_threads)
+                 + max(0, len(candidates) - args.max_followups) + len(failures),
+                 'list_truncated': drafts_more or sent_more,
+                 'followup_candidates': len(candidates) - not_in_mailbox, 'followup_threads': followups,
                  'standalone_drafts_excluded': len(standalone), 'failed_thread_ids': failures},
              'threads': rows}
     save(out / 'index.json', index)
@@ -779,6 +837,8 @@ def render(args):
         link = continuity.get(tid)
         case = ('' if not link else ' · new case' if link['status'] == 'new' else
                 f' · reused case, {md(link["status"], 20)} since {md(link["prior"]["reviewed_at"][:10], 10)}')
+        if thread.get('scope') == 'followup':
+            case += ' · reply waiting, no ReplyPen draft'
         evidence = [f'- {md(fact, 420)}' for fact in item.get('owner_evidence', [item['why']])]
         blocks = item.get('technical_evidence', [
             {'source': n, 'title': source['kind'].capitalize(), 'points': [source['fact']]}
@@ -852,6 +912,8 @@ def render(args):
                f'{c["uncovered_threads"]} discovered threads uncovered'
                + ('; additional unlisted threads unknown (pagination capped)' if c['list_truncated'] else '')
                + f' · {unresolved} unresolved threads not reviewed · {c["standalone_drafts_excluded"]} standalone drafts excluded'
+               + (f' · {c["followup_threads"]} follow-ups without a draft (of {c["followup_candidates"]} threads we wrote in '
+                  f'within {FOLLOWUP_DAYS} days)' if 'followup_threads' in c else '')
                + (f' · {c["carried_threads"]} earlier cases carried in' if c.get('carried_threads') else '') + '.')
     output = Path(args.out).expanduser()
     output.write_text('\n'.join(out) + '\n')
@@ -935,6 +997,8 @@ def main():
     for name in ('project', 'mailbox-id', 'gws-script', 'gws-config', 'out'):
         c.add_argument('--' + name, required=True)
     c.add_argument('--max-threads', type=int, default=200)
+    c.add_argument('--max-followups', type=int, default=300,
+                   help='recently-sent threads checked for an unanswered reply without a draft')
     c.add_argument('--max-pages', type=int, default=20)
     c.set_defaults(func=collect)
     k = subs.add_parser('continuation')
@@ -957,7 +1021,7 @@ def main():
             p.add_argument('--allow-draft-corrections', action='store_true')
         p.set_defaults(func=func)
     args = parser.parse_args()
-    if args.command == 'collect' and not (args.max_threads > 0 and args.max_pages > 0):
+    if args.command == 'collect' and not (args.max_threads > 0 and args.max_pages > 0 and args.max_followups >= 0):
         parser.error('Collection bounds must be positive')
     try:
         if args.command == 'validate':

@@ -230,33 +230,70 @@ class Tests(unittest.TestCase):
             client.rc('run', 'thread', 'abc')
             self.assertIn('--raw-output', run.call_args.args[0])
 
-    def test_only_draft_threads_collected_and_cap_explicit(self):
+    def test_undrafted_run_threads_pages_and_filters(self):
+        client = c.Client({'gws_script': 'core.py', 'gws_config': 'config.json', 'project': 'test'})
+        page1 = {'runs': [{'run_id': f'r{i}', 'thread_id': 'abc', 'has_draft': True} for i in range(99)]
+                 + [{'run_id': 'r99', 'thread_id': 'def', 'has_draft': False}]}
+        page2 = {'runs': [{'run_id': 's1', 'thread_id': 'fed', 'has_draft': False},
+                          {'run_id': 's2', 'thread_id': 'def', 'has_draft': False},
+                          {'run_id': 's3', 'thread_id': 'aaa', 'has_draft': False, 'simulation': True}]}
+        with patch.object(client, 'rc', side_effect=[page1, page2]) as rc:
+            self.assertEqual(client.undrafted_run_threads(14), (['def', 'fed'], False))
+            self.assertEqual(rc.call_args.args[-2:], ('--before', 'r99'))
+
+    def test_draft_threads_and_unanswered_followups_collected_with_caps(self):
+        def thread(tid, *messages):
+            return {'id': tid, 'messages': list(messages)}
+        ours = lambda mid, at: message(mid, ACCOUNT, 'customer@example.test', sent=True, at=at)
+        sent_threads = {
+            'a': None,  # also holds a draft: collected once, as a draft thread
+            'f1': thread('f1', message('in1'), ours('out1', 2), message('in2', at=3, text='still broken')),
+            'f2': thread('f2', message('in1'), ours('out1', 2)),  # we answered last: nothing owed
+            'f3': thread('f3', ours('out1', 1), message('bot', 'notifications@tool.test', at=2)),  # robot
+            'f4': thread('f4', message('in1'), ours('out1', 2), message('in2', at=3),
+                         message('d', ACCOUNT, draft=True, at=4)),  # unlisted draft: never "undrafted"
+        }
+        # Note-only threads come from ReplyPen's undrafted runs, not the Gmail query; 'e9' is a run on
+        # another mailbox of the project (not in Gmail), 'f1' is found by both sources.
+        run_threads = {'f5': thread('f5', message('in1'), message('note', ACCOUNT, ACCOUNT, sent=True, at=2))}
+
         class Fake:
             def __init__(self, config):
                 self.config = config
             def pages(self, path, key, **params):
-                assert path == 'drafts', 'undrafted inbox mail is out of scope'
+                if path == 'threads':
+                    assert params['q'] == f'in:sent -to:{ACCOUNT} newer_than:14d', params
+                    return [{'id': t} for t in sent_threads], False
                 return [{'id': f'd{i}', 'message': {'id': f'm{i}', 'threadId': t}}
                         for i, t in enumerate(('a', 'b', 'c', 'd'))] + \
                        [{'id': 'solo', 'message': {'id': 'solo', 'threadId': 'solo'}}], False
+            def undrafted_run_threads(self, days, max_pages=20):
+                return ['f5', 'e9', 'f1'], False
             def gws(self, *args):
                 if args[0] == 'whoami':
                     return {'email': ACCOUNT}
-                return {'id': args[1], 'messages': [message('in')]}
+                if args[1] == 'e9':
+                    raise c.Refused('not in this mailbox')
+                return (sent_threads.get(args[1]) or run_threads.get(args[1])
+                        or {'id': args[1], 'messages': [message('in')]})
             def rc(self, *args):
                 if args[:3] == ('project', 'mailbox', 'ls'):
                     return {'mailboxes': [{'id': 'one', 'provider': 'google', 'email_address': ACCOUNT}]}
                 return {'runs': [], 'threads': []}
         with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake):
             args = argparse.Namespace(out=temp, project='test', mailbox_id='one', gws_script='gws.py',
-                                      gws_config='config.json', max_pages=20, max_threads=3)
+                                      gws_config='config.json', max_pages=20, max_threads=3, max_followups=10)
             c.collect(args)
             index = c.read(Path(temp) / 'index.json')
-            self.assertEqual([t['thread_id'] for t in index['threads']], ['a', 'b', 'c'])
-            self.assertEqual(index['coverage']['discovered_threads'], 4)
-            self.assertEqual(index['coverage']['uncovered_threads'], 1)
-            self.assertEqual(index['coverage']['standalone_drafts_excluded'], 1)
-            self.assertEqual(index['threads'][0]['state'], 'not_processed')
+            self.assertEqual([(t['thread_id'], t['scope']) for t in index['threads']],
+                             [('a', 'draft'), ('b', 'draft'), ('c', 'draft'), ('f1', 'followup'), ('f5', 'followup')])
+            cov = index['coverage']
+            self.assertEqual((cov['discovered_threads'], cov['checked_threads'], cov['uncovered_threads']), (4, 3, 1))
+            self.assertEqual((cov['followup_candidates'], cov['followup_threads']), (5, 2))
+            self.assertEqual(cov['failed_thread_ids'], [])  # the other mailbox's run is not a failure
+            self.assertEqual(cov['standalone_drafts_excluded'], 1)
+            self.assertEqual(index['threads'][3]['state'], 'not_processed')  # ReplyPen never ran on it
+            self.assertEqual(c.read(Path(temp) / 'threads' / 'f1.json')['scope'], 'followup')
 
     def test_findings_errors_name_the_thread(self):
         detail, finding = fixture()
@@ -654,9 +691,10 @@ class Tests(unittest.TestCase):
             c.save(bundle / 'details/abc.json', detail)
             c.save(bundle / 'findings.json', [finding])
             c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'draft_ready'}],
+                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'not_processed', 'scope': 'followup'}],
                 'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0, 'carried_threads': 1}})
+                             'list_truncated': False, 'standalone_drafts_excluded': 0, 'carried_threads': 1,
+                             'followup_candidates': 9, 'followup_threads': 1}})
             c.save(bundle / 'continuation.json', {'threads': [
                 {'thread_id': 'abc', 'status': 'changed', 'prior': {'reviewed_at': '2026-10-22T10:00:00'}}]})
             c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
@@ -665,6 +703,8 @@ class Tests(unittest.TestCase):
             self.assertIn('reused case, changed since 2026-10-22', report)
             self.assertIn(f'`Mail-ref: gmail:abc {ACCOUNT}` · Case thread: `t3-thread://v1/mcp:aaaa`', report)
             self.assertIn('1 earlier cases carried in', report)
+            self.assertIn('· reply waiting, no ReplyPen draft', report)
+            self.assertIn('1 follow-ups without a draft (of 9 threads we wrote in within 14 days)', report)
 
     def test_history_id_bump_is_not_a_change(self):
         """Gmail bumps historyId on unrelated mailbox activity: same content must keep its fingerprint."""

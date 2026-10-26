@@ -1,12 +1,14 @@
 ---
 name: mailbox-review-core
-description: "Review a ReplyPen-watched Google mailbox from a developer machine: research every unsent ReplyPen draft, replace weak ones with a better version, open a fix thread per confirmed product bug, and hand the operator an inline Markdown report (Gmail links, folded evidence) plus a ledger. Read the project's mailbox-review wrapper first; it binds mailbox, accounts, repos and policy."
+description: "Review a ReplyPen-watched Google mailbox from a developer machine: research every unsent ReplyPen draft and every recent thread where a reply waits on us without one, replace weak drafts with a better version, open a fix thread per confirmed product bug, and hand the operator an inline Markdown report (Gmail links, folded evidence) plus a ledger. Read the project's mailbox-review wrapper first; it binds mailbox, accounts, repos and policy."
 ---
 
 # Mailbox review (core)
 
-Scope: every thread holding an unsent ReplyPen draft. ReplyPen's triage of undrafted mail is trusted;
-the rest of the inbox is not rechecked. Gmail supplies drafts, public `rp` supplies per-thread run
+North star: nothing that needs us slips through. Scope: every thread holding an unsent draft, plus
+**follow-ups**: threads we (a person or ReplyPen, notes included) wrote in during the last 14 days whose
+newest mail is an unanswered message from a person and that hold no draft (ReplyPen never ran, only
+left a note, or declined). Older undrafted inbox mail stays ReplyPen's triage. Gmail supplies drafts, public `rp` supplies per-thread run
 evidence. A successful run is evidence, never proof the answer is right.
 
 Needs authenticated `rp`, `uv`, and a [google-workspace-core](../google-workspace-core/SKILL.md) account
@@ -42,6 +44,11 @@ flowchart LR
    back to the top; a renewal date recurs and never counts. Among fresh threads, leave answered,
    no-inbound and confident simple drafts alone; pick uncertain or consequential ones. Health flags help
    prioritize; keywords or a green run never decide answer quality.
+   Follow-ups (`scope: followup`, "reply waiting, no ReplyPen draft"): courtesy (thanks, ack,
+   auto-reply) → no finding. Something owed (a question, a new problem, a promise of ours due) →
+   a finding like any other; when the answer is clear, write the reply as a new draft (step 7 recipe,
+   never send) and say why ReplyPen had none: no run is a host/ingestion question for `replypen`, a
+   note-only or declined run a `brain_proposal`.
 4. `detail` for every thread you will write a finding for. **Delegate generously, after routing**:
    step 3's age rule and continuity's routing (unchanged → carry, existing owner → its thread) run
    first; each remaining uncertain or consequential customer gets its own `delegate_task` (Claude Opus,
