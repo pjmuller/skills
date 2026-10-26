@@ -73,6 +73,8 @@ Verify the delivered format, not just the dev view: exports can differ. Confirm 
 slide/page count (accounting for intentional click pages), notes and asset rendering. A build
 success is not visual QA. Fix problems and recheck; state any verification limitation plainly.
 Deliver the requested artifact or preview with only the remaining decision/action for the user.
+End the final reply with the absolute path of each delivered file, the PDF (or other exported deck)
+first, so the user can open the result in one click.
 
 ## Learn from corrections
 

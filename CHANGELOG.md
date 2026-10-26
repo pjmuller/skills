@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-26 — slides: final reply ends with absolute file paths
+
+- The final reply lists the absolute path of each delivered file, the exported PDF first. Why: PJ opens the result in one click instead of hunting for it.
+
 ## 2026-10-26 — claude-cloud: token refresh ignores user-settings OAuth env
 
 - The pre-expiry refresh turn runs `claude … --setting-sources project,local`. Why: a profile whose `settings.json` env sets `CLAUDE_CODE_OAUTH_TOKEN` answered the Haiku turn with that token, so the Keychain login was never refreshed and every export failed with exit 3 (kampkompas, 150 h stale).
