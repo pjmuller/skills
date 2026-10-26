@@ -173,51 +173,6 @@ class Tests(unittest.TestCase):
         refetched['message']['payload']['parts'][0]['body']['size'] = 10
         self.assertNotEqual(c.digest(c.stable(draft)), c.digest(c.stable(refetched)))
 
-    def test_findings_freshness_run_identity_and_quotes(self):
-        detail, finding = fixture()
-        c.check_finding(finding, detail)
-        detail['collected_at'] = '2020-01-01T00:00:00+00:00'
-        with self.assertRaises(c.Refused):
-            c.check_finding(finding, detail)
-        detail, finding = fixture()
-        finding['run_id'] = 'different'
-        with self.assertRaises(c.Refused):
-            c.check_finding(finding, detail)
-        detail, finding = fixture()
-        body = 'AI body\nOn yesterday customer wrote:\n> Keep me'
-        detail['run']['draft_markdown'] = body
-        detail['drafts'][0]['message'] = message('draft', draft=True, text=body)
-        with self.assertRaises(c.Refused):
-            c.check_finding(finding, detail)
-
-    def test_owner_evidence_validates_optional_bounded_facts(self):
-        detail, finding = fixture()
-        c.check_finding(finding, detail)  # Existing findings remain valid.
-        for valid in [['A verified fact'], ['a', 'b', 'x' * 220]]:
-            finding['owner_evidence'] = valid
-            c.check_finding(finding, detail)
-        for invalid in [None, 'fact', [], ['a'] * 4, [''], ['   '], [1], ['x' * 221]]:
-            with self.subTest(invalid=invalid):
-                finding['owner_evidence'] = invalid
-                with self.assertRaises(c.Refused):
-                    c.check_finding(finding, detail)
-
-    def test_technical_evidence_requires_valid_source_and_bounded_results(self):
-        detail, finding = fixture()
-        block = {'source': 0, 'title': 'Billing', 'points': ['Refund pending.']}
-        finding['technical_evidence'] = [block]
-        c.check_finding(finding, detail)
-        invalid = [None, [], [block] * 5, ['not a block']]
-        invalid += [[dict(block, **change)] for change in (
-            {'source': True}, {'source': -1}, {'source': 1}, {'source': '0'},
-            {'title': ''}, {'title': ' '}, {'title': 'x' * 61},
-            {'points': []}, {'points': ['a'] * 5}, {'points': ['']},
-            {'points': [1]}, {'points': ['x' * 161]})]
-        for value in invalid:
-            with self.subTest(value=value), self.assertRaises(c.Refused):
-                finding['technical_evidence'] = value
-                c.check_finding(finding, detail)
-
     def test_pagination_and_raw_cli(self):
         client = c.Client({'gws_script': 'core.py', 'gws_config': 'config.json', 'project': 'test'})
         with patch.object(client, 'api', side_effect=[{'drafts': [{'id': '1'}], 'nextPageToken': 'next'},
@@ -280,7 +235,10 @@ class Tests(unittest.TestCase):
                 if args[:3] == ('project', 'mailbox', 'ls'):
                     return {'mailboxes': [{'id': 'one', 'provider': 'google', 'email_address': ACCOUNT}]}
                 return {'runs': [], 'threads': []}
-        with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake):
+        known = {'f1': {'owner': 'mcp:case', 'owner_title': 'Case', 'mentions': [
+            {'thread': 'mcp:review', 'title': '🧭 review', 'at': '1970-01-01T00:00:00.002Z', 'routing': True}]}}
+        with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake), \
+                patch.object(c, 't3_index', return_value=known) as t3:
             args = argparse.Namespace(out=temp, project='test', mailbox_id='one', gws_script='gws.py',
                                       gws_config='config.json', max_pages=20, max_threads=3, max_followups=10)
             c.collect(args)
@@ -294,167 +252,13 @@ class Tests(unittest.TestCase):
             self.assertEqual(cov['standalone_drafts_excluded'], 1)
             self.assertEqual(index['threads'][3]['state'], 'not_processed')  # ReplyPen never ran on it
             self.assertEqual(c.read(Path(temp) / 'threads' / 'f1.json')['scope'], 'followup')
-
-    def test_findings_errors_name_the_thread(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'findings.json', [finding])
-            c.save(bundle / 'index.json', {'threads': [{'thread_id': 'abc'}]})
-            with self.assertRaisesRegex(c.Refused, 'Thread abc: no detail file'):
-                c.findings(bundle, bundle / 'findings.json')
-            c.save(bundle / 'details/abc.json', detail)
-            finding['owner_evidence'] = ['a'] * 4
-            c.save(bundle / 'findings.json', [finding])
-            with self.assertRaisesRegex(c.Refused, 'Thread abc: Owner evidence'):
-                c.findings(bundle, bundle / 'findings.json')
-
-    def test_brain_proposal_validates_and_renders_escaped(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        finding['actionable'] = False
-        finding['brain_proposal'] = {'target': 'bug_report.md', 'change': 'Add <b>workaround</b>',
-                                     'why': 'Run escalated without a fix', 'detail': '/private/x.brain.md'}
-        c.check_finding(finding, detail)
-        c.check_finding(dict(finding, brain_proposal=dict(finding['brain_proposal'], status='landed')), detail)
-        for change in ({'target': ''}, {'change': 'x' * 401}, {'why': None}, {'detail': 1}, {'status': 'done'}):
-            with self.subTest(change=change), self.assertRaises(c.Refused):
-                c.check_finding(dict(finding, brain_proposal=dict(finding['brain_proposal'], **change)), detail)
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'details/abc.json', detail)
-            c.save(bundle / 'findings.json', [finding])
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'draft_ready'}],
-                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.md')))
-            report = (bundle / 'report.md').read_text()
-            self.assertIn('Lessons for ReplyPen', report)  # Shown even for non-actionable threads.
-            self.assertIn('- waiting for a go · ', report)  # Status defaults to proposed.
-            self.assertIn('Add &lt;b&gt;workaround&lt;/b&gt;', report)
-            self.assertIn('`/private/x.brain.md`', report)
-
-    def test_bug_and_dx_gaps_validate_and_render_escaped(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        finding['bug'] = {'title': 'Sheet <b>drops</b> rows', 'evidence': ['sync.go:181 returns early'],
-                          'affected': '67 backups', 'fix_direction': 'Backfill on reset', 'owner': 'Developer',
-                          'thread': 't3-thread://v1/mcp:x'}
-        finding['dx_gaps'] = [{'gap': 'No AWS profile', 'unblock': 'Ask the developer for read-only logs'}]
-        c.check_finding(finding, detail)
-        for bad in ({'bug': dict(finding['bug'], evidence=[])}, {'bug': dict(finding['bug'], owner='')},
-                    {'dx_gaps': []}, {'dx_gaps': [{'gap': 'x'}]}):
-            with self.subTest(bad=bad), self.assertRaises(c.Refused):
-                c.check_finding(dict(finding, **bad), detail)
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'details/abc.json', detail)
-            c.save(bundle / 'findings.json', [finding])
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'draft_ready'}],
-                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.md')))
-            report = (bundle / 'report.md').read_text()
-            self.assertIn('Confirmed product bugs', report)
-            self.assertIn('Sheet &lt;b&gt;drops&lt;/b&gt; rows', report)
-            self.assertIn('What limited this review', report)
-            self.assertIn('Ask the developer for read-only logs', report)
-            finding['bug']['thread'] = 'https://github.com/o/r/pull/7?token=x'
-            finding['sources'].append({'kind': 'mail', 'fact': 'Earlier answer',
-                                       'location': 'https://mail.google.com/mail/?authuser=x#all/19ffaa328bcf306a'})
-            finding['technical_evidence'] = [{'source': 1, 'title': 'Mail', 'points': ['Earlier answer.']}]
-            c.save(bundle / 'findings.json', [finding])
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.md')))
-            report = (bundle / 'report.md').read_text()
-            self.assertIn('[https://github.com/o/r/pull/7](https://github.com/o/r/pull/7)', report)
-            self.assertIn(c.gmail_url(ACCOUNT, '19ffaa328bcf306a') + ')', report)
-
-    def test_markdown_escaping_secret_links_and_confirmed_action(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        finding['verdict'] = 'confirmed'
-        finding['owner_evidence'] = ['Refund pending <script>evil</script> [x](https://evil.test) **bold**',
-                                     'See https://example.test/private?token=owner-secret']
-        long_location = 'internal/' + 'deep-path/' * 22 + 'billing/refund.go:187'
-        long_fact = 'Verified detail. ' * 30 + 'Caveat: no refund has been issued.'
-        long_delta = 'No changes observed. ' * 30 + 'Caveat: customer confirmation is still missing.'
-        finding['changed_since_run'] = long_delta
-        finding['sources'].append({'kind': 'code', 'location': long_location, 'fact': long_fact})
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'details/abc.json', detail)
-            c.save(bundle / 'findings.json', [finding])
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': '<script>subject</script> DPA-PrÃ¼fung', 'state': 'draft_ready'}],
-                'coverage': {'discovered_threads': 3, 'checked_threads': 1, 'uncovered_threads': 2, 'list_truncated': True,
-                             'standalone_drafts_excluded': 4}})
-            render = lambda: (c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                                          out=str(bundle / 'report.md'))),
-                              (bundle / 'report.md').read_text())[1]
-            report = render()
-            self.assertIn('### Do first', report)
-            self.assertIn('Send the verified reply', report)
-            self.assertIn(f'**[&lt;script&gt;subject&lt;/script&gt; DPA-Prüfung](https://mail.google.com/mail/'
-                          f'?authuser={ACCOUNT.replace("@", "%40")}#all/abc)** · today', report)
-            self.assertNotIn('<script>', report)
-            self.assertIn('\\[x\\](\\[link\\] \\*\\*bold\\*\\*', report)  # no live link or emphasis
-            for secret in ('token=secret', 'owner-secret', 'evil.test'):
-                self.assertNotIn(secret, report)
-            self.assertIn('unlisted threads unknown', report)
-            sections = re.findall(r'<details><summary>(.*?)</summary>\n\n(.*?)\n</details>', report, re.S)
-            self.assertEqual([title for title, _ in sections], ['Why · evidence'])
-            body = sections[0][1]
-            self.assertIn('Refund pending &lt;script&gt;evil&lt;/script&gt;', body)
-            self.assertIn('`' + long_location + '`', body)
-            self.assertIn(long_fact.strip(), body)
-            self.assertIn(long_delta.strip(), body)
-            self.assertIn(f'`Mail-ref: gmail:abc {ACCOUNT}`', body)
-            header = report.split('<details>')[0]
-            self.assertNotIn('onerror', header)  # Reason belongs inside the accordion.
-            finding['technical_evidence'] = [
-                {'source': 1, 'title': 'Billing <script>evil</script>', 'points': ['Refund pending.']},
-                {'source': 0, 'title': 'Run', 'points': ['See https://example.test/check?token=point-secret']}]
-            c.save(bundle / 'findings.json', [finding])
-            selected = render()
-            self.assertIn('*Billing &lt;script&gt;evil&lt;/script&gt;*', selected)
-            self.assertIn('[https://example.test/check](https://example.test/check)', selected)
-            self.assertIn('Refund pending.', selected)
-            for omitted in (long_fact, long_delta, 'Independent fact', 'point-secret', 'token=secret'):
-                self.assertNotIn(omitted, selected)
-            del finding['technical_evidence']
-            del finding['owner_evidence']
-            c.save(bundle / 'findings.json', [finding])
-            legacy = render()
-            self.assertEqual(legacy.count('&lt;img src=x onerror=evil()&gt;'), 1)
-            detail['collected_at'] = '2020-01-01T00:00:00+00:00'
-            c.save(bundle / 'details/abc.json', detail)
-            self.assertIn('Refresh evidence before acting.', render())
-            with self.assertRaises(c.Refused):
-                c.findings(bundle, bundle / 'findings.json')
-            c.save(bundle / 'index.json', {'threads': []})
-            with self.assertRaises(c.Refused):
-                c.findings(bundle, bundle / 'findings.json', require_fresh=False)
-
-    def test_memory_and_reviewer_thread_validate(self):
-        detail, finding = fixture()
-        c.check_finding(dict(finding, memory='Waiting on refund go since 25 Oct', reviewer_thread='mcp:abc'), detail)
-        for bad in ({'memory': ''}, {'memory': 'x' * 601}, {'reviewer_thread': 7}):
-            with self.subTest(bad=bad), self.assertRaises(c.Refused):
-                c.check_finding(dict(finding, **bad), detail)
-
-    def test_replacement_allowed_for_any_verdict(self):
-        # A better version may replace any untouched AI draft, not only a wrong one.
-        detail, finding = fixture()
-        for verdict in ('confirmed', 'uncertain', 'needs_human'):
-            c.check_finding(dict(finding, verdict=verdict), detail)
-        with self.assertRaisesRegex(c.Refused, 'complete replacement body'):
-            c.check_finding(dict(finding, replacement_body='  '), detail)
+            self.assertEqual(sorted(t3.call_args.args[1]), ['a', 'b', 'c', 'f1', 'f5'])  # one batch lookup
+            f1 = index['threads'][3]
+            self.assertEqual((f1['t3']['owner'], f1['new_since_t3']), ('mcp:case', 1))  # in2 (at=3) is newer
+            self.assertIsNone(index['threads'][0]['t3'])  # T3 knows nothing about it
+            self.assertTrue(f1['link'].startswith('[&lt;script&gt;customer&lt;/script&gt;](https://mail.google.com/'))
+            self.assertIn('3 read) + 2 follow-ups', cov['line'])
+            self.assertEqual(cov['t3_index'], 'ok')
 
     def test_cli_timeout_kills_grandchildren(self):
         with patch.object(c.subprocess.Popen, 'communicate',
@@ -463,40 +267,16 @@ class Tests(unittest.TestCase):
             c.cli_json(['sleep', '5'])
         killpg.assert_called_once()
 
-    def test_more_actions_collapse_and_corrected_marker(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            threads, items = [], []
-            for n in range(c.PRIMARY_ACTION_ROWS + 2):
-                tid = f'a{n}'
-                thread = dict(detail['gmail'], id=tid)
-                c.save(bundle / f'details/{tid}.json', dict(detail, gmail=thread, fingerprint=c.fingerprint(thread)))
-                items.append(dict(finding, thread_id=tid, evidence_fingerprint=c.fingerprint(thread),
-                                  priority='waiting' if n == 0 else 'today', action=f'Action {n}'))
-                threads.append({'thread_id': tid, 'subject': f'Subject {n}', 'state': 'draft_ready'})
-            c.save(bundle / 'corrections/a0.json', {'status': 'corrected', 'at': '2026-10-25T17:39:50+00:00'})
-            c.save(bundle / 'findings.json', items)
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': threads,
-                'coverage': {'discovered_threads': 9, 'checked_threads': 9, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.md')))
-            report = (bundle / 'report.md').read_text()
-            self.assertEqual(report.count('<summary>Why · evidence</summary>'), c.PRIMARY_ACTION_ROWS)
-            self.assertIn('<details><summary>2 more actions</summary>', report)
-            more = report.split('more actions</summary>')[1]
-            self.assertIn('· waiting: Action 0 · draft corrected, readback verified 2026-10-25T17:39', more)
-
-    def run_apply(self, draft_html=fake_render(AI_MD), rendered=True, readback_html=None, draft_text=AI_MD):
+    def run_apply(self, draft_html=fake_render(AI_MD), rendered=True, readback_html=None, draft_text=AI_MD,
+                  fingerprint=None, run_id='run', body=FIXED_MD, collected_at=None, run_markdown=AI_MD):
         detail, finding = fixture()
         draft = message('draft', ACCOUNT, 'customer@example.test', draft=True, at=2, text=draft_text, html=draft_html)
         detail['gmail']['messages'][1] = draft
         detail['fingerprint'] = finding['evidence_fingerprint'] = c.fingerprint(detail['gmail'])
-        detail['run']['draft_markdown'] = AI_MD
+        detail['run']['draft_markdown'] = run_markdown
         detail['drafts'] = [{'id': 'gmail-draft', 'message': draft}]
-        finding['replacement_body'] = FIXED_MD
+        if collected_at:
+            detail['collected_at'] = collected_at
         calls = self.calls = []
         class Fake:
             def __init__(self, config):
@@ -536,12 +316,12 @@ class Tests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         bundle = Path(temp.name)
         c.save(bundle / 'details/abc.json', detail)
-        c.save(bundle / 'findings.json', [finding])
         c.save(bundle / 'config.json', {'mailbox_id': 'one', 'account': ACCOUNT})
-        c.save(bundle / 'index.json', {'threads': [{'thread_id': 'abc'}]})
+        (bundle / 'fix.md').write_text(body)
         with patch.object(c, 'Client', Fake):
-            c.apply(argparse.Namespace(bundle=temp.name, findings=str(bundle / 'findings.json'),
-                                       thread_id='abc', allow_draft_corrections=True))
+            c.apply(argparse.Namespace(bundle=temp.name, thread_id='abc', draft_id='gmail-draft', run_id=run_id,
+                                       fingerprint=fingerprint or detail['fingerprint'], body_file=str(bundle / 'fix.md'),
+                                       reason='Wrong portal link', allow_draft_corrections=True))
         return bundle, self.writes(), calls
 
     def writes(self):
@@ -551,6 +331,7 @@ class Tests(unittest.TestCase):
         bundle, writes, calls = self.run_apply()
         audit = c.read(bundle / 'corrections/abc.json')
         self.assertEqual(audit['status'], 'corrected')
+        self.assertEqual(audit['reason'], 'Wrong portal link')
         self.assertEqual(audit['message_id_after'], 'after')
         self.assertEqual(c.plain_body(audit['draft']['message']), AI_MD)
         self.assertEqual(len(writes), 1)
@@ -577,6 +358,29 @@ class Tests(unittest.TestCase):
             self.run_apply(readback_html='<div>' + FIXED_MD + '</div>')
         self.assertEqual(len(self.writes()), 1)
 
+    def test_apply_ties_the_correction_to_the_reviewed_fresh_snapshot(self):
+        for kwargs, why in (({'fingerprint': 'other'}, 'Detail snapshot changed'),
+                            ({'collected_at': '2020-01-01T00:00:00+00:00'}, 'older than 4 hours'),
+                            ({'run_id': 'different'}, 'latest provider-filtered run'),
+                            ({'body': '  '}, 'complete replacement body')):
+            with self.subTest(why=why), self.assertRaisesRegex(c.Refused, why):
+                self.run_apply(**kwargs)
+            self.assertEqual(self.writes(), [])
+        quoted = AI_MD + '\nOn Monday customer wrote:\n> Keep me'
+        with self.assertRaisesRegex(c.Refused, 'quoted suffix'):
+            self.run_apply(draft_text=quoted, draft_html=fake_render(quoted), run_markdown=quoted)
+        with self.assertRaisesRegex(c.Refused, 'readback mismatched'):  # the fake Gmail reads back FIXED_MD
+            self.run_apply(draft_text=quoted, draft_html=fake_render(quoted), run_markdown=quoted,
+                           body='Fixed.\nOn Monday customer wrote:\n> Keep me')
+        self.assertEqual(len(self.writes()), 1)  # a kept quote passes every guard and gets written
+
+    def test_link_is_escaped_and_drops_tokens(self):
+        with patch('builtins.print') as out:
+            c.link(argparse.Namespace(url='https://app.replypen.com/runs/1?t=secret#x', label='Run [1] *x*'))
+        self.assertEqual(out.call_args.args[0], '[Run \\[1\\] \\*x\\*](https://app.replypen.com/runs/1)')
+        with self.assertRaises(c.Refused):
+            c.link(argparse.Namespace(url='javascript:alert(1)', label=None))
+
     def test_same_text_normalizes_only_line_endings_and_trailing_newline(self):
         self.assertTrue(c.same_text('a\r\nb\r\n', 'a\nb'))
         self.assertFalse(c.same_text('a\nb ', 'a\nb'))
@@ -587,124 +391,6 @@ class Tests(unittest.TestCase):
             with self.assertRaises(c.Refused):
                 c.apply(argparse.Namespace(allow_draft_corrections=False))
             client.assert_not_called()
-
-    def test_continuation_joins_earlier_reviews_of_the_same_mailbox_only(self):
-        def thread(tid, *messages):
-            return {'id': tid, 'messages': list(messages)}
-        same = thread('a1', message('in1'), message('d1', ACCOUNT, draft=True, at=2))
-        moved = thread('b2', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
-        carried = thread('c3', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
-        quiet = thread('d4', message('in1'), message('out1', ACCOUNT, 'customer@example.test', sent=True, at=2))
-        skipped = thread('c5', message('in1'), message('d5', ACCOUNT, draft=True, at=2))
-        live = {'a1': same, 'b2': copy.deepcopy(moved), 'c3': copy.deepcopy(carried), 'd4': quiet,
-                'c5': skipped}
-        live['b2']['messages'].append(message('in2', at=3, text='new question'))
-        live['c3']['messages'].append(message('in2', at=3, text='thanks'))
-
-        class Fake:
-            def __init__(self, config):
-                self.config = config
-            def gws(self, *args):
-                return {'email': ACCOUNT} if args[0] == 'whoami' else live[args[1]]
-            def rc(self, *args):
-                if args[:3] == ('project', 'mailbox', 'ls'):
-                    return {'mailboxes': [{'id': 'one', 'provider': 'google', 'email_address': ACCOUNT}]}
-                return {'runs': [], 'threads': []}
-
-        def bundle(path, at, mailbox, snapshots, items):
-            c.save(path / 'config.json', {'project': 'test', 'mailbox_id': mailbox})
-            c.save(path / 'index.json', {'account': ACCOUNT, 'collected_at': at, 'threads': []})
-            for tid, snap in snapshots.items():
-                c.save(path / 'details' / f'{tid}.json', {'gmail': snap, 'collected_at': at})
-            c.save(path / 'findings.json', [{'thread_id': t, 'run_id': None, 'verdict': 'confirmed',
-                                             'priority': 'soon', 'action': f'Act on {t}', 'draft_id': None,
-                                             'memory': f'Notes on {t}', 'reviewer_thread': f'mcp:{t}'}
-                                            for t in items])
-
-        with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake):
-            root = Path(temp)
-            bundle(root / 'mo-2026-10-21', '2026-10-21T10:00:00+00:00', 'one', {'a1': same}, ['a1'])
-            bundle(root / 'mo-2026-10-22', '2026-10-22T10:00:00+00:00', 'one',
-                   {'b2': moved, 'c3': carried, 'd4': quiet, 'c5': skipped}, ['b2', 'c3', 'd4', 'c5', 'f9'])
-            bundle(root / 'other-2026-10-22', '2026-10-22T11:00:00+00:00', 'two', {'a1': moved}, ['a1'])
-            # An old closed case is no longer polled: live has no 'a9', so a fetch would raise.
-            bundle(root / 'mo-2026-09-01', '2026-09-01T10:00:00+00:00', 'one', {'a9': same}, ['a9'])
-            c.save(root / 'mo-2026-09-01' / 'findings.json', [dict(c.read(root / 'mo-2026-09-01' / 'findings.json')[0],
-                                                                   actionable=False)])
-            today = root / 'mo-2026-10-23'
-            c.save(today / 'config.json', {'project': 'test', 'mailbox_id': 'one'})
-            rows = [c.summary(live[t], {}, ACCOUNT, []) for t in ('a1', 'b2')]
-            rows.append(c.summary(thread('e4', message('in1')), {}, ACCOUNT, []))
-            live['e4'] = thread('e4', message('in1'))
-            for t in ('a1', 'b2', 'e4'):
-                c.save(today / 'threads' / f'{t}.json', {'gmail': live[t]})
-            c.save(today / 'index.json', {'account': ACCOUNT, 'collected_at': '2026-10-23T10:00:00+00:00',
-                                          'threads': rows, 'coverage': {}})
-            live['f9'] = None  # gone from Gmail: the carry fails closed, the run goes on
-            real_gws = Fake.gws
-            def gws(self, *args):
-                if args[:2] == ('gmail-thread', 'f9'):
-                    raise c.Refused('gone')
-                return real_gws(self, *args)
-            Fake.gws = gws
-            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)], include=[]))
-            result = c.read(today / 'continuation.json')
-            status = {r['thread_id']: (r['status'], r.get('changes')) for r in result['threads']}
-            self.assertEqual(status, {'a1': ('unchanged', []), 'b2': ('changed', ['inbound']),
-                                      'e4': ('new', None), 'c3': ('changed', ['inbound']),
-                                      'd4': ('unchanged', []), 'f9': ('unknown', None), 'c5': ('unchanged', [])})
-            in_index = {r['thread_id']: r['in_index'] for r in result['threads']}
-            self.assertFalse(in_index['d4'])  # earlier case, no new inbound: listed, not re-reviewed
-            self.assertTrue(in_index['c5'])  # still holds a draft collect never read: never reported absent
-            c5 = next(t for t in c.read(today / 'index.json')['threads'] if t['thread_id'] == 'c5')
-            self.assertEqual((c5['draft_count'], c5['state'] != 'no_draft'), (1, True))
-            self.assertEqual(result['incompatible_bundles'], 1)  # the other mailbox never leaks in
-            rows = {r['thread_id']: r for r in result['threads']}
-            self.assertEqual(rows['a1']['prior']['reviewed_at'][:10], '2026-10-21')
-            self.assertEqual((rows['a1']['prior']['memory'], rows['a1']['prior']['reviewer_thread']),
-                             ('Notes on a1', 'mcp:a1'))  # the next run seeds its reviewer from these
-            self.assertEqual([m['id'] for m in rows['b2']['new_inbound']], ['in2'])
-            self.assertEqual(rows['c3']['mail_ref'], f'Mail-ref: gmail:c3 {ACCOUNT}')
-            index = c.read(today / 'index.json')
-            self.assertEqual([t['thread_id'] for t in index['threads'] if t.get('carried')], ['c3', 'c5'])
-            self.assertEqual(index['coverage']['carried_threads'], 2)
-            self.assertIn('f9', index['coverage']['failed_thread_ids'])
-            self.assertEqual(index['coverage']['uncovered_threads'], 1)  # a failed carry stays visible
-            self.assertEqual(result['counts']['unknown'], 1)
-            self.assertTrue((today / 'threads' / 'c3.json').exists())
-            c.continuation(argparse.Namespace(bundle=str(today), history=[str(root)], include=['d4']))
-            index = c.read(today / 'index.json')
-            self.assertIn('d4', [t['thread_id'] for t in index['threads']])  # open bug, quiet mail
-            self.assertEqual(index['coverage']['uncovered_threads'], 1)  # the rerun did not count f9 twice
-
-    def test_draft_save_and_removed_mail_count_as_changes(self):
-        before = {'id': 't', 'messages': [message('in'), message('d1', ACCOUNT, draft=True, at=2)]}
-        after = {'id': 't', 'messages': [message('d2', ACCOUNT, draft=True, at=2)]}
-        self.assertEqual(c.mail_delta(before, after), (['drafts', 'removed'], []))
-
-    def test_render_marks_reused_cases_and_prints_the_mail_ref(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        finding['case_thread'] = 't3-thread://v1/mcp:aaaa'
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'details/abc.json', detail)
-            c.save(bundle / 'findings.json', [finding])
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': c.now(), 'threads': [
-                {'thread_id': 'abc', 'subject': 'Subject', 'state': 'not_processed', 'scope': 'followup'}],
-                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0, 'carried_threads': 1,
-                             'followup_candidates': 9, 'followup_threads': 1}})
-            c.save(bundle / 'continuation.json', {'threads': [
-                {'thread_id': 'abc', 'status': 'changed', 'prior': {'reviewed_at': '2026-10-22T10:00:00'}}]})
-            c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                        out=str(bundle / 'report.md')))
-            report = (bundle / 'report.md').read_text()
-            self.assertIn('reused case, changed since 2026-10-22', report)
-            self.assertIn(f'`Mail-ref: gmail:abc {ACCOUNT}` · Case thread: `t3-thread://v1/mcp:aaaa`', report)
-            self.assertIn('1 earlier cases carried in', report)
-            self.assertIn('· reply waiting, no ReplyPen draft', report)
-            self.assertIn('1 follow-ups without a draft (of 9 threads we wrote in within 14 days)', report)
 
     def test_history_id_bump_is_not_a_change(self):
         """Gmail bumps historyId on unrelated mailbox activity: same content must keep its fingerprint."""
@@ -728,36 +414,6 @@ class Tests(unittest.TestCase):
         self.assertFalse(c.summary(thread, {'runs': []}, ACCOUNT, [])['stale'])
         robots = {'id': 'abc', 'messages': [message('cal', 'Calendly <notifications@calendly.test>', at=fresh)]}
         self.assertTrue(c.summary(robots, {'runs': []}, ACCOUNT, [])['stale'])
-
-    def test_stale_case_collapses_unless_our_promise_is_due(self):
-        detail, finding = fixture()
-        del finding['replacement_body']
-        with tempfile.TemporaryDirectory() as temp:
-            bundle = Path(temp)
-            c.save(bundle / 'details/abc.json', detail)
-            collected = c.now()
-            c.save(bundle / 'index.json', {'account': ACCOUNT, 'collected_at': collected, 'threads': [
-                {'thread_id': 'abc', 'subject': 'Old case', 'state': 'draft_ready',
-                 'customer_at': '1751760000000', 'stale': True}],
-                'coverage': {'discovered_threads': 1, 'checked_threads': 1, 'uncovered_threads': 0,
-                             'list_truncated': False, 'standalone_drafts_excluded': 0}})
-
-            def report(item):
-                c.save(bundle / 'findings.json', [item])
-                c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
-                                            out=str(bundle / 'report.md')))
-                return (bundle / 'report.md').read_text()
-
-            text = report(finding)
-            self.assertIn('No reviewed actions to surface.', text)
-            self.assertIn('1 old case: no customer mail for 14+ days', text)
-            self.assertIn('customer last wrote 2025-07-06', text)
-            due = dict(finding, due_by=(c.date.fromisoformat(collected[:10]) + c.timedelta(days=3)).isoformat())
-            text = report(due)
-            self.assertNotIn('old case', text)
-            self.assertIn('Send the verified reply', text.split('### Do first')[1])
-            with self.assertRaises(c.Refused):
-                report(dict(finding, due_by='next week'))
 
 if __name__ == '__main__':
     unittest.main()

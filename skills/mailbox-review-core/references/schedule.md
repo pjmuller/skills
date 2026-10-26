@@ -18,10 +18,9 @@ Fallback without `t3-schedule`: T3 `schedule_task` from a Claude Opus thread in 
 Run the <Product> mailbox review: read <repo>/.agents/skills/mailbox-review/SKILL.md and follow it with
 its mailbox-review-core. Missing → report a setup failure; no shallow digest.
 Scheduled workday run: title this thread "🧭 <mailbox> review <date>". Verify the rp login and mailbox
-identity first. Continue earlier runs (continuation over the wrapper's history, yesterday's 🧭 thread
-incl. my replies there as evidence, never as a new go; settle it per continuity step 5). After routing,
-give each uncertain or consequential customer its own delegate_task (Claude Opus, high), seeded with the
-prior brief, reviewer result and memory.
+identity first. Continue from T3 (each row's t3 tags; earlier 🧭 threads incl. my replies there as
+evidence, never as a new go; settle them per continuity step 3). After routing, give each uncertain or
+consequential customer its own delegate_task (Claude Opus, high), seeded with what T3 already concluded.
 Improve untouched ReplyPen drafts per the wrapper. Never send, delete, label, archive, move money or
 deploy without my go in this thread.
 Final reply: the inline Markdown report, then the ledger (send · decide · discard).

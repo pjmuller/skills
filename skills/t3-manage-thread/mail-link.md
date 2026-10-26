@@ -12,6 +12,7 @@ t3-mail-link resolve|find --all-accounts '<gmail url | id>'                     
 t3-mail-link --config <wrapper>/workspace.json claim '<gmail url | hex id>' [--for T3_ID]
 t3-mail-link --config <wrapper>/workspace.json release '<gmail url | hex id>'
 t3-mail-link --config <wrapper>/workspace.json schedule [--policy FILE]             # watch the account, arm the poller
+t3-mail-link index --account <mailbox> [<gmail id> …]                              # one pass, ~3 s: owner + mentioning T3 threads per Gmail thread (JSON)
 t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged <id> · unschedule
 ```
 

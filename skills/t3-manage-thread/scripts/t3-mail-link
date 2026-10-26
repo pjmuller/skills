@@ -539,6 +539,68 @@ def recorded_claim(account: str, gmail_thread: str) -> str | None:
     return owner
 
 
+# --- index: every Gmail thread T3 knows, in one pass ----------------------------
+MENTION = re.compile(r"(?:#(?:all|inbox|sent)/|gmail:)([0-9a-f]{15,16})\b")
+
+
+def thread_index(account: str, wanted: set[str] | None = None) -> dict[str, dict]:
+    """One read-only pass over T3's recorded items (~2 s on a 6 GB store): per Gmail thread the owner
+    (claims, same rules as `recorded_claim`) and the root T3 threads that mention it (Mail-ref lines,
+    Gmail links in replies, briefs, reports), newest first. The per-thread `find` adds full-text and
+    subject search on top; use this when you need many threads at once."""
+    db = t3_db()
+    found: dict[str, dict] = {}
+    roots: dict[str, str] = {}
+    with db:
+        rows = db.execute(f"SELECT thread_id, type, payload_json FROM {ITEMS} WHERE "
+                          "payload_json LIKE '%gmail:%' OR payload_json LIKE '%#all/%' OR payload_json LIKE '%#inbox/%' "
+                          "OR payload_json LIKE '%#sent/%' ORDER BY rowid").fetchall()
+        for thread_id, kind, payload in rows:
+            ids = set(MENTION.findall(payload))
+            if wanted is not None:
+                ids &= wanted
+            if not ids:
+                continue
+            item = json.loads(payload)
+            updated = item.get("completedAt") or item.get("updatedAt") or ""
+            root = roots.get(thread_id) or roots.setdefault(thread_id, root_thread(thread_id, db))
+            for gmail in ids:
+                entry = found.setdefault(gmail, {"owner": None, "mentions": {}})
+                entry["mentions"][root] = max(entry["mentions"].get(root, ""), updated)
+            if kind != "command_execution":
+                continue
+            for event, gmail, acct, explicit in mail_events(item.get("input") or "", item.get("output") or ""):
+                if acct != account or (wanted is not None and gmail not in wanted):
+                    continue
+                entry = found.setdefault(gmail, {"owner": None, "mentions": {}})
+                claimant = explicit or root
+                if event == "release":
+                    entry["owner"] = None
+                elif (hit := t3_lookup(claimant)) and not ROUTING_TITLE.search(hit[1]["title"] or ""):
+                    entry["owner"] = hit[0]
+        meta = {}
+        threads = {t for e in found.values() for t in [*e["mentions"], e["owner"]] if t}
+        for tid in threads:
+            row = db.execute("SELECT title, deleted_at FROM orchestration_v2_projection_threads WHERE thread_id = ?",
+                             (tid,)).fetchone()
+            meta[tid] = row
+    db.close()
+    out = {}
+    for gmail, entry in found.items():
+        mentions = [{"thread": t, "title": meta[t][0], "at": at, "routing": bool(ROUTING_TITLE.search(meta[t][0] or ""))}
+                    for t, at in sorted(entry["mentions"].items(), key=lambda kv: kv[1], reverse=True)
+                    if meta.get(t) and not meta[t][1]]
+        owner = entry["owner"] if entry["owner"] and meta.get(entry["owner"]) and not meta[entry["owner"]][1] else None
+        if owner or mentions:
+            out[gmail] = {"owner": owner, "owner_title": meta[owner][0] if owner else None, "mentions": mentions}
+    return out
+
+
+def cmd_index(args) -> int:
+    print(json.dumps(thread_index(args.account.lower(), set(args.ids) or None), indent=2, ensure_ascii=False))
+    return 0
+
+
 # --- find: which T3 threads already own a Gmail thread --------------------------
 FIND_LIMIT = 8  # T3 candidates inspected (one peek + one grep each)
 EXECUTION_SENTINEL = "Execution thread:"
@@ -1070,6 +1132,9 @@ def main(argv: list[str] | None = None) -> int:
     claim = reference("claim", "print the Mail-ref line: the T3 thread running this owns the mail case")
     claim.add_argument("--for", dest="for_thread", help="T3 thread id that owns it instead (e.g. a case thread you launched)")
     reference("release", "print the Mail-release line: stop watching this Gmail thread")
+    index = sub.add_parser("index", help="read-only, one pass: owner + mentioning T3 threads per Gmail thread (JSON)")
+    index.add_argument("--account", required=True, help="mailbox account whose Mail-ref claims count")
+    index.add_argument("ids", nargs="*", help="only these Gmail thread ids (default: every one T3 mentions)")
     listing = sub.add_parser("list", help="show watched mail cases")
     listing.add_argument("--thread-ids", action="store_true", help="only the owning T3 thread ids, one per line")
     poll = sub.add_parser("poll", help="apply new claims, triage new inbound mail, wake the owner")
@@ -1086,7 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "all_accounts", False) and (args.search or args.config):
         parser.error("--all-accounts takes an exact REF and no --config/--search (content search stays per account)")
     args.all_accounts = getattr(args, "all_accounts", False)
-    return {"resolve": cmd_resolve, "find": cmd_find, "claim": cmd_claim, "release": cmd_claim, "list": cmd_list,
+    return {"resolve": cmd_resolve, "find": cmd_find, "claim": cmd_claim, "release": cmd_claim, "list": cmd_list, "index": cmd_index,
             "poll": cmd_poll, "draft": cmd_draft, "schedule": cmd_schedule, "unschedule": cmd_unschedule}[args.command](args)
 
 

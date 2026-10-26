@@ -228,6 +228,23 @@ def test_recorded_claim_reads_t3_without_a_watch(t3db, tmp_path):
     assert ml.recorded_claim("a@x", GMAIL) is None
 
 
+def test_thread_index_owner_and_mentions_in_one_pass(t3db, tmp_path):
+    add_child(tmp_path, TASK, "aaaaaaaa-0000-0000-0000-000000000001")
+    other = "2222222222222222"
+    t3db(TASK, "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x", at="2026-10-20T10:00:00Z")  # child → its root owns
+    t3db("mcp:bbbbbbbb-0000-0000-0000-000000000002", "cat report.md",  # routing thread: mentions, never owns
+         f"[x](https://mail.google.com/mail/?authuser=a%40x#all/{GMAIL}) and gmail:{other}", at="2026-10-21T10:00:00Z")
+    t3db("cccccccc-0000-0000-0000-000000000003", "gws gmail-draft", f"Mail-ref: gmail:{other} a@x")  # deleted thread
+    index = ml.thread_index("a@x")
+    assert index[GMAIL]["owner"] == "aaaaaaaa-0000-0000-0000-000000000001"
+    assert [m["thread"] for m in index[GMAIL]["mentions"]] == [
+        "mcp:bbbbbbbb-0000-0000-0000-000000000002", "aaaaaaaa-0000-0000-0000-000000000001"]  # newest first
+    assert index[GMAIL]["mentions"][0]["routing"] is True
+    assert index[other]["owner"] is None  # the deleted claimant never owns
+    assert ml.thread_index("a@x", {other}).keys() == {other}
+    assert ml.thread_index("b@x")[GMAIL]["owner"] is None  # claims are per mailbox account
+
+
 def test_scan_events_canary_on_schema_change(t3db, tmp_path):
     import sqlite3
     t3db("x", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x")
