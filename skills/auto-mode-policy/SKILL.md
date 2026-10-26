@@ -15,8 +15,8 @@ names the permission being granted. An unexplained “no” is not a blanket aut
 Switching from Auto to Full Access (or approving the blocked call) right after an agent reported a
 block is the user's correction for that blocked action class, just like saying "this should be
 allowed". Finish the task in the granted mode, then make the durable repair below without asking and
-report the new rule in one line. Scope it to what was blocked (same command family, repo, account,
-destination), never to "everything Full Access allowed". Exception: irreversible data loss,
+report the new rule in one line. Scope it to the intent behind the blocked action (see
+[Generalize](#generalize-to-the-intent)), never to "everything Full Access allowed". Exception: irreversible data loss,
 production data writes, credential exposure, spend or publishing private data: propose the rule in
 the report and apply it only on an explicit yes. Goal: each Full Access detour happens once per
 action class, so Auto keeps adapting to how this user works.
@@ -43,11 +43,25 @@ trust from a billing label, or assume another person's profiles share the same o
 | Always-needed scope or pointer | Shared global AGENTS.md / CLAUDE.md |
 | Provider enforcement | [Provider adapters](providers.md), generated from those sources |
 
-Write the smallest durable rule covering the user's intent: **data/source + permitted operation +
-audience/destination + purpose**. Reading context through approved agent profiles does not imply
-publishing it, authorizing unrelated SaaS uploads, accessing other accounts' credentials, or changing
-production data. Put those distinctions in the private rule when relevant; never publish personal facts
-as universal defaults. Reuse an existing skill/overlay before adding infrastructure.
+## Generalize to the intent
+
+A rule names a **class of work the user evidently trusts**, not the one command that was blocked: the
+user approved painting the wall black, the rule is "repaint walls in any colour", not "black is fine".
+Ask what the user would answer to the next three variants (other repo, other script, other colour);
+if "obviously yes", the rule covers them. Shape: **data/source + operation + audience/destination +
+purpose**, worded as intent ("publishing releases of our own tooling through its documented release
+script"), with the hard limits spelled out.
+
+- **Widen or merge before adding.** Read the existing rules first; extend the closest one or merge two
+  into a broader one. Target a few dozen north-star rules, not hundreds of special cases.
+- **Generalize along the trusted axis only.** Releasing our own public kit generalizes to our other
+  tooling releases, not to publishing private repos or customer data. Reading context through approved
+  agent profiles does not imply publishing it, unrelated SaaS uploads, other accounts' credentials, or
+  production data changes.
+- **Don't generalize** the risky classes above (data loss, production data, credentials, spend, private
+  data): there the rule stays as narrow as the evidence.
+- Personal facts go in the private rule, never published as universal defaults. Reuse an existing
+  skill/overlay before adding infrastructure.
 
 The user's request to correct this policy authorizes the scoped policy edit and apply. Inspect the
 concrete diff yourself; don't manufacture another approval checkpoint. Without such authorization,
