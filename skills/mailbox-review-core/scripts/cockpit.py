@@ -27,6 +27,8 @@ PRIMARY_ACTION_ROWS = 7
 # (one collapsed line, no research) unless a dated promise of ours falls due within DUE_SOON_DAYS.
 STALE_DAYS = 14
 DUE_SOON_DAYS = 7
+LESSON_STATUS = {'proposed': 'waiting for a go', 'approved': 'go given, landing', 'landed': 'landed',
+                 'declined': 'declined'}
 ROBOT_LOCALPART = re.compile(r'no-?reply|do-?not-?reply|notification|mailer-daemon|postmaster|auto-?reply|bounce', re.I)
 
 
@@ -609,8 +611,10 @@ def check_finding(item, detail_data, require_fresh=True):
                     and len(item['brain_proposal'][k]) <= limit
                     for k, limit in (('target', 200), ('change', 400), ('why', 300)))
             and isinstance(item['brain_proposal'].get('detail', ''), str)
-            and len(item['brain_proposal'].get('detail', '')) <= 300):
-        raise Refused('Brain proposal needs target, change and why (short strings), optional detail path')
+            and len(item['brain_proposal'].get('detail', '')) <= 300
+            and item['brain_proposal'].get('status', 'proposed') in LESSON_STATUS):
+        raise Refused('Brain proposal needs target, change and why (short strings), optional detail path'
+                      f' and status ({"|".join(LESSON_STATUS)})')
     bug = item.get('bug')
     if 'bug' in item and not (
             isinstance(bug, dict)
@@ -824,11 +828,13 @@ def render(args):
     for item in ordered:
         bp = item.get('brain_proposal')
         if bp:
-            proposals.append(f'- {thread_link(item["thread_id"])} · {md_code(bp["target"], 200)}: '
+            proposals.append(f'- {LESSON_STATUS[bp.get("status", "proposed")]} · '
+                             f'{thread_link(item["thread_id"])} · {md_code(bp["target"], 200)}: '
                              f'**{md(bp["change"], 400)}** · {md(bp["why"], 300)}'
                              + (f' · {md_code(bp["detail"])}' if bp.get('detail') else ''))
     if proposals:
-        out += ['### Proposed brain changes', '', 'Not applied; the owner decides.', '', *proposals, '']
+        out += ['### Lessons for ReplyPen', '', 'Proposed per case; landed on the operator\'s go.', '',
+                *proposals, '']
     reviewed = {i['thread_id'] for i in items}
     unresolved = sum(t['state'] not in ('answered', 'no_unanswered_inbound') and
                      t['thread_id'] not in reviewed for t in index['threads'])

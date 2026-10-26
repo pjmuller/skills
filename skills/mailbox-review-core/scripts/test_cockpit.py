@@ -280,7 +280,8 @@ class Tests(unittest.TestCase):
         finding['brain_proposal'] = {'target': 'bug_report.md', 'change': 'Add <b>workaround</b>',
                                      'why': 'Run escalated without a fix', 'detail': '/private/x.brain.md'}
         c.check_finding(finding, detail)
-        for change in ({'target': ''}, {'change': 'x' * 401}, {'why': None}, {'detail': 1}):
+        c.check_finding(dict(finding, brain_proposal=dict(finding['brain_proposal'], status='landed')), detail)
+        for change in ({'target': ''}, {'change': 'x' * 401}, {'why': None}, {'detail': 1}, {'status': 'done'}):
             with self.subTest(change=change), self.assertRaises(c.Refused):
                 c.check_finding(dict(finding, brain_proposal=dict(finding['brain_proposal'], **change)), detail)
         with tempfile.TemporaryDirectory() as temp:
@@ -294,7 +295,8 @@ class Tests(unittest.TestCase):
             c.render(argparse.Namespace(bundle=temp, findings=str(bundle / 'findings.json'),
                                         out=str(bundle / 'report.md')))
             report = (bundle / 'report.md').read_text()
-            self.assertIn('Proposed brain changes', report)  # Shown even for non-actionable threads.
+            self.assertIn('Lessons for ReplyPen', report)  # Shown even for non-actionable threads.
+            self.assertIn('- waiting for a go · ', report)  # Status defaults to proposed.
             self.assertIn('Add &lt;b&gt;workaround&lt;/b&gt;', report)
             self.assertIn('`/private/x.brain.md`', report)
 

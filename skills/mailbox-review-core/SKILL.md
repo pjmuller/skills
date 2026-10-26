@@ -21,7 +21,7 @@ flowchart LR
   R -->|misunderstanding / setup| F
   R -->|confirmed bug, sized| T[own T3 thread<br/>in the owning repo]
   T -->|fix proposal| G{operator go?} -->|go| S[ship, verify live, tell customer]
-  R -->|draft needed a human| B[brain thread:<br/>teach, prove, publish on go]
+  R -->|lesson clear| P[propose now:<br/>exact diff, generic?] -->|go| B[land in batches:<br/>brain · help article · code PR]
   F --> L[fresh collect → ledger]
 ```
 
@@ -44,7 +44,8 @@ flowchart LR
 4. `detail` for every thread you will write a finding for. One **Opus, high effort, in-harness
    subagent** per customer (group that customer's threads) with [the reviewer recipe](references/reviewer.md)
    plus the wrapper's grounding brief. A Codex coordinator hands the set to a Claude worker; never
-   silently substitute a model. Opus unavailable → report it, leave corrections pending.
+   silently substitute a model. Opus unavailable → report it, leave corrections pending. As each
+   reviewer returns, propose its lessons right away ("Persist the lesson" below), not at the end.
 5. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
    A bug needs evidence (logs, rows, a live reproduction) and a count of affected customers. A
    confirmed bug, above all one hitting several customers, gets its own T3 thread (`t3_thread_launch`
@@ -59,12 +60,12 @@ flowchart LR
    verbatim as the body of your final T3 reply** (T3 renders Markdown, `<details>` accordions and
    Gmail links inline; no HTML page, no `html_render`); the file stays in the bundle as the archive.
    It holds up to seven prioritized cards (subject link + one action, a closed "Why · evidence"
-   accordion), the rest as one-line links in a closed accordion, then bugs, review limits and brain
-   proposals ([optional fields](references/optional-fields.md)), landed per "Teach the brain" below.
+   accordion), the rest as one-line links in a closed accordion, then bugs, review limits and lessons
+   with their status ([optional fields](references/optional-fields.md)).
    No raw mail or tokenized URLs.
 7. End with a fresh `collect` and a ≤10-bullet ledger: send · decide · discard. Sending and deleting
-   need the operator's explicit go in that conversation; verify in Gmail afterwards. Brain lessons
-   waiting for a publish go are a "decide" bullet. A new reply where no draft is left: GWS
+   need the operator's explicit go in that conversation; verify in Gmail afterwards. Lessons still
+   waiting for a go are a "decide" bullet. A new reply where no draft is left: GWS
    `gmail-draft --reply-to-message <last id> --from "<Name> <mailbox>"` (without `--from` the display
    name is lost), HTML from `rp dev tools draft-render`, then send.
 
@@ -105,24 +106,35 @@ flowchart LR
   a ReplyPen action. The operator's explicit go still gates every write; the wrapper says which
   credentials and writes are in bounds.
 
-## Teach the brain: you are its teacher
+## Persist the lesson per case: you are ReplyPen's teacher
 
 Solving today's case by hand is half the job. The other half: next time ReplyPen's own draft gets it
-right without a coding agent. For every draft you corrected or had to deepen, ask what the brain
-lacked: a fact or policy, a case runbook, routing (the symptom table pointed elsewhere), grounding (a
-script hid the deciding fact), an action (the fix needed hands). If the brain already said the right
-thing, it is a model/host issue for `replypen`, not a brain edit.
-- **Land the lessons, don't just list them.** One brain thread per review run (`t3_thread_launch` in
-  the brain checkout the wrapper names) bundles every `brain_proposal`, keyed to the run ids it fixes.
-  It reads the brain's `AGENTS.md` and its repo-local brain-dev skills (`<brain>/.agents/skills/`,
-  copies of `replypen-brain-skills`; `local-brain-work` first), writes the rule for the class of
-  cases (never this customer's name), proves it on the real case through `brain-simulate`/`brain-ask`
-  against a `dev/*` ref (simulation only, never a rerun of the customer thread): before wrong, after
-  right. Then `brain-publish`.
+right without a coding agent. Do it **per case, while you answer**: at the end it is forgotten.
+- **Spot it.** For every draft you corrected or had to deepen, ask what ReplyPen lacked: a fact or
+  policy, a case runbook, routing (the symptom table pointed elsewhere), grounding (a script hid the
+  deciding fact), an action (the fix needed hands), a wrong or missing help article, a product gap (a
+  screen or error that caused the mail). If the brain already said the right thing, it is a model/host
+  issue for `replypen`, not a brain edit.
+- **Propose as soon as it is clear,** to the operator, before the next case (a question tool where the
+  harness has one; keep researching while it waits). Concrete: file + section (article id or slug,
+  repo path) + the text to add or replace as a short diff or quote block, never "improve the brain".
+  Target where the fact lives: the brain (policy, runbook, routing, script, action); a help article
+  (customers and ReplyPen's KB both read it: fix it there, not in the brain); product code. Ask two
+  things: green light? Truly a generic rule (name the class of cases; never this customer) or a one-off
+  that stays out?
+- **Land on the green light, in batches.** Track each in the finding's `brain_proposal.status`.
+  - *Brain:* one brain thread per run (`t3_thread_launch` in the brain checkout the wrapper names),
+    started at the first go, fed later batches by `t3_thread_send`, keyed to the run ids it fixes. It
+    reads the brain's `AGENTS.md` and repo-local brain-dev skills (`<brain>/.agents/skills/`, copies
+    of `replypen-brain-skills`; `local-brain-work` first), writes the approved rule, proves it on the
+    real case through `brain-simulate`/`brain-ask` against a `dev/*` ref (simulation only, never a
+    rerun of the customer thread): before wrong, after right. Then `brain-publish`. The go on that
+    exact text is the publish go; a failed proof or a materially different text returns to the
+    operator with the simulated before/after.
+  - *Help article:* the wrapper's edit and publish path, then sync ReplyPen's KB and verify live.
+  - *Product code:* its own `t3_thread_launch` in the owning repo, a PR per "Go deep" shipping.
 - **Fix facts at their source.** A product fact the brain reads from a mirrored repo (wrapper lists the
   mirrors) is fixed in that repo's docs, not copied into the brain.
-- **Publishing changes customer answers:** it needs the operator's go, shown with the simulated
-  before/after. The proven `dev/*` ref waiting for that go is the deliverable, not a list of ideas.
 
 Reviewers stay read-only: no `rp ask`, retry, process-thread, sending, deletion, labels, archive or
 customer actions. A needed mutation becomes an audited action or its own thread. Draft correction
