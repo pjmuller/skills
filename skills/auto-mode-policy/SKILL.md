@@ -10,6 +10,17 @@ new authorization evidence: capture its actual scope, fix the durable rule, and 
 Do not require the word “go”, a second confirmation, or Full Access when the correction already
 names the permission being granted. An unexplained “no” is not a blanket authorization.
 
+## A mode switch is a correction
+
+Switching from Auto to Full Access (or approving the blocked call) right after an agent reported a
+block is the user's correction for that blocked action class, just like saying "this should be
+allowed". Finish the task in the granted mode, then make the durable repair below without asking and
+report the new rule in one line. Scope it to what was blocked (same command family, repo, account,
+destination), never to "everything Full Access allowed". Exception: irreversible data loss,
+production data writes, credential exposure, spend or publishing private data: propose the rule in
+the report and apply it only on an explicit yes. Goal: each Full Access detour happens once per
+action class, so Auto keeps adapting to how this user works.
+
 ## Diagnose before editing
 
 Read the exact rejected action and rationale, the user's correction, loaded global instructions,
