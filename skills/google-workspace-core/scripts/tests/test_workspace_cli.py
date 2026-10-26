@@ -212,3 +212,26 @@ def test_links_name_the_account_by_email_never_by_slot():
     assert with_account("https://console.cloud.google.com/apis/credentials?authuser=2&project=p#x",
                         "ops@example.com") == \
         "https://console.cloud.google.com/apis/credentials?project=p&authuser=ops@example.com#x"
+
+
+def test_draft_commands_print_the_draft_compose_link(capsys):
+    from gws_core.cli import cmd_gmail_draft, cmd_gmail_draft_get, cmd_gmail_draft_list
+    draft = {"id": "r-1", "message": {"id": "m1", "threadId": "19e875318442de06", "headers": {},
+                                     "attachments": [], "body": "b"},
+             "verified": {"files": 0}}
+    ws = SimpleNamespace(config=SimpleNamespace(account="Operator@Example.com"),
+                         gmail=SimpleNamespace(create_draft=lambda *a, **k: draft, get_draft=lambda _id: draft,
+                                               drafts=lambda _max: [draft]))
+    link = "https://mail.google.com/mail/?authuser=operator@example.com#drafts?compose=m1"
+    args = build_parser().parse_args(["gmail-draft", "--to", "a@b.c", "--subject", "s", "--body", "b"])
+    args.json = False
+    cmd_gmail_draft(args, ws)
+    assert f"\nDraft: {link}\n" in capsys.readouterr().out
+    args = build_parser().parse_args(["gmail-draft-get", "r-1"])
+    args.json = True
+    cmd_gmail_draft_get(args, ws)
+    assert f"Draft: {link}\n" in capsys.readouterr().err
+    args = build_parser().parse_args(["gmail-draft-list"])
+    args.json = False
+    cmd_gmail_draft_list(args, ws)
+    assert link in capsys.readouterr().out

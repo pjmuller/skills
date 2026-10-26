@@ -13,6 +13,7 @@ from .config import load_config
 from .drive import EXPORT_MIME
 from .errors import WorkspaceError
 from .gmail import thread_id_from, thread_url
+from .links import gmail_draft_url
 from .inputs import (extract_id, parse_json_arg, parse_values, protected_write, read_json,
                      read_requests, read_text)
 from .render import out, table, trunc, write_out
@@ -433,6 +434,15 @@ def print_open_url(ws, thread_id: str | None, as_json: bool) -> None:
         print(f"Open: {thread_url(ws.config.account, thread_id)}", file=sys.stderr if as_json else sys.stdout)
 
 
+def print_draft_url(ws, draft: dict, as_json: bool) -> None:
+    """The draft itself in compose, so the human reviews and sends it in one click (`Open:` is
+    only the thread); stderr keeps --json parseable."""
+    message_id = (draft.get("message") or {}).get("id")
+    if message_id:
+        print(f"Draft: {gmail_draft_url(ws.config.account, message_id)}",
+              file=sys.stderr if as_json else sys.stdout)
+
+
 def cmd_gmail_url(a, ws):
     thread_id = thread_of(ws, a.ref)
     url = thread_url(ws.config.account, thread_id)
@@ -448,6 +458,7 @@ def cmd_gmail_draft(a, ws):
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
     print_mail_ref(ws, message.get("threadId"), a.json)
+    print_draft_url(ws, draft, a.json)
 
 
 def cmd_gmail_send(a, ws):
@@ -462,14 +473,16 @@ def cmd_gmail_send(a, ws):
 
 def cmd_gmail_draft_list(a, ws):
     drafts = ws.gmail.drafts(a.max)
-    out(drafts, a.json, table([["DRAFT_ID", "MESSAGE_ID"]]
-        + [[d.get("id"), (d.get("message") or {}).get("id", "")] for d in drafts])
+    out(drafts, a.json, table([["DRAFT_ID", "MESSAGE_ID", "LINK"]]
+        + [[d.get("id"), m.get("id", ""), gmail_draft_url(ws.config.account, m["id"]) if m.get("id") else ""]
+           for d in drafts for m in [d.get("message") or {}]])
         + f"\n\n{len(drafts)} draft(s)")
 
 
 def cmd_gmail_draft_get(a, ws):
     draft = ws.gmail.get_draft(a.id)
     out(draft, a.json, f"draft {draft['id']}\n" + format_message(draft["message"], a.max_chars))
+    print_draft_url(ws, draft, a.json)
 
 
 def cmd_gmail_draft_update(a, ws):
@@ -479,6 +492,7 @@ def cmd_gmail_draft_update(a, ws):
     out(draft, a.json, f"draft updated and read back: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
     print_mail_ref(ws, message.get("threadId"), a.json)
+    print_draft_url(ws, draft, a.json)
 
 
 def cmd_gmail_draft_send(a, ws):

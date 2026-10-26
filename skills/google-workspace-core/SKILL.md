@@ -29,7 +29,10 @@ Gmail draft/send commands print `Mail-ref: gmail:<thread id> <account>` on their
 that claims the mail case for the running thread, so replies wake it ([mail cases](https://github.com/pjmuller/skills/blob/main/skills/t3-manage-thread/mail-link.md)).
 Don't filter that line away; never put it in the mail itself.
 They, plus `gmail-get`/`gmail-thread`, also print `Open: <normal Gmail link>`: put it in every
-report about a mail so the human can click straight to the thread. A pasted print link
+report about a mail so the human can click straight to the thread. Draft commands
+(`gmail-draft`, `-draft-update`, `-draft-get`, `-draft-list`) print `Draft: <link>` too: the draft
+open in compose. **Every report that creates, edits or reads back a draft hands that `Draft:` link
+to the human**, not only the thread; a draft without its link means a second round trip. A pasted print link
 (`view=pt&permthid=thread-f:…`) or Mail-ref → `gmail-url <ref>` gives that link; `gmail-thread`
 accepts the same refs (Show original and `thread-a` print links via a metadata lookup). Every link you hand out names the account by email, never `/u/<N>/`
 (sign-in order, reshuffles): [links](references/links.md) (`gws_core.links`, drafts, Docs, Console).
