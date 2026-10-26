@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-26 — contributing: direct commits for small, clearly shared changes
+
+- AGENTS.md "Direct commit or pull request": collaborators with write access push small, confident, broadly useful fixes straight to `main`; uncertain or consequential changes go to a PR left open for the owner's review; personal/company config stays out of the core. Why: the owner's company teams now contribute, and a PR per typo stalled on one reviewer.
+
 ## 2026-10-26 — tls-trust-audit: CA distrust exposure, measured not guessed
 
 - New skill. `tls_trust_audit.sh` classifies every CA bundle on the machine, live-probes each HTTPS client (curl, wget, git, every Python/Node install, Java, Go, the macOS OS verifier), compares tool versions and prints suggested remediation without running it; `tls_trust_remediate.sh` does the package-only half behind one confirmation (`-y` for agents). Per-incident data lives in `advisories/*.conf`, so the next advisory is a data file rather than a code change; eMudhra/emSign 2026-10 ships as the first one. Why: during that incident version numbers disagreed with behaviour repeatedly — `stripe` 16.0.0 was current and still shipped an affected bundle, `git` stayed exposed after Homebrew's `curl` was fixed because it reads the OS bundle, and two pending macOS updates predated the advisory so waiting for them could never have helped.

@@ -127,13 +127,13 @@ FTS5 `entries` + `threads`. `t3-find-thread` falls back to it ([t3-find-thread](
 - `check` pipes stdin through the same `redacted()` call as every write: `true` + categories (stderr,
   exit 0) or `false` (exit 1). Run it whenever a secret (token, password, key) passes through a
   thread; plain config (`PORT=3000`, `RAILS_ENV=production`) is meant to stay `false`.
-- **A miss → PR upstream**, no local rule file: `threads.redaction`, `scrub` and stale detection
-  assume one rule set, and a fix protects every user. In a clone of `pjmuller/skills` (fork without
-  push rights): rule in `scripts/t3_redact.py` + synthetic case in `scripts/test_t3_redact.py`
-  (assembled at runtime, never a real or token-shaped literal), bump `VERSION`, CHANGELOG line,
-  tests green, PR. It goes out in the user's name: their own rule for sending applies. Never patch the
-  installed copy: `skills-refresh` then blocks every skill update until the edit is undone. Once
-  the release is installed: run the rule-change steps below right away.
+- **A miss → fix upstream**, no local rule file: `threads.redaction`, `scrub` and stale detection
+  assume one rule set, and a fix protects every user. In a clone of `pjmuller/skills`: rule in
+  `scripts/t3_redact.py` + synthetic case in `scripts/test_t3_redact.py` (assembled at runtime,
+  never a real or token-shaped literal), bump `VERSION`, CHANGELOG line, tests green, then commit
+  or PR per the repo's AGENTS.md (no push rights: fork + PR). It goes out in the user's name: their
+  own rule for sending applies. Never patch the installed copy: `skills-refresh` then blocks every
+  skill update until the edit is undone. Once the release is installed: run the rule-change steps below right away.
 - Text is redacted before any clip (a cut could drop `PASSWORD =` and keep the value). Rule change →
   bump `t3_redact.VERSION`, then immediately, without asking (safe with T3 open), `sync --force`
   (threads still in T3: re-cut from full source text) and `scrub` (`--dry-run` counts first):

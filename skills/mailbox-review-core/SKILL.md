@@ -107,8 +107,12 @@ flowchart LR
   4. *Human hands:* login, phone, eID, payment, signature; sending or deleting mail.
   Missing access is a `dx_gaps` line, not a reason to stop: answer with what is reachable and say what
   the rest needs.
-- **Shipping a found fix:** a PR with tests on the critical path. Product-owner operator → the PR stays
-  open for the developer. Developer operator → merge and ship when confident, verify live. A data fix
+- **Shipping a found fix:** a PR with tests on the critical path and an opposite-model review, whoever
+  operates. A product owner at the keyboard runs agents strong enough to find and fix the root cause:
+  low-hanging fruit (clear cause, contained change, tests green) gets fixed, tested and landed per the
+  repo's rules in that run, not parked for the developer. Escalate to the developer only when the
+  agent sees no clear path forward (cause unclear, change broad or risky, infra/migration/security),
+  with the evidence and the exact question. Deploys follow the repo's rules; verify live. A data fix
   scoped to one customer (one account or backup, reversible, regression risk rated low by the agent)
   may run on the operator's explicit go through an audited action or the repo's documented write path,
   read back afterwards; anything broader is a PR.
