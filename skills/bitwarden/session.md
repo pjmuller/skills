@@ -16,7 +16,9 @@ item. Hence:
 
 - the holder keeps the key in its own memory and enforces the deadline by running `bw lock` (the only real
   revocation); no Keychain item (no expiry attribute), no launchd plist, no `export BW_SESSION`;
-- the holder, not `bw`, enforces scope: exact hosts, list/copy only, one field per copy, result = metadata.
+- the holder, not `bw`, enforces scope: exact **destination** hosts, list/copy only, one field per copy, result = metadata.
+  Candidate logins follow [URI matching](matching.md); approving `accounts.example.com` never authorizes requests
+  for `other.example.com`. Stop/restart a holder after changing its configured default.
 
 Sources: [CLI docs](https://bitwarden.com/help/cli/) ·
 [unlock.command.ts](https://github.com/bitwarden/clients/blob/main/apps/cli/src/key-management/commands/unlock.command.ts) ·
@@ -117,7 +119,7 @@ without sync logs the CLI out during the pre-unlock sync, and only PJ can `bw lo
 
 ## Never
 
-`bw export`, `bw list items` output (the helper reads it unfiltered internally and emits only exact-host metadata), `bw get item` dumps, `bw get password` to stdout, reading
+`bw export`, `bw list items` output (the helper reads it unfiltered internally and emits only approved matching metadata), `bw get item` dumps, `bw get password` to stdout, reading
 `pbpaste`/the clipboard, passing a secret to `preview_type`/`fill`/any text-entry tool, screenshotting a
 revealed password field, TOTP seeds or notes, `--passwordenv`/`--passwordfile`, copying `data.json`, setting
 `BW_SESSION` in any shell/env file/repo, or asking PJ to paste a key into the chat. A session is exposure

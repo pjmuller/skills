@@ -150,18 +150,18 @@ def test_no_delivery_on_failure_and_cleanup(fake, monkeypatch, mode, capsys):
     assert SECRET not in capsys.readouterr().out
 
 
-def test_exact_host_metadata_allowlist(fake):
+def test_matching_metadata_allowlist(fake):
     _, update, _ = fake
-    wrong = {**ITEM, "login": {**ITEM["login"], "uris": [{"uri": "https://eviladmin.example.com"},
+    wrong = {**ITEM, "login": {**ITEM["login"], "uris": [{"uri": "https://eviladmin.other.com"},
               {"uri": "https://admin.example.com.evil.test"}, {"uri": "https://admin.example.com@evil.test"}]}}
     update(items=[wrong, ITEM, {**ITEM, "type": 2}])
     result = bw.transaction(bw.Vault(), request("list"), ask=lambda *_: True)
-    assert result == {"items": [{"id": ID, "name": "Example", "username": "user", "host": "admin.example.com"}]}
+    assert result == {"items": [{"id": ID, "name": "Example", "username": "user", "host": "admin.example.com", "matched_uri_host": "admin.example.com", "match_rule": "base_domain"}]}
     assert not any(secret in json.dumps(result) for secret in (SECRET, "private", "https", "totp", "fields"))
 
 
 @pytest.mark.parametrize("change", [{"id": None}, {"id": "abcdef12-1234-1234-1234-123456789abc"}, {"type": 2},
-                                   {"login": {**ITEM["login"], "uris": [{"uri": "https://wrong.example.com"}]}},
+                                   {"login": {**ITEM["login"], "uris": [{"uri": "https://wrong.other.com"}]}},
                                    {"login": {**ITEM["login"], "password": None}}])
 def test_item_id_type_host_and_missing_field_rejected(fake, change):
     directory, update, _ = fake
@@ -182,17 +182,17 @@ def test_copy_without_id_picks_by_username_in_one_unlock(fake):
                             deliver=delivered.append)
     assert delivered == [SECRET]
     assert result == {"copied": "password", "id": ID, "name": "Example", "username": "user",
-                      "host": "admin.example.com", "clear_after_seconds": 30}
+                      "host": "admin.example.com", "clear_after_seconds": 30, "matched_uri_host": "admin.example.com", "match_rule": "base_domain"}
     assert sum(event["args"][0] == "unlock" for event in events()) == 1
 
 
-@pytest.mark.parametrize("rule", [3, 4])  # Exact, Regular expression: hidden from bw's --url and --search
-def test_item_hidden_by_its_match_rule_still_counts_as_ambiguous(fake, rule):
+@pytest.mark.parametrize("rule", [2, 3, 4, 5, 99])
+def test_restrictive_rule_is_never_weakened_to_host(fake, rule):
     directory, update, _ = fake
-    hidden = {**OTHER, "login": {**ITEM["login"], "uris": [{"uri": "https://admin.example.com/admin", "match": rule}]}}
-    update(items=[hidden, ITEM], filtered_items=[ITEM])  # any bw-side filter would drop the hidden item
-    with pytest.raises(bw.Failure, match="2 exact-host logins"):
-        bw.transaction(bw.Vault(), request(id=None, username="user"), ask=lambda *_: True,
+    restricted = {**ITEM, "login": {**ITEM["login"], "uris": [{"uri": "https://admin.example.com/admin", "match": rule}]}}
+    update(items=[restricted], item=restricted)
+    with pytest.raises(bw.Failure):
+        bw.transaction(bw.Vault(), request(id=None), ask=lambda *_: True,
                        deliver=lambda _: pytest.fail("delivered"))
     assert json.loads((directory / "state").read_text())["locked"]
 
@@ -227,7 +227,7 @@ def test_unlock_deadline_restarts_at_human_approval(monkeypatch):
 
 
 @pytest.mark.parametrize("answer,approved", [("", True), ("Y", True), ("n", False), (SECRET, False)])
-def test_confirm_reads_hidden_and_discards_early_password(monkeypatch, capsys, answer, approved):
+def test_confirm_reads_hidden_and_discards_early_password(fake, monkeypatch, capsys, answer, approved):
     monkeypatch.setattr(bw.getpass, "getpass", lambda prompt: answer)
     assert bw.confirm(request(), None) is approved
     assert SECRET not in capsys.readouterr().out
@@ -303,7 +303,7 @@ def test_scheme_less_and_http_hosts_match_exactly(uri):
 
 
 @pytest.mark.parametrize("uri", ["admin.example.com.evil.test", "admin.example.com@evil.test",
-                                 "eviladmin.example.com", "javascript://admin.example.com", "/admin.example.com"])
+                                 "eviladmin.other.com", "javascript://admin.example.com", "/admin.example.com"])
 def test_scheme_less_near_matches_rejected(uri):
     assert not bw.matching({**ITEM, "login": {"uris": [{"uri": uri}]}}, "admin.example.com")
 
@@ -410,7 +410,7 @@ def test_mutex_refuses_contention(fake):
 @macos_only
 def test_installer_copy_link_and_help_without_vault_access(fake, tmp_path):
     directory, _, _ = fake
-    for name, text in {"uname": "echo Darwin", "xcrun": 'printf "#!/bin/sh\\nexit 0\\n" > "$4"',
+    for name, text in {"uname": "echo Darwin", "xcrun": 'while [ "$1" != -o ]; do shift; done; shift; printf "#!/bin/sh\\nexit 0\\n" > "$1"',
                        "uv": "shift 3\nexec " + shlex.quote(sys.executable) + ' "$@"'}.items():
         script = directory / name
         script.write_text("#!/bin/sh\n" + text + "\n")
@@ -471,7 +471,7 @@ def test_session_serves_list_and_copy_without_new_unlock_then_locks_on_stop(fake
     assert bw.via_session({"op": "session-status", "vault": "default"})["active"]
     listed = bw.via_session(request("list"))
     assert listed == {"ok": True, "via": "session", "items": [{"id": ID, "name": "Example", "username": "user",
-                                                               "host": "admin.example.com"}]}
+                                                               "host": "admin.example.com", "matched_uri_host": "admin.example.com", "match_rule": "base_domain"}]}
     copied = bw.via_session(request())
     assert copied["ok"] and copied["copied"] == "password" and SECRET not in json.dumps(copied)
     assert delivered == [SECRET]
@@ -541,7 +541,7 @@ def test_vault_config_resolves_default_and_rejects_unknown(fake, tmp_path):
     with pytest.raises(bw.Failure, match="No vaults configured"):
         bw.vault_config("dentai")
     write_vaults(tmp_path, VAULTS)
-    assert bw.vault_config() == {"name": "work", "email": "work@example.com"}
+    assert bw.vault_config() == {"name": "work", "email": "work@example.com", "default_match": "base_domain"}
     assert bw.vault_config("dentai")["appdata"] == str(tmp_path / "home" / "bw-dentai")
     with pytest.raises(bw.Failure, match="choose --vault dentai|work"):
         bw.vault_config("personal")
@@ -642,8 +642,8 @@ def test_enrolled_copy_goes_to_the_broker_with_claim_and_every_vault(front):
                "--thread", "Invoice run", "--why", "download invoices")
     assert sent == {"op": "copy", "host": "admin.example.com", "username": "user", "field": "password",
                     "thread": "Invoice run", "why": "download invoices", "to": "clipboard",
-                    "vaults": [{"name": "other", "email": "b@example.com", "appdata": os.path.realpath("/tmp/x")},
-                               {"name": "work", "email": "a@example.com"}]}
+                    "vaults": [{"name": "other", "email": "b@example.com", "appdata": os.path.realpath("/tmp/x"), "default_match": "base_domain"},
+                               {"name": "work", "email": "a@example.com", "default_match": "base_domain"}]}
     assert launched == []
 
 
@@ -663,7 +663,7 @@ def test_fill_js_fetches_into_the_field_and_returns_only_the_length():
 def test_explicit_vault_restricts_the_broker_search(front):
     run, _ = front
     sent = run("--vault", "work", "list", "--host", "admin.example.com", "--username", "user")
-    assert sent["vaults"] == [{"name": "work", "email": "a@example.com"}] and sent["op"] == "list"
+    assert sent["vaults"] == [{"name": "work", "email": "a@example.com", "default_match": "base_domain"}] and sent["op"] == "list"
     assert sent["username"] == "user"
 
 
@@ -671,3 +671,81 @@ def test_not_enrolled_falls_back_to_the_terminal_without_claim_fields(front):
     run, launched = front
     run("copy", "--host", "admin.example.com", "--field", "password", "--why", "x", enrolled=False)
     assert len(launched) == 1 and "why" not in launched[0] and "thread" not in launched[0]
+
+
+MATCHING_CASES = json.loads((Path(__file__).parent / "matching_cases.json").read_text())
+
+
+@pytest.mark.parametrize("case", MATCHING_CASES)
+def test_matching_contract(case):
+    item = {"type": case.get("type", 1), "login": {"uris": [{"uri": case["uri"], "match": case["rule"]}]}}
+    assert bw.matching(item, case["host"], case["default"]) == case["yes"]
+
+
+def test_never_applies_only_to_its_uri():
+    assert bw.matching({"type": 1, "login": {"uris": [
+        {"uri": "https://accounts.google.com", "match": 5}, {"uri": "https://google.com", "match": 0}]}},
+        "accounts.google.com")
+
+
+def test_configured_default_restricts_both_frontend_and_broker_request(fake, tmp_path):
+    fake[1](email="work@example.com")
+    write_vaults(tmp_path, {"work": {"email": "work@example.com", "default": True, "default_match": "never"}})
+    assert bw.vault_config()["default_match"] == "never"
+    assert bw.broker_vaults()[0]["default_match"] == "never"
+    with pytest.raises(bw.Failure):
+        bw.transaction(bw.Vault(), {**request(), "vault": "work"}, ask=lambda *_: True,
+                       deliver=lambda _: pytest.fail("delivered"))
+    write_vaults(tmp_path, {"work": {"email": "work@example.com", "default": True, "default_match": "typo"}})
+    with pytest.raises(bw.Failure, match="default_match"):
+        bw.vault_config()
+
+
+def test_changed_uri_rule_between_list_and_get_cannot_release(fake):
+    directory, update, _ = fake
+    update(item={**ITEM, "login": {**ITEM["login"], "uris": [{"uri": "https://admin.example.com", "match": 5}]}})
+    with pytest.raises(bw.Failure):
+        bw.transaction(bw.Vault(), request(id=None), ask=lambda *_: True,
+                       deliver=lambda _: pytest.fail("delivered"))
+    assert json.loads((directory / "state").read_text())["locked"]
+
+
+def test_legacy_session_cannot_serve_copy_but_can_be_stopped(fake, monkeypatch):
+    import socket
+    import threading
+    with tempfile.TemporaryDirectory(prefix="bwlegacy", dir="/tmp") as directory:
+        monkeypatch.setattr(bw, "cache_dir", lambda: Path(directory))
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(Path(directory) / "session-default.sock"))
+        server.listen(1)
+        server.settimeout(5)
+        received = []
+        def serve():
+            with server:
+                connection, _ = server.accept()
+                with connection:
+                    received.append(json.loads(bw.read_line(connection)))
+                    connection.sendall(b'{"ok":true,"locked":true}\n')
+        thread = threading.Thread(target=serve)
+        thread.start()
+        assert bw.via_session(request()) is None
+        assert bw.via_session({"op": "session-stop", "vault": "default"})["locked"]
+        thread.join(5)
+        assert received == [{"op": "session-stop", "vault": "default"}]
+
+
+@pytest.mark.parametrize("contents", [None, "com\n"])
+def test_missing_or_incomplete_psl_is_actionable_and_never_delivers(fake, monkeypatch, tmp_path, contents):
+    directory, _, _ = fake
+    vault = bw.Vault()
+    if contents is not None:
+        (tmp_path / "public_suffix_list.dat").write_text(contents)
+    monkeypatch.setattr(bw, "ROOT", tmp_path)
+    bw.suffix_rules.cache_clear()
+    try:
+        with pytest.raises(bw.Failure, match="Public Suffix List.*rerun installer"):
+            bw.transaction(vault, request(id=None), ask=lambda *_: True,
+                           deliver=lambda _: pytest.fail("delivered"))
+        assert json.loads((directory / "state").read_text())["locked"]
+    finally:
+        bw.suffix_rules.cache_clear()

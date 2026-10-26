@@ -19,7 +19,7 @@ bw-once touchid status | bw-once touchid forget
   copy it); the real protection is that only the broker can open the stored secrets.
 - **Agent says (unverified)**, orange: `--thread`, `--why` as the agent wrote them (plain text, ≤120/200 chars).
 - **bw-once will (checked)**, green, built by the broker from the validated request: field, login filter, exact
-  host, vaults searched, destination. Touch ID approves exactly that; afterwards the window shows what was
+  destination host, base-domain match scope, per-vault default, excluded rules and vaults searched. Touch ID approves exactly that; afterwards the window shows what was
   released ("Copied password of … (user, vault) · vault locked"). Cancel/Esc/close or 5 minutes from the
   request (password-renewal panels included) → nothing.
 
@@ -32,13 +32,13 @@ bw-once touchid status | bw-once touchid forget
 - **Bitwarden**: the installer downloads Bitwarden's signed CLI from its GitHub release; the broker checks Apple's
   signature for Team `LTZ2PFU5D6` on the file and again on the running process. One `bw serve --hostname
   fd+connected://3` per vault over a socketpair (no TCP, no socket file, fixed environment): status (locked, right
-  account), sync, unlock, list all items, exact-host filter, lock, verify locked, stop. Each `bw` CLI start costs
+  account), sync, unlock, list all items, per-URI filter, lock, verify locked, stop. Each `bw` CLI start costs
   ~2.4 s; one serve per vault does the whole request in ~1.5 s.
 - **Release**: clipboard only after **every** vault is verified locked; a cancel after the touch still releases
   nothing. One match (or `--username`/`--id` narrowing to one) → released. Several matches → the broker keeps only
   those logins' requested field in memory, answers with `pick` (token + candidates' metadata), shows them in the
   window and waits 60 s on a private socket for `bw-once pick --token … --id …`; the window then shows the agent's
-  choice. One touch either way; the agent can only choose among the host's logins the human approved. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
+  choice. One touch either way; the agent can only choose among the destination's matching logins the human approved. The broker writes the clipboard itself (no other binary sees the secret); a detached copy of
   itself, knowing only an owner token, clears that write after 30 s unless something newer was copied.
   `--to page` instead: a detached copy serves the value once on `127.0.0.1` (random port + path, 60 s) to
   `Origin: https://<host>` only; the agent's `fill_js` fetches it into the field. Why: T3 drops Cmd+V into a tab
@@ -62,6 +62,9 @@ bw-once touchid status | bw-once touchid forget
 - **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
   a saved password (changed) → setup window for that vault; then the request continues (second touch). Both show
   the phrase.
+
+Matching is implemented in `matchScope`/`baseDomain`; `scripts/build_broker.py` compiles the vendored public
+suffix list into the signed binary. See [matching.md](matching.md) for scope and refresh instructions.
 
 ## Boundary
 

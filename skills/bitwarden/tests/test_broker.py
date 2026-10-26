@@ -81,8 +81,7 @@ while True:
 @pytest.fixture(scope="session")
 def broker(tmp_path_factory):
     build = tmp_path_factory.mktemp("broker")
-    subprocess.run(["xcrun", "swiftc", "-D", "BW_BROKER_TEST", str(SCRIPTS / "broker.swift"), "-o",
-                    str(build / "bw-broker")], check=True, capture_output=True)
+    subprocess.run([sys.executable, str(SCRIPTS / "build_broker.py"), str(build / "bw-broker"), "-D", "BW_BROKER_TEST"], check=True, capture_output=True)
     (build / "bw").write_text(f"#!{sys.executable}\n" + FAKE_SERVE)
     (build / "bw").chmod(0o700)
     return build
@@ -227,9 +226,9 @@ def test_username_still_selects_directly(world):
 
 def test_list_returns_metadata_only(world):
     enroll(world)
-    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob", host="other.example.com")])
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob", host="other.example.net")])
     result, _ = world["run"]("list", host=HOST)
-    assert result["items"] == [{"vault": "testa", "id": ID_A, "name": "Example", "username": "alice", "host": HOST}]
+    assert result["items"] == [{"vault": "testa", "id": ID_A, "name": "Example", "username": "alice", "host": HOST, "matched_uri_host": HOST, "match_rule": "base_domain"}]
     assert "private" not in json.dumps(result) and SECRET_A not in json.dumps(result)
     world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob")])
     result, panel = world["run"]("list", host=HOST, username="BOB")
@@ -461,7 +460,7 @@ def test_request_validation(world, fields):
 def test_a_failed_lock_still_locks_every_other_vault(world):
     enroll(world)
     world["configure"]("testa", fail_lock=True)
-    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob", host="other.example.com")])
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "bob", host="other.example.net")])
     result, _ = world["run"]("copy", host=HOST, field="password")
     assert result["ok"] is False and world["clip"]() is None and world["locked"]("testb")
 
@@ -512,3 +511,70 @@ def test_pick_window_discloses_agent_choice_and_late_or_totp_picks_fail(world):
     assert "the agent picks one" in child.stderr.read().decode()
     result, _ = world["run"]("copy", host=HOST, field="totp")
     assert result["ok"] is False and "pass --username" in result["error"]
+
+
+@pytest.mark.parametrize("case", json.loads((Path(__file__).parent / "matching_cases.json").read_text()))
+def test_compiled_matching_contract(broker, case):
+    request = {"op": "test-match", "host": case["host"], "default_match": case["default"],
+               "item": {"type": case.get("type", 1), "login": {"uris": [{"uri": case["uri"], "match": case["rule"]}]}}}
+    done = subprocess.run([str(broker / "bw-broker")], input=json.dumps(request), text=True,
+                          capture_output=True, check=True)
+    assert (json.loads(done.stdout)["scope"] is not None) == case["yes"]
+
+
+def test_base_domain_delivery_stays_on_destination_origin(world):
+    enroll(world)
+    world["configure"]("testa", items=[login(ID_A, SECRET_A, "alice", host="example.com")])
+    result, panel = world["run"]("copy", host=HOST, username="alice", field="password", to="page")
+    assert result["ok"] and result["matched_uri_host"] == "example.com" and result["match_rule"] == "base_domain"
+    assert "Base domain example.com" in panel and f"https://{HOST}" in panel
+    assert all(world["locked"](name) for name in MASTER) and world["clip"]() is None
+    for origin in ("https://example.com", "https://other.example.com", f"http://{HOST}"):
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(urllib.request.Request(result["fill_url"], headers={"Origin": origin}))
+    with urllib.request.urlopen(urllib.request.Request(result["fill_url"], headers={"Origin": f"https://{HOST}"})) as answer:
+        assert answer.read().decode() == SECRET_A
+    assert SECRET_A not in json.dumps(result) and SECRET_A not in panel
+
+
+@pytest.mark.parametrize("rule", [1, 2, 3, 4, 5, 99, True])
+def test_restricted_parent_uri_never_releases_even_with_id(world, rule):
+    enroll(world)
+    item = login(ID_A, SECRET_A, "alice", host="example.com")
+    item["login"]["uris"][0]["match"] = rule
+    world["configure"]("testa", items=[item])
+    result, panel = world["run"]("copy", host=HOST, id=ID_A, field="password")
+    assert not result["ok"] and world["clip"]() is None
+    assert all(world["locked"](name) for name in MASTER)
+    assert SECRET_A not in json.dumps(result) and SECRET_A not in panel
+
+
+def test_base_domain_adds_ambiguity_without_automatic_release(world):
+    enroll(world)
+    world["configure"]("testb", items=[login(ID_B, SECRET_B, "alice", host="example.com")])
+    child, result = world["start"]("copy", host=HOST, username="alice", field="password")
+    try:
+        assert len(result["pick"]["candidates"]) == 2 and world["clip"]() is None
+        assert all(world["locked"](name) for name in MASTER)
+        assert all("match_rule" in item for item in result["pick"]["candidates"])
+        assert world["pick"](result["pick"]["token"], ID_B)["ok"]
+        assert child.wait(10) == 0 and world["clip"]() == SECRET_B
+    finally:
+        if child.poll() is None:
+            child.terminate(); child.wait(10)
+
+
+def test_base_domain_recopy_cannot_move_to_sibling_destination(world, monkeypatch):
+    enroll(world)
+    world["configure"]("testa", items=[login(ID_A, SECRET_A, "alice", host="example.com")])
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    child, result = world["start"]("copy", host=HOST, username="alice", field="password", thread="Sign-in",
+                                    extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "1"})
+    try:
+        assert result["ok"] and result["matched_uri_host"] == "example.com"
+        assert recopy({"id": ID_A, "host": "other.example.com"}, "Sign-in") is None
+        assert recopy({"id": ID_A}, "Sign-in")["recopy"]
+        assert child.wait(10) == 0
+    finally:
+        if child.poll() is None:
+            child.terminate(); child.wait(10)

@@ -1,13 +1,14 @@
 """One fixed vault operation per human Terminal unlock, or a time-boxed session holder.
 
 The session key never leaves this process: a holder started in the human Terminal serves
-exact-host list/copy requests over a private Unix socket and locks the CLI at expiry."""
+destination-scoped list/copy requests over a private Unix socket and locks the CLI at expiry."""
 import argparse
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import fcntl
 import getpass
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -37,6 +38,7 @@ TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit
 BROKER_SECONDS = 330  # The broker releases nothing once 300 s passed since its start (renewal panels included).
 SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
+DEFAULT_MATCHES = {"base_domain": 0, "host": 1, "exact": 3, "never": 5}
 
 
 class Failure(Exception):
@@ -112,6 +114,10 @@ def vault_config(name=None):
     if entry is None or not isinstance(entry.get("email"), str) or "@" not in entry["email"]:
         raise Failure("Unknown vault; choose --vault " + "|".join(sorted(vaults)))
     config = {"name": vault_name(name), "email": entry["email"].lower()}
+    default_match = entry.get("default_match", "base_domain")
+    if not isinstance(default_match, str) or default_match not in DEFAULT_MATCHES:
+        raise Failure("Invalid default_match; use base_domain, host, exact or never")
+    config["default_match"] = default_match
     if entry.get("appdata"):
         appdata = str(entry["appdata"])
         appdata = Path.home() / appdata[2:] if appdata.startswith("~/") else Path(appdata)
@@ -281,7 +287,7 @@ def cache_dir():
 
 
 def session_socket(vault):
-    return cache_dir() / f"session-{vault_name(vault)}.sock"
+    return cache_dir() / f"session-v2-{vault_name(vault)}.sock"
 
 
 @contextmanager
@@ -341,6 +347,11 @@ def snapshot(request):
 def confirm(request, payload, account=None):
     print(f"\aBitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}):", flush=True)
     print(json.dumps(request, ensure_ascii=True), flush=True)
+    if request["op"] in ("list", "copy", "session-start"):
+        print("Vault default: " + vault_config(request["vault"]).get("default_match", "base_domain"), flush=True)
+        print("Matching: Base domain (public suffix aware) unless a per-URI or configured vault default restricts it. "
+              "Host only on destination port 443; Exact/StartsWith/Regex/Never excluded. "
+              "Browser defaults/equivalent domains are not imported.", flush=True)
     if payload:
         review = {key: payload[key] for key in ("name", "maxAccessCount", "deletionDate", "expirationDate")}
         review.update(payload.get("_review", {"exact_text": payload.get("text", {}).get("text")}))
@@ -356,55 +367,111 @@ def confirm(request, payload, account=None):
     return False
 
 
-def matching(item, expected):
-    if not isinstance(item, dict) or item.get("type") != 1 or not isinstance(item.get("login"), dict):
-        return False
-    for uri in item["login"].get("uris") or []:
-        try:
-            value = uri.get("uri") or ""
-            parsed = urlsplit(value if "://" in value or value.startswith("//") else "//" + value)
-            if parsed.scheme in ("", "https", "http") and parsed.hostname == expected:
-                return True
-        except (ValueError, AttributeError):
+@lru_cache(maxsize=1)
+def suffix_rules():
+    # Offline ICANN + PRIVATE snapshot, also embedded in the signed broker at build time.
+    try:
+        lines = (ROOT / "public_suffix_list.dat").read_text().splitlines()
+        if "// ===END ICANN DOMAINS===" not in lines or "// ===END PRIVATE DOMAINS===" not in lines:
+            raise Failure("Public Suffix List incomplete; rerun installer")
+        return {line.encode("idna").decode("ascii") for line in lines if line and not line.startswith("//")}
+    except (OSError, UnicodeError):
+        raise Failure("Public Suffix List missing or invalid; rerun installer") from None
+
+
+def base_domain(value):
+    labels = value.split(".")
+    rules = suffix_rules()
+    # Unknown/local suffixes and bare public suffixes cannot establish a registrable domain.
+    size = 0
+    for i in range(len(labels)):
+        suffix = ".".join(labels[i:])
+        if "!" + suffix in rules:
+            size = len(labels) - i - 1
+            break
+        if suffix in rules:
+            size = max(size, len(labels) - i)
+        if i > 0 and "*." + suffix in rules:
+            size = max(size, len(labels) - i + 1)
+    return ".".join(labels[-size - 1:]) if size and len(labels) > size else None
+
+
+def match_scope(item, expected, default_match="base_domain"):
+    if not isinstance(item, dict) or type(item.get("type")) is not int or item.get("type") != 1 or not isinstance(item.get("login"), dict):
+        return None
+    uris = item["login"].get("uris")
+    if not isinstance(uris, list):
+        return None
+    for uri in uris:
+        if not isinstance(uri, dict):
             continue
-    return False
+        rule = uri.get("match")
+        if rule is None:
+            rule = DEFAULT_MATCHES[default_match]
+        # Host-only requests cannot establish Exact/StartsWith/Regex constraints. Never stays never.
+        if type(rule) is not int or rule not in (0, 1):
+            continue
+        domain = base_domain(expected) if rule == 0 else None  # Missing PSL is an operation error, not a URI miss.
+        try:
+            value = uri.get("uri")
+            if not isinstance(value, str) or not value or any(ord(c) < 33 or ord(c) > 126 for c in value) or "\\" in value:
+                continue
+            parsed = urlsplit(value if "://" in value or value.startswith("//") else "//" + value)
+            if parsed.scheme not in ("", "https", "http") or parsed.username is not None or parsed.password is not None:
+                continue
+            saved = host(parsed.hostname)
+            port = parsed.port  # Reject malformed ports even for Base domain.
+            if (rule == 0 and domain is not None and domain == base_domain(saved)) or (
+                    rule == 1 and saved == expected and port in (None, 443)):
+                return {"matched_uri_host": saved, "match_rule": "base_domain" if rule == 0 else "host"}
+        except (ValueError, AttributeError, Failure):
+            continue
+    return None
 
 
-def exact_items(vault, expected):
-    # Unfiltered on purpose: `--url` applies each item's saved match rule and `--search` skips regex URIs, so
-    # either can hide an exact-host login and let `pick` claim a false uniqueness. Only metadata leaves here.
+def matching(item, expected, default_match="base_domain"):
+    return match_scope(item, expected, default_match) is not None
+
+
+def matched_items(vault, expected):
+    # Unfiltered: apply the same per-URI policy here and on the subsequent get-item check.
     items = vault.json("list", "items")
     if not isinstance(items, list):
         raise Failure("Invalid item list")
-    return [{"id": item_id(item.get("id")), "name": item.get("name"),
-             "username": item["login"].get("username"), "host": expected}
-            for item in items if matching(item, expected)]
+    found = []
+    for item in items:
+        scope = match_scope(item, expected, vault.config.get("default_match", "base_domain"))
+        if scope:
+            found.append({"id": item_id(item.get("id")), "name": item.get("name"),
+                          "username": item["login"].get("username"), "host": expected, **scope})
+    return found
 
 
 def pick(vault, request):
-    """Without --id, one exact-host login (narrowed by --username) in the same unlock as the copy."""
+    """Without --id, one URI-matching login (narrowed by --username) in the same unlock as the copy."""
     if request["id"]:
         return request["id"]
-    found = [item for item in exact_items(vault, request["host"])
+    found = [item for item in matched_items(vault, request["host"])
              if request["username"] is None or str(item["username"] or "").lower() == request["username"].lower()]
     if not found:
-        raise Failure("No exact-host login matches; check the saved Website URI: a parent domain does not match a subdomain. "
+        raise Failure("No login matches the destination and URI rules; Exact/StartsWith/Regex require a full URL and are excluded; Never is excluded. "
                       "This does not establish that the account is absent from the vault")
     if len(found) != 1:
-        raise Failure(f"{len(found)} exact-host logins match; pass --username or --id (from `list`)")
+        raise Failure(f"{len(found)} logins match; pass --username or --id (from `list`)")
     return found[0]["id"]
 
 
 def operate(vault, request, payload):
     op = request["op"]
     if op == "list":
-        return {"items": [item for item in exact_items(vault, request["host"]) if request["username"] is None
+        return {"items": [item for item in matched_items(vault, request["host"]) if request["username"] is None
                           or str(item["username"] or "").lower() == request["username"].lower()]}, None
     if op == "copy":
         request = {**request, "id": pick(vault, request)}
         item = vault.json("get", "item", request["id"])
-        if not matching(item, request["host"]) or str(item.get("id") or "").lower() != request["id"]:
-            raise Failure("Item ID, login type or exact host does not match")
+        scope = match_scope(item, request["host"], vault.config.get("default_match", "base_domain"))
+        if not scope or str(item.get("id") or "").lower() != request["id"]:
+            raise Failure("Item ID, login type or URI rule does not match")
         if request["username"] is not None and str(item["login"].get("username") or "").lower() != request["username"].lower():
             raise Failure("Item username does not match")
         if request["field"] == "totp":
@@ -417,7 +484,7 @@ def operate(vault, request, payload):
             raise Failure("Requested field is missing or unsupported")
         return {"copied": request["field"], "id": request["id"], "name": item.get("name"),
                 "username": item["login"].get("username"), "host": request["host"],
-                "clear_after_seconds": 30}, secret
+                "clear_after_seconds": 30, **scope}, secret
     encoded = base64.b64encode(json.dumps({k: v for k, v in payload.items() if k != "_review"}).encode())
     created = vault.json("send", "--fullObject", "create", data=encoded)
     if not isinstance(created, dict) or not isinstance(created.get("accessUrl"), str):
@@ -560,7 +627,7 @@ def submit_pick(token, item):
 def recopy_socket(host_name, field, thread):
     """Same name as the broker's `recopyKey`: host, field and thread hashed to fit an AF_UNIX path."""
     key = hashlib.sha256("\n".join((host_name, field, thread)).encode()).hexdigest()[:32]
-    return cache_dir() / f"recopy-{key}.sock"
+    return cache_dir() / f"recopy-v2-{key}.sock"
 
 
 def via_recopy(request, thread, vaults, to="clipboard"):
@@ -615,7 +682,7 @@ def broker_vaults(name=None):
     for entry in names:
         config = vault_config(entry)
         if config.get("email"):
-            vaults.append({key: config[key] for key in ("name", "email", "appdata") if key in config})
+            vaults.append({key: config[key] for key in ("name", "email", "appdata", "default_match") if key in config})
     return vaults
 
 
@@ -750,6 +817,8 @@ def session_transaction(vault, request, ask=confirm, announce=lambda status: Non
 def via_session(request):
     """Ask a running holder; None when there is none (caller falls back to the Terminal flow)."""
     path = session_socket(request["vault"])
+    if not path.exists() and request["op"] in ("session-status", "session-stop"):
+        path = cache_dir() / f"session-{vault_name(request['vault'])}.sock"  # Legacy holders: inspect/stop only.
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(120)
     try:
@@ -996,6 +1065,8 @@ def main():
                       "status": state if state in ("locked", "unlocked", "unauthenticated") else "unknown",
                       "account_matches": None if not expected or state == "unauthenticated"
                       else str(status.get("userEmail") or "").lower() == expected,
+                      "default_match": vault.config.get("default_match", "base_domain"),
+                      "matching_scope": "host-only; browser defaults and equivalent domains not imported",
                       "bw_version": version, "touch_id_flag": touch_id_flag(vault),
                       "ready": state == "locked" and sys.platform == "darwin" and result_ok(status, expected),
                       "clipboard_ready": (ROOT / "clipboard").is_file(),

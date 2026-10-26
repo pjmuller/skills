@@ -22,8 +22,12 @@ done
 if [ "$check" = true ]; then
   [ -x "$target/clipboard" ] && [ -x "$target/bw-broker" ] && [ -L "$command_path" ] \
     && [ "$(readlink "$command_path")" = "$target/bw-once" ] || { echo "bw-once installation missing" >&2; exit 1; }
-  for name in bw-once bw_once.py clipboard.swift broker.swift; do
+  for name in bw-once bw_once.py clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
     cmp -s "$source_dir/$name" "$target/$name" || { echo "Installed $name differs; rerun installer" >&2; exit 1; }
+  done
+  for pair in 'broker.swift broker.built.swift' 'public_suffix_list.dat public_suffix_list.built.dat' 'build_broker.py build_broker.built.py'; do
+    set -- $pair
+    cmp -s "$source_dir/$1" "$target/$2" || { echo "Broker build is stale; rerun installer" >&2; exit 1; }
   done
   [ "${BW_ONCE_SKIP_CLI_DOWNLOAD:-}" = 1 ] || codesign --verify -R="$requirement" "$target/bw" 2>/dev/null || {
     echo "Bitwarden CLI missing or unsigned; rerun installer" >&2; exit 1; }
@@ -37,7 +41,7 @@ if [ -e "$command_path" ] || [ -L "$command_path" ]; then
 fi
 mkdir -p "$target" "$prefix/bin"
 chmod 700 "$target"
-for name in bw-once bw_once.py clipboard.swift broker.swift; do
+for name in bw-once bw_once.py clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
   cp "$source_dir/$name" "$target/$name"
 done
 rm -f "$target/touchid" "$target/touchid.swift"  # Replaced by bw-broker.
@@ -47,8 +51,10 @@ mv "$target/clipboard.new" "$target/clipboard"
 # Hardened runtime: no injected libraries in the process that holds unsealed master passwords. Each build keeps its
 # own Keychain item; the build it replaces stays as bw-broker.prev until it handed its item over (one Touch ID in a
 # bw-once window at the next request), so an update never asks for the Mac password (touchid.md#updates).
-if [ ! -x "$target/bw-broker" ] || ! cmp -s "$source_dir/broker.swift" "$target/broker.built.swift"; then
-  xcrun swiftc "$target/broker.swift" -o "$target/bw-broker.new" -O
+if [ ! -x "$target/bw-broker" ] || ! cmp -s "$source_dir/broker.swift" "$target/broker.built.swift" \
+   || ! cmp -s "$source_dir/public_suffix_list.dat" "$target/public_suffix_list.built.dat" \
+   || ! cmp -s "$source_dir/build_broker.py" "$target/build_broker.built.py"; then
+  uv run --no-project python "$target/build_broker.py" "$target/bw-broker.new" -O
   codesign -s - -f -o runtime "$target/bw-broker.new" 2>/dev/null
   chmod 700 "$target/bw-broker.new"
   if [ -x "$target/bw-broker" ] && cmp -s "$target/bw-broker.new" "$target/bw-broker"; then
@@ -61,6 +67,8 @@ if [ ! -x "$target/bw-broker" ] || ! cmp -s "$source_dir/broker.swift" "$target/
     echo "bw-broker rebuilt: the next Touch ID request first shows a bw-once update window (your phrase, one touch)"
   fi
   cp "$source_dir/broker.swift" "$target/broker.built.swift"
+  cp "$source_dir/public_suffix_list.dat" "$target/public_suffix_list.built.dat"
+  cp "$source_dir/build_broker.py" "$target/build_broker.built.py"
 fi
 # Bitwarden's signed CLI from its official GitHub release (latest cli-v*), replaced only when the version changes.
 case "$(uname -m)" in arm64) flavour=macos-arm64;; *) flavour=macos;; esac

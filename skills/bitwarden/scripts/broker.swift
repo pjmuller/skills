@@ -1,6 +1,6 @@
 // bw-broker: the compiled core of bw-once's Touch ID path. Every security decision lives here, not in the
 // editable Python front end: the request panel (personal phrase, agent's claim, checked facts), Touch ID,
-// unsealing the master passwords, Bitwarden's signed CLI over a private socket, exact-host filtering, lock +
+// unsealing the master passwords, Bitwarden's signed CLI over a private socket, per-URI matching, lock +
 // verify, clipboard delivery. stdin: one request JSON; stdout: one result JSON (metadata only).
 //
 // Storage: one legacy Keychain item per broker build whose ACL trusts only that build (another or a modified binary
@@ -154,6 +154,7 @@ struct Vault {
     let name: String
     let email: String
     let appdata: String?
+    var defaultMatch = "base_domain"
 }
 
 struct Request {
@@ -191,7 +192,12 @@ func parseRequest(_ data: Data) throws -> Request {
         }
         let appdata = raw["appdata"] as? String
         if let appdata, !appdata.hasPrefix("/") { throw Failure(message: "Vault appdata must be absolute") }
-        vaults.append(Vault(name: name, email: email, appdata: appdata))
+        let defaultMatch = raw["default_match"] as? String ?? "base_domain"
+        guard raw["default_match"] == nil || raw["default_match"] is String,
+              ["base_domain", "host", "exact", "never"].contains(defaultMatch) else {
+            throw Failure(message: "Invalid vault default_match")
+        }
+        vaults.append(Vault(name: name, email: email, appdata: appdata, defaultMatch: defaultMatch))
     }
     var request = Request(op: op, vaults: vaults)
     if op == "list" || op == "copy" {
@@ -775,17 +781,52 @@ final class Serve {
 
 // MARK: - Matching (same rules as the front end's `matching`)
 
-func matches(_ item: [String: Any], host: String) -> Bool {
-    guard item["type"] as? Int == 1, let login = item["login"] as? [String: Any],
-          let uris = login["uris"] as? [[String: Any]] else { return false }
-    for entry in uris {
-        guard let raw = entry["uri"] as? String, !raw.isEmpty else { continue }
-        let value = raw.contains("://") || raw.hasPrefix("//") ? raw : "//" + raw
-        guard let parts = URLComponents(string: value), ["", "http", "https"].contains(parts.scheme?.lowercased() ?? ""),
-              parts.user == nil, parts.password == nil, parts.host?.lowercased() == host else { continue }
-        return true
+// publicSuffixRules is generated from the vendored ICANN + PRIVATE list by build_broker.py.
+// Embedded in the executable: replacing a runtime file cannot widen the signed broker's boundary.
+func baseDomain(_ host: String) -> String? {
+    let labels = host.split(separator: ".").map(String.init)
+    var size = 0
+    for i in labels.indices {
+        let suffix = labels[i...].joined(separator: ".")
+        if publicSuffixRules.contains("!" + suffix) { size = labels.count - i - 1; break }
+        if publicSuffixRules.contains(suffix) { size = max(size, labels.count - i) }
+        if i > 0 && publicSuffixRules.contains("*." + suffix) { size = max(size, labels.count - i + 1) }
     }
-    return false
+    return size > 0 && labels.count > size ? labels.suffix(size + 1).joined(separator: ".") : nil
+}
+
+func matchScope(_ item: [String: Any], host: String, defaultMatch: String = "base_domain") -> [String: String]? {
+    guard let type = item["type"] as? NSNumber, CFGetTypeID(type) != CFBooleanGetTypeID(), !["d", "f"].contains(String(cString: type.objCType)), type == 1,
+          let login = item["login"] as? [String: Any], let uris = login["uris"] as? [Any] else { return nil }
+    for rawEntry in uris {
+        guard let entry = rawEntry as? [String: Any] else { continue }
+        let rule: Int
+        if entry["match"] == nil || entry["match"] is NSNull {
+            rule = ["base_domain": 0, "host": 1, "exact": 3, "never": 5][defaultMatch] ?? 5
+        } else {
+            guard let number = entry["match"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), !["d", "f"].contains(String(cString: number.objCType)),
+                  number == 0 || number == 1 else { continue }
+            rule = number.intValue
+        }
+        // A hostname cannot prove path/query/regex restrictions; never weaken them to Host or Domain.
+        guard rule == 0 || rule == 1, let raw = entry["uri"] as? String, !raw.isEmpty,
+              !raw.unicodeScalars.contains(where: { $0.value < 33 || $0.value > 126 }), !raw.contains("\\") else { continue }
+        let value = raw.contains("://") || raw.hasPrefix("//") ? raw : "//" + raw
+        let authority = value.components(separatedBy: "//").dropFirst().first?.components(separatedBy: CharacterSet(charactersIn: "/?#")).first ?? ""
+        guard !authority.contains("%"), !authority.contains("["), !authority.contains("]"), let parts = URLComponents(string: value), ["", "http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.user == nil, parts.password == nil, let saved = exactHost(parts.url?.host),
+              parts.port == nil || (0...65535).contains(parts.port!) else { continue }
+        let domain = rule == 0 ? baseDomain(host) : nil
+        if (rule == 0 && domain != nil && domain == baseDomain(saved))
+            || (rule == 1 && saved == host && (parts.port == nil || parts.port == 443)) {
+            return ["matched_uri_host": saved, "match_rule": rule == 0 ? "base_domain" : "host"]
+        }
+    }
+    return nil
+}
+
+func matches(_ item: [String: Any], host: String, defaultMatch: String = "base_domain") -> Bool {
+    matchScope(item, host: host, defaultMatch: defaultMatch) != nil
 }
 
 // MARK: - Clipboard (written here: no other binary ever receives a released secret)
@@ -1236,7 +1277,9 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
             ?? (request.field == "totp" ? "the only matching login"
                 : "one matching login; if several match, the agent picks one (shown here)"))
     }
-    var rows = [("Releases", what), ("Exact host", request.host), ("Searches", vaults.joined(separator: ", ")),
+    var rows = [("Releases", what), ("Destination", "https://\(request.host)"),
+                ("Match scope", "Base domain \(baseDomain(request.host) ?? "unavailable"); per-URI Host restricts; Exact/StartsWith/Regex/Never excluded"),
+                ("Defaults", request.vaults.map { "\($0.name): \($0.defaultMatch)" }.joined(separator: ", ") + "; browser settings/aliases not imported"), ("Searches", vaults.joined(separator: ", ")),
                 ("Goes to", request.op != "copy" ? "the agent (metadata)" : request.to == "page"
                     ? "a page on https://\(request.host) only (one fetch within \(fillSeconds) s), not the clipboard"
                     : "clipboard, cleared after \(clipboardSeconds) s")]
@@ -1253,7 +1296,7 @@ func recopyAllowed(_ request: Request) -> Bool {
 
 /// Socket name shared with the front end (`bw_once.recopy_socket`): host, field and thread, hashed to fit the path.
 func recopyKey(host: String, field: String, thread: String) -> String {
-    "recopy-" + SHA256.hash(data: Data([host, field, thread].joined(separator: "\n").utf8))
+    "recopy-v2-" + SHA256.hash(data: Data([host, field, thread].joined(separator: "\n").utf8))
         .map { String(format: "%02x", $0) }.joined().prefix(32)
 }
 
@@ -1358,7 +1401,7 @@ func awaitPick(_ request: Request, _ choices: [([String: Any], String)], panel: 
     if server < 0 { fail("Cannot open the pick socket; nothing released") }
     func closeSocket() { close(server); unlink(path) }  // Every exit path below; exit() skips defers.
     func label(_ meta: [String: Any]) -> String {
-        "\(meta["name"] as? String ?? "?") (\(meta["username"] as? String ?? "no username"), \(meta["vault"] as? String ?? "?"))"
+        "\(meta["name"] as? String ?? "?") (\(meta["username"] as? String ?? "no username"), \(meta["vault"] as? String ?? "?")); \(meta["match_rule"] as? String ?? "?") \(meta["matched_uri_host"] as? String ?? "?")"
     }
     onMain {
         panel.setStatus("Vault locked. \(choices.count) logins match; the agent picks one within \(Int(pickSeconds)) s:\n"
@@ -1524,7 +1567,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     serves.append(serve)
                     guard let password = bundle[vault.name]?["password"], bundle[vault.name]?["email"] == vault.email,
                           try serve.unlock(password) else { rejected.append(vault); continue }
-                    for entry in try serve.items() where matches(entry, host: request.host) {
+                    for entry in try serve.items() where matches(entry, host: request.host, defaultMatch: vault.defaultMatch) {
                         candidates.append((vault, entry, serve))
                     }
                 }
@@ -1548,7 +1591,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             func metadata(_ entry: (Vault, [String: Any], Serve)) -> [String: Any] {
                 let login = entry.1["login"] as? [String: Any]
                 return ["vault": entry.0.name, "id": (entry.1["id"] as? String ?? "").lowercased(),
-                        "name": entry.1["name"] as? String ?? "", "username": login?["username"] ?? NSNull(), "host": request.host]
+                        "name": entry.1["name"] as? String ?? "", "username": login?["username"] ?? NSNull(), "host": request.host].merging(matchScope(entry.1, host: request.host, defaultMatch: entry.0.defaultMatch) ?? [:]) { $1 }
             }
             var result: [String: Any] = ["ok": true, "searched": vaults.map(\.name).filter { name in !unavailable.contains { $0["vault"] == name } },
                                          "unavailable": unavailable]
@@ -1575,7 +1618,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     guard choices.count > 1 else { throw Failure(message: "Requested field is missing on the matching logins") }
                 }
                 guard picked.count == 1 || !choices.isEmpty, let chosen = picked.first else {
-                    throw Failure(message: (picked.isEmpty ? "No exact-host login matches; check the saved Website URI: a parent domain does not match a subdomain. This does not establish that the account is absent from the vault" : "\(picked.count) logins match; pass --username or --id")
+                    throw Failure(message: (picked.isEmpty ? "No login matches the destination and URI rules; Exact/StartsWith/Regex require a full URL and are excluded; Never is excluded. This does not establish that the account is absent from the vault" : "\(picked.count) logins match; pass --username or --id")
                         + (candidates.isEmpty ? "" : "; candidates: "
                         + candidates.map { "\($0.0.name)/\($0.1["name"] as? String ?? "?")/\((($0.1["login"] as? [String: Any])?["username"] as? String) ?? "-")" }
                         .joined(separator: ", ")))
@@ -1616,7 +1659,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 let what = request.op == "list" ? "\((result["items"] as? [Any])?.count ?? 0) login(s) listed"
                     : (request.to == "page" ? "Sent " : "Copied ") + "\(request.field) of \(result["name"] as? String ?? "?") (\(result["username"] as? String ?? "no username"), "
                       + "\(result["vault"] as? String ?? "?"))"
-                panel.setStatus("✓ \(what) · vault locked", color: .systemGreen)
+                panel.setStatus("✓ \(what) · \(result["match_rule"] as? String ?? "URI rules") \(result["matched_uri_host"] as? String ?? "") · vault locked", color: .systemGreen)
                 DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
                     guard let recopy, let kept else { finish(result) }
                     emit(result)  // The front end returns now; this process keeps only the one released field.
@@ -1649,6 +1692,13 @@ if CommandLine.arguments.dropFirst().first == "--clear-after" { clearLater(Comma
 if CommandLine.arguments.dropFirst().first == "--serve-once" { serveOnce() }
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
+#if BW_BROKER_TEST
+if let probe = try? JSONSerialization.jsonObject(with: input) as? [String: Any], probe["op"] as? String == "test-match" {
+    let scope = matchScope(probe["item"] as? [String: Any] ?? [:], host: probe["host"] as? String ?? "",
+                           defaultMatch: probe["default_match"] as? String ?? "base_domain")
+    finish(["ok": true, "scope": scope as Any? ?? NSNull()])
+}
+#endif
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 switch (try? JSONSerialization.jsonObject(with: input) as? [String: Any])?["op"] as? String {

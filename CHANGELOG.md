@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-26 — bitwarden: base-domain matching with URI restrictions
+
+- Python and signed Swift broker match registrable domains using a vendored ICANN + PRIVATE Public Suffix List. Saved Host narrows; Never excludes; Exact/StartsWith/Regex fail closed for host-only requests. Destination-origin pinning and exact session/re-copy destination scope remain.
+- Approval and metadata expose match scope; per-vault `default_match` supports stricter client defaults. Browser/organization defaults and equivalent-domain aliases are not imported (documented). Versioned sockets prevent older holders from bypassing the new rules.
+- Removed: exact-host-only guidance and saved-parent-host clipboard workaround; request the actual destination host instead.
+
 ## 2026-10-25 — clickup-core: ✨ on AI-written comments
 
 - clickup-core 0.2.3: `comment`, `handoff` and `review --comment` start the comment with `✨ ` (own line before a leading code block/table; never doubled); `--no-ai-label` for a human's own words. Why: every comment shows the token owner as author, so readers could not tell agent text from the operator's; ClickUp's comment API has no AI/author-badge field (unlike WhatsApp's native AI label).

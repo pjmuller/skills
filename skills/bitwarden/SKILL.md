@@ -1,6 +1,6 @@
 ---
 name: bitwarden
-description: Discover exact-host Bitwarden logins, copy one approved credential, or create a text/file Send through a Touch ID or fresh human Terminal unlock. Use when the user requests Bitwarden access or secure sharing.
+description: Discover URI-matched Bitwarden logins, copy one approved credential, or create a text/file Send through a Touch ID or fresh human Terminal unlock. Use when the user requests Bitwarden access or secure sharing.
 ---
 
 Use `bw-once`; never obtain a `BW_SESSION` for the agent itself. **Touch ID** once enrolled
@@ -41,19 +41,21 @@ installer adds Bitwarden's signed CLI for everything else), `uv`, `curl`, and Xc
 dropped the login (refresh token expired after months without sync): `bw-once [--vault N] login` opens the human
 Terminal for official `bw login` (password + 2FA typed there; PJ's work 2FA is a YubiKey OTP), then locks.
 
-## No exact-host match
+## URI matching
 
-This means no login matched the requested hostname and username, **not** that the account is absent from the
-vault. Inspect the saved Website (URI) metadata before concluding that. A login saved as `https://example.com`
-does not match `accounts.example.com`, even if the Bitwarden extension offers it through base-domain matching.
-Item names and the vault owner's email do not determine the login host or username. Do not automatically widen
-matching to parent domains, sibling subdomains or lookalike suffixes.
+Base domain by default: `https://example.com` matches destination `accounts.example.com`, using the public
+suffix list (including private hosting domains). Saved Host rules narrow the match; Never excludes that URI.
+**Exact, StartsWith and Regex cannot be proved from `--host` and are excluded, never weakened.**
+The no-match message does not prove an account is absent. Item names and vault-owner emails do not select logins.
 
-If the user identifies the correct entry with a different saved host, explain the mismatch. Prefer adding the
-exact login origin as another Website URI with the user's approval. Alternatively, when the user has explicitly
-identified that credential for the destination, request the saved host with `--username` and `--to clipboard`,
-then paste only into the verified intended login page using the clipboard procedure above. `--to page` binds
-its delivery to the requested host: never rewrite its origin check or `fill_js` to bridge different hosts.
+Account/browser defaults and equivalent-domain aliases are **not imported**. Default rules use bw-once's
+`base_domain`; if another client or organization uses a stricter default, set the same per-vault `default_match`
+in `vaults.json` (`host`, `exact`, `never`) before using it. Explicit per-URI rules override that default.
+`doctor` reports it; the approval window shows it. [Matching scope, limitations and maintenance](matching.md).
+
+Always request the **actual destination host**, with `--username` when known. The approval window shows destination,
+base-domain scope, per-vault defaults and excluded rules; results/pick candidates include `matched_uri_host` and
+`match_rule`. `--to page` stays pinned to `https://<requested host>`; never rewrite its origin check or `fill_js`.
 
 **Several accounts** (e.g. work + a separate company vault): `~/.config/bw-once/vaults.json` names one CLI context per
 account (`email`, optional `appdata` = separate CLI data dir, `server`, one `"default": true`). `--vault N` goes
@@ -83,11 +85,11 @@ only while the server flag `biometrics-sdk-ipc` is on (`doctor` → `touch_id_fl
 2026-10-18), with Desktop ≥ 2026.9.0 running and Touch ID enabled for the same account ([README](https://github.com/bitwarden/clients/blob/cli-v2026.10.0/apps/cli/README.md#unlock-with-desktop-biometrics)). When it flips, the same Terminal shows Touch ID instead
 of the password prompt. The broker's enrolment needs neither. `--worker` is internal, not a bypass to use from tools.
 
-Metadata contains only item UUID/name/username and exact matched DNS host.
-`copy` without `--id` picks the only exact-host login (narrowed by `--username`) inside the same unlock
+Metadata contains only item UUID/name/username, destination host, matched URI host and rule.
+`copy` without `--id` picks the only matching login (narrowed by `--username`) inside the same unlock
 and returns its metadata; zero or several matches fail before any delivery. Candidates come from an unfiltered
-`bw list items` inside the helper (bw's `--url`/`--search` hide Exact/regex-rule items), then the exact-host filter. Failures name the bw step (`bw unlock failed` = wrong password or cancelled). Clipboard gets one item,
-exact host and username/password/generated TOTP;
+`bw list items` inside the helper (bw's `--url`/`--search` apply different URI/search semantics), then the per-URI filter. Failures name the bw step (`bw unlock failed` = wrong password or cancelled). Clipboard gets one item,
+approved destination and username/password/generated TOTP;
 no notes, seeds, raw item dumps or arbitrary consumers. CLI locks and verifies
 before any result or clipboard delivery. A private request result contains only
 metadata or Send link, never session/password. Raw CLI failures are suppressed.
@@ -121,7 +123,7 @@ does not govern other `bw` clients. CLI locking does not lock desktop/extensions
 Cleanup handles normal errors, timeout, SIGINT/SIGTERM; SIGKILL/power loss can
 prevent cleanup. A lock failure withholds delivery and requires a manual lock.
 No logout, password/session injection or vault database copies. The session holder is the only long-lived process: it keeps the key
-in memory, serves exact-host list/copy over a 0600 Unix socket, logs each request in
+in memory, serves destination-scoped list/copy over a 0600 Unix socket, logs each request in
 PJ's Terminal and runs `bw lock` at the deadline (`bw lock` anywhere revokes it).
 Status/doctor remain read-only.
 
