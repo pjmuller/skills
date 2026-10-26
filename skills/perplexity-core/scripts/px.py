@@ -25,6 +25,8 @@ DEFAULT_INSTRUCTIONS = (
     "facts, employers or titles. Say plainly when something is unknown. Be concise and factual; no "
     "citation markers like [1]."
 )
+
+
 class EmptyAnswer(Exception):
     """The API returned sources but no answer text; callers must not treat that as a result."""
 
@@ -158,7 +160,7 @@ def ask(query: str, *, instructions: str, model: str, context_size: str, people:
             continue
         if answer_text(response).strip() or attempt == 3:
             break
-        print("perplexity: empty answer, retrying once more", file=sys.stderr)
+        print("perplexity: empty answer, retrying", file=sys.stderr)
     elapsed = time.monotonic() - started
     cost = getattr(getattr(response, "usage", None), "cost", None)
     print(f"perplexity: {model} ${getattr(cost, 'total_cost', 0) or 0:.4f} {elapsed:.1f}s", file=sys.stderr)
@@ -183,11 +185,11 @@ def answer_text(response: Any) -> str:
 
 def render(response: Any, *, schema: Optional[Dict[str, Any]], as_json: bool) -> str:
     text = answer_text(response)
-    if not text.strip():
-        raise EmptyAnswer(sorted(collect_result_urls(response)))
     urls = sorted(collect_result_urls(response))
+    if not text.strip():
+        raise EmptyAnswer(urls)
     if schema is not None:
-        data = clean_structured(json.loads(text or "{}"), set(urls))
+        data = clean_structured(json.loads(text), set(urls))
         payload = {"data": data, "sources": urls}
         return json.dumps(payload if as_json else data, ensure_ascii=False, indent=2)
     if as_json:

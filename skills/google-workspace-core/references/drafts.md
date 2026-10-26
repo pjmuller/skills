@@ -1,54 +1,49 @@
 ## Access checks
 
-Report account identity, offline refresh, granted scopes and access to the requested resource
-separately: a profile request proves neither refreshability nor write access. `doctor --live`
-tests refresh + identity without saving or printing tokens. Writes stay "untested" unless the task
-included a verified write; never mutate user data to test permissions. A resource 404 can mean
-missing access or an obsolete id, so reauthentication alone is not a demonstrated fix.
+Report identity, offline refresh, granted scopes and access to the requested resource separately: a
+profile request proves neither refreshability nor write access. `doctor --live` tests refresh +
+identity without saving or printing tokens. Writes stay "untested" unless the task included a verified
+write; never mutate user data to test permissions. A 404 can mean missing access or an obsolete id, so
+reauthentication alone is not a demonstrated fix.
 
 ## Composing messages
 
-Write the body as plain text (`gmail-draft --body-file PATH`): ordinary paragraphs and `- `
-bullets (blank line between long bullets), no fixed-width line breaks. The core always stores a
-`multipart/alternative`: that text as `text/plain` plus an HTML twin (`_text_html`): `<br>` per line,
-leading spaces/space runs as `&nbsp;` (nested bullets survive), Gmail's ~76-char soft wraps (line
-ends in a space) rejoined, `> ` runs as `gmail_quote` blockquotes. Visual check: render that HTML
-locally (headless Playwright); never Gmail's print view (`view=pt`), it pops the OS print dialog.
-`--html` / `--html-file` only when layout itself matters: minimal paragraphs/lists, no fixed
-widths, layout tables, fonts or pasted editor markup; never auto-convert Markdown.
+Body = plain text (`gmail-draft --body-file PATH`): ordinary paragraphs, `- ` bullets (blank line
+between long ones), no fixed-width line breaks. The core always stores `multipart/alternative`: that
+text plus an HTML twin (`_text_html` in `scripts/gws_core/gmail.py`: line breaks, indentation and
+`> ` quotes preserved, Gmail's soft wraps rejoined). `--html` / `--html-file` only when layout itself
+matters: minimal paragraphs/lists, no fixed widths, layout tables, fonts or pasted editor markup; never
+auto-convert Markdown. Visual check: render that HTML locally (headless Playwright), never Gmail's
+print view (`view=pt` pops the OS print dialog).
 
 > [!IMPORTANT]
-> Why the HTML twin (verified 2026-10-22, test mails `[test wrap 1-3]`): Gmail web opens a
-> `text/plain`-only draft in **Plain text mode** and hard-wraps every paragraph at ~70 chars when
-> a human clicks Send. With an HTML part it opens in rich mode: the sent HTML reflows (its plain
-> alternative is wrapped by Gmail as for any mail). API sends (`gmail-send`) are never rewrapped.
-> `gmail-draft-update` keeps a draft's existing shape, so an old plain-only draft stays exposed.
+> Why the HTML twin (verified 2026-10-22): Gmail web opens a `text/plain`-only draft in Plain text
+> mode and hard-wraps every paragraph at ~70 chars when a human clicks Send; with an HTML part it
+> opens in rich mode and reflows. API sends (`gmail-send`) are never rewrapped. `gmail-draft-update`
+> keeps a draft's existing shape, so an old plain-only draft stays exposed.
 
-From: the mailbox's default send-as identity (`Name <alias>`, Gmail settings), else the
-account address; `--from alias` or `--from 'Name <alias>'` picks another verified alias.
+From: the mailbox's default send-as identity (`Name <alias>`), else the account address; `--from
+alias` or `--from 'Name <alias>'` picks another verified alias.
 
-Diagnose wrapping from the decoded MIME body (`api GET …/messages/<id> --param format=raw`), not
-wire lines: quoted-printable soft breaks vanish on decode. `format=flowed` is not a fix (needs RFC
-3676 encoding and client support). Never send a test email without authorization.
-
-Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/drafts),
-[sendAs](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs),
-[Python MIME](https://docs.python.org/3/library/email.contentmanager.html).
+Diagnose wrapping from the decoded MIME body (`api GET …/messages/<id> --param format=raw`), not wire
+lines: quoted-printable soft breaks vanish on decode. `format=flowed` is no fix (needs RFC 3676
+encoding and client support). Never send a test email without authorization.
 
 ## Attachments
 
-- `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send` and `gmail-draft-update`: text
-  part(s) first, then one `attachment` part per file in a `multipart/mixed` (mimetype guessed,
-  else `application/octet-stream`). Use it to forward invoice PDFs, e.g. to a Yuki mail-in address.
-- Missing files, symlinks and more than 20 MB in total are refused before Gmail is called; larger
-  files go as a Drive link.
-- Output `files=<n>` is the read-back count of stored attachments; a mismatch is an error.
-  `gmail-draft-update --attach` appends to the draft's existing files.
+- `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send`, `gmail-draft-update`: one part per file
+  after the text in a `multipart/mixed` (e.g. invoice PDFs to a mail-in address).
+- Missing files, symlinks and >20 MB total are refused before Gmail is called; send larger files as a
+  Drive link.
+- `files=<n>` is the read-back count; a mismatch is an error. `gmail-draft-update --attach` appends.
 
-## Existing Gmail drafts (either account)
+## Existing drafts
 
-Edit the latest text from `gmail-draft-get`, keeping the user's wording outside the requested change;
-`gmail-draft-update <draft-id> --body-file PATH --expect-message <message-id>` swaps only the body
-in place (HTML part = escaped text unless `--html-file`), never sends and verifies the read-back.
-MIME shapes it cannot rewrite without touching other parts are refused before writing
-(`update_draft` in `scripts/gws_core/gmail.py`). After a `gmail-draft` timeout, list drafts before retrying.
+Edit the latest text from `gmail-draft-get`, keeping the user's wording outside the requested change.
+`gmail-draft-update <draft-id> --body-file PATH --expect-message <message-id>` swaps only the body in
+place (HTML part = escaped text unless `--html-file`), never sends, verifies the read-back, and refuses
+MIME shapes it cannot rewrite without touching other parts (`update_draft`). After a `gmail-draft`
+timeout, list drafts before retrying.
+
+Refs: [Gmail drafts](https://developers.google.com/workspace/gmail/api/guides/drafts),
+[sendAs](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs).

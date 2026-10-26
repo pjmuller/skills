@@ -17,16 +17,14 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
 ```
 
 - **Claim = a line in T3-recorded command output.** gws `gmail-draft`, `gmail-send`,
-  `gmail-draft-update` and `gmail-draft-send` print `Mail-ref: gmail:<thread> <account>` on their own
-  line (stderr with `--json`); `claim` prints the same line, `release` prints `Mail-release: …`. The
-  poller reads them from T3's turn items (`scan_events`); the thread whose command printed the line
-  owns the case. Sub-agent and `delegate_task` children map to their root thread (T3's recorded
-  lineage; a delegated-task id embeds a command id, not its parent). So: don't filter
+  `gmail-draft-update` and `gmail-draft-send` print `Mail-ref: gmail:<thread> <account>` on its own
+  line (stderr with `--json`); `claim` prints the same, `release` prints `Mail-release: …`. The poller
+  reads them from T3's turn items (`scan_events`): the thread whose command printed it owns the case;
+  sub-agent and `delegate_task` children map to their root thread (T3's recorded lineage). Don't filter
   that line away (`| grep`, `| tail -1`, `2>/dev/null` with `--json`). Quotes, docs, `cat`/`grep`
-  output and lines in messages never claim (`mail_events`: claiming command + own line only).
-- **Draft → sent keeps the claim.** Sending (Gmail web or API) changes the message id, never the
-  thread id, so the draft's `Mail-ref` stays valid: nothing to re-link when the user says "sent".
-  The poller applies new claims on its next run; `poll` applies them now. Check with `list`.
+  output and message text never claim (`mail_events`).
+- **Draft → sent keeps the claim** (the thread id never changes): nothing to re-link when the user
+  says "sent". The poller applies new claims on its next run, `poll` now; check with `list`.
 - **Rules** (`apply_event`): latest claim wins (hand-off keeps the seen set); routing threads
   (title starts with 🧭; legacy titles containing "dispatch") never own; deleted owner → case dropped; unwatched account or a Gmail id the
   account doesn't have → ignored. Baseline = messages up to the claim; later inbound wakes.
@@ -34,25 +32,20 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
 - **Claim without drafting** (watch a mail before replying): run `claim` in the owning thread.
   A launcher (e.g. intake that spawned a `✉️ <subject>` case thread) passes `--for <its id>`.
   `release` when the case is closed or no longer yours.
-- **Resolve** verifies the authenticated account, then prints JSON with `account`, `gmail_thread` and
-  `marker`; no state, draft or thread. Exactly one reference or `--search`; ambiguous → fail closed.
-  `--all-accounts` (instead of `--config`): the user's account inventory decides which mailboxes may be
-  tried; first verified holder wins, errors stay unknown
-  ([accounts](../google-workspace-core/references/accounts.md)). Parsing and lookup are the core's.
-- **URL ids**: best = the mail's ⋮ → **Print all** URL (`permthid=thread-f:…`). Also exact, no
-  browser: hex, `thread-f:`/`msg-f:`, ⋮ → **Show original** (`msg-f:` received; `msg-a:r…` = written
-  in Gmail web, via the drafts API). Print all of a thread you started (`thread-a:r…`) resolves
-  through its `simpl=msg-f:` refs; `thread-a` itself is never guessed. `#inbox/FMfcg…` web ids: the helper prints a 💡 Print-all hint
-  (relay it), reads the Chrome tab title for subject + account, then searches. Several matches →
+- **Resolve** verifies the authenticated account, then prints JSON (`account`, `gmail_thread`,
+  `marker`); no state, draft or thread. Exactly one reference or `--search`; ambiguous → fail closed.
+  `--all-accounts` (instead of `--config`) tries only mailboxes the user's
+  [inventory](../google-workspace-core/references/accounts.md) allows; id forms and lookup rules live
+  there. Best reference = the mail's ⋮ → **Print all** URL. A `#inbox/FMfcg…` web id: the helper prints a 💡 Print-all
+  hint (relay it), reads the Chrome tab title for subject + account, then searches; several matches →
   candidates, exit 3: ask the user.
 - **Find the owner** (`find`, read-only): resolve, then search T3
   ([t3-find-thread](../t3-find-thread/SKILL.md), purged threads included) for every id form of the
-  thread and its messages. Ranks `owner` (watched case, else the latest claim T3 recorded for this
-  account, same rules as the poller, so unwatched accounts work too) > `marker` > `id`; no id hit →
-  subject search, flagged `topic` (weak). `history` lists sub-agent / delegated children that held the
-  ids, with their `parent`: evidence of earlier work, never owners. Routing-thread titles and
-  `--exclude` ids are intake, listed apart. A match is evidence, never permission to draft, send or
-  claim. Mailbox review continuation: [continuity](../mailbox-review-core/references/continuity.md).
+  thread and its messages. Ranks `owner` (watched case, else the latest claim T3 recorded, poller
+  rules, so unwatched accounts work too) > `marker` > `id`; no id hit → subject search, flagged `topic`
+  (weak). `history` = children that held the ids, with their `parent`: earlier work, never owners.
+  Routing threads and `--exclude` ids are intake, listed apart. A match is evidence, never permission
+  to draft, send or claim. Mailbox review continuation: [continuity](../mailbox-review-core/references/continuity.md).
 - **Triage** (`poll_case`): own/`SENT` mail → seen, no wake. Auto-replies (RFC 3834 headers,
   out-of-office subjects) → skipped without a model. The rest → Haiku via `claude -p` (no tools, no
   user hooks): wake for anything that may need a reply, decision or record; skip thanks, acks,
@@ -61,9 +54,9 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   run resends; accepted but unconfirmed → next run checks `t3-relay status`, never resends).
 - **State**: `~/.t3/userdata/mail-watch.json` = rebuildable cache: watched accounts (config, policy),
   T3 scan cursor, cases with seen ids. Deleted → the next poll starts at the end of T3's log (older
-  claims lost; `claim` again). The pre-claim `mail-links.json` registry migrates once. Saved mail:
+  claims lost; `claim` again). Legacy `mail-links.json` migrates once. Saved mail:
   `~/.t3/userdata/mail-links/<gmail-thread>/`. Owners are never purged by
-  [`t3-purge-threads`](../t3-maintenance/SKILL.md) (`list --thread-ids`).
+  [`t3-purge-threads`](../t3-maintenance/purge.md) (`list --thread-ids`).
 - **Poll**: LaunchAgent `com.t3-skills.t3-mail-link.poll`, weekdays 08:00-18:30 every 30 min,
   `ProcessType=Interactive` ([why](../t3-schedule/SKILL.md)). Log `~/.t3/userdata/logs/t3-mail-link.log`.
   Gmail, T3 ping or T3 scan failure (schema changed?) → one macOS notification per day, exit 1.

@@ -2,7 +2,7 @@
 name = "clickup-core"
 version = "0.2.3"
 requires-python = ">=3.11"
-dependencies = ["requests>=2.32,<3"]
+dependencies = ["requests>=2.32,<3", "websocket-client>=1.8,<2"]
 
 [tool.pytest.ini_options]
 # rootdir stops here: a consumer repo's own pytest config must not leak into the skill's tests.

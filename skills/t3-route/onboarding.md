@@ -1,29 +1,25 @@
 # One-time setup, safe to rerun
 
-Inspect relevant local setup only: current repository entrypoint/registered skills,
-known personal setup repo, registered T3 projects and referenced workflow wrappers.
-Do not scan arbitrary personal files or copy someone else's credentials/policy.
-Discover facts first; ask only for the routing-thread location, intended accounts or
-ownership boundaries that cannot be established. Cloud-only agents without a local
-T3 session cannot route; report that limit, not readiness.
+Inspect relevant local setup only: current repository entrypoint/registered skills, known
+personal setup repo, registered T3 projects and referenced workflow wrappers. Never scan
+arbitrary personal files or copy someone else's credentials/policy. Discover facts first; ask
+only for the routing-thread location, intended accounts or ownership boundaries you cannot
+establish. Cloud-only agents without a local T3 session cannot route: report that, not readiness.
 
 ## Register and check
 
-In the user's personal setup repository, register the public instructions locally:
+In the user's personal setup repository:
 
 ```bash
 pnpm dlx skills add pjmuller/skills -s t3-route -a claude-code codex -y
 ```
 
-This instruction-only skill has no installer. Install/check the existing command
-skills actually needed (`t3-manage-thread`; `t3-find-thread` for reuse), using each
-skill's `scripts/install` and `scripts/install --check`. Verify T3 connectivity and
-helper availability, not just skill registration. Follow the repository's existing
-Claude/Codex registration layout; do not create competing copies. A source owner
-may use the repository's established source-symlink convention instead.
-When enabling Gmail, check `t3-mail-link resolve --help`. If the installed helper
-lacks `resolve`, update through its existing registration/refresh mechanism, then
-rerun installer/readiness checks; relinking an old installation alone cannot add it.
+No installer here. Install/check the command skills actually needed (`t3-manage-thread`;
+`t3-find-thread` for reuse) with each skill's `scripts/install` and `--check`; verify T3
+connectivity and helpers, not just registration. Follow the repo's existing Claude/Codex layout
+(a source owner may use its source-symlink convention); no competing copies. Enabling Gmail:
+`t3-mail-link resolve --help` must work; if `resolve` is missing, refresh through the existing
+registration mechanism and rerun checks (relinking an old install cannot add it).
 
 ## Discover capability and identity
 
@@ -31,49 +27,43 @@ Build a small private capability note from the selected wrappers, not a new regi
 
 | Record | Verify read-only |
 | --- | --- |
-| Project roots/ownership | registered T3 projects and repository entrypoints; avoid auxiliary worktrees as default destinations |
-| ClickUp wrapper/config | wrapper policy, configured workspace/list hints, `whoami`; a service token is a **service identity**, not the operator |
-| Workspace wrapper/account | `workspace.json` account + required `scopes`, selected credential references, `whoami` identity + actual granted `scopes` from tokeninfo, observation date |
-| Account inventory | `gws.py accounts discover <code root>` suggests rows; the user marks which mailboxes `gmail_lookup` may try for links that name no account ([inventory](../google-workspace-core/references/accounts.md)); `accounts list --check` |
+| Project roots/ownership | registered T3 projects and repo entrypoints; no auxiliary worktrees as default destinations |
+| ClickUp wrapper/config | wrapper policy, workspace/list hints, `whoami`; a service token is a **service identity**, not the operator |
+| Workspace wrapper/account | `workspace.json` account + required `scopes`, credential references, `whoami` identity + granted `scopes` (tokeninfo), observation date |
+| Account inventory | `gws.py accounts discover <code root>` suggests rows; the user marks which mailboxes `gmail_lookup` may try ([inventory](../google-workspace-core/references/accounts.md)); `accounts list --check` |
 | Browser fallback | user's profile-routing policy and signed-in identity, only when needed |
-| Thread helpers | installed command paths/check results and relevant search capability |
+| Thread helpers | installed command paths/check results and search capability |
 
-Distinguish documented, installed, authenticated and permission-scoped capabilities.
-Configured `scopes` are requirements; record actual grants from `whoami.scopes`
-(tokeninfo), not the broader `mint_scopes`. If the wrapper expects a specific
-email (including `GWS_EXPECTED_EMAIL`), compare the verified identity; mismatch is a
-hard stop for that integration. Successful `whoami` does not prove Gmail permission:
-use an appropriate read-only probe when Gmail routing is being enabled. Never print
-tokens or private message bodies in the readiness note. Missing optional ClickUp,
-Gmail or browser access means partial readiness, not failure of all routing.
+Distinguish documented, installed, authenticated and permission-scoped. Configured `scopes` are
+requirements; record actual grants from `whoami.scopes`, not the broader `mint_scopes`. Expected
+email (incl. `GWS_EXPECTED_EMAIL`) ≠ verified identity → hard stop for that integration.
+`whoami` does not prove Gmail permission: run a read-only Gmail probe when enabling it. Never
+print tokens or message bodies in the note. Missing optional ClickUp, Gmail or browser access =
+partial readiness, not failure.
 
 ## Create the private entrypoint
 
-Create or refine a committed sibling skill, outside `t3-route`, with:
+A committed sibling skill outside `t3-route` with:
 
-- A precise local trigger: explicit command plus the designated routing thread.
-- A link to this core, routing-thread identity/location and model/lifecycle defaults.
-  Lifecycle defaults tailor the core's eligibility decision, not authorization or explicit keep-open choices.
-- A small project catalog: roots, ownership and sibling boundaries.
-- Links to the user's own integration wrappers and relevant triage/playbooks.
-- For recurring short requests, a private trigger lookup (below), explicitly loaded
-  by the wrapper on first invocation and used for later routing messages.
+- a precise trigger: explicit command plus the designated routing thread;
+- a link to this core, routing-thread identity and model/lifecycle defaults
+  ([limits](SKILL.md#lifecycle));
+- a small project catalog: roots, ownership, sibling boundaries;
+- links to the user's integration wrappers and triage/playbooks;
+- for recurring short requests, a private trigger lookup (below).
 
-Reuse existing owning references rather than another rulebook. Add a narrow setup-repo
-entrypoint note: "In the designated routing thread, invoke `<private-wrapper>`;
-an execution brief must not re-route its same task (see `t3-route`)." Establish the
-actual designation as a dedicated setup thread titled with a leading 🧭 (for example, "🧭 Routing"; `t3-mail-link` keeps 🧭 threads from owning mail cases): discover
-and record its title + exact T3 ID privately using supported helpers/native tools,
-never invent an ID or infer it from cwd. An onboarding request can authorize creating
-that dedicated conversation; it does not re-route this execution task.
-Link global rules instead of duplicating them. Keep account and personal policy in
-the wrapper. Reruns preserve custom policy; propose only evidence-backed changes.
+Reuse existing owning references; link global rules instead of duplicating them. Add a narrow
+setup-repo entrypoint note: "In the designated routing thread, invoke `<private-wrapper>`; an
+execution brief must not re-route its same task (see `t3-route`)." The designation is a
+dedicated thread titled with a leading 🧭 (e.g. "🧭 Routing"; `t3-mail-link` keeps 🧭 threads
+from owning mail cases): record its title + exact T3 ID privately via helpers/native tools,
+never invented or inferred from cwd. An onboarding request may create that thread; it does not
+re-route this execution task. Reruns preserve custom policy; propose only evidence-backed changes.
 
 ### Trigger lookup
 
-Keep `trigger-lookup.md` beside the private wrapper. Map **when** to owner and exact
-entrypoint; omit procedures and exhaustive installed-skill inventories. Start from
-real requests and verified local files. Example (replace with the user's own targets):
+`trigger-lookup.md` beside the private wrapper maps **when** to owner and exact entrypoint; no
+procedures or installed-skill inventories. Start from real requests and verified files:
 
 ```markdown
 | User phrasing / intent | Owner repo | Read |
@@ -82,29 +72,22 @@ real requests and verified local files. Example (replace with the user's own tar
 | “assistant answer tone” | selected product brain | AGENTS.md |
 ```
 
-Wrapper instruction: “Read `trigger-lookup.md` on first invocation; use it for later
-routing messages and reread after compaction or edits.” Link the file explicitly.
-Keep repo placement/account policy in their existing references. Matches select
-context, not permissions; diagnosis does not itself authorize stopping active work.
-
-After a user correction or verified routing miss, add missing triggers, correct
-faulty rows, merge aliases or remove obsolete targets. Read the owning policy first,
-verify paths and replay the corrected prompt without launching or external writes.
-Distinguish recent evidence from useful catalog entries; retain bounded references,
-not sensitive source text. Maintain this private file through [corrections.md](corrections.md).
+The wrapper links it: "Read `trigger-lookup.md` on first invocation; use it for later routing
+messages and reread after compaction or edits." Repo placement/account policy stays in its
+references. Matches select context, not permissions; a diagnosis does not authorize stopping
+active work. Maintain rows (add, fix, merge aliases, drop obsolete) via
+[corrections.md](corrections.md), verifying paths.
 
 ## Verification handshake
 
-Run `t3-pick-instance <chosen model>`: inspect actual account routing without
-creating a thread. Then rehearse a ticket/mail/screenshot
-route supported by this user's integrations, without external writes: show fetched
-evidence, inferred intent, destination and whether a verified thread would be reused.
-Check that execution context cannot re-route the same task. Apply one neutral user
-correction to its owning private reference and read it back. Report readiness and
-specific gaps; never claim another person's account was tested from this machine.
-For isolated forward-evaluation, use the neutral [cases and screenshot](tests/cases.md)
-without live tools; judge decisions rather than matching instruction wording.
+`t3-pick-instance <chosen model>` shows actual account routing without creating a thread. Then
+rehearse a ticket/mail/screenshot route this user's integrations support, without external
+writes: fetched evidence, inferred intent, destination, whether a verified thread would be
+reused. Check execution context cannot re-route the same task. Apply one neutral correction to
+its owning private reference and read it back. Report readiness and specific gaps; never claim
+another person's account was tested from this machine. Isolated forward-evaluation: neutral
+[cases and screenshot](tests/cases.md) without live tools; judge decisions, not wording.
 
-Daily use: paste tasks/links/images in the routing thread; correct misrouting
-there. Public-core updates replace only the core: compare the sibling wrapper's
-before/after hash or diff to verify policy preservation, and recheck its core links.
+Daily use: paste tasks/links/images in the routing thread; correct misrouting there. Core
+updates replace only the core: diff the sibling wrapper before/after to verify policy
+preservation and recheck its core links.

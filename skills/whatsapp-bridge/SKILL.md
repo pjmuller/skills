@@ -1,47 +1,59 @@
 ---
 name: whatsapp-bridge
-description: "Core mechanics for a locally paired WhatsApp account (Neonize, no browser): QR login, read synced chats, find/resolve contacts, download and transcribe voice notes, allowlisted individual text/document/image sends. Use when an agent must read, draft or send WhatsApp messages; read the repository's wrapper skill first for the account, allowed recipients and drafting policy."
+description: "Use when an agent must read WhatsApp chats, resolve contacts, transcribe voice notes, or draft and send allowlisted individual messages from a locally paired account. Read the repository's wrapper first (account, allowed recipients, drafting policy)."
 ---
 
-Install, alternatives and live checks: [README.md](README.md). Read → draft → send and result shapes: [reply-workflow.md](reply-workflow.md).
+This core owns mechanics: Neonize build, history store, `wa` CLI, Python API. A repo-local **wrapper skill** owns
+policy (paired account, own number, who may be messaged, tone, AI-badge use, contact hints). Read the wrapper first;
+no wrapper → sending is self-only.
 
-## Core vs wrapper
-
-This core owns mechanics only: the Neonize build, the session/history store, the `wa` CLI and the Python API. A repo-local **wrapper skill** owns policy: which account is paired, the own number, who may be messaged, tone-of-voice/drafting rules and contact conventions. Read the wrapper first; if a repository has none, treat sending as self-only.
-
-## Map
-
-`wa --help` (run via `uv run --project <this dir> wa …`) lists `login|read|context|contacts|resolve|voice|send|send-document|send-image`; the same functions are exported from `whatsapp_bridge` for consumers using this directory as an editable uv path dependency. Drafting starts at `conversation_context` / `wa context`.
-
-- `whatsapp_bridge/__init__.py` — public API, CLI, input validation, context budgets.
-- `whatsapp_bridge/store.py` — history DB, name/number resolution, recipient allowlist, send pacing.
-- `whatsapp_bridge/worker.py` — one native session per subprocess call, serialized by a file lock. No browser, daemon or polling service.
-
-## Voice notes
-
-`wa voice <chat> [-n 3 | --id MSGID…] [--transcribe --hint "Flemish Dutch; Mexem, beurstaks"]` (API: `download_voice_notes`, `transcribe_voice_notes`, `transcribe_audio`) downloads a chat's latest audio/voice notes to `~/.config/whatsapp-bridge/media/` (0700/0600) and, with `--transcribe`, hands each file to sibling core [transcribe-gemini](../video-shrink-for-gemini/SKILL.md) (Gemini API key route; ~$0.02 per 5 min) with a verbatim-transcript prompt plus the **hint**: language + names/jargon to spell exactly. Wrappers keep per-contact hints. Downloading never marks a note as played.
-
-Media download keys are stored per message (`media`/`kind` columns) since 2026-10. Older rows (shown `[non-text message]`) get a placeholder-resend request to the **own phone** (peer protocol message, `scripts/neonize-peer-request.patch`; nothing reaches the chat); the phone answers in seconds to minutes (reply lands on this or the next connect), so an `error` "not resent yet" means rerun. A download error after resend = media expired on WhatsApp's servers.
+- `uv run --project <this dir> wa --help`; same functions exported from `whatsapp_bridge` (editable uv path dependency).
+- Read → draft → send, result shapes, attachments: [reply-workflow.md](reply-workflow.md). Install, checks, why Neonize: [README.md](README.md).
+- `whatsapp_bridge/__init__.py`: API, CLI, validation, context budgets · `store.py`: history DB, name resolution,
+  recipient allowlist, send pacing · `worker.py`: one native session per subprocess, serialized by a file lock (no daemon/polling).
 
 ## Safety (hard rules)
 
-- Sending defaults to **self only**; widen deliberately per command with `WA_ALLOWED_RECIPIENTS=+32470123456,120363…@g.us,…` (explicit international numbers or verbatim group JIDs from `wa contacts`; no names or wildcards). A shared lock enforces ≥5 s between send attempts across processes.
-- WhatsApp's native **AI badge**: per send `--ai-label` / `--no-ai-label` (API `ai_label=True/False`); without either, the user's default `{"ai_label_default": true}` in `~/.config/whatsapp-bridge/settings.json`, else off. When to badge is the wrapper's policy. Works in 1:1 chats and groups (our build patch adds `NEONIZE_BOT_TAG=always`; upstream only badges 1:1).
-- E2E tests default exclusively to the paired account’s self chat: resolve `me`, verify the own identity against the wrapper, then pass that explicit number. Use harmless synthetic files, minimal sends, and no recipient expansion for tests.
-- Prefer long prompts/reports as `.md`/`.txt` attachments with short explanatory captions, rather than enormous chat bodies. See [attachment commands and receipts](reply-workflow.md#attachments).
-- Never bulk-send, never widen the allowlist just to make a test pass, never auto-retry an uncertain send (a worker crash can mean it went out).
-- Reading any chat is allowed. Never print or copy session/credential files.
+Ban/abuse guardrails for an unofficial protocol client: breaking them risks the account, not just one message.
 
-These are the ban/abuse guardrails for an unofficial protocol client; breaking them risks the account, not just a bad message.
+- Sending defaults to **self only**; widen per command with `WA_ALLOWED_RECIPIENTS=+32470123456,120363…@g.us`
+  (explicit international numbers or verbatim group JIDs from `wa contacts`; no names, no wildcards). ≥5 s between
+  send attempts across processes (shared lock).
+- Never bulk-send, never widen the allowlist to make a test pass, never auto-retry an uncertain send (a worker crash
+  can mean it went out).
+- E2E tests only to the paired account's self chat: resolve `me`, verify the own identity against the wrapper, pass
+  that explicit number; harmless synthetic files, minimal sends.
+- Reading any chat is allowed. Never print or copy session/credential files (`~/.config/whatsapp-bridge/`, 0700).
+- Long prompts/reports → `.md`/`.txt` attachment with a short caption, not a huge chat body.
+- **AI badge**: `--ai-label`/`--no-ai-label` (API `ai_label=`); else `{"ai_label_default": true}` in
+  `~/.config/whatsapp-bridge/settings.json`, else off. When to badge = wrapper policy. Works in groups too (our patch).
 
-## Neonize pin
+## Pairing
 
-Neonize 0.4.7 is built from a pinned upstream checkout plus two committed patches (`scripts/neonize-bot-tag-always.patch` adds the `always` bot-tag mode; `scripts/neonize-peer-request.patch` routes peer data requests to the own phone) by `scripts/build-neonize` into gitignored `.build/neonize`; `pyproject.toml` resolves it from there, so build before any `uv sync` (a fresh checkout or consumer fails otherwise). The API sets `NEONIZE_BOT_TAG` per worker call (`off` unless `ai_label`); PyPI's older 0.4.3.post0 ignores that variable and stamps WhatsApp's AI badge on every message, so do not downgrade. No compiled artifacts in git; switch to an upstream PyPI wheel once one ships with the flag.
+Run `wa login --window` **first** (opens a large macOS Terminal), only then ask the human to scan (WhatsApp →
+Settings → Linked devices → Link a device); never make them hunt for a QR in agent output. It returns before
+pairing: wait for that Terminal to report the own number after initial sync (phone online; don't inspect session files). Timeout → rerun.
+Expired/unlinked session → `wa login --window` again. Linux/WSL2: plain `wa login` in a terminal the human sees.
 
-## Pairing UX
+## Voice notes
 
-Run `wa login --window` **first**: it opens a large macOS Terminal immediately; only then ask the human to scan via WhatsApp → Settings → Linked devices → Link a device. Never ask them to hunt for QR codes in hidden agent output. The command returns before pairing finishes, so it is not proof of login: wait for the Terminal to report the own number after initial sync (phone online; no session-file inspection). Codes refresh in place; on timeout, rerun. Once paired, reads reconnect without another scan; an expired/unlinked session needs `wa login --window` again. Linux/WSL2 has no `--window`: run plain `wa login` in a terminal the human can see (full QR on screen, not an agent tool log).
+`wa voice <chat> [-n 3 | --id MSGID…] [--transcribe --hint "Flemish Dutch; Mexem, beurstaks"]` downloads to
+`~/.config/whatsapp-bridge/media/` (never marks played); `--transcribe` hands each file to
+[transcribe-gemini](../video-shrink-for-gemini/SKILL.md) (~$0.02 / 5 min) with a verbatim prompt plus the hint
+(language + names/jargon to spell exactly; wrappers keep per-contact hints).
+Rows synced before 2026-10 (shown `[non-text message]`) lack media keys: the worker asks the **own phone** to resend
+them (peer protocol message, `scripts/neonize-peer-request.patch`; nothing reaches the chat). Error "not resent yet"
+→ rerun (seconds to minutes). Download error after resend = media expired on WhatsApp's servers.
 
 ## History limits
 
-Only locally synced history, potentially incomplete: empty results do not prove an empty chat, and deletions/edits/disappearing messages are not mirrored. Name matching is exact (case-folded) and rejects ambiguity; use international numbers when needed. State lives outside git in `~/.config/whatsapp-bridge/` (0700). Audio renders as `[voice note 43s]`/`[audio 43s]`, other media without a caption as `[non-text message]`; a forwarded contact card renders as `[contact] Name: +number` (several joined by ` | `).
+Only locally synced history: empty ≠ empty chat; deletions/edits/disappearing messages not mirrored. Name matching
+is exact (case-folded), rejects ambiguity; use international numbers when needed. Rendering: `[voice note 43s]`,
+`[audio 43s]`, `[non-text message]` (media without caption), `[contact] Name: +number` (several joined by ` | `).
+
+## Neonize pin
+
+Neonize 0.4.7 from a pinned upstream checkout plus two committed patches (`neonize-bot-tag-always.patch`: badge
+in groups; `neonize-peer-request.patch`: peer requests to the own phone), built by `scripts/build-neonize` into
+gitignored `.build/neonize`, which `pyproject.toml` resolves: build before any `uv sync`. Never downgrade to PyPI
+0.4.3.post0: it ignores `NEONIZE_BOT_TAG` and badges every message. Switch to a PyPI wheel once one ships the flag.

@@ -21,26 +21,25 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
 - **No sidebar row** (`relationshipToParent: "subagent"`); questions/approvals show as **Input / Approval on the parent row**. Answer questions via `t3_pending_request_*` (`threadId` = `childThreadId`); only the user approves (leave `runtimeMode` unset).
 - Result = its **final answer** (after background/nested work): brief it to report there; no footer, no settle. It gets **only the task text**, shares your checkout (`isolation: "worktree"` for its own); nesting works.
 - **Every review round = a new `delegate_task`** (new `clientRequestId`, stable across that round's retries) carrying original brief, prior findings, your responses, open objections. `childThreadId` is storage: `t3_thread_send` to it only for a short clarification needing its conversation (new `taskId`, wakes you).
-- `task_cancel` or stopping the parent stops it; settling doesn't (a later result wakes and unsettles the parent).
+- `task_cancel` or stopping the parent stops it; settling doesn't ([settle-thread.md](settle-thread.md#settle--stop)).
 - Reading a terminal result acknowledges it. Don't poll; `mode: "wait"` only for seconds-long tasks. Recovery after parent/child limit/stop/restart is unverified: keep task ids, `task_status` if a wake is overdue.
 
 ### Codex sandbox limits
 
-Observed 2026-10-23 on Codex `delegate_task` children in `auto` mode: no outbound network (asset
-downloads, AWS/log CLIs failed) and no Docker (a testcontainer test hung; the worker polled for 5+
-minutes). Brief Codex workers accordingly: pre-fetch inputs to a local path, run only tests that need
-neither, and report "not run: needs network/Docker" instead of waiting. The lead runs the rest.
+Codex `delegate_task` children in `auto` mode have no outbound network and no Docker (AWS CLIs fail,
+testcontainer tests hang). Brief them: inputs pre-fetched to a local path, only tests needing neither,
+report "not run: needs network/Docker" instead of waiting. The lead runs the rest.
 
 ### Provider unavailable or failed
 
 - `orchestrator_capabilities` (cached health) and `t3-pick-instance` (capacity) don't prove execution. Codex **status-probe timeout** ≠ expired auth: with explicit `providerInstanceId`, `delegate_task` re-probes once before refusing, so keep the account. Transient-timeout refusal → one retry after 30 s, same `clientRequestId`; accepted → inspect its `taskId`, never resend blindly.
-- Failed run → read the provider error: `ENOTFOUND` = DNS; "model at capacity" = model availability, not quota; only an auth error warrants checking credentials, after rechecking connectivity/status.
-- Resume a failed standalone owner only if authorized and still failed/inactive; keep its prompt, never duplicate a launch or restart active/completed work.
-- Replacing a live owner (user-requested model switch or authorized recovery): read it, ask it to stop safely, and start replacement work only after observing its turn end; a stop ping proves only "asked". Carry its partial artifacts into the handoff.
+- Failed run → read the provider error: `ENOTFOUND` = DNS; "model at capacity" = model availability, not quota; only an auth error (after rechecking connectivity/status) warrants checking credentials.
+- Resume a failed standalone owner only if authorized and still failed/inactive; keep its prompt; never duplicate a launch or restart active/completed work.
+- Replacing a live owner (user-requested model switch or authorized recovery): read it, ask it to stop safely, start the replacement only after observing its turn end (a stop ping proves only "asked"); carry its partial artifacts over.
 
 ### Recover a limit-interrupted owner
 
-1. `t3-fleet list --limited` ([maintenance](../t3-maintenance/SKILL.md)), incl. children and terminal limit text on completed runs; old `limitRecovery` metadata alone isn't a current failure.
+1. Find them: `t3-fleet list --limited` ([fleet.md](../t3-maintenance/fleet.md), incl. children and completed runs).
 2. Read owner and parent (a replacement may own the rest; never replay superseded children). Check live capacity in the authorized pool; keep thread ID, model/options, permissions ([broader-mode owner](permission-ceiling.md)).
 3. `t3_queue_list`: a queued child-result delivery may keep the old account → save its text, `t3_queue_cancel` only that unstarted delivery, include it once in the continuation; never discard user messages/attachments.
 4. Re-read right before mutating. Inactive owner → `t3_thread_configure` (new instance, original selection), one idempotent `t3_thread_send` to resume (T3 transfers context; same-provider switches may get a summary). Verify real execution and kept context, not configure acceptance.
@@ -61,6 +60,7 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 
 ## Briefs and titles
 
-- Brief: markdown file, path in task/message ([dispatch-workers.md](dispatch-workers.md)); images at a stable path named in it. Title `<emoji> <3-6 words>`, user's language, no ticket ids.
+- Brief = markdown file on disk, path in the task/message (`Read and execute /abs/brief.md`), never a long inline string; images at a stable path named in it. Ticket/finding/meeting threads: [brief shapes](dispatch-workers.md#brief).
+- Title `<emoji> <3-6 words the user recognises>`, user's language (an operator's convention wins): `📤` standalone, `🏓` children only. No ticket ids (they go in the brief), repo names, phase words or invented emojis (🎫, 🔧: they confuse the fleet views). Good `📤 Annulatiepolicy toepassen`; bad `🎫 869f4kx78 annulatiepolicy: numeric fields, conditional profile, playbook, dashboard tile`.
 - Sustained build (hours of tool-heavy work)? Put `routing-load: heavy` as its own line in the `task`/`message` text itself (not only the brief file, not quoted or fenced): routing counts that owner as 3 instead of 1. Default 1; never infer it from project or title.
-- Model/account: [routing.md](routing.md); re-pick before each spawn, never reuse across a batch; model implies no account/repo affinity.
+- Model and account per spawn: [routing.md](routing.md).

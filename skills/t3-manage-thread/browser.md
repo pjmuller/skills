@@ -12,7 +12,7 @@ Escalate in order. Verify the signed-in identity before authenticated work; neve
 ## Signing in inside T3 (v0.1.x)
 
 - Import (Settings → Integrations → Browser profiles → from Chrome) = cookies only, Chrome quit; re-run for fresher logins. **Google sessions don't survive import** (device-bound): sign in inside T3. Several Google accounts per profile: `?authuser=<email>` (e.g. `mail.google.com/mail/?authuser=…`), not `/u/<n>`. Only a tab's opener session can close it.
-- Login page: ask the user once to log in in the visible T3 tab via their password manager (name host, account, profile, why). Agent-driven only on request: a vault helper (e.g. [bitwarden](../bitwarden/SKILL.md) `bw-once copy`) clips password/TOTP; `preview_press Meta+V` lands only while the tab has keyboard focus (user clicked in). In-page clipboard reads denied; never `preview_type` a secret.
+- Login page: ask the user once to log in in the visible T3 tab via their password manager (name host, account, profile, why). Agent-driven only on request: a vault helper (e.g. [bitwarden](../bitwarden/SKILL.md) `bw-once copy`) clips password/TOTP; `preview_press Meta+V` lands only while the tab has keyboard focus (user clicked in); in-page clipboard reads are denied. Never `preview_type` a secret.
 - Passkeys: no macOS passkey sheet (v0.1.0); sign in in Chrome, re-import cookies.
 
 ## Real Chrome over CDP (route 2a)

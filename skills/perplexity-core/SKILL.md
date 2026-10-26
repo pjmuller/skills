@@ -1,45 +1,41 @@
 ---
 name: perplexity-core
-description: Use when an agent needs sourced web research (a person, a company, a market, a fact with URLs) through the shared Perplexity Agent API CLI; free-text answers with retrieved sources or structured JSON from a schema. Paid per call; never run it in tests.
+description: "Use for sourced web research with URLs (\"who is this person\", \"profile this company\", size a market, check a fact, prep a meeting) as cited text or schema-shaped JSON. Paid per call; never from tests."
 ---
 
 # Perplexity core
 
-One PEP 723 script, no wrapper needed: the consuming repo only supplies `PERPLEXITY_API_KEY`
-through its mise env file. The core directory is replaced on update, so nothing local lives here.
+One PEP 723 script; the consuming repo supplies `PERPLEXITY_API_KEY` in its mise env file. The core
+directory is replaced on update: nothing local lives here. `scripts/install --check` verifies uv,
+deps and key. Offline tests: `uv run --with pytest pytest skills/perplexity-core/scripts -q`.
 
 ```sh
 PX() { uv run .agents/skills/perplexity-core/scripts/px.py "$@"; }
 PX check                                        # key + SDK, spends nothing
-PX ask "Who is Jo Wyns at Farmad?" --people-search
-PX ask - < question.md --out answer.md          # long prompts from stdin, file output
-PX ask "Farmad, Belgium" --schema company.json --json   # structured, urls verified
+PX ask "Who is Jane Doe at Example NV?" --people-search
+PX ask - < question.md --out answer.md          # long prompt from stdin
+PX ask "Example NV, Belgium" --schema company.json --json
 ```
-
-`scripts/install --check` verifies uv, deps and the key. Offline tests (source repo):
-`uv run --with pytest pytest skills/perplexity-core/scripts -q`.
 
 ## Contract
 
-- **Every `ask` is paid** (cents; `--context-size high` and `--people-search` cost more). Never
-  call it from tests, UI checks or loops without a cap; cache results in the repo (markdown) instead.
-- **Exit 3 = no answer.** The API sometimes returns retrieved URLs with an empty answer (seen under
-  rate limiting); the CLI retries once, then exits 3 and prints the URLs to stderr. Treat it as a
-  failed call, never as "no information". 429s are retried with backoff.
-- **Sourced or nothing.** Search tools are always on; the default instructions demand inline source
-  URLs and plain "unknown". `Sources:` lists only URLs the API actually retrieved.
-- **Structured mode** (`--schema FILE`): every top-level field becomes nullable + required;
-  placeholder strings ("not disclosed") become `null`; any key ending in `url`/`_urls` is kept only
-  when it occurs in the retrieved results (no invented LinkedIn/company links).
-- Model/context defaults: `PERPLEXITY_MODEL` (default `google/gemini-3.8-flash`) and
-  `PERPLEXITY_CONTEXT_SIZE` (`medium`); override per call with `--model` / `--context-size`.
-- Personal data: research public professional facts for a legitimate purpose (meeting prep,
-  audience tailoring); keep the output in the repo, not in chat history, and skip private details.
+- **Every `ask` is paid** (cents; `--context-size high` and `--people-search` cost more). No tests,
+  UI checks or uncapped loops; cache answers in the repo as Markdown.
+- **Exit 3 = no answer**: the API sometimes returns retrieved URLs with empty text (seen under rate
+  limiting). After retries the CLI prints those URLs on stderr. A failed call, never "no information".
+- **Sourced or nothing**: search tools are always on (without them the model doesn't search and
+  invents); default instructions demand inline source URLs and a plain "unknown". `Sources:` lists
+  only URLs the API actually retrieved.
+- **`--schema FILE`**: top-level fields become nullable + required; placeholders ("not disclosed")
+  become `null`; keys ending in `url`/`_urls` survive only when they occur in the retrieved results.
+- Defaults `PERPLEXITY_MODEL` (`google/gemini-3.8-flash`), `PERPLEXITY_CONTEXT_SIZE` (`medium`);
+  per call `--model` / `--context-size`.
+- **Personal data**: public professional facts for a legitimate purpose; output in the repo, not chat;
+  skip private details.
 
 ## Recipes
 
-- **Audience / attendee list**: one `ask` per unknown person (`--people-search`, name + city +
-  event), then one synthesis `ask` over the collected facts for the group picture. Commit the
-  markdown; label guesses.
-- **Company profile**: schema with `website_url`, `summary`, `employee_range`, `business_model`,
-  `customer_type` (B2B / B2B2C / B2C) so answers are comparable across a list.
+- **Attendee list**: one `--people-search` ask per person (name + city + event), then one synthesis
+  ask over the collected facts. Commit the Markdown; label guesses.
+- **Company profiles**: one schema (`website_url`, `summary`, `employee_range`, `business_model`,
+  `customer_type` B2B/B2B2C/B2C) so a list stays comparable.

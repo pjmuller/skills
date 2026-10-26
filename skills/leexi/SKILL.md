@@ -1,6 +1,6 @@
 ---
 name: leexi
-description: Leexi API access for meeting calls. Use for a Leexi call URL or UUID, "the Leexi meeting of today around 14:00" (find a call by date/time), Leexi transcript export to Markdown with speakers and timestamps, Leexi recording download, or listing recent Leexi calls.
+description: "Use for a Leexi call URL or UUID, \"the Leexi meeting today around 14:00\", a Leexi transcript as Markdown with speakers and timestamps, a recording download, or listing recent Leexi calls."
 ---
 
 # Leexi

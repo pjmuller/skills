@@ -317,7 +317,7 @@ def main():
         except Exception as exc:
             result = {"error": f"WhatsApp {type(exc).__name__}; operation failed or send outcome unknown. Do not retry blindly."}
         print("WA_RESULT=" + json.dumps(result), flush=True)
-    # Neonize 0.4.3 can retain a non-daemon FFI thread after Stop on QR timeout.
+    # Neonize can retain a non-daemon FFI thread after Stop on QR timeout (seen on 0.4.3).
     # Store transactions and our lock are closed; this isolated process is done.
     os._exit(0)
 

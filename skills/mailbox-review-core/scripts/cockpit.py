@@ -68,12 +68,11 @@ def cli_json(argv):
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
         raise Refused(f'Command timed out: {Path(argv[0]).name}') from exc
-    result = subprocess.CompletedProcess(argv, proc.returncode, stdout)
-    if result.returncode:
+    if proc.returncode:
         # Neither stderr nor stdout is safe to print: either can contain credentials or mail.
-        raise Refused(f'Command failed (exit {result.returncode}); check login/scopes locally')
+        raise Refused(f'Command failed (exit {proc.returncode}); check login/scopes locally')
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(stdout)
         if isinstance(data, dict) and (data.get('error') or data.get('spilled') or
                 data.get('type') in ('spill', 'output_artifact') or
                 ('artifact' in data and 'preview' in data)):
@@ -188,18 +187,14 @@ def mail_state(thread, account):
         if 'DRAFT' in labels:
             continue
         h = headers(message)
-        own = 'SENT' in labels
-        if not own:
+        if 'SENT' not in labels:
             inbound.append(message)
         elif addresses(h.get('to', '')) == {account}:
             notes.append(message)
-        elif 'SENT' in labels:
-            if automated(h) or not addresses(h.get('to', '')):
-                uncertain.append(message)
-            else:
-                replies.append(message)
-        else:
+        elif automated(h) or not addresses(h.get('to', '')):
             uncertain.append(message)
+        else:
+            replies.append(message)
     latest = inbound[-1] if inbound else None
     answered = bool(latest and any(stamp(m) > stamp(latest) for m in replies))
     ambiguous = bool(latest and any(stamp(m) > stamp(latest) for m in uncertain))

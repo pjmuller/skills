@@ -1,86 +1,59 @@
 # Rate-limit windows (t3-limits)
 
-Flags: `t3-limits --help` (`--markdown` for a routing decision, `--json` for
-scripts, `--fresh` skips the cache). Code: `scripts/lib/t3_limits.py`, shared
-with [routing](routing.md).
+Flags: `t3-limits --help` (`--markdown` for a routing decision, `--json` for scripts, `--fresh`
+skips the cache). Code: `scripts/lib/t3_limits.py`, shared with [routing](routing.md).
 
-Glossary:
-- Percentages are **used** (CodexBar's menubar shows % left).
-- `session` = 5 h rolling window (starts at its first request, not on the clock) ·
-  `weekly` = 7-day cap · `<Model> only` = per-model weekly sub-cap.
-- `pace` = share of the window already elapsed (what an even load would have
-  used); `room` = pace − used: **+20** = spare capacity, **−20** = burning ahead
-  of pace. No pace for a stale window (no reset / reset in the past).
-- Claude plan label comes from live `/api/oauth/profile` organization metadata,
-  cached with usage for 90 s; `--fresh` refreshes both. Discovery failures retain
-  valid usage and mark the saved credential label `(login fallback)`.
-  Login and `.claude.json` tier fields can lag subscription changes; neither
-  overrides a live tier. Disagreement appears in `t3-limits` notes.
-  `unknown` means no label was available.
-- **Tier** (`20x`, `5x map`, `1x?`) is printed after the plan in `t3-limits`
-  (`multiplier`/`multiplier_source` in `--json`), `t3-list-profiles` and spawn
-  routing. Source: a label stating it (`max_20x`), else the private
-  `$T3CODE_HOME/userdata/t3-plan-multipliers.json` (`{"codex": {"prolite": 5}}`,
-  driver → plan label → N) for labels that state none (Codex `pro`/`prolite`;
-  OpenAI publishes no multiplier in metadata), else `1x?`: unverified, ranked as
-  the smallest plan, never optimistic. Tier = advertised size, not quota left.
-- Percentages are relative to each account's own allowance. A 1x account at
-  20% and a 20x account at 20% do not have equal quota left; routing multiplies
-  headroom by the tier. A fresh reading does not reserve capacity for running jobs.
-- Setup-token profiles can lack a plan label. Never invent one or reauthenticate just
-  to route. After independently confirming the plan, private `t3-plan-multipliers.json`
-  may include `"instances": {"instance-id": {"identity_hash": "<from --json>", "multiplier": 20}}`.
-  This fallback applies only when the plan is absent and the account hash matches;
-  a reported plan or changed observed login identity wins. For setup-token profiles,
-  the identity may come from the last saved login: replacing only the setup token
-  does not prove an account change. Reverify/remove the fallback when replacing it. It describes plan size, never account preference.
-  Unknown tiers remain conservative 1x and routing warns about the resulting demotion.
-- Windows are whatever the endpoint reports, nothing is hardcoded per provider
-  (e.g. Codex Pro currently reports weekly only, Plus also a 5 h window).
+Reading the output:
+- Percentages are **used** (CodexBar's menubar shows % left), relative to each account's own
+  allowance (routing weights them by tier).
+- `session` = 5 h rolling window (starts at its first request, not on the clock) · `weekly` = 7-day
+  cap · `<Model> only` = per-model weekly sub-cap. Windows are whatever the endpoint reports, nothing
+  hardcoded per provider (Codex Pro reports weekly only, Plus also a 5 h window).
+- `pace` = share of the window elapsed; `room` = pace − used: **+20** spare, **−20** burning ahead.
+  No pace for a stale window (no reset / reset in the past).
+- Claude plan label: live `/api/oauth/profile` metadata, cached with usage for 90 s. Discovery
+  failure keeps usage and marks the saved login label `(login fallback)`; login and `.claude.json`
+  tier fields can lag subscription changes and never override a live tier (disagreement → notes).
+  `unknown` = no label.
+- **Tier** (`20x`, `5x map`, `1x?`; `multiplier`/`multiplier_source` in `--json`, also in
+  `t3-list-profiles` and routing output) = advertised plan size, not quota left. Source: a label stating
+  it (`max_20x`), else private `$T3CODE_HOME/userdata/t3-plan-multipliers.json`
+  (`{"codex": {"prolite": 5}}`: driver → plan label → N; OpenAI publishes no multiplier), else `1x?`:
+  unverified, ranked as the smallest plan, routing warns about the demotion.
+- Setup-token profiles can lack a plan label. Never invent one or reauthenticate just to route. After
+  independently confirming the plan, the same file may hold
+  `"instances": {"<instance-id>": {"identity_hash": "<from --json>", "multiplier": 20}}`, applied only
+  when the plan is absent and the account hash matches (a reported plan or changed login identity
+  wins; replacing only the setup token does not prove an account change). Reverify/remove it when
+  replacing the account. Plan size only, never account preference.
 
-Source per enabled T3 provider instance, so each row is the account T3 would run:
-- Claude on macOS: Keychain item `Claude Code-credentials`, suffixed
-  `-<sha256(config dir)[:8]>` when the instance sets `config.homePath` →
-  Anthropic OAuth usage endpoint. Linux/WSL reads `<homePath>/.credentials.json`;
-  macOS falls back to that file if Keychain has no usable login. Empty homePath
-  uses `CLAUDE_CONFIG_DIR` (ignored when it is another instance's homePath: T3
-  sets it inside that instance's threads), then `~/.claude`. Windows execution stays inside WSL.
-- Claude with a 1-year `claude setup-token` (settings `env.CLAUDE_CODE_OAUTH_TOKEN`) and no
-  valid `/login` token (expired locally, or the usage API refuses it: a revoked token can answer
-  429): one tiny turn through the unmodified CLI (`run_probe`: `claude -p --model haiku --effort low
-  --output-format stream-json`, no tools/MCP/hooks/session file, the profile's config dir) whose
-  `rate_limit_event` carries the 5 h and weekly windows. Not a raw API call: Anthropic allows
-  subscription OAuth only in Claude Code itself. A probe is a model turn, so `window_open` allows
-  it only when a window is certainly open: the last reading's window still runs, or a local turn
-  (newest `<config>/projects/*/*.jsonl`) came after a window-free point (the reading's reset, or
-  an idle check: no local turn for 5 h / since that reset) that is < 5 h old. Idle → derived
-  reading (session 0 %, weekly kept until its reset); turns since the last reading with the
-  window state unprovable → error until the last turn is 5 h old. Turns elsewhere (claude.ai,
-  another machine) show at the next probe; a window opened there is invisible locally, so a probe
-  can start one only if nothing polled during that whole window (CodexBar polls every 5 min). Readings reused 5 min (routing shows the actual age as `seen`, not the 90 s cache), stored per config dir + account
-  in `$T3CODE_HOME/userdata/t3-limits-probe.json`. At most every 2 h (`FABLE_PROBE_SECONDS`) the
-  probe runs on Fable instead: only a Fable turn reports the Fable weekly cap
-  (`seven_day_overage_included` → `Fable only`), at ~100x a Haiku turn's quota. No reading yet → error until the first turn
-  after an idle check; `--fresh` probes anyway (may start a window). Lost vs the API: other per-model
-  caps; the plan is the last live tier the API reported for that account (`max_20x (live Oct 19)`,
-  kept in the probe store), else the saved login label (`(login fallback)`), which can lag plan
-  changes. Note: `via setup-token probe`.
-- Codex: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint.
-  The login e-mail is shown so a mis-assigned home is visible. Only top-level
-  windows; API-key logins have none.
+Source per enabled T3 provider instance (each row = the account T3 would run):
+- **Claude**: macOS Keychain `Claude Code-credentials` (suffix `-<sha256(config dir)[:8]>` when the
+  instance sets `config.homePath`), Linux/WSL `<homePath>/.credentials.json` (macOS fallback) →
+  Anthropic OAuth usage endpoint. Empty homePath → `CLAUDE_CONFIG_DIR` (ignored when it is another
+  instance's homePath: T3 sets it inside that instance's threads), then `~/.claude`.
+- **Claude setup-token** (`env.CLAUDE_CODE_OAUTH_TOKEN`, no valid `/login` token; a revoked token can
+  answer 429): one tiny `claude -p` Haiku turn through the unmodified CLI (`run_probe`; Anthropic
+  allows subscription OAuth only in Claude Code itself), whose `rate_limit_event` carries the windows.
+  A probe is a model turn, so it runs only when a session window is certainly open (`window_open`);
+  else the reading is derived as idle (session 0 %, weekly kept) or unknown until the last local turn
+  is 5 h old. Turns on claude.ai or another machine show at the next probe.
+  Readings reused 5 min in `$T3CODE_HOME/userdata/t3-limits-probe.json`. Every 2 h
+  (`FABLE_PROBE_SECONDS`) the probe runs on Fable instead (~100x a Haiku turn's quota): only that
+  reports the `Fable only` cap. Plan = last live tier the API reported (`max_20x (live Oct 19)`), else
+  the login label. Other per-model caps are lost. Row note `via setup-token probe`; `--fresh` probes
+  anyway and may start a window. Logic: `probe_claude_usage`.
+- **Codex**: `<homePath>/auth.json` (empty = `~/.codex`) → ChatGPT usage endpoint. Login e-mail shown
+  so a mis-assigned home is visible. Top-level windows only; API-key logins have none.
 
 Behaviour worth knowing:
-- Tokens are never printed or refreshed (a refresh would rotate the CLI's own
-  copy); an expired one reports itself (never sent; setup-token profiles probe
-  instead) and the other accounts still report. `HTTP 429` can also mean a
-  revoked token: this endpoint answers 429 to non-Claude-Code clients.
-- The endpoints are shared with other pollers and often 429. Last good payloads
-  are cached in `$T3CODE_HOME/userdata/t3-limits-cache.json` (no tokens), bound
-  to home + account identity (Claude: hash of account/org ids, token fingerprint
-  if no local identity), served fresh for 90 s and as marked-stale fallback up to
-  15 min. A cached exhausted window stays until its reset so routing keeps
-  excluding it. `T3_LIMITS_DEBUG=1` traces cache hits.
-- Paid overage is never shown or counted as capacity.
+- Tokens are never printed or refreshed (a refresh would rotate the CLI's own copy); an expired one
+  reports itself and the other accounts still report. `HTTP 429` can also mean a revoked token.
+- Endpoints are shared with other pollers and often 429. Last good payloads are cached in
+  `$T3CODE_HOME/userdata/t3-limits-cache.json` (no tokens), bound to home + account identity, fresh
+  90 s, marked-stale fallback up to 15 min. A cached exhausted window stays until its reset so routing
+  keeps excluding it. `T3_LIMITS_DEBUG=1` traces cache hits.
+- Paid overage is never shown.
 
-Related: [t3-usage-windows](../t3-usage-windows/SKILL.md) confirms a window
-really reset before resuming blocked threads.
+Related: [t3-usage-windows](../t3-usage-windows/SKILL.md) confirms a window really reset before
+resuming blocked threads.

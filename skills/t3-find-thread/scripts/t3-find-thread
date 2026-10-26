@@ -11,7 +11,7 @@ Progressive disclosure - each step costs more context than the last:
     t3-find-thread peek 2ac7596e,9f12ab30                              # headers + first prompts
     t3-find-thread grep 2ac7596e -k snapshot -k restore                # snippets around hits
 
-Reading a whole thread: the native `t3_thread_read` MCP tool. Reads T3's store read-only
+`read` pages a whole thread's messages (live or purged). Reads T3's store read-only
 ($T3CODE_HOME/userdata/statev2.sqlite, default ~/.t3/...) and keeps a private FTS5 cache at
 ~/.cache/t3-find-thread/index.sqlite, refreshed incrementally before every command. Sub-agent and
 delegated-task threads are skipped unless --subagents. Nothing is ever written back to T3.
@@ -545,12 +545,12 @@ def cmd_search(args) -> None:
     print()
     print("| # | created | project | title | terms | hits u/a | id |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
-    for rank, r in enumerate(shown, 1):
+    for n, r in enumerate(shown, 1):
         # Purged threads no longer open in T3: plain title, no dead link.
         title = (clip(r["title"], 60) + " _(backup)_") if r["backup"] else thread_link(clip(r["title"], 60), r["thread_id"])
         title += " _(archived)_" if r["archived"] else ""
         print(
-            f"| {rank} | {day(r['created_at'])} | {clip(r['project'], 22)} | {title} "
+            f"| {n} | {day(r['created_at'])} | {clip(r['project'], 22)} | {title} "
             f"| {len(r['terms_hit'])}/{r['terms_total']} | {r['user_hits']}/{r['assistant_hits']} "
             f"| `{r['short_id']}` |"
         )
@@ -661,7 +661,7 @@ def cmd_grep(args) -> None:
 
 
 def cmd_read(args) -> None:
-    """The story of a purged thread (T3 can no longer open it): entries in order, full text."""
+    """A thread's entries in order, full text; for purged threads the only way to read them."""
     cache = ensure_index(args)
     row, from_backup = resolve_thread(cache, args.id)
     cache.close()
@@ -690,7 +690,7 @@ def add_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project", action="append", help="fuzzy project/workspace name (repeatable)")
     parser.add_argument("--since", help="ISO date or relative (7d, 3w, 2m)")
     parser.add_argument("--until", help="ISO date or relative")
-    parser.add_argument("--include-archived", dest="include_archived", action="store_true", default=True)
+    parser.add_argument("--include-archived", dest="include_archived", action="store_true", default=True, help=argparse.SUPPRESS)
     parser.add_argument("--no-archived", dest="include_archived", action="store_false")
     parser.add_argument("--role", choices=("user", "assistant", "any"), default="any")
     parser.add_argument("--all", action="store_true", help="require every term")
@@ -727,7 +727,7 @@ def main(argv: list[str] | None = None) -> None:
     peek_parser.add_argument("--outline", type=int, default=40)
     peek_parser.set_defaults(func=cmd_peek)
 
-    read_parser = subparsers.add_parser("read", help="a thread's entries in full (for purged threads)")
+    read_parser = subparsers.add_parser("read", help="a thread's entries in full, paged (live or purged)")
     read_parser.add_argument("id")
     read_parser.add_argument("--tools", action="store_true", help="include archived tool calls / reasoning")
     read_parser.add_argument("--from", dest="start", type=int, default=0, help="first entry #")

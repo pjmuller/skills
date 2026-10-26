@@ -156,6 +156,14 @@ def limits_rows() -> list[dict]:
     return json.loads(result.stdout)
 
 
+def profile_rows(profile: str | None) -> list[dict]:
+    rows = limits_rows()
+    if profile:
+        from profiles import filter_rows
+        rows = filter_rows(rows, profile)
+    return rows
+
+
 def installed_interval() -> int:
     try:
         return int(plistlib.loads(PLIST.read_bytes())["StartInterval"])
@@ -181,10 +189,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         log("T3 Code not up, skipped")
         return 0
     try:
-        rows = limits_rows()
-        if getattr(args, "profile", None):
-            from profiles import filter_rows
-            rows = filter_rows(rows, args.profile)
+        rows = profile_rows(args.profile)
     except (RuntimeError, ValueError) as error:
         log(f"t3-limits failed: {error}")
         return 0
@@ -200,13 +205,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 log("outside hours after wait, skipped")
                 return 0
             try:
-                rows = limits_rows()
+                rows = profile_rows(args.profile)
             except (RuntimeError, ValueError) as error:
                 log(f"t3-limits failed after wait: {error}")
                 return 0
-            if getattr(args, "profile", None):
-                from profiles import filter_rows
-                rows = filter_rows(rows, args.profile)
             stale, unknown, no_window = classify(rows, args.force)
             now = datetime.now(TZ)
             due = no_window if args.force else morning_due(no_window, load_started(), now)
@@ -263,8 +265,8 @@ def cmd_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_uninstall(_args: argparse.Namespace) -> int:
-    if _args.dry_run:
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    if args.dry_run:
         print(f"would remove {LABEL}")
         return 0
     launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
@@ -275,8 +277,8 @@ def cmd_uninstall(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
-    if getattr(_args, "json", False):
+def cmd_status(args: argparse.Namespace) -> int:
+    if args.json:
         print(json.dumps({"label": LABEL, "loaded": loaded(), "interval": installed_interval()}))
         return 0
     print(f"{LABEL}: {'loaded' if loaded() else 'NOT loaded'} · every {installed_interval()}s")

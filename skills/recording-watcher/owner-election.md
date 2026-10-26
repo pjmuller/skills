@@ -23,7 +23,9 @@ credentials: before arming a lower-priority machine, give it the recorder accoun
 compare its election on a few recordings against the top-priority machine's. Missing self identity
 or roster conflicts raise instead of skipping.
 
-## Roster (private, outside installed skills)
+## Roster
+
+Private, outside installed skills:
 
 ```json
 {"people": {"ana": {"identities": ["ana@example.com", "leexi:desk@beta.example"]},

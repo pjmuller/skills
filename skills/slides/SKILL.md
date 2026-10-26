@@ -1,100 +1,75 @@
 ---
 name: slides
-description: Create, edit, review and export presentations with a clear story, concise speaker notes and visual verification. Includes Slidev expertise. Read the project's project-slides skill first for paths and brand. Use for talks, pitch decks, teaching slides and redesigns; preserve a requested format such as PowerPoint.
+description: "Use to create, edit, review or export a presentation (\"make slides about…\", \"fix this deck\", talk, pitch, teaching slides, redesign), Slidev or a requested format such as PowerPoint. Read the project's project-slides wrapper first."
 ---
 
 # Slides
 
-Make the audience understand, remember or decide something. A beautiful deck that leaves
-them unsure of the point has failed. These are north stars, not a mandatory template.
+Make the audience understand, remember or decide something; a beautiful deck that leaves them
+unsure of the point has failed. North stars, not a mandatory template.
 
-Read the project's `project-slides` wrapper when present: it owns deck locations, brand, audience,
-local commands, delivery conventions and the house style guide (what a good slide is *here*).
-Apply that guide before asking. This shared skill owns craft, Slidev mechanics and the
-[corrections loop](#learn-from-corrections) that grows both.
-For new wrappers or installation, see [integration](references/integration.md).
+The project's `project-slides` wrapper, when present, owns deck locations, brand, audience, local
+commands, delivery conventions and the house style guide: apply it before asking. New wrapper or
+installation → [integration](references/integration.md).
 
-## Shape the story before styling
+## Craft checklist
 
-Infer the audience, occasion, time available and desired outcome from the brief and existing
-material. Ask only when a missing answer would change the deck. Distinguish a live talk from
-a document people must understand without a speaker; a handout may need more context.
+Infer audience, occasion, time and outcome from the brief and existing material; ask only when the
+answer would change the deck. A deck read without a speaker may need more context than a live talk.
 
-- Write the takeaway in one sentence. Arrange slide headlines into a coherent argument:
-  a recognizable situation, what changes our understanding, evidence, then a useful conclusion.
-  Read the headlines alone: they should carry the argument. Choose the arc that fits;
-  not every talk is a sales pitch or needs a company introduction.
-- Give each slide one job. A comparison can be one idea; two unrelated takeaways deserve
-  separate slides. Split, cut or move detail into notes/appendix before shrinking text.
-- Prefer concrete examples and explanatory titles to topic labels. The audience should not
-  have to reverse-engineer the scenario. Preserve qualifications that change the conclusion.
-- Ground claims, numbers and quotations in sources. Keep source links with the relevant slide
-  or notes. Label invented examples and illustrative data; never pass them off as evidence.
-- Spoken or dictated words read poorly verbatim: on the slide, restate only the part that carries
-  this slide's point (drop the speaker's habitual phrases), without quote marks, and keep the
+- **Story first.** Takeaway in one sentence; headlines alone carry the argument (a recognizable
+  situation, what changes our understanding, evidence, a useful conclusion). Pick the arc that fits;
+  not every talk needs a pitch or company intro. New deck → sketch headlines and visuals first (a
+  working aid, not an approval gate); small edit → keep the working narrative.
+- **One job per slide** (a comparison can be one idea; two unrelated takeaways are two slides). Split, cut or move detail to
+  notes/appendix before shrinking text.
+- **Concrete over abstract:** examples and explanatory titles, not topic labels; keep qualifications
+  that change the conclusion.
+- **Grounded:** claims, numbers and quotes link a source on the slide or in notes; label invented
+  examples and illustrative data.
+- **Spoken quotes:** dictated words read poorly verbatim. On the slide, restate only the part that
+  carries this slide's point, without quote marks or the speaker's habitual phrases; keep the
   verbatim source in notes or source files. Quote exactly only when the wording itself is the point.
-
-For a substantial new deck, sketch headlines and the intended visual before building. For a
-small edit, preserve the working narrative. An outline is a working aid, not an approval gate.
-
-## Make the point visible
-
-Choose the simplest visual that explains the idea: a direct comparison, annotated screenshot,
-chart, diagram, short code sample, or one strong image. HTML/SVG can make a precise visual;
-Mermaid is useful for relationships, not a requirement for every slide.
-
-Use consistent visual language, generous space, readable labels and deliberate emphasis.
-Show the few dimensions that affect a decision, not every available field. Keep chart scales
-honest, label units and uncertainty, and do not rely on colour alone for meaning.
-
-Images earn their space by explaining, making something memorable, or setting an intentional
-mood. If generated artwork would help, choose a coherent art direction and purposeful humour;
-avoid generic decorative AI imagery. Respect requests to brainstorm without generating yet.
-Use existing brand assets and avoid revealing private information in screenshots.
-
-## Support the speaker
-
-For live talks, put concise bullet cues in presenter notes: the example, essential nuance,
-transition, or demo cue the speaker could forget. Do not duplicate the slide or write a script
-unless requested. Keep editorial/review history outside presenter notes. Reveal content only
-when the order helps understanding. Estimate speaking time from the notes, allowing for
-demos, pauses and questions; flag and cut an overfull talk. Where possible, rehearse with
-the speaker to replace the estimate with actual timing.
+- **Simplest visual that explains:** comparison, annotated screenshot, chart, diagram, short code or
+  one strong image; HTML/SVG for precision, Mermaid for relationships (not every slide). Consistent
+  visual language, generous space, readable labels; only the dimensions that affect a decision.
+  Honest chart scales, units and uncertainty; never colour alone for meaning.
+- **Images earn their space** (explain, make memorable, set an intended mood). Generated art:
+  coherent direction, purposeful humour, no generic AI decoration; respect "brainstorm, don't
+  generate yet". Use brand assets; no private information in screenshots.
+- **Presenter notes** (live talks): short cues the speaker could forget (example, nuance,
+  transition, demo); no copy of the slide or script unless asked, no review history. Reveal only
+  when order helps. Estimate speaking time incl. demos, pauses and questions; cut an overfull talk;
+  rehearse for real timing where possible.
 
 ## Build and verify the actual deliverable
 
-Keep the existing format and toolchain. For a new code-based deck, Slidev is a useful default:
-read [Slidev authoring](references/slidev.md). For an explicitly requested PowerPoint or other
-format, use the available format-specific skill/tool and apply the craft guidance here.
+Keep the existing format and toolchain. New code-based deck → Slidev
+([authoring](references/slidev.md)); requested PowerPoint or other format → its own skill/tool,
+with this craft.
 
-Inspect every new or changed slide as rendered, at its intended aspect ratio. An overview
-catches pacing and inconsistent styling; full-size views catch unreadable labels, clipping,
-missing assets and awkward spacing. Check first/final and meaningful intermediate reveal
-states. After shared style changes, inspect affected existing decks too.
+Inspect every new or changed slide rendered at its aspect ratio: overview for pacing and
+consistency, full size for unreadable labels, clipping, missing assets and spacing; first, final
+and meaningful reveal states. Shared style change → recheck affected decks.
 
-Verify the delivered format, not just the dev view: exports can differ. Confirm expected
-slide/page count (accounting for intentional click pages), notes and asset rendering. A build
-success is not visual QA. Fix problems and recheck; state any verification limitation plainly.
-Deliver the requested artifact or preview with only the remaining decision/action for the user.
-End the final reply with the absolute path of each delivered file, the PDF (or other exported deck)
-first, so the user can open the result in one click.
+**Verify the delivered format, not the dev view** (exports differ): slide/page count (intentional
+click pages included), notes, assets. A build success is not visual QA. Fix, recheck, state verification
+limits plainly; deliver with only the remaining decision for the user. End the final reply with the absolute path of each delivered file, the PDF (or other
+export) first.
 
 ## Learn from corrections
 
-Feedback during an edit round is micro (this title, that bullet); its value is the macro rule
-behind it. Keep a running list of corrections while you work. A pattern is the same preference
-shown on independent slides or decks, or an explicit general instruction ("always…"); two fixes on
-one odd slide are not. When you see one, or at the end of the round for the patterns collected,
-propose the rule in one line: exact wording plus target file. Write it once the user agrees, or
-straight away when their instructions say to act autonomously, and say what was burned in.
+Edit-round feedback is micro; its value is the macro rule behind it. Track corrections. A pattern
+is the same preference on independent slides or decks, or an explicit "always…"; two fixes on one
+odd slide are not. Then (or at round end) propose the rule in one line, exact wording plus target
+file; write it once the user agrees (or at once when they say act autonomously) and say what was
+burned in.
 
-- Universal craft (any deck, any company): a sentence in the matching section of this file,
-  proposed upstream in `pjmuller/skills`, not only in the local copy.
-- Brand, language, audience, naming, deck mechanics, verification quirks: the wrapper's style
-  guide (`project-slides/style.md`).
-- A rule states the intent and the test ("titles fit beside the logo: at most 40 characters"),
-  never the instance that triggered it. No example lists, no changelog. Fold into an existing rule
-  when one covers the case. An exception narrows a rule's scope; delete a rule only when the user
-  states a superseding one.
+- Universal craft → this file's checklist, proposed upstream in `pjmuller/skills`, not only locally.
+- Brand, language, audience, naming, deck mechanics, verification quirks → the wrapper's
+  `project-slides/style.md`.
+- A rule states intent and test ("titles fit beside the logo: at most 40 characters"), never the
+  triggering instance; no example lists or changelog. Fold into an existing rule; an exception
+  narrows scope; delete a rule only when the user states a superseding one.
 
 [Sources and upstream license](references/sources.md).

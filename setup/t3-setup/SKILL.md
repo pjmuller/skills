@@ -123,7 +123,7 @@ Antigravity requested: `brew install --cask antigravity-cli`, run `agy` to sign 
 (separate ACP runtime and login; leave binary path automatic). Expired localhost callback →
 fresh T3 sign-in, paste the final redirect URL into T3's fallback field while that attempt
 is active. Verify `t3-pick-instance gemini`, then a `t3_thread_launch` with that
-instance and a real file write. Video goes through native `agy`, not T3:
+instance and a real file write. Video: `transcribe-gemini` (API key), native `agy` only without a key, never T3:
 [video-shrink-for-gemini](../../skills/video-shrink-for-gemini/SKILL.md#execute-and-verify).
 
 ## Browser sessions (optional)

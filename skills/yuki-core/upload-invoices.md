@@ -1,103 +1,74 @@
-# Deliver invoices from a folder
+# Deliver invoices and mark DONE
 
-Only route: the Yuki web upload (T3 browser `preview_*` first, PJ's Chrome over CDP second). A tenant that
-shows the Visma Connect login is blocked: ask PJ to sign in there, do not mail PDFs to the mail-in address.
+Only on an explicit request. **Only route: the Yuki web upload** (T3 browser `preview_*` first, the user's
+Chrome over CDP second). Tenant, login and mail-in come from the wrapper's `yuki.json` `web`
+(missing → blocks delivery, not CSV reporting). A tenant showing the Visma Connect login is blocked:
+ask the user to sign in to that tenant in the T3 browser and say "ready"; one login can serve several
+tenants but the session is per subdomain. The mail-in address is reference only (suppliers and the user's
+phone forward there; intake takes hours, never re-send), never an agent route.
 
-Use an Astra Medium agent for browser judgment and ambiguous scans. A smaller model may extract
-vendor/date/amount/invoice number, but verify the source image before accepting its match.
-Use the current session when already executing this task; do not spawn the same task again.
+Browser judgment and ambiguous scans: an Astra Medium agent. A smaller model may extract
+vendor/date/amount/invoice number; verify the source image before accepting its match. Already
+executing this task → don't spawn it again.
 
-1. Verify the wrapper's company, administration and Workspace account. Use its Workspace API
-   CLI for Drive downloads and all Sheet reads/writes. Read actual headers and all rows; filter
-   DONE in memory (blank/FALSE are open; boolean TRUE or formatted "TRUE" are done).
-2. Download the supplied Drive folder or use the supplied local downloads; inspect PDFs/images. Match vendor or verified trading name,
-   currency/amount and invoice or transaction date. Bank booking dates can differ: inspect the
-   raw transaction date. Date/amount alone cannot resolve a contradictory vendor identity.
-3. Keep a local manifest: Drive ID, original filename/hash, sheet item_id, matched row,
-   document identity and upload status. Exclude duplicates, already-done and ambiguous items.
-   For invoices absent from the sheet, check the matching quarter with `Y outstanding`; an
-   outdated sheet is not evidence that the invoice was delivered. Keep accepted document links
-   for those invoices; do not fabricate a row or mark a different payment DONE.
-4. Open the wrapper's Yuki tenant (`yuki.json` `web.tenant_url`). Follow the host's browser policy; verify the signed-in
-   identity and administration. A logged-out page is not upload access. Never substitute a
-   different company's account. Route: **Postbus → Aanleveren → Aankoop binder → Uploaden**.
-5. Inspect the current upload dialog and selected purchase destination before attaching files.
-   Use a supported browser file-upload mechanism, or computer use for the native file picker.
-   Record accepted filenames/receipts or history entries. An uncertain timeout is not a failure:
-   inspect history before retrying, never blindly resubmit.
-6. Only after acceptance, re-read through the API and locate each row by stable item_id. Update
-   only its DONE cell to boolean TRUE; verify typed readback and unchanged unrelated cells.
+1. Verify the wrapper's company, administration and Workspace account. Read the sheet's actual
+   headers and all rows via `gws.py`; filter DONE in memory (blank/FALSE open; boolean or formatted
+   TRUE done).
+2. Use the supplied Drive folder or local downloads. Match vendor (or verified trading name),
+   currency/amount and invoice or transaction date; bank booking dates differ, so inspect the raw
+   transaction date. Date/amount alone cannot resolve a contradictory vendor identity.
+3. Keep a local manifest: Drive ID, filename/hash, `item_id`, matched row, document identity, upload
+   status. Exclude duplicates, already-done and ambiguous items. An invoice absent from the sheet →
+   check its quarter with `Y outstanding` (an outdated sheet is no proof of delivery); keep its
+   document link, never fabricate a row or mark a different payment DONE.
+4. Open `web.tenant_url` per the host's browser policy; verify the signed-in identity
+   (`web.login_email`, top-right user menu) and administration. A logged-out page is not upload
+   access; never substitute another company's account. Route: **Postbus → Aanleveren → Aankoop
+   binder → Uploaden**.
+5. Inspect the upload dialog and **Map = Aankoop** before attaching. Record accepted filenames and
+   document links. An uncertain timeout is not a failure: inspect history before retrying, never
+   blindly resubmit.
+6. Only after acceptance, re-read the sheet, locate each row by `item_id` and set only its DONE cell
+   to boolean TRUE (below).
 
-**DONE means delivered, not booked.** Yuki processes uploads asynchronously; the outstanding
-invoice list need not shrink. Do not use disappearance or a changed count as upload proof.
-Leave missing, ambiguous and failed documents unmarked; report the concrete remaining items.
+**DONE means delivered, not booked.** Yuki processes uploads asynchronously; the outstanding list need
+not shrink, so disappearance or a changed count is no upload proof. Leave missing, ambiguous and
+failed documents unmarked; report the concrete remaining items. There is no unattended upload/OCR
+pipeline: matching stays a verified agent decision.
 
-## Sheets API mechanics
+## Sheet writes
 
-Use `gws.py --config <wrapper-config>`: `sheet-meta` resolves the tab; `sheet-read` reads the
-full used range. UI filters do not restrict these values: keep each row's original grid index
-while filtering in memory. No browser cell editing or filter-view manipulation is needed.
+`gws.py --config <wrapper-config>`: `sheet-meta` resolves the tab, `sheet-read` reads the full used
+range (UI filters don't restrict it; keep each row's original grid index). Re-resolve `item_id`s right
+before writing (sorting/inserting moves A1 coordinates). `sheet-batch-write` takes a range-to-values
+JSON map: `[[true]]` per accepted row's DONE cell; never rewrite a compacted visible-rows list. Verify
+with `api GET` on the values endpoint, `valueRenderOption=UNFORMATTED_VALUE`: booleans, and only the
+intended cells changed. No browser cell editing.
 
-Re-resolve unique `item_id`s immediately before writing because sorting/inserting rows changes
-A1 coordinates. `sheet-batch-write` accepts a JSON range-to-values map; send `[[true]]` for each
-accepted row's single DONE cell. Never rewrite a compacted list of visible rows over the sheet.
-Verify via `api GET` on the Sheets values endpoint with `valueRenderOption=UNFORMATTED_VALUE`
-that the results are booleans; compare the full readback to ensure only intended cells changed.
+## Yuki upload page (verified 2026-10-12/14)
 
-## Browser mechanics verified 2026-10-12
+- Direct URL: `<tenant>/domain/inbox/aspx/uploadarchive.aspx`. The binder picker lives in the
+  same-origin iframe `name="Main"` (`iframe[src*="uploadarchive"]`): click the leaf whose text is
+  `Aankoop` (`Ordner_OnClick(1)`), take a **fresh snapshot** (controls refresh), click **Uploaden** →
+  `/domain/archive/upload-files/1` with `Map = Aankoop` and a **Bladeren** button.
+- Selecting files is not delivery: check "N bestand(en) klaar om te uploaden" (names, count), click
+  **Uploaden** once, wait for **Uploaden voltooid!**. Success lands on
+  `/domain/aspx/UploadedFiles.aspx?Batch=<id>`, whose iframe lists filename, Map, Status "Open" and
+  document links: save them in the manifest before editing DONE. The success toast may vanish.
+- A navigation can make an evaluate call report failure although the click worked: check the URL
+  before retrying.
 
-- Clicking **Aankoop** refreshes controls inside a legacy iframe: take a fresh snapshot before
-  clicking **Uploaden**. It redirects to `/domain/archive/upload-files/1`; confirm **Map = Aankoop**.
-- **Bladeren** selects files; selection is not delivery. Verify filenames and count, then click
-  **Uploaden** once. Wait for **Uploaden voltooid!** and the accepted count.
-- Success redirects to `/domain/aspx/UploadedFiles.aspx?Batch=<id>`. The batch lists uploader,
-  timestamp, individual document links and **Aankoop**. Save those links in the manifest before
-  editing DONE. The transient success notification may disappear by itself.
-- Where host policy permits logged-in Chrome: `chrome-devtools start --autoConnect`, find the
-  tenant with `list_pages`, select it without bringing it forward, then open your own tab with
-  `new_page <url> --background`. Verify profile identity in the top-right user menu.
-  `upload_file <pageId> <Bladeren-uid> <paths...>` attaches multiple files; obtain UIDs from
-  each current `take_snapshot`. Close only your created tab, then stop the CLI daemon.
+**T3 preview** (preferred when its Yuki session is signed in): close the profile drawer after checking
+identity (it covers Uploaden). Without a file-upload tool, serve only the PDFs from a throwaway folder
+(never `~/Downloads` itself) through a loopback CORS server (`Access-Control-Allow-Origin: *`, free
+port: `lsof -iTCP:<port>`, other agents run servers too; run it as a background Bash task, see
+[fetch-invoices.md](fetch-invoices.md)). One `preview_evaluate`: `fetch` each file, `new File([blob],
+name)`, add to a `DataTransfer`, assign it to `input[type=file].files`, dispatch a bubbling `change`;
+a second evaluate checks `Map` and clicks Uploaden; `preview_wait_for urlIncludes UploadedFiles.aspx`.
+Kill the server afterwards. Base64 through evaluate only as fallback (each expression < 64,000
+characters, never print payloads).
 
-## Reusable tooling
-
-The maintained Python tools are `scripts/yuki.py` (read-only outstanding payments and append-only
-sheet reporting) and the wrapper's Google Workspace core `gws.py` (Drive and targeted Sheets
-operations). Run `scripts/install --check` for Yuki readiness. Browser uploads follow this recipe;
-there is no unattended upload/OCR pipeline. Invoice matching remains a verified agent decision.
-Company/account IDs stay in each `yuki` wrapper; consumer repos carry committed core copies.
-
-## Chrome CDP upload, verified 2026-10-13 (2 PDFs)
-
-`new_page <tenant>/domain/inbox/aspx/uploadarchive.aspx --background`. The binder picker lives in the
-same-origin iframe `name="Main"`: select Aankoop with `evaluate_script` (leaf element whose text is
-`Aankoop`, `.click()`; its `onclick` is `Ordner_OnClick(1)`), re-snapshot, click **Uploaden** → lands on
-`/domain/archive/upload-files/1` with `Map = Aankoop` and a **Bladeren** button. `upload_file <pageId>
-<Bladeren-uid> <pdf...>`; snapshot shows "N bestand(en) klaar om te uploaden"; click **Uploaden**; the page
-navigates to `UploadedFiles.aspx?Batch=<id>` whose iframe lists filename, Map, Status "Open" per file.
-Sources for the files: [fetch-invoices.md](fetch-invoices.md).
-
-## T3 preview upload, verified 2026-10-13 (4 PDFs, no base64 in chat)
-
-Cheaper than base64 evaluate calls: serve the PDFs from a throwaway local folder with a tiny CORS HTTP server
-(`Access-Control-Allow-Origin: *`, free port, only the files to upload, kill it afterwards; http://127.0.0.1 is
-allowed from the https page). Then one `preview_evaluate`: `fetch` each file, `new File([blob], name)`, add to a
-`DataTransfer`, assign `input[type=file].files`, dispatch `change`; the page lists "N bestand(en) klaar"; a second
-evaluate checks `Map` = Aankoop and clicks the Uploaden button; `preview_wait_for urlIncludes UploadedFiles.aspx`.
-Select the binder first via evaluate inside iframe `name="Main"` (click the leaf whose text is `Aankoop`, then `Uploaden`).
-Never serve ~/Downloads itself; check `lsof -iTCP:<port>` because other agents run servers too.
-
-## T3 preview upload, verified 2026-10-13 (first run)
-
-Prefer `preview_*` when its Yuki session is signed in. Close the profile drawer after checking
-identity: it can cover Uploaden and intercept clicks. Legacy page content is inside the same-origin
-`iframe[src*="uploadarchive"]`; inspect its DOM with `preview_evaluate` when snapshots omit it.
-When no file-upload tool is exposed, serve the PDFs from a loopback HTTP server (background Bash
-task, see fetch-invoices.md) and let the Yuki page `fetch('http://127.0.0.1:<port>/get?name=…')`
-each one (Yuki has no CSP; verified 2026-10-14, 4 files in one evaluate), construct `File` objects,
-assign a `DataTransfer.files` list to the observed `input[type=file]`, then dispatch one bubbling
-`change` event. Base64 through evaluate calls is the fallback only (each expression below 64,000
-characters, never print payloads). Verify queued filenames/count and Aankoop before
-clicking Uploaden. Read the resulting UploadedFiles iframe for receipt rows and document links.
-A navigation can make evaluate report failure even when the click worked: inspect the current URL
-before retrying. No Chrome remote-debugging connection is needed for this route.
+**Chrome over CDP** (where host policy permits logged-in Chrome): `chrome-devtools start
+--autoConnect`, find the tenant with `list_pages`, open your own tab with `new_page <url>
+--background`, verify the profile identity. `upload_file <pageId> <Bladeren-uid> <pdf...>` attaches
+several files (UIDs from the current `take_snapshot`). Close only your tab, then `chrome-devtools stop`.

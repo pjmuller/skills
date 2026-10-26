@@ -1,13 +1,12 @@
 ---
 name: t3-schedule
-description: Run a T3 Code thread on a recurring wall-clock schedule (e.g. every workday 07:30 open a thread in project X with prompt Y) or once at a specific date/time (e.g. Saturday 08:00 downscale a server) via macOS launchd or Linux/WSL systemd user timers, or wake an existing thread later to continue its work (continuation). Use for "schedule a daily/weekly T3 job", "run this prompt once on Saturday at 08:00", "every morning run the fleet report", "check back on this thread tomorrow 09:00", "list/pause/resume/remove scheduled T3 jobs", "/t3-schedule". Not for in-session timers (CronCreate, /loop) or resuming rate-limited threads (t3-usage-windows).
+description: "Use to start a T3 thread on a wall clock (\"every workday 07:30 run X\", \"once on Saturday 08:00\"), wake this thread later (\"check back tomorrow 09:00\", \"arm a follow-up\"), or list/pause/resume/remove scheduled jobs (\"what's scheduled?\"). Not in-session timers or rate-limited threads (T3 resumes those)."
 ---
 
 # t3-schedule
 
-`scripts/t3-schedule` (flags: `--help`, `add --help`; tests `scripts/test_*.py`). Install
-`scripts/install`; `install --check` also verifies the
-[t3-relay](../t3-manage-thread/relay.md) dependency (`t3-relay check`).
+`scripts/t3-schedule` (`--help`, `add --help`); install `scripts/install`, `--check` also checks
+[t3-relay](../t3-manage-thread/relay.md).
 
 ```mermaid
 flowchart LR
@@ -15,62 +14,57 @@ flowchart LR
   C[catch-up poller, 15 min] -- missed or failed slot --> R
 ```
 
-Why launchd/systemd and not T3's native `fixed_time` tasks: those skip a run >10 min late
-(sleeping Mac); launchd replays the missed slot at wake, the catch-up poller covers the rest.
+Not T3's native `fixed_time` tasks: they skip a run >10 min late (sleeping Mac); launchd replays
+the missed slot at wake, the catch-up poller covers the rest.
 
 ```bash
-t3-schedule add --name nightly --at 07:30 --weekdays --project ~/code/x/app -- "Run the nightly report."
 t3-schedule add --name check-deploy --once 2026-10-20 --at 10:00 --resume-thread <threadId> \
   --prompt-file ~/notes/what-to-check.md
+t3-schedule add --name nightly --at 07:30 --weekdays --project ~/code/x/app -- "Run the nightly report."
 t3-schedule list --markdown   # answer "what's scheduled?" with this
 ```
 
 ## Jobs
 
-- **Recurring** (`--weekdays`, `--days mon,thu`, default daily): definition versioned in the repo,
-  machine opts in with `adopt`; pause/resume, one-or-many machines → [repo-jobs.md](repo-jobs.md).
+- **Continuation** (`--resume-thread ID`, usually `--once`): sends the prompt as a turn to that
+  thread ("Scheduled follow-up (<date>), as agreed earlier in this thread: …"); settled threads
+  wake. Inside T3 pass **your own id** (`t3_thread_list` → `currentThreadId`); a launchd job
+  cannot resolve "self". Arm one whenever the next step needs time to pass (logs, cache expiry,
+  deploy soak, a reply). Keep data the prompt needs outside `/tmp`. `pending-resumes` lists them;
+  `t3-purge-threads` spares their threads.
 - **One-shot** (`--once YYYY-MM-DD`): machine-local, retried until 23:00 that day, then retired
-  (`list` shows `fired <date>` / `expired (never fired)`).
-- **Continuation** (`--resume-thread ID`): sends the prompt as a turn to that thread ("Scheduled
-  follow-up (<date>), as agreed earlier in this thread: …"); settled threads wake. Machine-local,
-  usually `--once`. Inside T3 pass **your own id** (`t3_thread_list` → `currentThreadId`); a
-  launchd job cannot resolve "self". Arm one whenever the next step needs time to pass (logs,
-  cache expiry, deploy soak, a reply). Keep data the prompt needs outside `/tmp`.
-  `pending-resumes` lists them; `t3-purge-threads` spares those threads.
+  (`list`: `fired <date>` / `expired (never fired)`).
+- **Recurring** (`--weekdays`, `--days mon,thu`, default daily): definition versioned in the repo,
+  each machine opts in with `adopt`; pause/resume, one or many machines → [repo-jobs.md](repo-jobs.md).
 
-## Fire = `t3-relay … --wait 120` (fired = the thread/message exists, not just accepted)
+## Launch options
 
-| job field | relay |
-|---|---|
-| `project`, `title` (`{date}` → today) | `launch --project --title` |
-| `model` (ordered list, e.g. `opus,astra`) | first candidate `t3-pick-instance` can route → `--model`, `--instance`; none → run fails, catch-up retries. Omitted → opus, else astra. Provider alias `codex`/`openai` → Astra. haiku/luna refused unless `allow_small_model` (`--allow-small-model`): orchestration already done, e.g. a script decides everything |
-| `profile` (label or instance id, machine-local, needs `--model`) | narrows the account choice → `--instance` |
-| `thinking` | `--effort` (omitted → house effort) |
-| `settle_when_done` | appends the [completion footer](../t3-manage-thread/settle-thread.md) to the prompt |
-| `resume_thread` | `send --thread` (model/profile/title/settle refused) |
-
-Without `--settle-when-done` the prompt (or the helper it runs) owns the lifecycle.
-`--no-notify` drops the success notification. `--pre-command CMD` runs CMD in the runner before
-the T3 wait (no T3 needed; nonzero exit → one notification per day, the fire still follows); the
-skills updater uses it. `run-now <name>` fires through the service manager and tails the log.
+- `--model opus,astra`: ordered; the first candidate `t3-pick-instance` can route wins; none →
+  run fails, catch-up retries. Omitted → opus, else astra. haiku/luna refused unless
+  `--allow-small-model` (a script already decides everything).
+- `--profile` (label or instance id, machine-local, needs `--model`) narrows the account;
+  `--thinking` → effort (omitted → house effort).
+- `--settle-when-done` appends the [completion footer](../t3-manage-thread/settle-thread.md);
+  otherwise the prompt owns the lifecycle. Continuations refuse model/profile/title/settle.
+- `--pre-command CMD` runs before the T3 wait, without T3 (nonzero → one notification per day,
+  the fire still follows; the skills updater uses it). `--no-notify` drops the success notification.
+- `run-now <name>` fires through the service manager and tails the log.
 
 ## Contract
 
-- **Once per day**: `<name>.last` written only once t3-relay confirms the effect; failures notify
-  once per day (`<name>.failed`). Accepted but unconfirmed after 120 s → `<name>.pending` (rid):
-  the catch-up tick re-checks it (`t3-relay status`, no runner): landed → fired (for the marker's
-  day); failed → due again; pending → never re-fired (could duplicate), notify once after 30 min.
-  The marker survives midnight and blocks later fires until t3-relay decides. One `fire` per job
-  at a time (lock); spec and markers are written atomically, an unreadable spec skips only its job.
-- **Catch-up**: LaunchAgent `com.t3-skills.t3-schedule.catch-up` re-kicks a job whose slot passed
-  today without a fire, until slot+10h (same day). One job per tick, earliest first, never while
-  another runner is active, so capacity is re-read between jobs. Keep slots ≥15 min apart.
-- **Waits for T3** up to `--wait-max` min (health endpoint), then fails → catch-up.
-- **Provider limits/auth** are the thread's problem, as for any launch
-  ([t3-usage-windows](../t3-usage-windows/SKILL.md)).
-- Never edit a runner: `add --force` (one) or `refresh` (all; `skills-refresh` runs it).
-  `list` flags stale runners.
-- Files: runner + state `~/.t3/userdata/scheduled/t3-schedule/<name>.*`, log
-  `~/.t3/userdata/logs/t3-schedule.<name>.log`. `ProcessType=Interactive` (Standard clamps CLI calls).
+- **Fired = the thread/message exists** (`t3-relay … --wait 120`), not just accepted; `<name>.last`
+  is written only then, at most once per day. Failures notify once per day. Accepted but
+  unconfirmed → `<name>.pending`: never re-fired (could duplicate); catch-up re-checks
+  `t3-relay status`, notifies after 30 min.
+- **Catch-up** (`com.t3-skills.t3-schedule.catch-up`) re-kicks a missed or failed slot until
+  slot+10h, same day; one job per tick, earliest first, never while another runner is active (so
+  capacity is re-read between jobs). Keep slots ≥15 min apart.
+- The runner waits for T3 up to `--wait-max` min, then fails → catch-up. Provider limits/auth are
+  the thread's problem ([t3-usage-windows](../t3-usage-windows/SKILL.md)).
+- Never edit a runner: `add --force` (one) or `refresh` (all; `skills-refresh` runs it). `list`
+  flags stale runners.
+- Files: `~/.t3/userdata/scheduled/t3-schedule/<name>.*`, log
+  `~/.t3/userdata/logs/t3-schedule.<name>.log`. `ProcessType=Interactive` (Standard clamps CLI
+  calls to 15–25 s).
 
 Linux / Windows (WSL, systemd user timers): [linux-wsl.md](linux-wsl.md).

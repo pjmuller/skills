@@ -68,34 +68,42 @@ def configure(path):
     CUSTOMER_FIELD_ID = CONFIG.get("custom_fields", {}).get("customer", {}).get("id", "")
 
 
-def token_from_env():
+def env_file():
+    """auth.env_file resolved against the config's directory, or None."""
+    filename = CONFIG.get("auth", {}).get("env_file")
+    if not filename:
+        return None
+    path = Path(filename).expanduser()
+    if not path.is_absolute() and CONFIG_PATH:
+        path = CONFIG_PATH.parent / path
+    return path.resolve()
+
+
+def env_value(name: str) -> str:
+    """Environment first, then the configured auth.env_file (parsed, never executed)."""
     import shlex
-    auth = CONFIG.get("auth", {})
-    name = auth.get("env_var", "CLICKUP_API_PERSONAL_TOKEN")
-    tok = os.environ.get(name, "").strip()
-    filename = auth.get("env_file")
-    path = None
-    file_state = "not configured"
-    if not tok and filename:
-        path = Path(filename).expanduser()
-        if not path.is_absolute() and CONFIG_PATH:
-            path = CONFIG_PATH.parent / path
-        path = path.resolve()
-        file_state = "missing"
-        if path.is_file():
-            file_state = f"exists but lacks {name}"
-            for line in path.read_text().splitlines():
-                match = re.match(r"^(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*)$", line.strip())
-                if match:
-                    values = shlex.split(match[1], comments=True)
-                    tok = values[0] if len(values) == 1 else ""
-                    if tok:
-                        file_state = f"contains {name}"
-                    break
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    path = env_file()
+    if not path or not path.is_file():
+        return ""
+    for line in path.read_text().splitlines():
+        match = re.match(r"^(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*)$", line.strip())
+        if match:
+            values = shlex.split(match[1], comments=True)
+            return values[0] if len(values) == 1 else ""
+    return ""
+
+
+def token_from_env():
+    name = CONFIG.get("auth", {}).get("env_var", "CLICKUP_API_PERSONAL_TOKEN")
+    tok = env_value(name)
     if not tok:
+        path = env_file()
+        state = "not configured" if not path else "missing" if not path.is_file() else f"exists but lacks {name}"
         config_path = str(CONFIG_PATH.resolve()) if CONFIG_PATH else "not resolved"
-        env_path = str(path) if path else "not configured"
-        sys.exit(f"{name} is empty; config: {config_path}; auth.env_file: {env_path} ({file_state})")
+        sys.exit(f"{name} is empty; config: {config_path}; auth.env_file: {path or 'not configured'} ({state})")
     return tok
 
 
@@ -157,7 +165,7 @@ def user_id(who: str) -> int:
 
 def workspace_member_id(who: str) -> int | None:
     """Resolve a workspace member by full name, username or email (case-insensitive) when the wrapper
-    has no alias for them — a one-off recipient (Alexey on the Rootcause list) must still get a real tag."""
+    has no alias for them — a one-off recipient must still get a real tag."""
     key = who.strip().lstrip("@").casefold()
     for m in api("GET", f"/team/{TEAM_ID}").get("team", {}).get("members", []):
         u = m.get("user", {})
@@ -170,7 +178,7 @@ LITERAL_MENTION = re.compile(r"(?<![\w`])@[A-Z][\w.-]*(?: [A-Z][\w.-]*)?")
 
 
 def refuse_literal_mention(text: str, mention):
-    """A typed ``@Name`` is plain text in the API: ClickUp notifies nobody (2026-10-13, an Alexey ping
+    """A typed ``@Name`` is plain text in the API: ClickUp notifies nobody (2026-10-13, a ping
     that never arrived). Without ``--mention`` such text is a silent no-op, so refuse it."""
     if mention:
         return
@@ -682,11 +690,6 @@ def get_task(task_id: str, markdown: bool = False) -> dict:
                params={"include_markdown_description": "true"} if markdown else None)
 
 
-def set_description(task_id: str, md: str):
-    content = md_to_delta(md)
-    write_task_content(task_id, content)
-
-
 def task_id_from_url(value: str) -> str | None:
     m = re.search(r"https://app\.clickup\.com/t/(?:\d+/)?([a-z0-9]+)", value)
     return m.group(1) if m else None
@@ -980,26 +983,6 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
 # Chat (channels, DMs, threads). Text goes through the public v3 chat API. Images need the
 # web app's private seam: the public markdown path stores an image with src="http://null/".
 # ---------------------------------------------------------------------------------------------
-
-def env_value(name: str) -> str:
-    """Environment first, then the configured auth.env_file (parsed, never executed)."""
-    import shlex
-    value = os.environ.get(name, "").strip()
-    filename = CONFIG.get("auth", {}).get("env_file")
-    if value or not filename:
-        return value
-    path = Path(filename).expanduser()
-    if not path.is_absolute() and CONFIG_PATH:
-        path = CONFIG_PATH.parent / path
-    if not path.is_file():
-        return ""
-    for line in path.read_text().splitlines():
-        match = re.match(r"^(?:export\s+)?" + re.escape(name) + r"\s*=\s*(.*)$", line.strip())
-        if match:
-            values = shlex.split(match[1], comments=True)
-            return values[0] if len(values) == 1 else ""
-    return ""
-
 
 def chat_ref(value: str) -> tuple[str, str | None]:
     """'https://app.clickup.com/<ws>/chat/r/<channel>[/t/<message>]', '<channel>' or

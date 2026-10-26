@@ -1,44 +1,36 @@
 ---
 name: disk-audit
-description: Deterministic macOS disk-usage audit and safe-cache cleanup. Use for disk filling up, "what's eating my disk", the monthly check, or before/after cleanup. For CPU or RAM pressure, use resource-audit.
+description: "Use when the Mac's disk is filling up (\"what's eating my disk\", \"disk full\", free space dropping), for the monthly disk check, or around a cache cleanup. Prunes only self-regenerating caches. CPU/RAM pressure → resource-audit."
 ---
 
 # Disk audit
 
-Split of labour: the **script** measures, the **LLM** interprets and digs into anomalies.
-Never guess sizes — run the script. `scripts/install` links the scripts onto `~/.local/bin`
-(`--check` verifies); otherwise run them from this skill's `scripts/`.
+The **script** measures, you interpret and dig into anomalies. Never guess sizes: run it.
+`scripts/install [--check]` links the scripts onto `~/.local/bin`.
 
-- `disk_audit.sh` — read-only snapshot (one `du` pass over `$HOME`); ends with SUGGESTED CLEANUPS, printed, never run.
-- `disk_cleanup.sh` — confirms once, then prunes only self-regenerating caches; `-y` for agents after the user said "go".
-- `go_cache_trim.sh [CAP_GB]` — LRU cap (default 30G) on the Go build cache; never touches entries used in the
-  last hour, so running builds survive. Meant for an hourly scheduler: Go has no size cap and only trims entries
-  idle 5 days, while an agent fleet building many worktrees adds 5-20 GB/h. A weekly prune cannot keep up.
+- `disk_audit.sh`: read-only snapshot (one `du` pass over `$HOME`); ends with SUGGESTED CLEANUPS, printed, never run.
+  Thresholds and the suggestion list sit at its bottom: add new offenders there.
+- `disk_cleanup.sh`: confirms once, then prunes only self-regenerating caches; `-y` only after the user said "go".
+- `go_cache_trim.sh [CAP_GB] [DIR...]`: LRU cap (default 30G) on Go/golangci-lint caches; skips entries used in
+  the last hour so running builds survive. Meant for an hourly scheduler: Go trims only entries idle 5 days,
+  while an agent fleet adds 5-20 GB/h.
 
-Intent of the split: everything the cleanup script touches regrows on its own (build/package
-caches). Anything that costs a re-download or a lost feature is only *suggested* by the audit,
-prefixed "Operator judgment" (Downloads, docker volumes, node_modules) — copy the printed command
-after the user decides.
+**Safety split:** the cleanup script touches only what regrows on its own (build/package caches). Anything
+costing a re-download or a lost feature (Downloads, docker volumes, node_modules, HF models) is only
+*suggested*, prefixed "Operator judgment": run the printed command after the user decides.
 
 ## Agent notes
 
 - Disk filling within days: compare growth per hour, not totals. For a cache dir,
   `find DIR -type f -print0 | xargs -0 stat -f '%Sm %z' -t '%m-%d_%H'` summed per hour shows the rate.
-  The audit scans only `$HOME`; swap (`sysctl vm.swapusage`, own APFS volume) and `/private/tmp` share the
-  container's free space too.
-- Measure freed space with `df`, not `du`: uv venvs are APFS clones of cache files, so `uv cache clean`
-  that removes 12G may free only ~2G (blocks stay shared with project `.venv`s).
-- Prefer deleting by age/LRU over wiping a whole cache while agents build; mass deletes also flood fseventsd,
-  so batch and pace them (`go_cache_trim.sh` does).
-
-- Thresholds and the suggestion list sit at the bottom of `scripts/disk_audit.sh`; add new
-  offenders there, not in ad-hoc commands.
-- uv cache "in use" FAILED: a long-running `uv run`/`uvx` holds the lock. If those processes
-  run from a project `.venv` (`pgrep -fl uv`, check child python path), `uv cache clean --force`
-  is safe (macOS venvs are clones); an ephemeral `uvx`/`--with` env lives in the cache, so stop it first.
-- Colima: the audit's suggested prune ends with `colima ssh -- sudo fstrim -av`, which returns
-  freed sparse-disk blocks to macOS (Virtualization.Framework backend). Recreate the VM only if
-  trim fails, and only after backing up volumes.
-- App-managed data the script does not suggest (it only shows under Application Support /
-  Caches): `~/Library/Application Support/Claude/vm_bundles`, Chrome `OptGuideOnDeviceModel`
-  weights. Operator judgment; the owning app may re-download them.
+  The audit scans only `$HOME`; swap (`sysctl vm.swapusage`) and `/private/tmp` share the container's free space.
+- Measure freed space with `df`, not `du`: uv venvs are APFS clones of cache files, so a `uv cache clean`
+  removing 12G may free ~2G.
+- Prefer age/LRU deletes over wiping a cache while agents build; mass deletes flood fseventsd, so batch and pace.
+- uv cache "in use" FAILED: a long-running `uv run`/`uvx` holds the lock. If it runs from a project `.venv`
+  (`pgrep -fl uv`, check child python path), `uv cache clean --force` is safe; an ephemeral `uvx`/`--with` env
+  lives in the cache, so stop it first.
+- Colima: the suggested prune ends with `colima ssh -- sudo fstrim -av`, returning freed sparse-disk blocks to
+  macOS. Recreate the VM only if trim fails, and only after backing up volumes.
+- App-managed data not suggested (shows only under Application Support / Caches): Claude `vm_bundles`, Chrome
+  `OptGuideOnDeviceModel` weights. Operator judgment; the app may re-download them.

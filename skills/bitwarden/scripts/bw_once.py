@@ -170,7 +170,6 @@ def validate(request):
         request["reason"] = reason_text(request["reason"])
     if op in ("list", "copy"):
         request["host"] = host(request["host"])
-    if op in ("list", "copy"):
         if request["username"] is not None and (not isinstance(request["username"], str) or not request["username"]
                                                 or len(request["username"]) > 254
                                                 or any(ord(c) < 32 or ord(c) == 127 for c in request["username"])):
@@ -1004,8 +1003,8 @@ def main():
     listing.add_argument("--username", help="only logins with this username (when you know the account)")
     copy = commands.add_parser("copy")
     copy.add_argument("--host", required=True)
-    copy.add_argument("--id", help="item UUID from `list`; omit to pick the only exact-host login")
-    copy.add_argument("--username", help="pick the exact-host login with this username (no --id needed)")
+    copy.add_argument("--id", help="item UUID from `list`; omit to pick the only matching login")
+    copy.add_argument("--username", help="pick the matching login with this username (no --id needed)")
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
     copy.add_argument("--to", choices=("clipboard", "page"), default="clipboard",
                       help="page: one fetch by the https://<host> page via the returned fill_js (Touch ID broker only)")

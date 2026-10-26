@@ -1,78 +1,66 @@
 ---
 name: agents-md
-description: "Create, simplify or prune agent entrypoints: a repository's AGENTS.md / canonical CLAUDE.md, or the global cross-project file (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md), including merging the shared global template into someone's existing file. Use for agent onboarding, project context, domain taxonomy, trimming bloated prompts; not general documentation rewrites."
+description: "Use to write, trim or merge an agent entrypoint (a repo's AGENTS.md / CLAUDE.md, or the global cross-project prompt and its shared template), or to write a handoff prompt between people, agents or roles (\"onboard agents to this repo\", \"this prompt is bloated\", \"re-sync the global template\"). Not general documentation."
 ---
 
 # Agent entrypoints
 
-Give a capable agent the context that changes its decisions: what this project is
-for, who depends on it, where responsibility ends, and how to verify its work.
-Explain why and the desired outcome; leave implementation choices open unless a
-real constraint or concrete verification requirement makes precision necessary.
+Give a capable agent the context that changes its decisions: what the project is for, who
+depends on it, where responsibility ends, how to verify its work. Explain why and the desired
+outcome; leave implementation open unless a real constraint or verification need demands precision.
 
-This file covers a repository's entrypoint. The user-level file loaded in every
-repo (write, prune, merge the [template](global-template.md), port improvements)
-has its own economics: [global.md](global.md). Product-owner/developer adaptation
-and agent-owned Git housekeeping: [roles.md](roles.md). Handoffs between people, agents
-and roles (relay prompt, dev → non-technical, bug report → dev): [handoff.md](handoff.md).
-Independent review and reasoned pushback: [review procedure](../t3-manage-thread/code-review.md)
-(harness-neutral; T3 mechanics in its last section).
+| Concern | Open |
+| --- | --- |
+| A repository's entrypoint | this file |
+| User-level file loaded in every repo: write, prune, merge the [template](global-template.md), re-sync, port improvements | [global.md](global.md) |
+| Product-owner vs developer adaptation, agent-owned Git housekeeping | [roles.md](roles.md) |
+| Handoffs: relay prompt, dev → non-technical, bug report → dev | [handoff.md](handoff.md) |
+| Independent review and reasoned pushback | [review procedure](../t3-manage-thread/code-review.md) |
 
-Bundled files are templates; the person's live prompt stays outside this
-installation (skill updates replace it). Where to register: [README](../../README.md#registration-scope).
+Bundled files are templates; the person's live prompt stays outside this installation (skill
+updates replace it). Where to register: [README](../../README.md#registration-scope).
 
 ## Ground it
 
-Read the existing entrypoint, applicable parent instructions, and linked skills
-or glossaries. Resolve symlinks and forwarding files before choosing the canonical
-file to edit; preserve the repository's discovery arrangement and unrelated edits.
-Inspect source, manifests and test/CI entrypoints to check claims. Existing prose
-is evidence, not proof: resolve stale or conflicting claims against current
-behavior and explicit intent. Do not invent product strategy when evidence is absent.
+Read the existing entrypoint, parent instructions and linked skills/glossaries. Resolve
+symlinks and forwarding files before choosing the canonical file; preserve the discovery
+arrangement and unrelated edits. Check every claim, old or new, against source, manifests and
+test/CI entrypoints: prose is evidence, not proof. Never invent product strategy.
 
 ## Choose what earns space
 
-These are lenses, not a template or heading quota. Omit what adds no decision value.
+Lenses, not a template or heading quota. Keep distinctive intent and verified constraints;
+omit what adds no decision value; link detail to its owner instead of copying it.
 
-- **Intent and users:** the problem, audience, valuable outcome and meaningful
-  tradeoffs. Include business context only where it changes product decisions.
-- **Scope and boundaries:** what this repo owns, what neighboring systems own,
-  and the few technologies or architectural seams needed to locate work. If it
-  also hosts research/support/business work, clarify that scope without forcing
-  every request into a coding workflow. Link maintained maps instead of copying trees.
-- **Domain vocabulary:** recurring ambiguous terms, useful aliases and crucial
-  distinctions, briefly defined. Prefer the product's existing language. Link
-  shared terminology at its owner, especially ReplyPen terms in connected repos;
-  define only local differences here. Do not make a generic dictionary, rename
-  concepts, or enumerate every model. Term count is not a target.
-- **Verification:** actual commands and when they apply, required fixtures or
-  environment, and observable success. Distinguish local checks from live checks;
-  use existing docs-only CI paths for documentation changes. Link longer test or
-  release runbooks. Preserve non-obvious safety and deployment constraints.
-- **Routing and constraints:** a few task-relevant links and real invariants with
-  their reasons. Include an operational rule only when missing it invites a
-  concrete mistake; do not turn a past incident into a speculative blanket ban.
+- **Intent and users:** problem, audience, valuable outcome, meaningful tradeoffs; business
+  context only where it changes product decisions.
+- **Scope and boundaries:** what this repo owns, what neighbours own, the few technologies or
+  seams needed to locate work. Repo also hosts research/support/business work → say so, without
+  forcing every request into a coding workflow.
+- **Domain vocabulary:** recurring ambiguous terms, aliases and crucial distinctions, briefly,
+  in the product's own language. Link shared terminology at its owner (e.g. ReplyPen terms in
+  connected repos); define only local differences. No generic dictionary, renaming or
+  model inventory; term count is not a target.
+- **Verification:** actual commands and when they apply, fixtures/environment, observable
+  success; local vs live checks; docs-only CI paths for doc changes. Preserve non-obvious
+  safety and deployment constraints.
+- **Routing and constraints:** a few task-relevant links and real invariants, each with its
+  reason in a clause. An operational rule only when missing it invites a concrete mistake; no
+  speculative blanket ban from one past incident.
+- **Cut:** generic engineering advice, restated global instructions, task history, stale
+  milestones, volatile numbers/inventories, copied trees/runbooks/skill content, exhaustive
+  schema or implementation detail, rigid recipes. A new supporting file only when the detail has
+  no home and earns its maintenance. Stay in scope; shorter is better only while decisions stay
+  clear.
 
-## Simplify as well as create
-
-Keep the project's distinctive intent and verified constraints. Remove generic
-engineering advice, restated global instructions, task history, stale milestones,
-volatile numbers/inventories, exhaustive schema or implementation detail, rigid
-how-to recipes, and duplicated skill/runbook content. Replace useful detail with
-a link to its maintained owner; create supporting files only when that detail
-has no suitable home and earns the maintenance cost. Avoid broad rewrites outside
-the requested scope. Shorter is better only while the decisions remain clear.
-
-Public output must stand on public evidence: never copy private business facts,
-internal samples, personal absolute paths or secrets from reference repositories.
-Distill the pattern; use neutral examples only when they clarify a distinction.
+**Public output (hard rule):** stand on public evidence only; never copy private business facts,
+internal samples, personal absolute paths or secrets from reference repos. Distill the pattern;
+neutral examples only where they clarify a distinction.
 
 ## Check the result
 
-Verify definitions against their source, commands against existing configuration,
-and links from the entrypoint's actual location, including anchors and symlinks.
-Do not run deployments or expensive app suites merely to validate prose.
-Mentally try a representative change and an ambiguous request: can a fresh agent
-identify the right owner, vocabulary and verification without unnecessary rules?
-For simplification, check that removing detail did not erase a real constraint.
-Report consequential uncertainty or conflicts instead of fabricating certainty.
+Verify links (anchors, symlinks) from the entrypoint's actual location; no deployments or
+expensive suites just to validate prose. Dry-run a representative change and an ambiguous
+request: can a fresh agent find the owner, vocabulary and verification without needless rules?
+After simplifying, check no real constraint was erased. Report consequential uncertainty or
+conflicts; never fabricate certainty.

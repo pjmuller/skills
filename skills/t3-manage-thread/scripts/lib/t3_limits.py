@@ -68,7 +68,6 @@ STALE_SECONDS = 15 * 60  # older than this and "no data" beats a wrong number
 MAX_RETRY_SECONDS = 5
 SESSION_SECONDS = 5 * 3600
 WEEKLY_SECONDS = 7 * 86400
-CURRENCY = {"EUR": "€", "USD": "$", "GBP": "£"}
 EXPIRED_HINT = "token expired — run any turn in that profile to refresh"
 AUTH_CODES = (401, 403)
 PROBE_STORE = SETTINGS.parent / "t3-limits-probe.json"
@@ -478,7 +477,7 @@ def fetch_with_retry(credentials, fetch) -> dict:
     try:
         return fetch(credentials)
     except urllib.error.HTTPError as error:
-        if error.code in (401, 403):
+        if error.code in AUTH_CODES:
             raise
         delay = retry_delay(error)
     except urllib.error.URLError:

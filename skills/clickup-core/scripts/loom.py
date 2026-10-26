@@ -63,15 +63,6 @@ def loom_id(s: str) -> str:
     sys.exit(f"not a Loom share URL or id: {s}")
 
 
-def find_loom_urls(text: str) -> list[str]:
-    """All distinct Loom ids in free text, in order of appearance."""
-    seen: list[str] = []
-    for m in LOOM_RE.finditer(text or ""):
-        if m.group(1) not in seen:
-            seen.append(m.group(1))
-    return seen
-
-
 def mmss(t: float) -> str:
     t = int(t)
     return f"{t // 60:02d}-{t % 60:02d}"

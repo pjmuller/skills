@@ -1,135 +1,116 @@
 ---
 name: video-shrink-for-gemini
-description: Prepare recordings and obtain Markdown transcripts or visual narration with Gemini, delegating locally when available. Use for Fathom raw transcript retrieval without video analysis, video shrinking, meeting transcription, silent UI walkthroughs, or recordings a text-only coding agent must understand. Loom shares via download-loom; Leexi calls come from the leexi skill; without Gemini, frames come from video-frames-for-vision.
+description: "Use for \"transcribe this video/call\", \"what happens in this recording\", a product-feedback or silent UI walkthrough, a Fathom/Loom/Leexi/SyncUp link, or shrinking a video for Gemini: ends in a verified Markdown transcript or visual narration. No Gemini → video-frames-for-vision."
 ---
 
 # Video → Gemini
 
-Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a copy/paste prompt for the
-user), built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source.
-Helpers (`--help` each): `shrink-video`, `build-prompt`, `download-fathom`, `download-loom`,
-`detect-screenshare`, `transcribe-gemini`, `transcribe-local`, `transcribe-openai`. `scripts/install` links them; `--check` verifies deps.
+Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a paste-prompt for the user),
+built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source. Helpers (`--help`
+each, which also holds their measurements): `shrink-video`, `build-prompt`, `download-fathom`,
+`download-loom`, `detect-screenshare`, `transcribe-gemini`, `transcribe-local`, `transcribe-openai`.
+`scripts/install` links them; `--check` verifies deps and the key.
 
 Route: `transcribe-gemini` (Gemini API) → continuous audiovisual narrative; native `agy` only
 without an API key ([agy-route.md](agy-route.md)). No Gemini, or small on-screen text must be
 exact → [No Gemini available](#no-gemini-available).
 
-## Fathom input
+## Inputs
 
-Fathom URL → [fathom.md](fathom.md). Transcript-only requests: `download-fathom URL --out
-PRIVATE_DIR --transcript-only`, then stop (no media, Gemini or ASR). Never change sharing
-permissions.
+All `--out` dirs must be git-ignored and private (the helpers refuse otherwise). **Never create or
+change sharing permissions**: missing access is a blocker to report.
 
-## Loom input
+- Fathom → [fathom.md](fathom.md). Transcript-only ask: `download-fathom URL --out DIR
+  --transcript-only`, then stop (no media, Gemini or ASR).
+- Loom share → [loom.md](loom.md): `download-loom URL --out DIR` (video + Loom's timestamped
+  transcript, no login).
+- Leexi URL/UUID/"today's call around 14:00" → [leexi](../leexi/SKILL.md) (`download-leexi`).
+- ClickUp SyncUp → `clickup-core`'s `scripts/syncup.py URL --out DIR`
+  ([reference](../clickup-core/reference.md#syncup-recordings)).
 
-Loom share URL → [loom.md](loom.md): `download-loom URL --out PRIVATE_DIR` fetches video, metadata
-and Loom's own timestamped transcript (public shares, no login). That transcript is the speech layer;
-Gemini adds the screen. `--transcript-only` stops before the download.
-
-## Leexi input
-
-Leexi URL, UUID or "the Leexi meeting of today around 14:00" → sibling [leexi](../leexi/SKILL.md)
-skill (`download-leexi`). Its timestamped transcript is the speech layer; Gemini adds what
-happened on screen and checks what Leexi heard.
-
-## ClickUp SyncUp input
-
-`clickup-core`'s `scripts/syncup.py URL --out PRIVATE_DIR` fetches recording, AI notes and the
-untimed transcript ([reference](../clickup-core/reference.md#syncup-recordings)); then continue below.
+A vendor transcript is the speech layer; Gemini adds the screen and checks what the vendor heard.
 
 ## Inspect and choose mode
 
-Look at 3–4 frames per clip; get duration from `ffprobe`. With audio, estimate speech share from
-`ffmpeg -i INPUT -af silencedetect=noise=-35dB:d=0.3 -f null -` as `(duration − silence) /
-duration` (count silence running to EOF). It measures audible activity, not speech: music,
-clicks and quiet voices need a listen. No audio or < ~20% → visual-first; speech-heavy →
-transcript-first; speech plus UI actions → mixed. Infer project, speakers, language, purpose
-and skip ranges from context (`AGENTS.md`, project docs); ask one question round only for gaps.
+Look at 3–4 frames per clip; duration from `ffprobe`. Speech share ≈ `(duration − silence) /
+duration` from `ffmpeg -i INPUT -af silencedetect=noise=-35dB:d=0.3 -f null -` (count silence
+running to EOF; it measures audible activity, so music/clicks/quiet voices need a listen). No audio
+or < ~20% → visual-first; speech-heavy → transcript-first; speech plus UI actions → mixed. Infer
+project, speakers, language, purpose and skip ranges from context (`AGENTS.md`, project docs); ask
+one question round only for gaps.
 
 ## Shrink
 
-`shrink-video --preset normal FILE` (presets in the script; keep the original). API tokens depend
-on duration, not bytes: shrinking only speeds the upload. Native `agy` rejects attachments over
-**50 MiB (52,428,800 bytes)**; over it: add `--max-bytes 48M` (splits into overlapping parts + `<name>.chunks.md`);
-preset choice and stitching part transcripts: [compression.md](compression.md).
-Never use `extreme` when small screen text matters; rapid actions may need source frames.
+`shrink-video --preset normal FILE` (keep the original). API tokens follow duration, not bytes:
+shrinking only speeds the upload. Native `agy` rejects attachments over **50 MiB**: add
+`--max-bytes 48M` (overlapping parts + `<name>.chunks.md`); presets and stitching parts:
+[compression.md](compression.md). Never `extreme` when small screen text matters.
 
 ## Prompt
 
-**Ground the vocabulary first, every time.** Collect the exact spellings the recording will
-contain: people, company/product/feature names, vendors, the project's taxonomies/enums, places,
-language variety (e.g. Flemish Dutch). Sources: project `AGENTS.md`/skill docs, glossaries, the
-vendor transcript's summary and speaker list, recent notes, ticket titles. 30–80 terms, only ones
-seen written. Without them Gemini and OpenAI invent plausible spellings.
+**Ground the vocabulary first, every time**: 30–80 exact spellings seen written (people,
+company/product/feature names, vendors, project enums, places, language variety such as Flemish
+Dutch) from `AGENTS.md`/skill docs, glossaries, the vendor transcript's summary and speakers,
+recent notes, ticket titles. Without them Gemini and OpenAI invent plausible spellings.
 
-Fill [prompt-template.md](prompt-template.md) (`MODE`, ffprobe durations, situation, language,
-speakers, skips, vocabulary, one-line intro per context file; keep applicable rule blocks), then
-`build-prompt --header header.md --out session.gemini-prompt.md CONTEXT_FILE...` appends context
-files verbatim. **When the shared screen is an artefact we already hold** (a deck in the repo, a
-Claude Design export, a ticket, a mockup), pass it as a context file: the pass still watches the
-video to know what is on screen at which second, but names slides, frames and labels by their real
-titles/ids instead of guessing from pixels. Opaque URLs/record IDs: read [exact-identifiers.md](exact-identifiers.md) first.
+Fill [prompt-template.md](prompt-template.md), then `build-prompt --header header.md --out
+session.gemini-prompt.md CONTEXT_FILE...` (appends context files verbatim). **Shared screen is an
+artefact we hold** (repo deck, design export, ticket, mockup) → pass it as context: Gemini still
+watches for timing but names slides/frames/labels by their real titles. Opaque URLs/record IDs →
+[exact-identifiers.md](exact-identifiers.md) first.
 
-**Product feedback walkthrough** (someone clicks through an app and narrates what to change): shrink
-with `--preset ui` (1 fps: at 0.5 fps a chip removed by Backspace or a 200 ms spinner falls between
-frames; API tokens follow duration, so it costs the same), keep the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
-carry it) so item times line up with server logs, and pass as context the owning screen's skill doc
-plus the app's UI copy (its i18n/strings file or the relevant templates): Gemini then quotes real
-labels and step names. Then follow [feedback-round](../recording-followups/feedback-round.md).
+**Product feedback walkthrough** (someone clicks through an app narrating changes): `--preset ui`
+(1 fps: at 0.5 fps a Backspace-removed chip or 200 ms spinner falls between frames; same cost), keep
+the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
+carry it) so items line up with server logs, and pass the owning screen's skill doc plus the app's
+UI copy (i18n/strings or templates) so Gemini quotes real labels. Then
+[feedback-round](../recording-followups/feedback-round.md).
 
 ## Execute and verify
 
-`transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` writes
-`<name>.transcript.md` + `.usage.json` (tokens, USD at list price), from any folder. Audio files
-(`.ogg/.m4a/.mp3/.wav`) go in as audio, no shrink needed; WhatsApp voice notes: [whatsapp-bridge](../whatsapp-bridge/SKILL.md#voice-notes) `wa voice --transcribe --hint …`. Key: one per
-machine: `VIDEO_GEMINI_API_KEY` from the env or `~/.config/transcribe-gemini/env` (chmod 600; never
-in a repo); else a project's `GEMINI_API_KEY`; else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex). None →
-[agy-route.md](agy-route.md). `scripts/install --check` reports the key.
-`--thinking medium` (default) kept every visual step at ~$0.02 per 2 minutes; `high` doubles cost
-for no speech gain; `low` dropped visual steps. Frames go at `--media-resolution high` by default (4×
-the video tokens of `low`): it decides whether screen text is read or invented (small UI facts 0.08 →
-0.76, [evidence](compression.md#crop-the-meet-share-tile)). `--media-resolution low` only for long
-videos whose screen content doesn't matter.
+`transcribe-gemini <name>.gemini.mp4 --prompt session.gemini-prompt.md` → `<name>.transcript.md` +
+`.usage.json` (tokens, USD at list), from any folder. Audio files go in as audio, no shrink;
+WhatsApp voice notes: [whatsapp-bridge](../whatsapp-bridge/SKILL.md#voice-notes).
 
-Google Meet recordings (Fathom, Leexi): first `detect-screenshare <name>.gemini.mp4` (seconds per
-hour, local; one frame every 15 seconds) → `<name>.gemini.screenshare.json`, then pass it as `--ranges`: frames only while a
-screen is shared, audio throughout; no share → audio only. Not Meet (Loom, Zoom, phone) → the JSON
-says `full-fallback` and the whole video is sent. Historical benchmark at 2-second sampling, 10 Meet calls: 42% of video seconds skipped,
-recall 1.00; a 29-minute call cost $0.14 instead of ~$0.17 (low resolution). Transcript cues ("share my screen")
-missed most share starts: don't use them. Then `shrink-video --crop <name>.gemini.screenshare.json SOURCE`
-→ `<name>.gemini.crop.mp4` (share tile fills the frame, no webcam faces); transcribe that with the same
-`--ranges`. Same tokens, small UI text read 0.76 → 0.88 (0.08 → 0.43 at low resolution).
+**Key routing**: `VIDEO_GEMINI_API_KEY` (env or `~/.config/transcribe-gemini/env`, chmod 600, never
+in a repo), else a project's `GEMINI_API_KEY`, else `GOOGLE_CLOUD_PROJECT` + credentials (Vertex).
+None → [agy-route.md](agy-route.md).
 
-Read the file; check speech, visual changes, timestamps and coverage against the recording;
-report gaps. The file opens with a provenance header (source video, pass settings, prompt path,
-"work from this text, do not re-run the video pass"): downstream briefs point at **this** file, never
-at the raw vendor ASR beside it, so no later thread watches the video again.
+Defaults are tuned (`--help` has the numbers): `--thinking medium` (`low` drops visual steps, `high`
+doubles cost for nothing); `--media-resolution high` decides whether screen text is read or
+invented. `low` only for long videos whose screen doesn't matter.
 
-Feedback walkthroughs: check every count and every "X is sorted/broken by Y" line against a source
-frame or the data. A flash pass once restated the speaker's misreading ("sorted by volume") as
-visible fact while its own numbers showed the opposite, and misread one count (31 → 51).
+**Google Meet recordings (Fathom, Leexi)**: `detect-screenshare <name>.gemini.mp4` →
+`<name>.gemini.screenshare.json`; `shrink-video --crop <that json> SOURCE` → `<name>.gemini.crop.mp4`
+(share tile fills the frame, no webcam faces); transcribe the crop with `--ranges <that json>`
+(frames only while sharing, audio throughout). Not Meet → the JSON says `full-fallback`, whole video
+is sent. Don't locate shares from transcript cues ("share my screen"): they miss most starts.
 
-Small-text UI walkthroughs: Flash confidently invented most on-screen text, example data and
-screen names on a 29-minute 720p share at low resolution (2026-09-24); crop + high resolution read 0.88
-of small UI facts (2026-10-12). Opaque IDs still need source frames: compare 3–4 first; if they
-disagree, use [video-frames-for-vision](../video-frames-for-vision/SKILL.md) as the source and the
-Gemini draft as hypotheses. `gemini-3.1-pro-high` did not read small opaque IDs better.
+Verify: read the file; check speech, visual changes, timestamps and coverage against the recording;
+report gaps. Its provenance header says "work from this text": downstream briefs point at **this**
+file, never at raw vendor ASR, so no later thread re-watches the video.
 
-T3 workers have no media tool and cannot watch video; they run `transcribe-gemini` (or an
-orchestrator runs native `agy`). If a future runtime supports media: `delegate_task` on
-`t3-pick-instance gemini` with absolute paths; verify the file it writes; never delegate recursively. All
-routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
-Model comparisons: fresh conversations, identical media, held-out reference evidence.
+Hard-won checks:
+- Feedback walkthroughs: check every count and every "X is sorted/broken by Y" against a source
+  frame or the data. A Flash pass once restated the speaker's misreading as visible fact while its
+  own numbers showed the opposite, and misread 31 as 51.
+- Small-text UI: uncropped low resolution invented most screen text and names; crop + high read
+  0.88 of small facts ([evidence](compression.md#crop-the-meet-share-tile)). Opaque IDs still need
+  source frames: if 3–4 disagree, [video-frames-for-vision](../video-frames-for-vision/SKILL.md) is
+  the source and the Gemini draft only hypotheses. A Pro model did not read them better.
+- Model comparisons: fresh conversations, identical media, held-out reference evidence.
 
-Follow-up prompts / T3 threads from the verified transcript: [recording-followups](../recording-followups/SKILL.md).
+T3 workers cannot watch video; they run `transcribe-gemini` (or an orchestrator runs native `agy`).
+All routes fail → report the blocker and hand over the prepared video + prompt for AI Studio.
+Follow-up prompts / threads from the verified transcript:
+[recording-followups](../recording-followups/SKILL.md).
 
 ## No Gemini available
 
-Seen blockers: no API key and `agy` weekly quota 429, video-summary 503, no Antigravity (Windows + Codex,
-Claude Code on a subscription). Frames: `select-frames` from
-[video-frames-for-vision](../video-frames-for-vision/SKILL.md). Speech: vendor transcript
-(Leexi/Fathom), else `transcribe-local`. Second ASR opinion when names/products/decisions matter
-(optional; prints "skipped" without `OPENAI_API_KEY`):
-`transcribe-openai source.webm --align leexi-call.json --hint "<≤20 riskiest terms>" --out transcript.openai.md`.
-It keeps the vendor's speakers/timestamps and swaps in OpenAI's words: prefer it for names, the
-vendor for fillers/timing, flag disagreements. Evidence and model choices: [local-route.md](local-route.md).
+Seen: no API key plus `agy` weekly-quota 429, no Antigravity (Windows + Codex, Claude Code on a
+subscription). Frames: `select-frames` ([video-frames-for-vision](../video-frames-for-vision/SKILL.md)).
+Speech: vendor transcript, else `transcribe-local`. Names/products/decisions matter → optional second
+ASR: `transcribe-openai source.webm --align leexi-call.json --hint "<≤20 riskiest terms>" --out
+transcript.openai.md` (vendor speakers/timestamps, OpenAI's words; prefer it for names, the vendor
+for timing; flag disagreements; "skipped" without `OPENAI_API_KEY`). Evidence and model choices:
+[local-route.md](local-route.md).

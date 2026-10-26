@@ -90,7 +90,7 @@ def desktop_url(env: str, thread_id: str) -> str:
 
 
 def markdown_link(title: str, thread_id: str) -> str:
-    label = title.replace("[", "(").replace("]", ")")
+    label = title.replace("[", "(").replace("]", ")").replace("|", "/")
     return f"[{label}](t3-thread://v1/{thread_id})"
 
 

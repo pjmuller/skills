@@ -1,13 +1,12 @@
 # Cloud dry runs
 
-Read the project's cloud runbook; publish through its normal workflow and record the full SHA.
-Verify `git ls-remote origin refs/heads/<branch>`, then `create --wait --title 'Cloud dry run' --gate <SHA> '<checks>'`.
-Use a fresh session after environment changes; for repeats of affected checks, `send --gate <newer SHA>
---branch <b>` re-tests in the warm session (fetch + detached checkout, no cold start).
+Read the project's cloud runbook; publish through its normal workflow, record the full SHA, verify
+`git ls-remote origin refs/heads/<branch>`, then `create --wait --title 'Cloud dry run' --gate <SHA> '<checks>'`.
+Fresh session after environment changes; repeats of affected checks → `send --gate <newer SHA> --branch <b>`
+in the warm session (fetch + detached checkout, no cold start).
 
-`--gate` adds only the SHA gate and read-only footer (`gated()` in `scripts/claude-cloud`); you
-supply repo, runbook, checks and report shape. In the browser, compose the whole prompt by hand
-and replace every placeholder:
+`--gate` adds only the SHA gate and read-only footer (`gated()`); you supply repo, runbook, checks
+and report shape. Browser: compose the whole prompt by hand, every placeholder replaced:
 
 > Dry run on <repo/branch>, expected <full SHA>. Read <project runbook>.
 > Print `git rev-parse HEAD`; gate all checks with `git merge-base --is-ancestor <full SHA> HEAD`.
@@ -17,8 +16,7 @@ and replace every placeholder:
 > Finish background checks; return one concise report: pass/fail, timings, exact failures,
 > actual tested SHA and <screenshots when needed>.
 
-- Ask for one report per check: pass/fail table + exact excerpts + DX friction hit. The friction list
-  is where the next fix comes from; a bare pass is not a report.
+- Ask per check: pass/fail + exact excerpts + DX friction hit (the next fix comes from it; a bare pass is not a report).
 - Separate source defects from dependencies, network policy and test mistakes; fix locally and repeat affected checks.
 - Proxy/CA failures: compare curl for the same URL; Chromium may need `HTTPS_PROXY`, localhost bypass and proxy CA trust. Isolated `ignoreHTTPSErrors` is diagnostic only; never weaken app TLS.
 - Localhost proxy 405: try Chromium `--proxy-server` and `--proxy-bypass-list=localhost;127.0.0.1`; `<-loopback>` removes bypass. Mocked assets do not establish a pass.

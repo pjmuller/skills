@@ -1,6 +1,6 @@
 ---
 name: t3-find-thread
-description: Fuzzy-find a past T3 Code thread by project, time window and topic keywords — deterministic FTS5 narrowing over the local thread store, then LLM judging with progressive disclosure (search → peek → grep). Use for "which thread did we…", "find the T3 thread where…", "where did I ask about X", "that conversation last month about Y", "/t3-find-thread".
+description: "Use for \"which thread did we…\", \"find the T3 thread where…\", \"where did I ask about X\", \"that conversation last month about Y\", a short thread id, or reading/reviving an old or purged thread. Works from vague memory and dictated typos."
 ---
 
 # T3 Find Thread
@@ -22,23 +22,22 @@ Never dump a whole thread into context. Flags: `--help`.
    already native T3 chat links.
 
 Gmail URL/id → `t3-mail-link find` ([mail-link.md](../t3-manage-thread/mail-link.md)): it resolves
-the account and every id form first, then calls this search.
+the account and every id form, then calls this search.
 
-Thread ids: full id or ≥8-char short id (the thread's UUID). Reading a thread in full → native
-`t3_thread_read`.
+Ids: full id or ≥8-char short id. `read <id>` pages a thread's messages in full (`--from`,
+`--limit`; live or purged); native `t3_thread_read` also works for live threads.
 
-**Purged threads** live on in the backup archive ([t3-maintenance](../t3-maintenance/SKILL.md#archive-t3-thread-archive)). Its secrets read `[redacted:<category>]`.
-`search` adds it when the live store has no hit or `--since`/`--until` reach before the live store
-(`--backup on|off` forces); hits are flagged `_(backup)_` and have no T3 link (the thread is gone).
-`peek`/`grep` take their ids as usual; `read <id> [--tools]` replaces `t3_thread_read` for them.
-Archived tool calls show in `grep` and `read --tools` (role = tool name); entry numbers match.
+**Purged threads** live on in the backup archive ([t3-maintenance](../t3-maintenance/SKILL.md#archive-t3-thread-archive));
+secrets there read `[redacted:<category>]`. `search` adds it when the live store has no hit with
+every term or `--since`/`--until` predate the live store (`--backup on|off` forces); hits show
+`_(backup)_`, no T3 link. `grep` and `read --tools` also see archived tool calls (role = tool
+name); entry numbers match across commands.
 
-**Revive a purged thread** (T3 can't reopen it): export, then start a fresh thread on the file.
-1. `t3-find-thread read <id> --limit 0 > ~/Downloads/<slug>.md`: every message whole (tens of KB).
-   Add a `--tools` copy only as a grep-only tool log (often 10x larger).
-2. `peek <id>` gives the project; `t3_thread_launch` there with message "Continuation of purged
-   thread <title>. Read ~/Downloads/<slug>.md first (tool log: …-tools.md, grep only). Then: <ask>".
-Verified 2026-10: a fresh agent rebuilt task, decisions, commits and next step from the export alone.
+**Revive a purged thread** (T3 can't reopen it): `t3-find-thread read <id> --limit 0 >
+~/Downloads/<slug>.md` (every message whole; a `--tools` copy only as a grep-only log, often 10x
+larger), then `t3_thread_launch` in the project `peek` shows: "Continuation of purged thread
+<title>. Read ~/Downloads/<slug>.md first. Then: <ask>". Verified 2026-10: a fresh agent rebuilt
+task, decisions, commits and next step from the export alone.
 
 ## Opening
 
