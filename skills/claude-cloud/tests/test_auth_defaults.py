@@ -52,7 +52,8 @@ def test_refresh_reloads_once_and_selects_home(monkeypatch, default):
     assert api.credentials() == 'new'
     assert len(calls) == 1
     argv, kwargs = calls[0]
-    assert argv == ['claude', '-p', 'reply with ok', '--model', 'haiku', '--max-turns', '1']
+    assert argv == ['claude', '-p', 'reply with ok', '--model', 'haiku', '--max-turns', '1',
+                    '--setting-sources', 'project,local']
     assert kwargs['env'].get('CLAUDE_CONFIG_DIR') == (None if default else '/tmp/profile')
     assert 'ANTHROPIC_API_KEY' not in kwargs['env']
     assert 'CLAUDE_CODE_OAUTH_TOKEN' not in kwargs['env']

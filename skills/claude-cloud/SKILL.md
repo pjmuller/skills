@@ -51,7 +51,8 @@ Behaviour `--help` does not show:
 
 Reads the macOS Keychain item for the profile's config dir (`Claude Code-credentials[-hash]`),
 falling back to its `.credentials.json`; uses `claudeAiOauth.accessToken`, never logs it. Within
-10 minutes of expiry it runs one official-CLI Haiku turn for that profile and rereads; still
+10 minutes of expiry it runs one official-CLI Haiku turn for that profile (user settings skipped,
+so a `CLAUDE_CODE_OAUTH_TOKEN` in its `settings.json` env can't bypass the Keychain login) and rereads; still
 expired → exit 3. The helper never rotates refresh tokens itself.
 
 ## API surface

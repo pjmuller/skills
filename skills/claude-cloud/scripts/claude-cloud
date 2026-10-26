@@ -126,8 +126,11 @@ class API:
             print("OAuth expiring: refreshing once with official Claude CLI", file=sys.stderr)
             try:
                 with tempfile.TemporaryDirectory(prefix="claude-cloud-refresh-") as scratch:
+                    # Skip user settings: an env CLAUDE_CODE_OAUTH_TOKEN there would
+                    # bypass the Keychain login, so it never refreshes.
                     subprocess.run(["claude", "-p", "reply with ok", "--model", "haiku",
-                                    "--max-turns", "1"], env=env, cwd=scratch, capture_output=True,
+                                    "--max-turns", "1", "--setting-sources", "project,local"],
+                                   env=env, cwd=scratch, capture_output=True,
                                    text=True, timeout=120)
             except (OSError, subprocess.TimeoutExpired):
                 pass

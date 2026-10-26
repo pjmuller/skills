@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-26 — claude-cloud: token refresh ignores user-settings OAuth env
+
+- The pre-expiry refresh turn runs `claude … --setting-sources project,local`. Why: a profile whose `settings.json` env sets `CLAUDE_CODE_OAUTH_TOKEN` answered the Haiku turn with that token, so the Keychain login was never refreshed and every export failed with exit 3 (kampkompas, 150 h stale).
+
 ## 2026-10-26 — bitwarden: base-domain matching with URI restrictions
 
 - Python and signed Swift broker match registrable domains using a vendored ICANN + PRIVATE Public Suffix List. Saved Host narrows; Never excludes; Exact/StartsWith/Regex fail closed for host-only requests. Destination-origin pinning and exact session/re-copy destination scope remain.
