@@ -44,6 +44,6 @@ Keep exact provenance in `sources`: file paths and lines (including Go files), r
 
 A thread the index marks `stale` (no person wrote for 14 days) is an old case: no deep research, one action (discard, or the debt we owe), `due_by` only for a dated promise of ours.
 
-Optional fields `due_by`, `brain_proposal` (what ReplyPen lacked, in the brain, a help article or the product, so the next run answers alone), `replacement_body` (correcting an untouched AI draft), `bug` (confirmed product bug), `dx_gaps` (what limited your research) and `case_thread` (the case's owner thread): open [optional-fields.md](optional-fields.md) before emitting either.
+Optional fields `due_by`, `brain_proposal` (what ReplyPen lacked, in the brain, a help article or the product, so the next run answers alone), `replacement_body` (correcting an untouched AI draft), `bug` (confirmed product bug), `dx_gaps` (what limited your research), `case_thread` (the case's owner thread) and `memory` (running case notes for tomorrow's run; always emit it for a case that stays open): open [optional-fields.md](optional-fields.md) before emitting either.
 
 A concise card needs subject + one short action. Do not make a card for every successful/simple email or reproduce sensitive content. The evidence accordion starts closed; URLs in the report must not carry bearer tokens.

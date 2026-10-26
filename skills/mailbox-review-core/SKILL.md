@@ -31,7 +31,8 @@ flowchart LR
 2. **Continue earlier cases before researching anew** ([continuity](references/continuity.md)):
    `continuation --history <earlier bundles>` says per Gmail thread new / unchanged / changed and
    carries back earlier cases that got new mail; `t3-mail-link find` names an existing case owner.
-   Read before resuming, never duplicate running work, never resume a reviewer child.
+   Read earlier 🧭 threads to their end: the operator's replies there are evidence of decisions, never
+   fresh authorization. Never duplicate running work; never message an old reviewer: seed a new one.
 3. **This week's mail first.** The cockpit answers "what do I send, fix or decide today", not a backlog
    audit. `index.json` marks a thread `stale` when no person has written for 14 days (`customer_at`:
    our own mail, tool notifications, auto-replies and bounces don't count). A stale case gets no reviewer
@@ -41,9 +42,17 @@ flowchart LR
    back to the top; a renewal date recurs and never counts. Among fresh threads, leave answered,
    no-inbound and confident simple drafts alone; pick uncertain or consequential ones. Health flags help
    prioritize; keywords or a green run never decide answer quality.
-4. `detail` for every thread you will write a finding for. One **Opus, high effort, in-harness
-   subagent** per customer (group that customer's threads) with [the reviewer recipe](references/reviewer.md)
-   plus the wrapper's grounding brief. A Codex coordinator hands the set to a Claude worker; never
+4. `detail` for every thread you will write a finding for. **Delegate generously, after routing**:
+   step 3's age rule and continuity's routing (unchanged → carry, existing owner → its thread) run
+   first; each remaining uncertain or consequential customer gets its own `delegate_task` (Claude Opus,
+   high effort, async; a Codex coordinator does the same), at most `8` per run, most consequential
+   first, the rest listed as deferred. Its brief file `<bundle>/briefs/<customer>.md` holds
+   [the reviewer recipe](references/reviewer.md), the wrapper's grounding brief, that customer's detail
+   paths and, when carried, the prior brief file, the prior reviewer's result JSON and the
+   coordinator's objections to it. Reviewers write their JSON next to the brief; keep both in the
+   bundle and put the `childThreadId` in the finding's `reviewer_thread` (the latest completed
+   reviewer; carry it forward on days without one). The coordinator orchestrates and verifies; it
+   never researches ten cases serially. In-harness sub-agents only for quick single-fact checks. Never
    silently substitute a model. Opus unavailable → report it, leave corrections pending. As each
    reviewer returns, propose its lessons right away ("Persist the lesson" below), not at the end.
 5. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
@@ -143,4 +152,5 @@ tolerated, any word change refused), a unique draft, unchanged thread/run/messag
 evidence; recipients, attachments and quotes are preserved, the original saved and read back. Gmail
 cannot lock thread and draft together: a residual race exists, never call it race-free.
 
-Schedule only when asked, with machine-local definitions. Never borrow a colleague's credentials.
+Schedule only when asked, machine-local, one fresh 🧭 thread per workday ([schedule](references/schedule.md)).
+Never borrow a colleague's credentials.

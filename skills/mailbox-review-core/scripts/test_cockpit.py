@@ -404,6 +404,13 @@ class Tests(unittest.TestCase):
             with self.assertRaises(c.Refused):
                 c.findings(bundle, bundle / 'findings.json', require_fresh=False)
 
+    def test_memory_and_reviewer_thread_validate(self):
+        detail, finding = fixture()
+        c.check_finding(dict(finding, memory='Waiting on refund go since 25 Oct', reviewer_thread='mcp:abc'), detail)
+        for bad in ({'memory': ''}, {'memory': 'x' * 601}, {'reviewer_thread': 7}):
+            with self.subTest(bad=bad), self.assertRaises(c.Refused):
+                c.check_finding(dict(finding, **bad), detail)
+
     def test_replacement_allowed_for_any_verdict(self):
         # A better version may replace any untouched AI draft, not only a wrong one.
         detail, finding = fixture()
@@ -573,7 +580,8 @@ class Tests(unittest.TestCase):
             for tid, snap in snapshots.items():
                 c.save(path / 'details' / f'{tid}.json', {'gmail': snap, 'collected_at': at})
             c.save(path / 'findings.json', [{'thread_id': t, 'run_id': None, 'verdict': 'confirmed',
-                                             'priority': 'soon', 'action': f'Act on {t}', 'draft_id': None}
+                                             'priority': 'soon', 'action': f'Act on {t}', 'draft_id': None,
+                                             'memory': f'Notes on {t}', 'reviewer_thread': f'mcp:{t}'}
                                             for t in items])
 
         with tempfile.TemporaryDirectory() as temp, patch.object(c, 'Client', Fake):
@@ -582,6 +590,10 @@ class Tests(unittest.TestCase):
             bundle(root / 'mo-2026-10-22', '2026-10-22T10:00:00+00:00', 'one',
                    {'b2': moved, 'c3': carried, 'd4': quiet, 'c5': skipped}, ['b2', 'c3', 'd4', 'c5', 'f9'])
             bundle(root / 'other-2026-10-22', '2026-10-22T11:00:00+00:00', 'two', {'a1': moved}, ['a1'])
+            # An old closed case is no longer polled: live has no 'a9', so a fetch would raise.
+            bundle(root / 'mo-2026-09-01', '2026-09-01T10:00:00+00:00', 'one', {'a9': same}, ['a9'])
+            c.save(root / 'mo-2026-09-01' / 'findings.json', [dict(c.read(root / 'mo-2026-09-01' / 'findings.json')[0],
+                                                                   actionable=False)])
             today = root / 'mo-2026-10-23'
             c.save(today / 'config.json', {'project': 'test', 'mailbox_id': 'one'})
             rows = [c.summary(live[t], {}, ACCOUNT, []) for t in ('a1', 'b2')]
@@ -612,6 +624,8 @@ class Tests(unittest.TestCase):
             self.assertEqual(result['incompatible_bundles'], 1)  # the other mailbox never leaks in
             rows = {r['thread_id']: r for r in result['threads']}
             self.assertEqual(rows['a1']['prior']['reviewed_at'][:10], '2026-10-21')
+            self.assertEqual((rows['a1']['prior']['memory'], rows['a1']['prior']['reviewer_thread']),
+                             ('Notes on a1', 'mcp:a1'))  # the next run seeds its reviewer from these
             self.assertEqual([m['id'] for m in rows['b2']['new_inbound']], ['in2'])
             self.assertEqual(rows['c3']['mail_ref'], f'Mail-ref: gmail:c3 {ACCOUNT}')
             index = c.read(today / 'index.json')

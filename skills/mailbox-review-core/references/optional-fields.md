@@ -10,6 +10,8 @@ For a **confirmed** product bug (evidence: code path, rows/logs or a reproductio
 
 When something kept you from going deeper, add `dx_gaps`: 1-5 `{"gap": "what was missing (env var, credential, CLI, repo, access, timed-out query)", "unblock": "who grants it or what fixes it"}`. Renders under "What limited this review" so the operator can ask for it.
 
+`memory`: ≤600 characters of running case notes for the next run, rewritten (not appended) each time: what was decided and by whom, what we wait on and since when, what was tried. `continuation` hands it back as `prior.memory`; never rendered. `reviewer_thread`: the `childThreadId` of the latest completed delegated reviewer for this case (carry it forward on days without one), so a later run can read it. The brief and reviewer JSON in the bundle stay authoritative; `memory` is only their summary.
+
 `case_thread`: the T3 thread that owns this case (a standalone fix/action thread, or the owner `t3-mail-link find` returned), as `t3-thread://v1/<threadId>` or the bare id, ≤300 characters. Renders beside the row's `Mail-ref` line ([continuity](continuity.md)).
 
 `due_by`: `YYYY-MM-DD` of a promise **we** made (a refund date, a document by a date, a contractual

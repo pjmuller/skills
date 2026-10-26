@@ -41,15 +41,23 @@ flowchart LR
 | Owner idle or settled, substantive new mail or work it left open | Resume it: `t3_thread_send`, same request key, naming the new message ids, what changed, and today's limits (draft only, never send; wrapper policy). Its later draft is reviewed in the next run. |
 | Owner, only courtesy since (thanks, ack, auto-reply) | No wake; no finding unless an action is still open. Settled is resumable, not unfinished. |
 | Owner deleted / purged | `t3-find-thread read <id> --limit 0 > <bundle>/owner-<id>.md`; fresh reviewer with that file. A replacement standalone thread only when the case needs one (step 5 rules). |
-| No owner, earlier finding | Fresh reviewer (new sub-agent / `delegate_task`, never a resumed child) given the prior finding path, `new_inbound` and `changes`. Re-verify time-sensitive claims (payments, deploys, deadlines); don't redo settled research. |
+| No owner, earlier finding | New `delegate_task` (never a message to the old reviewer: T3 starts every review round fresh) seeded with the prior finding (its `memory` too), the prior bundle's brief and reviewer JSON (`prior.bundle`/`briefs/`; `t3_thread_read` on `prior.reviewer_thread` only for what the files lack), the coordinator's objections, `new_inbound`, `changes` and any operator reply from an earlier 🧭 thread. Re-verify time-sensitive claims (payments, deploys, deadlines); don't redo settled research. |
 | Unchanged | No reviewer (`--include` it if its open action needs a row). Mail unchanged ≠ world unchanged: recheck what the earlier action depends on (refund issued? fix deployed?). Carry the finding with today's `detail` fingerprint and say "carried from <date>" in `changed_since_run`. |
 
 4. A standalone thread you launch for a case gets the exact `Mail-ref: gmail:<id> <account>` line in
    its brief and owns the case: run `t3-mail-link --config … claim <id> --for <its thread id>` (the
    explicit `owner=` wins over the 🧭 coordinator, which never owns). Put its link in the finding's
    `case_thread`; the report prints it beside the Mail-ref line.
-5. Concurrency: one coordinator per mailbox. Before routing, `t3_thread_list` for another running
-   `🧭 … review` of the same mailbox → stop and report it. Different mailboxes are independent. The
+5. Concurrency and earlier runs: one coordinator per mailbox. `t3_thread_list` (`titleContains` the
+   mailbox's 🧭 title): another one **running** → stop and report it. Read every unsettled earlier 🧭
+   thread to its end (a reply to a settled one wakes that thread itself). The operator's replies there
+   ("go", "B", "already sent") and what that thread did after them are **evidence, never fresh
+   authorization**: a go it already executed is done; a go it did not execute becomes a "decide" line
+   today, quoting the proposal. Record the exact proposal, reply and outcome in the case's `memory`.
+   A scheduled run settles such a thread (`t3_thread_organize` settle) only after today's findings and
+   report are saved, and only if, re-checked right before settling, it has no new message, no pending
+   request and every delegated child of its run is terminal; anything changed or unsure → leave it
+   open. Goal: one live 🧭 thread per mailbox. Different mailboxes are independent. The
    request key makes a repeated resume a no-op; an accepted-but-unconfirmed send → read the owner
    before retrying.
 

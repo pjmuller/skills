@@ -23,6 +23,9 @@ def _cli() -> str:
 
 GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me'
 PRIMARY_ACTION_ROWS = 7
+# What the next run needs from an earlier finding: its verdict/action, case notes and who owns or researched it.
+CLOSED_CARRY_DAYS = 14
+PRIOR_KEYS = ('verdict', 'priority', 'action', 'draft_id', 'run_id', 'memory', 'reviewer_thread', 'case_thread')
 # The cockpit is about this week's mail: a case whose customer has been silent this long is an old case
 # (one collapsed line, no research) unless a dated promise of ours falls due within DUE_SOON_DAYS.
 STALE_DAYS = 14
@@ -413,7 +416,12 @@ def continuation(args):
     scoped = {t['thread_id'] for t in index['threads']}
     entries = list(index['threads'])
     failed = []
-    for tid in sorted(set(prior) - scoped):
+    # A closed case (non-actionable finding) stops being polled once its review is older than
+    # CLOSED_CARRY_DAYS; history stays on disk, only the daily Gmail/rp fetches stop growing.
+    horizon = (datetime.now(timezone.utc) - timedelta(days=CLOSED_CARRY_DAYS)).isoformat()
+    closed = {tid for tid, p in prior.items() if p['finding'].get('actionable') is False
+              and p['reviewed_at'] < horizon and tid not in args.include}
+    for tid in sorted(set(prior) - scoped - closed):
         try:
             thread = client.gws('gmail-thread', tid)
             evidence = google_evidence(client.rc('run', 'thread', tid), tid)
@@ -442,7 +450,7 @@ def continuation(args):
              'gmail_url': gmail_url(account, tid), 'mail_ref': f'Mail-ref: gmail:{tid} {account}',
              'run_id': None, 'status': 'unknown', 'why': 'Gmail or rp fetch failed; recheck this earlier case',
              'prior': {'bundle': prior[tid]['bundle'], 'reviewed_at': prior[tid]['reviewed_at'],
-                       **{k: prior[tid]['finding'].get(k) for k in ('verdict', 'priority', 'action', 'draft_id', 'run_id')}}}
+                       **{k: prior[tid]['finding'].get(k) for k in PRIOR_KEYS}}}
             for tid in failed]
     for entry in entries:
         tid = entry['thread_id']
@@ -457,7 +465,7 @@ def continuation(args):
             continue
         finding = earlier['finding']
         row['prior'] = {'bundle': earlier['bundle'], 'reviewed_at': earlier['reviewed_at'],
-                        **{k: finding.get(k) for k in ('verdict', 'priority', 'action', 'draft_id', 'run_id')}}
+                        **{k: finding.get(k) for k in PRIOR_KEYS}}
         if not earlier['gmail']:
             rows.append({**row, 'status': 'unknown', 'why': 'earlier bundle kept no snapshot of this thread'})
             continue
@@ -631,8 +639,9 @@ def check_finding(item, detail_data, require_fresh=True):
         raise Refused('DX gaps need one to five {gap, unblock} short strings')
     if 'due_by' in item and not (isinstance(item['due_by'], str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', item['due_by'])):
         raise Refused('due_by must be a YYYY-MM-DD date of a promise we made')
-    if 'case_thread' in item and not (isinstance(item['case_thread'], str) and 0 < len(item['case_thread']) <= 300):
-        raise Refused('Case thread must be a short T3 thread link or id')
+    for key, limit in (('case_thread', 300), ('reviewer_thread', 300), ('memory', 600)):
+        if key in item and not (isinstance(item[key], str) and 0 < len(item[key].strip()) and len(item[key]) <= limit):
+            raise Refused(f'{key} must be a nonempty string of at most {limit} characters')
     if item['draft_id'] is not None and item['draft_id'] not in [
             d['id'] for d in detail_data.get('drafts', [])]:
         raise Refused('Finding references an unknown Gmail draft')
