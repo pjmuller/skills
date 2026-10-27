@@ -59,3 +59,4 @@ case-insensitive substring. Other system audio settings stay untouched.
   or changed delivery. A few takes of one sentence are evidence, not a global optimum.
 
 A/B of device, placement or filter: `run --keep-gain --takes 1` per variant, same sentence.
+Planning a session: [lessons from live sessions](lessons.md) first.
