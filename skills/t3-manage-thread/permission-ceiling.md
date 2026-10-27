@@ -15,7 +15,7 @@ A send never changes the target's mode.
 
 ## Continue an existing broader-mode owner
 
-1. **Preflight** before sending: `t3_thread_configuration` for yourself (no threadId) and the
+1. **Preflight** before sending: `t3_thread_configure` without `modelSelection` (= read) for yourself (no threadId) and the
    target. Equal or narrower target → send normally.
 2. **Broader target → keep the intent.** Write the continuation exactly as it would have been
    sent (verbatim user text, separated new evidence, attachment paths, target id, chosen
@@ -33,7 +33,7 @@ A send never changes the target's mode.
    - Claude thread whose mode changes (owner in B, routing thread in C) restarts its session and loses
      in-session background work ([t3code#16000](https://github.com/pingdotgg/t3code/issues/16000)):
      check for it first and warn.
-4. **Retry once after C:** re-read both configurations, the owner's runs and `t3_queue_list`, then
+4. **Retry once after C:** re-read both configurations, the owner's runs and `t3_queue list`, then
    one `t3_thread_send` with the same `clientRequestId`. Lost answer = unknown delivery: read the
    owner before any retry.
 

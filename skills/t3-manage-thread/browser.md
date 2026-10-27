@@ -18,15 +18,15 @@ Escalate in order. Verify the signed-in identity before authenticated work; neve
 - **Screenshots need a visible tab.** Hidden tabs (`open:false`, thread not viewed, delegated child) stop compositing, so capture times out after 15 s; `preview_recording_start` stalls the same and wedges the host ~2 min ([t3code #23936](https://github.com/pingdotgg/t3code/issues/23936)). Hidden → read via `preview_evaluate`; visual check without login → headless Playwright; with login → ask the user to view the tab.
 - `open:false` never raises the T3 window; a page's `window.open` popup (OAuth) opens a real window.
 - Gmail print view (`view=pt`, ⋮ → Print all) pops the OS print dialog on the user's screen: use that URL as an id only, never open it.
-- Cross-origin iframes (chat embeds): `preview_wait_for` resolves `iframe[…] >> internal:control=enter-frame >> textarea`, but `preview_click`/`preview_type` inside fail. Reachable without login (signed link) → headless Playwright.
-- Paste: `preview_press Meta+V` into a tab the user isn't viewing (`visible:false`) pastes nothing by design (unfocused guest input drops clipboard events); `preview_type`/`preview_evaluate` work there. No `preview_*` tool takes a `secretRef` yet: secrets via the vault helper's page fill.
+- Cross-origin iframes (chat embeds): `preview_wait_for` resolves `iframe[…] >> internal:control=enter-frame >> textarea`, but `preview_act` click/type inside fail. Reachable without login (signed link) → headless Playwright.
+- Paste: `preview_act press Meta+V` into a tab the user isn't viewing (`visible:false`) pastes nothing by design (unfocused guest input drops clipboard events); `preview_act type`/`preview_evaluate` work there. No `preview_*` tool takes a `secretRef` yet: secrets via the vault helper's page fill.
 - Local HTML: `file://` is refused; serve over HTTP (`uv run python -m http.server <port>`), fresh tab, keep the server alive.
 - Blank T3 window: [resource-audit](../resource-audit/ram.md#blank-t3-window-macos).
 
 ## Signing in inside T3 (v0.1.x)
 
 - Import (Settings → Integrations → Browser profiles → from Chrome) = cookies only, Chrome quit; re-run for fresher logins. **Google sessions don't survive import** (device-bound): sign in inside T3. Several Google accounts per profile: `?authuser=<email>` (e.g. `mail.google.com/mail/?authuser=…`), not `/u/<n>`. Only a tab's opener session can close it.
-- Login page: ask the user once to log in in the visible T3 tab via their password manager (name host, account, profile, why). Agent-driven only on request: a vault helper (e.g. [bitwarden](../bitwarden/SKILL.md) `bw-once copy`) clips password/TOTP; `preview_press Meta+V` lands only while the tab has keyboard focus (user clicked in); in-page clipboard reads are denied. Never `preview_type` a secret.
+- Login page: ask the user once to log in in the visible T3 tab via their password manager (name host, account, profile, why). Agent-driven only on request: a vault helper (e.g. [bitwarden](../bitwarden/SKILL.md) `bw-once copy`) clips password/TOTP; `preview_act press Meta+V` lands only while the tab has keyboard focus (user clicked in); in-page clipboard reads are denied. Never `preview_act type` a secret.
 - Passkeys: none in T3 (`browserPasskeys:false`). Google: "Try another way" → "Enter your password" (password + TOTP via the vault helper). Passkey-only sites: sign in in Chrome, re-import cookies (not for Google). Never add a T3-local passkey to the user's accounts.
 
 ## Real Chrome over CDP (route 2a)

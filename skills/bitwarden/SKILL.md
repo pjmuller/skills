@@ -13,7 +13,7 @@ text/file Send, after the human approves exactly that request. Approval paths, b
 - Never obtain a `BW_SESSION` for yourself or put it in any shell, env file or repo; no `--passwordenv`/`--passwordfile`,
   no asking the human to paste a key. `--worker` is internal, not a bypass.
 - Never read the secret: no `pbpaste`, no `bw get password`/`get item`/`list items`/`export` output, no secret in
-  `preview_type`/`fill`/any text-entry tool, no snapshot/reveal/`value` read of a filled field (check `length` only),
+  `preview_act type`/`fill`/any text-entry tool, no snapshot/reveal/`value` read of a filled field (check `length` only),
   no TOTP seeds or notes, no copy of the CLI's `data.json`. `fill_js` (page delivery) is the only fill helper;
   never rewrite its origin check.
 - Terminal approval: never send keystrokes to, or read, the Terminal while authentication is in progress. No agent
@@ -30,7 +30,7 @@ text/file Send, after the human approves exactly that request. Approval paths, b
 Once enrolled (`bw-once touchid enroll` opens a native window; the human types each master password once):
 
 1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), host verified;
-   `preview_type` the username (not secret; works in a background tab).
+   `preview_act type` the username (not secret; works in a background tab).
 2. **Pick the delivery before asking for a touch**: `preview_evaluate` in the tab:
    `(async () => { let blocked = false; document.addEventListener('securitypolicyviolation', () => { blocked = true; }); await fetch('http://127.0.0.1:9/', {mode: 'no-cors'}).catch(() => {}); await new Promise(r => setTimeout(r, 100)); return {page_fill: !blocked}; })()`
    `page_fill: true` → `--to page` (any tab, hidden too). `false` (CSP blocks loopback: GitHub, Sentry) → clipboard,
@@ -47,7 +47,7 @@ Once enrolled (`bw-once touchid enroll` opens a native window; the human types e
    `list --host H [--username U]` only when you need metadata without a copy.
 6. **Page**: `preview_evaluate` the answer's `fill_js` as is within 60 s → `{ok, length}`; submit. `--selector`
    overrides the field. `ok: false` → same `copy` with `--to clipboard` (re-copy, no touch).
-   **Clipboard**: `preview_click` the field **again** (the window took focus), `preview_press Meta+V`, check
+   **Clipboard**: `preview_act click` the field **again** (the window took focus), `preview_act press Meta+V`, check
    `value.length` only, `bw-once clear`, submit; one call at a time.
 7. Same password again within 15 min (Google asks twice, gcloud OAuth right after): same `copy` with the same
    `--thread` and `--username`/`--id` → `recopy: true`, no touch.

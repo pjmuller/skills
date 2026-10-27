@@ -41,7 +41,7 @@ Sources: [CLI docs](https://bitwarden.com/help/cli/) ·
 
 ## Getting the secret into the login form
 
-- T3 browser: `preview_click` the field, `preview_press Meta+V`; T3 pastes from the system clipboard in its main
+- T3 browser: `preview_act click` the field, `preview_act press Meta+V`; T3 pastes from the system clipboard in its main
   process, so the value never enters the model. Only into the tab the human is viewing (hidden tab → nothing,
   by design). Verify the tab's host **before** the copy.
 - The user's Chrome over CDP (`playwright-cli attach --cdp=chrome`): `press Meta+V` on your own background tab works the

@@ -41,7 +41,7 @@ report "not run: needs network/Docker" instead of waiting. The lead runs the res
 
 1. Find them: `t3-fleet list --limited` ([fleet.md](../t3-maintenance/fleet.md), incl. children and completed runs).
 2. Read owner and parent (a replacement may own the rest; never replay superseded children). Check live capacity in the authorized pool; keep thread ID, model/options, permissions ([broader-mode owner](permission-ceiling.md)).
-3. `t3_queue_list`: a queued child-result delivery may keep the old account → save its text, `t3_queue_cancel` only that unstarted delivery, include it once in the continuation; never discard user messages/attachments.
+3. `t3_queue list`: a queued child-result delivery may keep the old account → save its text, `t3_queue cancel` only that unstarted delivery, include it once in the continuation; never discard user messages/attachments.
 4. Re-read right before mutating. Inactive owner → `t3_thread_configure` (new instance, original selection), one idempotent `t3_thread_send` to resume (T3 transfers context; same-provider switches may get a summary). Verify real execution and kept context, not configure acceptance.
 
 ## 📤 `t3_thread_launch`
