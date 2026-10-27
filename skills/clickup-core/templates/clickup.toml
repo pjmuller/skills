@@ -33,6 +33,7 @@ require_priority = false
 handoff_status = "to test"
 handoff_mode = "counterpart" # or assignee: one existing assignee other than token owner
 handoff_pair = ["author", "reviewer"]
+# active_statuses = ["in progress", "to test"] # marked * in `tasks` output
 # ignored_assignees = [103]
 # default_assignee = "author"
 # review_closed_status = "complete"

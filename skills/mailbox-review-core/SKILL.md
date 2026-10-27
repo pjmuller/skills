@@ -59,7 +59,7 @@ flowchart LR
 5. **Research first.** Most "it's broken" mails are misunderstanding or setup: the draft answers them.
    A bug needs evidence (logs, rows, a live reproduction) and a count of affected customers; then its
    own `t3_thread_launch` in the owning repo (brief carries the `Mail-ref` line; second opinion
-   inside it via `delegate_task`), shipped per "Go deep". Explain at the operator's level.
+   inside it via `delegate_task`), shipped per "Go deep". Explain at the [operator's level](references/report.md#operator-level).
 6. **Correct drafts** wherever you have a **better version** of an untouched ReplyPen draft (wrong,
    obsolete, incomplete, or just clearer): `cockpit.py apply … --allow-draft-corrections`, no operator
    go unless the wrapper switches corrections off. A claim that depends on a human step (pay, refund,

@@ -20,7 +20,8 @@ Ban/abuse guardrails for an unofficial protocol client: breaking them risks the 
   (explicit international numbers or verbatim group JIDs from `wa contacts`; no names, no wildcards). ≥5 s between
   send attempts across processes (shared lock).
 - Never bulk-send, never widen the allowlist to make a test pass, never auto-retry an uncertain send (a worker crash
-  can mean it went out).
+  can mean it went out). Before sending to a group JID, verify its name in `wa contacts`. Send through `wa` or the
+  API only; never a temporary script that patches the source.
 - E2E tests only to the paired account's self chat: resolve `me`, verify the own identity against the wrapper, pass
   that explicit number; harmless synthetic files, minimal sends.
 - Reading any chat is allowed. Never print or copy session/credential files (`~/.config/whatsapp-bridge/`, 0700).
@@ -40,7 +41,8 @@ Expired/unlinked session → `wa login --window` again. Linux/WSL2: plain `wa lo
 `wa voice <chat> [-n 3 | --id MSGID…] [--transcribe --hint "Flemish Dutch; Mexem, beurstaks"]` downloads to
 `~/.config/whatsapp-bridge/media/` (never marks played); `--transcribe` hands each file to
 [transcribe-gemini](../video-shrink-for-gemini/SKILL.md) (~$0.02 / 5 min) with a verbatim prompt plus the hint
-(language + names/jargon to spell exactly; wrappers keep per-contact hints).
+(language + names/jargon to spell exactly; wrappers keep per-contact hints). Keep the original-language transcript
+(translate beside it, never instead) and mark uncertain words `(?)`.
 `--id` also fetches images/documents (screenshots, PDFs) for reading; `-n` scans audio only.
 Rows synced before 2026-10 (shown `[non-text message]`) lack media keys: the worker asks the **own phone** to resend
 them (peer protocol message, `scripts/neonize-peer-request.patch`; nothing reaches the chat). Error "not resent yet"

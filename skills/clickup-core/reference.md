@@ -47,6 +47,33 @@ have no comment part: they degrade to a rule line / plain link.
 Description list/blockquote/code-block attributes are nested objects; comment attributes stay flat.
 Before parsing a new embed, write it in the UI and read it back through the API.
 
+Description Markdown that ClickUp rewrites on save (2026-10):
+
+- A `**bold**` or `` `code` `` span whose markers sit on different source lines comes back escaped
+  (`\*\*…`): keep each span on one physical line. Bold around a whole paragraph with nested italic
+  breaks too; use a short bold lead-in.
+- A link before inline code (not only before a code block) is mangled into a broken autolink:
+  put bare URLs after the prose.
+
+## Workspace admin limits
+
+Probed against live lists, 2026-09/10:
+
+- **List statuses are add-only by API.** `POST /v2/list/<id>/status` with a nested body
+  `{"status": {"name": …, "type": "custom", "color": …}}` (flat shapes return `STATUS_026 "Status
+  name is required"`). It lands just before the closed status (`orderindex` ignored; only a UI drag
+  reorders) and converts an inherited space group into a list-level copy. No delete or rename (a
+  POST with an existing id creates a second status). The one undo, all-or-nothing:
+  `PUT /v2/list/<id>` `{"override_statuses": false}` reverts the list to the space set. Then fix
+  `clickup.toml` statuses (`topology` → `matches_skill_constants`).
+- **Dropdown options are UI-only**: no API edits a custom field's options (create/delete only, and
+  delete drops every task's value). A person adds the option; read its id back with `fields`.
+- **No auto-number field** (`auto_number`/`unique_id` → `FIELD_422`). The task id is already unique;
+  sequential ids need the Custom Task IDs ClickApp (paid plans, per Space, UI only, renumbers the
+  Space).
+- **Date-only fields** are stored at midnight in the operator's ClickUp timezone (`GET /user`), not
+  UTC: convert before writing epoch ms and read the day back.
+
 ## Chat
 
 The public v3 chat API posts Markdown only, and stores `![](url)` as an image with

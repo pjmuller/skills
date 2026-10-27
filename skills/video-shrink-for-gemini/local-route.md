@@ -32,7 +32,10 @@ runner for whisper-large-v3-turbo. Verify with `scripts/install --check` and a 3
   Local ASR is for recordings without one or a disputed passage.
 - `whisper-large-v3-turbo` (`transcribe-local` default): ≈25× realtime, no speaker labels.
   `--condition-on-previous-text False` (set by the script) is required: otherwise the file looped
-  after ~25 min (one filler 143×). The shrink preset's 32 kb/s mono audio transcribes as well as
+  after ~25 min (one filler 143×). The script also sets `--hallucination-silence-threshold 2
+  --no-speech-threshold 0.5 --compression-ratio-threshold 1.8` (without them cross-talk in Dutch
+  standups degenerated into "Ehm…/Ja." loops); `--prompt "<names>"` passes a vocabulary as
+  whisper's `--initial-prompt`. The shrink preset's 32 kb/s mono audio transcribes as well as
   the original.
 - English (2026-10-08, vs AssemblyAI, three podcasts): turbo on par with Parakeet, fewest missed
   names. `parakeet-mlx` + `parakeet-tdt-0.6b-v2` ≈2× faster for word-timestamp clip cutting.

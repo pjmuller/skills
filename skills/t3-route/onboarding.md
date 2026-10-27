@@ -72,6 +72,13 @@ procedures or installed-skill inventories. Start from real requests and verified
 | “assistant answer tone” | selected product brain | AGENTS.md |
 ```
 
+Build it from a bounded read-only sample of the user's own requests (e.g. `t3-my-prompts --days 14
+--stats/--outline` to narrow projects, `t3-find-thread` search/peek for titles, `t3_thread_read` to
+verify a request). Mark each row's basis (recent request verified · scheduled invocation, not
+user-typed · catalog only, use unconfirmed) with short evidence refs (date + short thread id); keep
+no raw prompts, account ids, customer details or ticket bodies. Add a row after a real routing
+miss; when refreshing, recheck paths and dates and downgrade unverified rows to catalog.
+
 The wrapper links it: "Read `trigger-lookup.md` on first invocation; use it for later routing
 messages and reread after compaction or edits." Repo placement/account policy stays in its
 references. Matches select context, not permissions; a diagnosis does not authorize stopping

@@ -50,6 +50,17 @@ Order ([examples](prompt-shape.md)):
    - house rules the thread needs (opposite-model review over 100 loc, no per-project code paths);
    - source (call link, mm:ss, transcript path, ASR caveat) on one line.
 
+## Colleague handoffs
+
+A ticket in a colleague's queue is the delivery for their work, never execution on this machine.
+
+- A topic is not a task: ticket only an explicit request or an unambiguous committed action.
+- Separate speaker words from inference; uncertain names or negations never become requirements.
+- Keep sequence and phase owner: "X prepares, Y fine-tunes" means X owns the prerequisite and Y
+  reviews later.
+- Check the queue first. A ticket the user deleted or rejected stays deleted; extend existing work
+  only on a material change.
+
 ## Light research before proposing
 
 A few minutes per candidate in the code: does it already exist, which package owns it, which

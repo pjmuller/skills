@@ -30,6 +30,7 @@ requested outcome: “research” authorizes research, not its recommended build
   a ClickUp handoff in their queue, even for "spawn": their agent runs it on their machine.
 - The brief/ticket carries the exact quote, speaker, call link and mm:ss, plus the scope as said;
   normal permission limits still apply (no deploys, external messages or spending beyond repo rules).
-- One action per command per call; check the queue for an existing ticket first.
+- One action per command per call; check the queue for an existing ticket first
+  ([handoff rules](SKILL.md#colleague-handoffs)).
 - Debrief lists "Spoken commands executed" (quote, mm:ss, thread/ticket link) and any rejected ones with
   the reason; those stay proposals.

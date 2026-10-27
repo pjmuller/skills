@@ -44,7 +44,8 @@ answer would change the deck. A deck read without a speaker may need more contex
 
 ## Build and verify the actual deliverable
 
-Keep the existing format and toolchain. New code-based deck → Slidev
+Edit only what was requested; nothing else on the slide or in the deck changes. Keep the existing
+format and toolchain. New code-based deck → Slidev
 ([authoring](references/slidev.md)); requested PowerPoint or other format → its own skill/tool,
 with this craft.
 

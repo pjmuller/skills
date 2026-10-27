@@ -5,11 +5,8 @@ description: Project presentation paths, brand and delivery conventions. Read to
 
 # Project slides
 
-Read the shared `slides` skill at `../slides/SKILL.md` beside this wrapper.
-If absent, install from the repository root:
-`pnpm dlx skills add pjmuller/skills -s slides -a claude-code codex -y`.
-Read the installed core; commit its files, agent links and `skills-lock.json` for team/cloud use.
-Keep this wrapper outside that replaceable installation.
+Read the shared `slides` skill at `../slides/SKILL.md` beside this wrapper (install/update:
+`../slides/references/integration.md`).
 
 Record only project facts below: deck/package directory, canonical examples, style/brand
 sources, language/audience, local commands, output policy and specialized workflow links.

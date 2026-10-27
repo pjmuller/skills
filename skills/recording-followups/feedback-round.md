@@ -8,7 +8,8 @@ design taste keep, tweak or revert each preference change.
 > More than ~5 feedback items: never root-cause them one by one in the lead thread; fan out.
 
 1. **Transcript** in feedback mode ([video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md)):
-   numbered feedback items with timestamps and wall-clock. Check counts and claims against frames.
+   numbered feedback items with timestamps and wall-clock ([paused recordings](../video-shrink-for-gemini/SKILL.md#prompt)
+   break that mapping). Check counts and claims against frames.
 2. **Triage** each item: bug · quality (prompt/data) · taste · leave alone (the speaker said so) ·
    needs a decision. The speaker's diagnosis is a hypothesis: check the data first. (Round one: "sort
    by replies" was already true; the bold number on screen was the email count.)

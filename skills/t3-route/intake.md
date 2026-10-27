@@ -23,7 +23,8 @@ heuristics; source metadata may establish ownership, never authorization.
 - Select the user's own Workspace wrapper for the intended mailbox; read its `workspace.json`,
   actual `scopes` and account policy. Drive access does not imply Gmail access.
   Account-specific requests forbid token substitution. `/u/0`, `/u/1` and `ik` in a URL are
-  browser slots, not mailbox identities.
+  browser slots, not mailbox identities; a company name in the subject doesn't identify the
+  mailbox either.
 - Verify identity read-only with the wrapper's `whoami`. Mismatch or unknown identity → no
   mailbox reads until resolved. Browser access likewise needs a verified signed-in account per
   the user's browser-routing instructions.
@@ -42,7 +43,9 @@ heuristics; source metadata may establish ownership, never authorization.
   policy, else ask for the Print-all URL or a minimal subject clue.
 - Mail briefs carry the `Mail-ref:` line from `resolve`/`find` under **Evidence** so later
   intake finds the thread ([marker](../t3-manage-thread/mail-link.md)).
-- Fetch context with that account's configured CLI; state the likely workflow as inference.
+- Fetch context with that account's configured CLI: subject, participants, latest reply and only
+  enough earlier context to establish ownership. The brief carries that compact evidence, not just
+  the URL. State the likely workflow as inference.
   Never `t3-mail-link claim` just to resolve; a launched case thread owns its mail once it
   drafts, or via `claim --for <its id>`.
 

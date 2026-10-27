@@ -12,7 +12,13 @@ artifacts for two tickets and displaced speech timestamps while eventually findi
 An independently fetched ID/title inventory may assist matching. Record its source, ordering, cap
 and date; it is an open set, never a nearest-match vocabulary. **Every seeded ID is
 candidate-assisted**, even if the model calls it visually read. Keep inventory content separate
-from spoken evidence. Domain wrappers own retrieval.
+from spoken evidence. Domain wrappers own retrieval. Never seed the first perception pass with a
+prior synthesis's answers.
+
+Measured (six short runs, two ticket pairs in one recording, 2026-09): seeding matched 4/4 IDs and
+withholding one yielded `UNREADABLE` rather than a forced match; unseeded and Pro runs invented
+IDs; focused cropping recovered IDs but drifted speech timing. Seeding assists; it never replaces
+verification.
 
 After the draft, inspect one original source frame per distinct ID at the draft's evidence time;
 enlarge only the address bar or record label. One crop per unresolved ID, then one alternate frame;

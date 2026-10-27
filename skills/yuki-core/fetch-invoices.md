@@ -5,6 +5,10 @@ and `vendor-recipes.md` (per vendor: Bitwarden entry + account, billing URL, cli
 card line text, company) apply.
 
 ## Routes per open row, in order
+Loop: in the quarter tab filter the owner column (formula hint) to yourself, keep the done/status
+column empty, sort by description_clean A→Z; per vendor match each row's **date** (and amount) to an
+invoice and download only those.
+
 1. **Gmail already has it**: `GWS gmail-search '<vendor> after:<quarter start>'` → `GWS
    gmail-attachments <id> -o <dir>`. Many vendors mail PDFs (Stripe receipts, webshops, colleagues' forwards).
 2. **Supplier portal in the T3 browser**, signed-in profile per host policy (`preview_open {profileId,

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Transcribe speech locally with mlx-whisper: no audio leaves the machine and no Gemini quota is used.
-# Usage: transcribe-local [--language nl] [--model mlx-community/whisper-large-v3-turbo] [--out DIR] FILE...
+# Usage: transcribe-local [--language nl] [--model mlx-community/whisper-large-v3-turbo] [--prompt "names…"] [--out DIR] FILE...
 #   FILE may be a bare name; it is looked up in ~/screenshots and ~/Downloads.
+#   --prompt: vocabulary (names, products) passed as whisper's --initial-prompt; anti-loop thresholds are always on.
 # Output: <name>.whisper.{txt,srt,vtt,json,tsv} next to the source (or in --out DIR).
 set -euo pipefail
 
-language=""; model="mlx-community/whisper-large-v3-turbo"; outdir=""
+language=""; model="mlx-community/whisper-large-v3-turbo"; outdir=""; prompt=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --language) language=$2; shift 2 ;;
     --model) model=$2; shift 2 ;;
     --out) outdir=$2; shift 2 ;;
+    --prompt) prompt=$2; shift 2 ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) break ;;
   esac
@@ -40,10 +42,12 @@ for arg in "$@"; do
   echo "→ $in  [$model${language:+ lang=$language}]"
   ffmpeg -hide_banner -loglevel error -y -i "$in" -vn -ac 1 -ar 16000 -c:a pcm_s16le "$wav"
   # Conditioning on previous text makes long recordings drift into repetition loops after ~25 min
-  # (a 42-minute meeting went from 44% to 17% word disagreement without it).
-  mlx_whisper --model "$model" ${language:+--language "$language"} \
+  # (a 42-minute meeting went from 44% to 17% word disagreement without it). The three thresholds stop
+  # filler loops ("Ehm…/Ja." repeated) on cross-talk and silence in Dutch standups (2026-10).
+  mlx_whisper --model "$model" ${language:+--language "$language"} ${prompt:+--initial-prompt "$prompt"} \
     --output-dir "$tmp" --output-format all --word-timestamps True \
-    --condition-on-previous-text False "$wav"
+    --condition-on-previous-text False --hallucination-silence-threshold 2 \
+    --no-speech-threshold 0.5 --compression-ratio-threshold 1.8 "$wav"
   rm -f "$wav"
   for produced in "$tmp"/*; do
     [[ -f $produced ]] || continue

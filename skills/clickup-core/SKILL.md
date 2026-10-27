@@ -22,7 +22,8 @@ pass `--config`.
 
 Token: the operator's raw personal token (no `Bearer`) in `auth.env_var` (default
 `CLICKUP_API_PERSONAL_TOKEN`); a nonempty env value beats `auth.env_file` (parsed, never executed).
-Never commit tokens.
+Never commit tokens. Write only through this CLI, never a claude.ai/MCP ClickUp connector even when
+its tools are loaded: it posts as whoever authorised it, not the operator.
 
 ## CLI semantics `--help` doesn't show
 
@@ -38,6 +39,10 @@ Never commit tokens.
 - `handoff` / `review` implement the wrapper's `[policy]`; recipients must be unambiguous.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
 - `--json task` returns `{"task": ...}` plus requested comments/downloads.
+- Listing someone's work: `tasks --assignee X` pages to the end and groups by the status actually
+  returned; never trust a server-side `--status` filter to drop finished work. Report the active
+  queue (`[policy] active_statuses`, marked `*`) apart from backlog, skip closed, flag shared
+  assignments, include each URL.
 - `chat read|post URL`: channels, DMs, threads (`/t/<id>`, also when the id is a reply). Text uses
   the public API; `--image` needs the web-app session (`chat session`, [reference.md](reference.md#chat)).
 
@@ -52,10 +57,21 @@ compare intent and outcome, not titles; finished work may have no ticket (check 
 `date_updated`, so a recent pass or an incomplete scope proves no absence. After an uncertain
 create, search the exact title (`--include-closed --updated-since <today>`) before retrying.
 
+- A ticket the user deleted or rejected stays deleted: never recreate it because a lookup now
+  comes back empty. Extend existing work only on a material change.
+- Never create spaces, folders or lists. Read a task before changing it.
+- New ticket: factual body from the conversation (repro, evidence, actual vs expected), nothing
+  invented; longer bodies via `--description-file`. Report the read-back URL, assignee, status and
+  priority.
+
 ## Comment discipline
 
 Defaults; the wrapper may override. Every write costs a human's attention.
 
+- The body is the record, a comment is a ping. Substance (what shipped or deviated, what to test,
+  links, output) goes in the body as a dated `## <date> — <whoami>` section
+  (`--append-description-file`); the comment is a `--mention` plus "see description" (wording:
+  wrapper), never a repeat. Same for `handoff` and `review --text`.
 - Two writes per ticket: status at start, one handoff/review at the end. No progress notes.
 - A substantive description append is a handoff too: after verified readback, one brief
   native-mention comment to the owner/reviewer pointing to the dated section, even when status
@@ -69,7 +85,8 @@ Defaults; the wrapper may override. Every write costs a human's attention.
   Ideation or progress stays silent.
 - Reader acts through a coding agent: one ```md block in English addressed to their agent.
   Reporter → developer: symptoms, data, intended outcome. Patterns: skill `agents-md` → `handoff.md`.
-- Before escalating to a developer: [triage.md](triage.md).
+- Before escalating to a developer: [triage.md](triage.md). Reviewing a ticket another agent
+  wrote: [review.md](review.md).
 
 ## Rich content and media
 
@@ -88,6 +105,7 @@ Description appends use ClickUp's private content seam and verify on readback, f
   next to the text it explains. First new layout: ask the reader for a screenshot.
 - Several screenshots: one `attach ID a.png b.png` in reading order. Real screenshots beat mockups.
 - `task ID --download-attachments` → `/tmp/cu-ID` (or `--dir`); the token never goes to media hosts.
+  Open screenshots yourself: the body shows only their remote URLs.
   `--download-looms` runs [scripts/loom.py](scripts/loom.py): read transcript AND frames, scrub
   screen data before sharing.
 - SyncUp calls: `uv run scripts/syncup.py URL`; token only, no `clickup.toml`; exit 75 = not
@@ -95,6 +113,9 @@ Description appends use ClickUp's private content seam and verify on readback, f
 
 ## Writes and verification
 
-GETs retry 429 (reset ≤ 30 s); writes never auto-retry and read back; `delete` / `detach` need `--yes`. Live checks: `whoami`, `topology`, one
+GETs retry 429 (reset ≤ 30 s); writes never auto-retry and read back; report only the verified
+URL. `delete` / `detach` need `--yes`. An update never changes the assignee, including the move to
+`to test` (the other person tests, not owns); a new task gets exactly one assignee (who: wrapper).
+Live checks: `whoami`, `topology`, one
 `task --comments`. A disposable create/delete needs authorization, a clear title and cleanup in a
 finally path. Never send test mentions or comments to people.

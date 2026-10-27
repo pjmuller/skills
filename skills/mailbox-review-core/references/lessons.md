@@ -10,6 +10,9 @@ next run reads it.
   rerun of the customer thread): before wrong, after right; then `brain-publish`. The go on that
   exact text is the publish go; a failed proof or materially different text returns to the operator
   with the simulated before/after.
+  Brain-dev skills live in the brain checkout (`.agents/skills/`); missing → run
+  `replypen-brain-skills/install.sh` inside it. Runs commit `journal/` to the brain's `main` all
+  day: edit in a worktree and let `brain-publish` reconcile.
 - **Help article:** the wrapper's edit and publish path, then sync ReplyPen's KB and verify live.
 - **Product code:** its own `t3_thread_launch` in the owning repo, a PR per
   [Shipping a found fix](go-deep.md#shipping-a-found-fix).

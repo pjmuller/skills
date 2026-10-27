@@ -53,5 +53,11 @@ Fix: <direction> · <fix thread or PR>
 **Ledger** (≤10): send · decide · discard
 ```
 
+## Operator level
+
+The wrapper says which operator is at the keyboard. Developer: technical, concise. Product owner:
+what the customer sees, what changes, the risk, a one-line reply to approve; paths and commands in a
+closed `<details>`.
+
 Every card keeps its `Mail-ref` line: that is how tomorrow's `t3-mail-link index` finds today's
 conclusion. Omit empty sections.

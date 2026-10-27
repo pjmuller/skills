@@ -43,7 +43,8 @@ case-insensitive substring. Other system audio settings stay untouched.
 - **Expect** SNR to barely change: gain raises voice and room noise together. Gain decides clipping
   versus a weak signal; distance and room decide SNR.
 - **STT**: `transcribe-local` (sibling `video-shrink-for-gemini`, local Whisper; nothing uploaded),
-  same settings per take, the sentence is never passed as a hint. Equal transcripts do not mean
+  same settings per take, the sentence is never passed as a hint. Bilingual speaker → one session
+  per language (`--language`), each with a sentence in that language. Equal transcripts do not mean
   equal audio, and the speaker's own dictation engine may behave differently.
 - **Not measured**: how it sounds. Ask the speaker to listen to the extremes and the pick.
   A warning that speech level ignored the gain sweep points to onboard AGC, an ineffective control

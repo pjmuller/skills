@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27 — wrapper lessons moved into nine cores
+
+- `clickup-core`: body-is-record/comment-is-ping, listing someone's work (`active_statuses`), assignee invariant, new-ticket body and "deleted stays deleted", MCP-connector ban, screenshots read; `reference.md` gains description-Markdown rewrites and "Workspace admin limits" (statuses add-only, dropdowns UI-only, no auto-number, date-field timezone); new `review.md` for reviewing a ticket another agent wrote.
+- `video-shrink-for-gemini`: `transcribe-local` sets whisper's anti-loop thresholds and takes `--prompt` (vocabulary → `--initial-prompt`); measured seeding evidence in `exact-identifiers.md`; agy quota/log checks; paused-recording timing, Claude cloud sessions, signed URLs, untouched vendor transcript.
+- `recording-followups` "Colleague handoffs"; `slides` (only requested edits, Slidev `:src` and UnoCSS collisions, shorter wrapper template); `mailbox-review-core` report "Operator level" + brain-dev setup; `whatsapp-bridge` group-name check and original-language voice transcripts; `t3-manage-thread/mail-link.md` what is worth a case, reply recipients; `t3-route` Gmail evidence, building a trigger lookup, `t3-pick-instance` stderr; `microphone-calibration` bilingual sessions; `yuki-core` per-row fetch loop.
+- Why: these generic lessons sat in wrappers in 11 repos (ClickUp, video, mailbox, slides, Yuki, routing, personal), so only one team saw each; every core user now gets them and wrappers can link instead of restate.
+
 ## 2026-10-27 — google-workspace-core: generic lessons out of wrappers
 
 - New `references/mymaps.md` (My Maps: Drive discovery, browser/Data Portability export, UI-only edits). `drafts.md`: wrapper signatures (once, before quoted history, both alternatives) and "draft vs send is wrapper policy, default draft". `rest.md`: raw `api` pagination/bounded reads, Calendar via `api`, `doc-read --out`. `integration.md`: runnable import example, `ws.session.http`, `scopes` is a minimum not a ceiling, wrappers link instead of restating. `troubleshooting.md`: token lifetime (Testing 7 days; Gmail tokens die on password change) and the unverified-app notice/100-user cap. `auth export-token` wording corrected (writes a file). Why: PJ's personal wrapper had grown to restate these; every core user should get them.

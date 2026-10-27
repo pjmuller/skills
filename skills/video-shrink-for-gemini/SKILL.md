@@ -18,7 +18,8 @@ exact → [No Gemini available](#no-gemini-available).
 ## Inputs
 
 All `--out` dirs must be git-ignored and private (the helpers refuse otherwise). **Never create or
-change sharing permissions**: missing access is a blocker to report.
+change sharing permissions**: missing access is a blocker to report. Never commit signed download
+URLs; keep stable record ids and safe app links.
 
 - Fathom → [fathom.md](fathom.md). Transcript-only ask: `download-fathom URL --out DIR
   --transcript-only`, then stop (no media, Gemini or ASR).
@@ -63,7 +64,8 @@ watches for timing but names slides/frames/labels by their real titles. Opaque U
 (1 fps: at 0.5 fps a Backspace-removed chip or 200 ms spinner falls between frames; same cost), keep
 the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
 carry it) so items line up with server logs, and pass the owning screen's skill doc plus the app's
-UI copy (i18n/strings or templates) so Gemini quotes real labels. Then
+UI copy (i18n/strings or templates) so Gemini quotes real labels. A paused recording breaks the
+video time = wall clock mapping: time slow steps from server data, not video offsets. Then
 [feedback-round](../recording-followups/feedback-round.md).
 
 ## Execute and verify
@@ -87,7 +89,8 @@ invented. `low` only for long videos whose screen doesn't matter.
 is sent. Don't locate shares from transcript cues ("share my screen"): they miss most starts.
 
 Verify: read the file; check speech, visual changes, timestamps and coverage against the recording;
-report gaps. Its provenance header says "work from this text": downstream briefs point at **this**
+report gaps. Keep the vendor transcript untouched; corrections go in annotations beside it. Its
+provenance header says "work from this text": downstream briefs point at **this**
 file, never at raw vendor ASR, so no later thread re-watches the video.
 
 Hard-won checks:
@@ -108,7 +111,8 @@ Follow-up prompts / threads from the verified transcript:
 ## No Gemini available
 
 Seen: no API key plus `agy` weekly-quota 429, no Antigravity (Windows + Codex, Claude Code on a
-subscription). Frames: `select-frames` ([video-frames-for-vision](../video-frames-for-vision/SKILL.md)).
+subscription), Claude cloud sessions (`CLAUDE_CODE_REMOTE=true`: no agy, no mlx, CPU too slow for
+local ASR: vendor transcript or `transcribe-openai`). Frames: `select-frames` ([video-frames-for-vision](../video-frames-for-vision/SKILL.md)).
 Speech: vendor transcript, else `transcribe-local`. Names/products/decisions matter → optional second
 ASR: `transcribe-openai source.webm --align leexi-call.json --hint "<≤20 riskiest terms>" --out
 transcript.openai.md` (vendor speakers/timestamps, OpenAI's words; prefer it for names, the vendor

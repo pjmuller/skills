@@ -115,6 +115,7 @@ execution thread.
 ## Report and learn
 
 Verify the tool result; report destination/title and actual account/model, or which thread was
-reused and why. Routing failures stay visible. Durable user corrections →
+reused and why. Substitution and account reasons come from `t3-pick-instance` stderr (candidates,
+chosen account, reason), never a guessed association. Routing failures stay visible. Durable user corrections →
 [corrections.md](corrections.md). Requested router reset → review lessons once, then the
 [replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.
