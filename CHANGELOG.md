@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — T3 0.1.3 merged MCP tools: new names in docs
+
+- `t3-manage-thread` (browser, workers, permission-ceiling), `bitwarden`, `t3-route` test cases: `preview_click/type/press` → `preview_act {action}`, `t3_queue_list/cancel` → `t3_queue {action}`, `t3_thread_configuration` → `t3_thread_configure` without `modelSelection` (= read). Why: T3 0.1.3 ([#25423](https://github.com/pingdotgg/t3code/pull/25423)) merged 18 tools into action tools; agents following the old names hit "tool not found". Needs T3 ≥ 0.1.3 (older T3 still has only the old names).
+
 ## 2026-10-27 — slides: presenter notes only when asked
 
 - `slides/SKILL.md`: presenter notes are skipped unless the user, a wrapper or the deck's own doc asks; slides and the exported PDF must stand on their own. Why: the same "skip unless asked" line sat in all 7 project-slides wrappers; it is the better default for decks shared as PDFs, and decks that need notes already say so.
