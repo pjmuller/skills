@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -47,12 +48,11 @@ FINAL = ("spawned", "skipped:")
 RELAY_PENDING = "relay-pending"        # accepted by t3-relay, launch not yet confirmed: never respawn
 RELAY_WAIT = 120                       # seconds a spawn waits for t3-relay to confirm the thread exists
 PENDING_ALERT = timedelta(hours=1)     # an unconfirmed spawn older than this is reported
-SCREEN_SHARE_MIN_HITS = 2              # lowercase phrase hits over the whole transcript => "likely"
-SCREEN_SHARE_PHRASES = [
-    "scherm delen", "mijn scherm", "ziet ge mijn scherm", "zie je mijn scherm", "zie jij mijn scherm",
-    "ik deel", "hier zie je", "zoals je hier ziet", "hier zie ge",
-    "share my screen", "sharing my screen", "can you see my screen", "let me show you", "as you can see here",
-]
+VISUAL_TIMEOUT = timedelta(minutes=45)  # download + detect-screenshare per call; later -> "not assessed"
+MAX_VISUAL_JOBS = 3                     # concurrent background video checks (bandwidth, disk)
+# Seconds; the job kills each step's process group at its limit, so 30 + 10 min < VISUAL_TIMEOUT frees the slot
+# for real. A ~50 min Fathom HLS download took ~11 min.
+DOWNLOAD_TIMEOUT, DETECT_TIMEOUT = 30 * 60, 10 * 60
 
 
 @dataclass
@@ -348,12 +348,25 @@ def route(cfg, call):
     return winners[0] if len(winners) == 1 else cfg.workspace
 
 
-def screen_share(segments, has_video=True):
-    text = " ".join(t for _, _, t, _ in segments).lower()
-    hits = sum(text.count(p) for p in SCREEN_SHARE_PHRASES)
-    if not has_video:
-        return hits, "no video (audio-only recording)"
-    return hits, "likely" if hits >= SCREEN_SHARE_MIN_HITS else "unlikely"
+def mmss(seconds):
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
+
+
+def visual_line(visual):
+    """One-line verdict for the transcript header, state and log."""
+    status = visual.get("status")
+    if status == "audio-only":
+        return "no video (audio-only recording)"
+    if status != "done":
+        return f"not assessed ({visual.get('reason') or status})"
+    if visual.get("method") == "full-fallback":
+        return "not assessed (not a Google Meet layout: the detector cannot tell)"
+    ranges = visual.get("ranges") or []
+    if not ranges:
+        return "none detected (video checked every second)"
+    spans = ", ".join(f"{mmss(r['start'])}-{mmss(r['end'])}" for r in ranges[:8]) + (" …" if len(ranges) > 8 else "")
+    return f"{len(ranges)} range(s), {visual.get('share_seconds', 0) / 60:.0f} min: {spans}"
 
 
 def evaluate(cfg, call, now):
@@ -390,7 +403,7 @@ def election_line(call):
     return call.decision.evidence() if call.decision else "not run"
 
 
-def render_transcript(cfg, call, hits, verdict):
+def render_transcript(cfg, call, visual):
     local = call.start.astimezone(TZ)
     words = speaker_words(call.segments)
     total = sum(w for w, _ in words.values()) or 1
@@ -399,7 +412,7 @@ def render_transcript(cfg, call, hits, verdict):
              f"- When: {local:%Y-%m-%d %H:%M} Europe/Brussels · {round(call.duration_s / 60)} min",
              f"- Owner election: {election_line(call)}",
              "- Speakers: " + ", ".join(f"{n} {w / total:.0%}" for n, (w, _) in sorted(words.items(), key=lambda kv: -kv[1][0])),
-             f"- Screen share: {verdict} ({hits} phrase hits)",
+             f"- Screen share: {visual_line(visual)}",
              f"- Raw {call.source} ASR, not verified against audio/video.", "", "## Transcript", ""]
     prev = None
     for ts, name, text, _ in call.segments:
@@ -411,25 +424,41 @@ def render_transcript(cfg, call, hits, verdict):
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_brief(cfg, call, workspace, hits, verdict, transcript_path):
+def visual_media(call, visual, transcript_path):
+    """The brief's $media sentence: what the video check found and what the thread does with the video."""
+    skill = f"{SKILL_DIR.parent}/video-shrink-for-gemini/SKILL.md"
+    status, media = visual.get("status"), media_dir(call.key)
+    store = (f"store it beside the transcript in {transcript_path.parent}. Then run the follow-ups on transcript + "
+             f"narration; every downstream brief points at that verified narration file (it carries a provenance "
+             f"header), never at the raw transcript.md, so no later thread watches the video again.")
+    if status == "audio-only":
+        return "Audio-only recording: work from the transcript."
+    meet = status == "done" and visual.get("method") == "meet-layout"
+    if meet and not visual.get("ranges"):
+        return ("No screen share in the video (detect-screenshare checked one frame per second): work from the "
+                "transcript; the video is not needed.")
+    if meet:
+        return (f"Screen shared at {visual_line(visual).split(': ', 1)[1]} (detect-screenshare). Video and ranges are "
+                f"ready: {visual['video']} and {visual['plan']}. Get a visual narration of those ranges first per "
+                f"{skill} (shrink-video --crop with that plan, transcribe-gemini --ranges); " + store)
+    late = f" A late result may still land in {media / 'visual.json'}." if status == "timeout" else ""
+    get = (f"The video is already at {visual['video']}; inspect a few frames, narrate what was shown per {skill} and "
+           if visual.get("video") else
+           f"Download the video per {skill} and run detect-screenshare first; if it finds shares, narrate those ranges and ")
+    return (f"Visual coverage not assessed: {visual_line(visual)[len('not assessed ('):-1]}. Do not assume there was "
+            f"no screen share.{late} " + get + store)
+
+
+def build_brief(cfg, call, workspace, visual, transcript_path):
     local = call.start.astimezone(TZ)
     participants = ", ".join(others(cfg, call)) or "unnamed speakers"
     facts = (f"New {call.source.title()} call \"{call.title}\" on {local:%a %Y-%m-%d %H:%M} (Europe/Brussels), "
              f"{round(call.duration_s / 60)} min. Other speakers: {participants}. "
-             f"Screen share: {verdict} ({hits} phrase hits). Transcript: {transcript_path}. Source: {call.url}. "
+             f"Screen share: {visual_line(visual)}. Transcript: {transcript_path}. Source: {call.url}. "
              f"Recording id: {call.source}:{call.id}. Processed on {cfg.self_id}'s machine as elected owner: "
              f"{election_line(call)}. Routed to {workspace} by recording-watcher (deterministic; "
              f"if this is the wrong repo, say so first).")
-    if verdict == "likely":
-        media = (f"Screen sharing is likely, so first get a visual narration per "
-                 f"{SKILL_DIR.parent}/video-shrink-for-gemini/SKILL.md "
-                 + ("(Fathom: `download-fathom URL --out <call dir>`, then shrink + `transcribe-gemini`)"
-                    if call.source == "fathom" else "(Leexi: `download-leexi`, then shrink + `transcribe-gemini`)")
-                 + f"; store it beside the transcript in {transcript_path.parent}. Then run the follow-ups on transcript + "
-                 f"narration; every downstream brief points at that verified narration file (it carries a provenance header), "
-                 f"never at the raw transcript.md, so no later thread watches the video again.")
-    else:
-        media = "Screen sharing is unlikely: work from the transcript only, do not download the video."
+    media = visual_media(call, visual, transcript_path)
     template = SKILL_DIR / "briefs" / "default.md"
     if cfg.briefs_dir:
         for candidate in (cfg.briefs_dir / f"{Path(workspace).name}.md", cfg.briefs_dir / "default.md"):
@@ -445,12 +474,111 @@ def transcript_path(key):
     return STATE_DIR / "calls" / key.replace(":", "-", 1) / "transcript.md"
 
 
-def write_transcript(cfg, call):
+def write_transcript(cfg, call, visual=None):
     path = transcript_path(call.key)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    hits, verdict = screen_share(call.segments, call.has_video)
-    path.write_text(render_transcript(cfg, call, hits, verdict))
+    path.write_text(render_transcript(cfg, call, visual or {"status": "pending", "reason": "video check running"}))
     return path
+
+
+# ---------- video check: download + detect-screenshare in a detached job, read by a later poll ----------
+
+def media_dir(key):
+    return transcript_path(key).parent / "media"
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def visual_check(cfg, call, now, dry_run=False, starter=None):
+    """The call's video verdict, or None while its background check runs (the poll holds the call).
+    Starts the check (at most MAX_VISUAL_JOBS at once); past VISUAL_TIMEOUT the verdict is 'timeout'."""
+    if not call.has_video:
+        return {"status": "audio-only"}
+    media = media_dir(call.key)
+    if done := read_json(media / "visual.json"):
+        return done
+    job = read_json(media / "job.json")
+    if job:
+        if now - parse_ts(job["started"]) > VISUAL_TIMEOUT:
+            return {"status": "timeout", "reason": f"video check still running after {VISUAL_TIMEOUT.seconds // 60} min"}
+        return None
+    if dry_run:
+        return {"status": "not-run", "reason": "dry run: no download"}
+    calls_dir = STATE_DIR / "calls"
+    running = sum(1 for j in calls_dir.glob("*/media/job.json") if not (j.parent / "visual.json").exists()
+                  and now - parse_ts((read_json(j) or {}).get("started") or utc(now)) <= VISUAL_TIMEOUT)
+    if running >= MAX_VISUAL_JOBS:
+        return None
+    media.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (media / "job.json").write_text(json.dumps({"key": call.key, "source": call.source, "id": call.id, "url": call.url,
+                                                "started": now.isoformat()}) + "\n")
+    (starter or start_visual_job)(call.key, media)
+    return None
+
+
+def start_visual_job(key, media):
+    """Detached `recording-watcher visual KEY`: survives the poll, never holds its lock."""
+    with open(media / "visual.log", "a") as log:
+        subprocess.Popen([str(Path(__file__).resolve()), "visual", key], stdout=log, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, cwd=media, start_new_session=True)
+
+
+def run_bounded(cmd, timeout, env=None):
+    """subprocess.run(check=True) that kills the whole process group (yt-dlp, ffmpeg) on timeout."""
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise
+    if proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, out, err)
+
+
+def visual_job(args):
+    """Background: download the call's video, run detect-screenshare, write media/visual.json. A video without
+    shares is deleted again (the brief says the transcript suffices); failures are recorded, never 'no share'."""
+    media = media_dir(args.key)
+    job = read_json(media / "job.json") or {}
+    result = {"status": "failed"}
+    try:
+        cfg = load_config()
+        keys = {"fathom": ["FATHOM_API_KEY"], "leexi": ["LEEXI_KEY_ID", "LEEXI_KEY_SECRET"]}[job["source"]]
+        env = {**os.environ, **load_env(cfg.sources[job["source"]].get("env_file"), keys)}
+        cmd = (["download-fathom", job["url"], "--out", str(media)] if job["source"] == "fathom"
+               else ["download-leexi", job["id"], "--out", str(media)])
+        run_bounded(cmd, DOWNLOAD_TIMEOUT, env)
+        video = next((p for p in sorted(media.glob("source.*")) if p.suffix in (".mp4", ".webm", ".mkv")), None)
+        if not video:
+            raise RuntimeError("download produced no video")
+        plan = media / "source.screenshare.json"
+        run_bounded(["detect-screenshare", str(video), "--out", str(plan)], DETECT_TIMEOUT)
+        out = json.loads(plan.read_text())
+        result = {"status": "done", "method": out["method"], "ranges": out["ranges"],
+                  "share_seconds": out.get("share_seconds", 0), "duration": out.get("duration"),
+                  "video": str(video), "plan": str(plan)}
+        if out["method"] == "meet-layout" and not out["ranges"]:
+            video.unlink()
+            result["video"] = None
+    except subprocess.TimeoutExpired as exc:
+        result["reason"] = f"{exc.cmd[0]} timed out after {int(exc.timeout // 60)} min"
+    except subprocess.CalledProcessError as exc:
+        result["reason"] = f"{exc.cmd[0]} exit {exc.returncode}: {(exc.stderr or '').strip()[-300:]}"
+    except (Exception, SystemExit) as exc:
+        result["reason"] = f"{type(exc).__name__}: {str(exc)[-300:]}"
+    result["at"] = datetime.now(timezone.utc).isoformat()
+    tmp = media / "visual.json.tmp"
+    tmp.write_text(json.dumps(result, indent=1) + "\n")
+    tmp.replace(media / "visual.json")
+    print(f"{args.key}: {visual_line(result)}")
+    return 0 if result["status"] == "done" else 1
 
 
 # ---------- state ----------
@@ -567,7 +695,7 @@ def default_sources(cfg, names=None, errors=None):
     return out
 
 
-def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_status):
+def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_status, visual=visual_check):
     now = now or datetime.now(timezone.utc)
     if not args.force_hours and not in_hours(now):
         return 0
@@ -623,11 +751,19 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
     spawned = 0
     for call in candidates:
         workspace = route(cfg, call)
-        hits, verdict = screen_share(call.segments, call.has_video)
-        transcript = write_transcript(cfg, call)
-        title, brief = thread_title(cfg, call), build_brief(cfg, call, workspace, hits, verdict, transcript)
+        seen = visual(cfg, call, now, args.dry_run)
+        if seen is None:   # video check running (or queued): hold the call and the watermark
+            print(f"{'visual-pending':30} {call.key:48} {call.start.astimezone(TZ):%m-%d %H:%M} {call.title[:50]}")
+            listed_by_source[call.source][1].append(call)
+            if not args.dry_run:
+                entry = state["calls"].get(call.key) or {}
+                state["calls"][call.key] = {**entry, "status": "visual-pending", "title": call.title,
+                                            "start": call.start.isoformat(), "at": entry.get("at") or now.isoformat()}
+            continue
+        transcript = write_transcript(cfg, call, seen)
+        title, brief = thread_title(cfg, call), build_brief(cfg, call, workspace, seen, transcript)
         over_cap = spawned >= MAX_SPAWNS
-        head = f"{'over-cap' if over_cap else 'spawn'}: {title!r} -> {workspace} · screen={verdict} ({hits})"
+        head = f"{'over-cap' if over_cap else 'spawn'}: {title!r} -> {workspace} · screen={visual_line(seen)}"
         if args.dry_run:
             print(f"\n=== {head}\n{brief}")
             spawned += 1
@@ -650,7 +786,7 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
         spawned += 1
         print(f"{head} · relay {relay_id}" + (" (accepted, unconfirmed: next poll checks)" if status == RELAY_PENDING else ""))
         state["calls"][call.key] = {"status": status, "title": call.title, "thread_title": title, "relay_id": relay_id,
-                                    "project": workspace, "self_share": round(self_share(cfg, call), 2), "screen_share": verdict,
+                                    "project": workspace, "self_share": round(self_share(cfg, call), 2), "screen_share": visual_line(seen),
                                     "start": call.start.isoformat(), "at": now.isoformat(), "transcript": str(transcript),
                                     "election": election_line(call)}
         save_state(state)   # persist each spawn immediately: a crash must never cause a re-spawn
@@ -858,8 +994,11 @@ def main():
     ls = sub.add_parser("list", help="recent calls with key, start, title, duration, state status (read-only)")
     ls.add_argument("--since", help="e.g. 2026-10-01 (Brussels); default today")
     ls.add_argument("--source", choices=sorted(SOURCES))
+    v = sub.add_parser("visual", help="internal, started by poll: download one call's video and run detect-screenshare")
+    v.add_argument("key")
     args = parser.parse_args()
-    return {"poll": poll, "status": status, "check": check, "seed": seed, "forget": forget, "ack": ack, "list": list_calls}[args.cmd](args)
+    return {"poll": poll, "status": status, "check": check, "seed": seed, "forget": forget, "ack": ack, "list": list_calls,
+            "visual": visual_job}[args.cmd](args)
 
 
 if __name__ == "__main__":

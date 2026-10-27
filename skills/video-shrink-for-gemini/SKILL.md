@@ -110,6 +110,7 @@ invented. `low` only for long videos whose screen doesn't matter.
 (share tile fills the frame, no webcam faces); transcribe the crop with `--ranges <that json>`
 (frames only while sharing, audio throughout). Not Meet → the JSON says `full-fallback`, whole video
 is sent. Don't locate shares from transcript cues ("share my screen"): they miss most starts.
+Changing the detector → run [benchmark](benchmark/README.md) (synthetic set in pytest, real calls private).
 
 Verify: read the file; check speech, visual changes, timestamps and coverage against the recording;
 report gaps. Apply corrections in the transcript file itself and replace its `Verification: none

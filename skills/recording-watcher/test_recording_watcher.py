@@ -97,10 +97,72 @@ def test_routing(cfg):
     assert rw.speaker_name(cfg, "Alpha Office") == "Ben Example" and rw.speaker_name(cfg, None) == "Unknown"
 
 
-def test_screen_share():
-    hits, verdict = rw.screen_share([seg("A", 0, text="Ziet ge mijn scherm? Ja. Hier zie je de lijst")])
-    assert (hits, verdict) == (3, "likely")
-    assert rw.screen_share([seg("A", 0, text="share my screen, can you see my screen")], has_video=False)[1].startswith("no video")
+NO_SHARE = {"status": "done", "method": "meet-layout", "ranges": [], "share_seconds": 0, "video": None}
+SHARED = {"status": "done", "method": "meet-layout", "ranges": [{"start": 1456.0, "end": 2993.0}], "share_seconds": 1537,
+          "video": "/m/source.mp4", "plan": "/m/source.screenshare.json"}
+
+
+def test_visual_verdicts_in_brief(tmp_path, monkeypatch):
+    monkeypatch.setattr(rw, "STATE_DIR", tmp_path)
+    c, t = call(), tmp_path / "t.md"
+    shared = rw.visual_media(c, SHARED, t)
+    assert "24:16-49:53" in rw.visual_line(SHARED) and "/m/source.screenshare.json" in shared and "narration" in shared
+    assert "No screen share" in rw.visual_media(c, NO_SHARE, t) and "video is not needed" in rw.visual_media(c, NO_SHARE, t)
+    for v in ({"status": "failed", "reason": "download-fathom exit 1"}, {"status": "timeout", "reason": "still running"},
+              {"status": "done", "method": "full-fallback", "ranges": [{"start": 0, "end": 60}], "video": "/m/v.mp4"}):
+        text = rw.visual_media(c, v, t)
+        assert text.startswith("Visual coverage not assessed") and "Do not assume there was no screen share" in text
+    assert "/m/v.mp4" in rw.visual_media(c, v, t)                       # already downloaded: no second download
+    assert rw.visual_line({"status": "audio-only"}).startswith("no video")
+
+
+def test_visual_check_starts_one_bounded_job(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(rw, "STATE_DIR", tmp_path)
+    started = []
+    starter = lambda key, media: started.append(key)   # noqa: E731
+    calls = [call(id=str(i)) for i in range(rw.MAX_VISUAL_JOBS + 1)]
+    assert [rw.visual_check(cfg, c, NOW, starter=starter) for c in calls] == [None] * len(calls)
+    assert started == [c.key for c in calls[:rw.MAX_VISUAL_JOBS]]       # the last one waits for a free slot
+    assert rw.visual_check(cfg, calls[0], NOW + timedelta(minutes=10), starter=starter) is None and len(started) == 3
+    assert rw.visual_check(cfg, calls[0], NOW + rw.VISUAL_TIMEOUT + timedelta(minutes=1))["status"] == "timeout"
+    (rw.media_dir(calls[1].key) / "visual.json").write_text(json.dumps(SHARED))
+    assert rw.visual_check(cfg, calls[1], NOW)["ranges"] == SHARED["ranges"]
+    assert rw.visual_check(cfg, call(id="d"), NOW, dry_run=True)["status"] == "not-run"
+    audio = call(id="m")
+    audio.has_video = False
+    assert rw.visual_check(cfg, audio, NOW) == {"status": "audio-only"}
+
+
+def test_visual_job_downloads_detects_and_drops_unshared_video(tmp_path, monkeypatch):
+    monkeypatch.setattr(rw, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(rw, "load_config", lambda: Namespace(sources={"fathom": {"env_file": None}}))
+    monkeypatch.setattr(rw, "load_env", lambda path, keys: {k: "secret" for k in keys})
+    media = rw.media_dir("fathom:7")
+    media.mkdir(parents=True)
+    (media / "job.json").write_text(json.dumps({"source": "fathom", "id": "7", "url": "https://fathom.video/share/x",
+                                                "started": NOW.isoformat()}))
+    ranges = []
+
+    def fake_run(cmd, timeout, env=None):
+        if cmd[0] == "download-fathom":
+            assert env["FATHOM_API_KEY"] == "secret" and timeout == rw.DOWNLOAD_TIMEOUT
+            (media / "source.mp4").write_bytes(b"x")
+        else:
+            Path(cmd[cmd.index("--out") + 1]).write_text(json.dumps({"method": "meet-layout", "ranges": ranges}))
+    monkeypatch.setattr(rw, "run_bounded", fake_run)
+    assert rw.visual_job(Namespace(key="fathom:7")) == 0
+    seen = json.loads((media / "visual.json").read_text())
+    assert seen["status"] == "done" and seen["video"] is None and not (media / "source.mp4").exists()
+    ranges.append({"start": 10.0, "end": 70.0})
+    assert rw.visual_job(Namespace(key="fathom:7")) == 0 and (media / "source.mp4").exists()
+
+    def broken(cmd, timeout, env=None):
+        raise rw.subprocess.CalledProcessError(1, cmd, stderr="no share url")
+    monkeypatch.setattr(rw, "run_bounded", broken)
+    (media / "source.mp4").unlink()
+    assert rw.visual_job(Namespace(key="fathom:7")) == 1
+    seen = json.loads((media / "visual.json").read_text())
+    assert seen["status"] == "failed" and "no share url" in seen["reason"]
 
 
 @pytest.mark.parametrize("when,expected", [
@@ -116,12 +178,12 @@ def test_title_and_brief(cfg, tmp_path):
     c = call(segments=[seg("Ana", 100, ANA), seg("Ben Example", 300, BEN), seg("Cleo Doe", 200, CLEO), seg("Speaker 3", 50)])
     assert rw.thread_title(cfg, c) == "Call Ben Cleo 10-08"
     rw.evaluate(cfg, c, NOW)
-    brief = rw.build_brief(cfg, c, ALPHA, 0, "unlikely", tmp_path / "t.md")
+    brief = rw.build_brief(cfg, c, ALPHA, NO_SHARE, tmp_path / "t.md")
     assert "recording-followups/SKILL.md" in brief and "owner=ana" in brief and "$" not in brief
     (tmp_path / "briefs").mkdir()
     (tmp_path / "briefs" / "alpha.md").write_text("custom $followups $facts")
     own = config(tmp_path, briefs_dir=str(tmp_path / "briefs"), followups_skill="/my/wrapper/SKILL.md")
-    assert rw.build_brief(own, c, ALPHA, 0, "unlikely", tmp_path / "t.md").startswith("custom /my/wrapper/SKILL.md")
+    assert rw.build_brief(own, c, ALPHA, NO_SHARE, tmp_path / "t.md").startswith("custom /my/wrapper/SKILL.md")
 
 
 class FakeSource:
@@ -135,9 +197,25 @@ class FakeSource:
         self.loaded += 1
 
 
-def run(tmp_path, monkeypatch, cfg, sources, spawner, now=NOW, dry_run=False):
+def run(tmp_path, monkeypatch, cfg, sources, spawner, now=NOW, dry_run=False, visual=lambda *a: NO_SHARE):
     monkeypatch.setattr(rw, "STATE_DIR", tmp_path / "state")
-    return rw.poll(Namespace(dry_run=dry_run, since=None, force_hours=False), cfg=cfg, sources=sources, spawner=spawner, now=now)
+    return rw.poll(Namespace(dry_run=dry_run, since=None, force_hours=False), cfg=cfg, sources=sources, spawner=spawner,
+                   now=now, visual=visual)
+
+
+def test_poll_holds_call_until_video_check_lands(cfg, tmp_path, monkeypatch):
+    src = FakeSource("fathom", [call(id="v", segments=[seg("Ana", 200, ANA), seg("Cleo", 200, CLEO)])])
+    briefs, verdict = [], {"v": None}
+    spawner = lambda cfg, ws, title, brief: briefs.append(brief) or "t-1"   # noqa: E731
+    run(tmp_path, monkeypatch, cfg, [src], spawner, visual=lambda *a: verdict["v"])
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert briefs == [] and state["calls"]["fathom:v"]["status"] == "visual-pending"
+    assert rw.parse_ts(state["sources"]["fathom"]["watermark"]) < src.calls[0].created
+    verdict["v"] = SHARED
+    run(tmp_path, monkeypatch, cfg, [src], spawner, now=NOW + timedelta(minutes=15), visual=lambda *a: verdict["v"])
+    assert len(briefs) == 1 and "24:16-49:53" in briefs[0] and "source.screenshare.json" in briefs[0]
+    transcript = (tmp_path / "state" / "calls" / "fathom-v" / "transcript.md").read_text()
+    assert "- Screen share: 1 range(s), 26 min: 24:16-49:53" in transcript
 
 
 def test_idempotent_cap_watermark_and_skip_evidence(cfg, tmp_path, monkeypatch):
@@ -246,10 +324,10 @@ def test_unconfirmed_spawn_is_checked_never_respawned(cfg, tmp_path, monkeypatch
     assert state()["fathom:a"]["status"] == rw.RELAY_PENDING
     later = NOW + timedelta(minutes=30)
     rw.poll(Namespace(dry_run=False, since=None, force_hours=False), cfg=cfg, sources=[src], spawner=pending,
-            now=later, checker=lambda rid: "pending")
+            now=later, checker=lambda rid: "pending", visual=lambda *a: NO_SHARE)
     assert spawned == [1] and state()["fathom:a"]["status"] == rw.RELAY_PENDING
     rw.poll(Namespace(dry_run=False, since=None, force_hours=False), cfg=cfg, sources=[src],
-            spawner=lambda *a: spawned.append(2) or "r2", now=later, checker=lambda rid: "failed")
+            spawner=lambda *a: spawned.append(2) or "r2", now=later, checker=lambda rid: "failed", visual=lambda *a: NO_SHARE)
     assert spawned == [1, 2] and state()["fathom:a"]["status"] == "spawned"
 
 
@@ -306,3 +384,15 @@ def test_missing_credentials_fail_the_poll_visibly(cfg, tmp_path, monkeypatch):
     one = config(tmp_path, sources={"fathom": {"env_file": str(tmp_path / "missing.env")}})
     assert rw.poll(Namespace(dry_run=False, since=None, force_hours=True), cfg=one, now=NOW) == 1
     assert "FATHOM_API_KEY" in json.loads((tmp_path / "state" / "state.json").read_text())["last_errors"][0]
+
+
+def test_run_bounded_kills_the_process_group(tmp_path):
+    marker = tmp_path / "child-alive"
+    script = f"(sleep 2; touch {marker}) & sleep 30"   # a grandchild like yt-dlp under download-fathom
+    with pytest.raises(rw.subprocess.TimeoutExpired):
+        rw.run_bounded(["sh", "-c", script], timeout=0.5)
+    import time
+    time.sleep(2.5)
+    assert not marker.exists()
+    assert rw.DOWNLOAD_TIMEOUT + rw.DETECT_TIMEOUT < rw.VISUAL_TIMEOUT.total_seconds()
+

@@ -31,7 +31,13 @@ lives in one config file ([config.md](config.md)); new machine (macOS or WSL): [
 - Election on vendor-verified speaker emails; a `personal` source (own Monologue account) is always
   this machine's. Not owner → `skipped:<reason>` + owner + evidence.
 - Route: the source's pinned `workspace`, else known non-self speakers vote by words, then
-  invitees, else default. Screen-share phrases → the brief asks for a Gemini narration first.
+  invitees, else default.
+- Screen share is read from the video, not from phrases ("share my screen" caught 1 of 25 shared
+  minutes in a standup): a qualifying call with video starts a detached `visual KEY` job
+  (`download-fathom`/`download-leexi` → `detect-screenshare`, ≤3 at once) and stays
+  `visual-pending`; a later poll spawns with the ranges, video and plan paths in the brief (narrate
+  those ranges) or "no screen share" (video deleted again). Failure or > 45 min → "visual coverage
+  not assessed", never "no share". Files: `calls/<key>/media/{job,visual}.json`, `visual.log`.
 - Spawn = `t3-relay launch --wait 120` ([relay.md](../t3-manage-thread/relay.md)): confirmed →
   `spawned`; accepted but unconfirmed → `relay-pending`, re-checked via `t3-relay status` next poll
   (landed → `spawned`, failed → respawned; never resent while pending). Max 6 per poll, newest

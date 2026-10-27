@@ -7,21 +7,29 @@
 
 Google Meet bot recordings (Fathom, Leexi): while someone presents, Meet draws the shared screen as one big
 tile with a filmstrip of webcam tiles on its right, split by a full-height gutter in the dark client
-background at ~73% or ~77% of the width (the position depends on the participant count). Galleries put their
-gutters at 1/2 or 1/3 and 2/3, a spotlight has none. Every --step seconds (default 15) one frame is sampled; frames that
-clearly show the gutter teach its position(s), every frame with a gutter there counts as shared; runs are
-merged across short gaps and padded.
+background (~73-77% of the width). Speaker view and 3-4 tile galleries draw a gutter there too, so
+geometry only locates; the big tile's content decides. One frame per second at 320x180:
+
+- layout: a clean gutter at 55-86% of the width, tiles on both sides, and right of it a filmstrip
+  (stacked tiles or one short tile; speaker view and galleries put tall tiles side by side);
+- screen votes, median over 9 s, need 2 of 4: flat pixels (equal horizontal neighbours: UI, slides) >= 0.5;
+  grey pixels (no chroma: white/grey/black UI) >= 0.25; tile static between frames (75th percentile) >= 0.6;
+  skin-coloured pixels < 0.1. Webcams fail all four. Plus text: >= 0.5% edge pixels (luma step > 20;
+  an avatar tile is flat, static and skin-free too, dim IDE text still passes);
+- runs of >= 10 s open a share; gaps <= 20 s merge, gaps <= 120 s merge while the share's gutter and
+  filmstrip stay (near-black terminals and photos look like background or webcams); edges padded 2 s.
 
 Each share range carries "crop": the tile's [x, y, w, h] (fractions) for shrink-video --crop. Anything else
-(no dark client margin: Loom, Zoom, Teams, phone video) gets one range over the whole video (method
-"full-fallback"): send all frames.
+(no dark client margin: Loom, Zoom, Teams, CleanShot) gets one range over the whole video ("full-fallback").
 
-Measured 2026-10-08 at the previous 2 s interval on 10 Meet recordings (7.6 h, 4.3 h shared; ground truth from inspected frames, blind
-spot-check 120/120): share-seconds precision 0.99 (padding; a 4-tile gallery's 3/4 gutter still passes),
-recall 1.00; 42% of video seconds skipped;
-~13 s per hour of 720p source, ~6 s per hour of a shrunk .gemini.mp4. Rejected on the same set: transcript
-cues ("share my screen", "zie je mijn scherm"; precision 0.4, recall 0.1 on share starts, ends never
-announced) and select-frames' skin/edge heuristic (precision 0.85: logo and avatar tiles look like screens).
+Measured 2026-10-27 (benchmark/README.md: runner, sets, limits): 17 labelled Meet recordings (11.5 h;
+Fathom + Leexi; speaker view, 2-6 tile galleries, spotlight; slides, live UI, dark IDE/terminal) and 5
+held-out ones labelled before the run. Share-second precision 0.99, recall 0.99-1.00, boundaries within
+3 s; the previous gutter-only rule: precision 0.86 and 0.96, boundaries off by up to 24 s, a speaker-view
+call without share marked 29 of 30 min shared. CPU per video hour: Fathom ~30 s, Leexi WebM ~55 s (full
+decode), shrunk .gemini.mp4 ~10 s. Rejected: transcript cues ("share my screen"; precision 0.4, recall
+0.1 on share starts, ends never announced), stillness or skin alone (blurred webcams are static,
+slides show people).
 """
 from __future__ import annotations
 
@@ -29,30 +37,33 @@ import argparse
 import json
 import subprocess
 from itertools import pairwise
-from math import ceil
 from pathlib import Path
 
-W, H = 640, 360            # analysis size; positions below are fractions of the width
-WINDOW = (0.70, 0.82)      # where Meet puts the share/filmstrip gutter
-MIN_SEED_SECONDS = 10      # scale evidence with cadence, so sparse sampling still finds short demos
+W, H = 320, 180            # analysis size; positions below are fractions of the width
+WINDOW = (0.55, 0.86)      # where Meet puts the share/filmstrip gutter (speaker view and galleries too)
+VOTE_WINDOW = 9            # seconds of median smoothing for the content votes
+MIN_RUN = 10               # seconds of share frames that open a share
+GAP, LAYOUT_GAP = 20, 120  # merge gaps up to GAP s always, up to LAYOUT_GAP s while the share layout stays
+PAD = 2                    # seconds added on both sides (transitions, sampling)
 
 
-def probe(video: Path) -> tuple[float, float]:
-    """(duration, median keyframe spacing over the first minute)."""
-    duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
-                                     str(video)], check=True, capture_output=True, text=True).stdout.strip())
+def probe(video: Path) -> tuple[float, float, float]:
+    """(duration, frame rate, median keyframe spacing over the first minute)."""
+    out = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                     "format=duration:stream=avg_frame_rate", "-of", "json", str(video)],
+                                    check=True, capture_output=True, text=True).stdout)
+    num, _, den = (out.get("streams") or [{}])[0].get("avg_frame_rate", "0/0").partition("/")
+    fps = float(num) / float(den) if den and float(den) else 0.0
     keys = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey", "-show_entries",
                            "frame=pts_time", "-read_intervals", "%+60", "-of", "csv=p=0", str(video)],
                           check=False, capture_output=True, text=True).stdout.split()
     times = sorted(float(k.strip(",")) for k in keys if k.strip(",").replace(".", "", 1).isdigit())
     gaps = sorted(b - a for a, b in pairwise(times))
-    return duration, (gaps[len(gaps) // 2] if gaps else float("inf"))
+    return float(out["format"]["duration"]), fps, (gaps[len(gaps) // 2] if gaps else float("inf"))
 
 
-def column_profiles(video: Path, step: float, keyframes_only: bool):
-    """Per sampled frame: fraction of rows (10-95% of height) in Meet background colour, per column; the same
-    per row (all rows, columns 5-70% of the width: always inside a share tile); and whether the left margin
-    looks like a Meet client (dark, uniform)."""
+def frames(video: Path, step: float, keyframes_only: bool):
+    """Yield W x H rgb frames, one per `step` seconds."""
     import numpy as np
 
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
@@ -61,99 +72,119 @@ def column_profiles(video: Path, step: float, keyframes_only: bool):
     cmd += ["-i", str(video), "-an", "-sn", "-vf", f"fps=1/{step},scale={W}:{H}", "-f", "rawvideo",
             "-pix_fmt", "rgb24", "pipe:"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-    profiles, rows, margins = [], [], []
     size = W * H * 3
-    bg = 17  # Meet's dark client background as recorded; re-read from the left margin of every Meet frame
-    while True:
-        buf = proc.stdout.read(size)
-        if len(buf) < size:
-            break
-        rgb = np.frombuffer(buf, np.uint8).reshape(H, W, 3).astype(np.int16)
-        luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
-        spread = rgb.max(2) - rgb.min(2)
-        edge = luma[int(H * 0.10):int(H * 0.95), :4]
-        level = int(np.median(edge))
-        # Meet's dark grey (luma ~17 as recorded); black or lighter margins are other apps (Loom, IDEs).
-        margins.append(10 <= level <= 26 and float((np.abs(edge - level) <= 6).mean()) > 0.8)
-        if margins[-1]:
-            bg = level
-        # Luma plus low chroma, not exact RGB: compression tints the gutter next to coloured tiles.
-        mask = (np.abs(luma - bg) <= 9) & (spread <= 14)
-        profiles.append(mask[int(H * 0.10):int(H * 0.95)].mean(0))
-        rows.append(mask[:, int(W * 0.05):int(W * 0.70)].mean(1))
+    while len(buf := proc.stdout.read(size)) == size:
+        yield np.frombuffer(buf, np.uint8).reshape(H, W, 3)
     proc.wait()
     if proc.returncode:
         raise SystemExit(f"ffmpeg failed on {video}")
-    return np.array(profiles, np.float32).reshape(-1, W), np.array(rows, np.float32).reshape(-1, H), margins
 
 
-def shared_frames(cols, step: float = 2.0) -> tuple[list[bool], list[float], list[int]]:
-    """Per frame: Meet share layout? Plus the learned gutter positions (fractions of the width) and the gutter
-    column each frame matched (0: none)."""
+def features(stream) -> dict:
+    """Per frame: Meet client margin?, gutter column + its strength, tile content left/right of it, the tiles
+    right of it (tallest as a fraction of the height, how many stacked), the big tile's box, its screen votes."""
     import numpy as np
 
-    def content(c, a, b):  # non-background share of columns [a, b): tiles, not empty client background
-        return 1 - c[..., a:b].mean(-1)
-
-    # Seeds: frames whose strongest column in the window is a clean gutter with tiles on both sides.
+    keys = ("margin", "gutter", "strength", "left", "right", "film", "stack", "box", "flat", "grey", "still", "skin", "detail")
+    out = {k: [] for k in keys}
+    bg, prev, prev_raw, still = 17, None, None, 0.0
     lo, hi = int(W * WINDOW[0]), int(W * WINDOW[1])
-    peak = cols[:, lo:hi].argmax(1) + lo
-    strength = cols[np.arange(len(cols)), peak]
-    right = np.array([content(c, x + 4, int(W * 0.97)) for c, x in zip(cols, peak)])
-    left = np.array([content(c, int(W * 0.05), x - 3) for c, x in zip(cols, peak)])
-    seeds = np.bincount(peak[(strength >= 0.85) & (right > 0.25) & (left > 0.3)], minlength=W)
-    gutters: list[int] = []
-    for x in np.argsort(-seeds):
-        if seeds[x] < max(1, ceil(MIN_SEED_SECONDS / step)):
-            break
-        if all(abs(int(x) - g) > 4 for g in gutters):
-            gutters.append(int(x))
-    matched = np.zeros(len(cols), int)
-    for x in gutters:
-        # Lenient per frame: the active speaker's glow and dark shared content blur the gutter edges.
-        hit = ((cols[:, x - 3:x + 4].max(1) >= 0.5) & (content(cols, x + 4, int(W * 0.97)) > 0.25)
-               & (content(cols, int(W * 0.05), x - 3) > 0.1))
-        matched[hit & (matched == 0)] = x
-    return (matched > 0).tolist(), [round(g / W, 3) for g in sorted(gutters)], matched.tolist()
+    for raw in stream:
+        rgb = raw.astype(np.int32)
+        luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
+        spread = rgb.max(2) - rgb.min(2)
+        edge = luma[int(H * 0.10):int(H * 0.95), :2]
+        level = int(np.median(edge))
+        # Meet's dark grey (luma ~17 as recorded); black or lighter margins are other apps (Loom, IDEs).
+        margin = 10 <= level <= 26 and float((np.abs(edge - level) <= 6).mean()) > 0.8
+        if margin:
+            bg = level
+        # Luma plus low chroma, not exact RGB: compression tints the gutter next to coloured tiles.
+        mask = (np.abs(luma - bg) <= 9) & (spread <= 14)
+        cols = mask[int(H * 0.10):int(H * 0.95)].mean(0)
+        clean = np.flatnonzero(cols[lo:hi] >= 0.85)
+        x = int(clean[-1] + lo) if len(clean) else int(cols[lo:hi].argmax() + lo)  # rightmost: share|filmstrip
+        busy = np.flatnonzero(cols[:x] < 0.5)
+        x0 = int(busy[0]) if len(busy) else 0
+        rows = np.flatnonzero(mask[:, x0:max(x0 + 1, x - 1)].mean(1) < 0.5)
+        y0, y1 = (int(rows[0]), int(rows[-1]) + 1) if len(rows) else (0, H)
+        side = np.concatenate([[False], mask[:, x + 3:int(W * 0.98)].mean(1) < 0.5, [False]]).astype(np.int8)
+        edges = np.flatnonzero(np.diff(side))
+        runs = edges[1::2] - edges[::2]
+        film = float(runs.max(initial=0) / H)
+        stack = int((runs >= H * 0.08).sum())
+        inner = (slice(y0 + 3, max(y0 + 4, y1 - 3)), slice(x0 + 3, max(x0 + 4, x - 4)))  # skip borders, glow
+        tile = luma[inner]
+        if prev_raw is None or not np.array_equal(raw, prev_raw):  # duplicated frame: keep the last value
+            still = float((tile == prev[inner]).mean()) if prev is not None else 0.0
+        prev, prev_raw = luma, raw
+        r, g, b = (rgb[inner][..., c] for c in range(3))
+        values = (margin, x, float(cols[x]), float(1 - cols[int(W * 0.03):max(int(W * 0.03) + 1, x - 1)].mean()),
+                  float(1 - cols[x + 2:int(W * 0.98)].mean()), film, stack, (x0, y0, x, y1),
+                  float((np.diff(tile, axis=1) == 0).mean()) if tile.shape[1] > 1 else 0.0,
+                  float((spread[inner] <= 3).mean()), still,
+                  float(((r > 95) & (g > 40) & (b > 20) & (r - g > 15) & (r - b > 15) & (r - b < 120)).mean()),
+                  float((np.abs(np.diff(tile, axis=1)) > 20).mean()) if tile.shape[1] > 1 else 0.0)
+        for k, v in zip(keys, values):
+            out[k].append(v)
+    return {k: np.array(v) for k, v in out.items()}
 
 
-def share_box(cols, rows, matched, start: float, end: float, step: float) -> list[float] | None:
-    """[x, y, w, h] (fractions) of the share tile over a range: left of the gutter, without the dark client
-    margins around it. Loose percentiles over the range's frames: a layout change or a dark slide widens the
-    box instead of cutting content."""
+def rolling(values, window: int, q: float = 50):
+    """Centred rolling percentile (edges repeat the outermost value)."""
     import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view
 
-    idx = [i for i in range(int(start / step), min(len(cols), int(end / step) + 1)) if matched[i]]
-    if not idx:
-        return None
-    x0 = [int(np.argmax(cols[i, :matched[i]] < 0.5)) for i in idx]  # first tile column (rows 10-95% busy)
-    busy = [np.flatnonzero(rows[i] < 0.5) for i in idx]
-    y0 = [b[0] for b in busy if len(b)] or [0]
-    y1 = [b[-1] + 1 for b in busy if len(b)] or [H]
-    x, y = max(0, np.percentile(x0, 5) - 2) / W, max(0, np.percentile(y0, 5) - 2) / H
-    right, bottom = (max(matched[i] for i in idx) - 2) / W, min(H, np.percentile(y1, 95) + 2) / H
-    return [round(x, 3), round(y, 3), round(right - x, 3), round(bottom - y, 3)]
+    if window <= 1 or len(values) < 2:
+        return np.asarray(values, float)
+    half = window // 2
+    padded = np.pad(np.asarray(values, float), (half, window - 1 - half), mode="edge")
+    return np.percentile(sliding_window_view(padded, window), q, axis=1)
 
 
-def to_ranges(flags: list[bool], step: float, duration: float, gap: float = 20.0, pad: float = 4.0,
-              min_samples: int | None = None) -> list[dict]:
-    """Sampled flags (one per `step` seconds from 0) -> padded share ranges.
+def filmstrip(f: dict, step: float = 1.0):
+    """Per frame: a filmstrip right of the gutter. It is stacked or short; speaker view and galleries put
+    tall tiles side by side there."""
+    k = max(1, round(VOTE_WINDOW / step))
+    return (f["right"] > 0.25) & (rolling(((f["stack"] >= 2) | (f["film"] < 0.45)).astype(float), k) >= 0.5)
 
-    Runs shorter than min_samples (default: 4 s worth of samples) are dropped, runs closer than `gap` seconds merge,
-    confidence is the share of positive samples inside the merged run, edges are padded by `pad`."""
-    if min_samples is None:
-        min_samples = max(1, ceil(4 / step))
+
+def classify(f: dict, step: float = 1.0) -> list[bool]:
+    """Per frame: big tile + filmstrip layout whose big tile looks like a screen (2 of 4 votes)."""
+    k = max(1, round(VOTE_WINDOW / step))
+    layout = (f["strength"] >= 0.6) & (f["left"] > 0.1) & filmstrip(f, step)
+    votes = ((rolling(f["flat"], k) >= 0.5).astype(int) + (rolling(f["grey"], k) >= 0.25)
+             + (rolling(f["still"], k, 75) >= 0.6) + (rolling(f["skin"], k) < 0.1))
+    text = rolling(f["detail"], k) >= 0.005  # avatar / camera-off tiles: one circle, almost no edges
+    return (layout & text & (votes >= 2)).tolist()
+
+
+def to_ranges(flags: list[bool], step: float, duration: float, gutters=None, strip=None,
+              min_run: float = MIN_RUN, gap: float = GAP, layout_gap: float = LAYOUT_GAP, pad: float = PAD) -> list[dict]:
+    """Per-frame flags (one per `step` seconds from 0) -> padded share ranges.
+
+    Runs shorter than min_run seconds are dropped; runs closer than `gap` seconds merge, and so do runs up to
+    `layout_gap` apart when every frame between keeps the share's gutter (±8 px of 320) with a filmstrip right of it.
+    Confidence is the share of positive frames inside the merged run."""
     runs, start = [], None
     for i, flag in enumerate(list(flags) + [False]):
         if flag and start is None:
             start = i
         elif not flag and start is not None:
-            if i - start >= min_samples:
-                runs.append([start, i])  # sample indices [start, i)
+            if (i - start) * step >= min_run:
+                runs.append([start, i])  # frame indices [start, i)
             start = None
+
+    def layout_stays(a: int, b: int) -> bool:  # the active speaker's glow moves the gutter a few pixels
+        if gutters is None or strip is None or not a:
+            return False
+        x = gutters[a - 1]
+        return all(abs(int(gutters[i]) - int(x)) <= 8 and strip[i] for i in range(a, b))
+
     merged: list[list[int]] = []
     for run in runs:
-        if merged and (run[0] - merged[-1][1]) * step <= gap:
+        if merged and ((run[0] - merged[-1][1]) * step <= gap
+                       or ((run[0] - merged[-1][1]) * step <= layout_gap and layout_stays(merged[-1][1], run[0]))):
             merged[-1][1] = run[1]
         else:
             merged.append(run)
@@ -169,37 +200,56 @@ def to_ranges(flags: list[bool], step: float, duration: float, gap: float = 20.0
     return out
 
 
+def share_box(f: dict, flags: list[bool], start: float, end: float, step: float) -> list[float] | None:
+    """[x, y, w, h] (fractions) of the share tile over a range: left of the gutter, without the dark client
+    margins around it. Loose percentiles over the range's share frames: a layout change or a dark slide
+    widens the box instead of cutting content."""
+    import numpy as np
+
+    idx = [i for i in range(int(start / step), min(len(flags), int(end / step) + 1)) if flags[i]]
+    if not idx:
+        return None
+    box = np.array([f["box"][i] for i in idx], float)
+    x, y = max(0, np.percentile(box[:, 0], 5) - 1) / W, max(0, np.percentile(box[:, 1], 5) - 1) / H
+    right, bottom = (box[:, 2].max() - 1) / W, min(H, np.percentile(box[:, 3], 95) + 1) / H
+    return [round(x, 3), round(y, 3), round(right - x, 3), round(bottom - y, 3)]
+
+
+def detect(f: dict, step: float, duration: float) -> dict:
+    """Features -> the JSON contract (method, ranges with crop, share_seconds)."""
+    if not len(f["margin"]) or f["margin"].mean() < 0.6:
+        result = {"duration": round(duration, 1), "method": "full-fallback",
+                  "ranges": [{"start": 0.0, "end": round(duration, 1), "kind": "share", "confidence": 0.0}]}
+    else:
+        flags = classify(f, step)
+        ranges = to_ranges(flags, step, duration, f["gutter"], filmstrip(f, step))
+        for r in ranges:  # for shrink-video --crop: filmstrip (faces) and dark margins cut off
+            r["crop"] = share_box(f, flags, r["start"], r["end"], step)
+        result = {"duration": round(duration, 1), "method": "meet-layout", "ranges": ranges}
+    result["share_seconds"] = round(sum(r["end"] - r["start"] for r in result["ranges"]), 1)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("video", type=Path)
     parser.add_argument("--out", type=Path, help="default <video stem>.screenshare.json beside the video")
-    parser.add_argument("--step", type=float, default=15.0, help="seconds between sampled frames (default: 15)")
-    parser.add_argument("--gap", type=float, default=20.0, help="merge share ranges closer than this (s)")
-    parser.add_argument("--pad", type=float, default=4.0, help="minimum padding on both sides (s; at least --step)")
+    parser.add_argument("--step", type=float, default=1.0,
+                        help="seconds between analysed frames (default 1; never finer than the video's frame rate)")
     args = parser.parse_args()
     video = args.video.expanduser().resolve()
     if not video.is_file():
         raise SystemExit(f"not found: {video}")
     out = args.out or video.with_name(video.stem + ".screenshare.json")
 
-    duration, key_spacing = probe(video)
-    cols, rows, margins = column_profiles(video, args.step, keyframes_only=key_spacing <= args.step)
-    if not len(cols):
+    duration, fps, key_spacing = probe(video)
+    step = max(args.step, 1 / fps if fps else args.step)  # shrunk 0.5 fps files: every frame, no duplicates
+    f = features(frames(video, step, keyframes_only=key_spacing <= 1.5 * step))
+    if not len(f["margin"]):
         raise SystemExit("no frames decoded")
-    meet = sum(margins) / len(margins) >= 0.6
-    if meet:
-        flags, gutters, matched = shared_frames(cols, args.step)
-        # A full sampling interval of padding covers starts/ends between inspected frames.
-        ranges = to_ranges(flags, args.step, duration, args.gap, max(args.pad, args.step))
-        for r in ranges:  # for shrink-video --crop: filmstrip (faces) and dark margins cut off
-            r["crop"] = share_box(cols, rows, matched, r["start"], r["end"], args.step)
-        result = {"duration": round(duration, 1), "method": "meet-layout", "gutters": gutters, "ranges": ranges}
-    else:
-        result = {"duration": round(duration, 1), "method": "full-fallback",
-                  "ranges": [{"start": 0.0, "end": round(duration, 1), "kind": "share", "confidence": 0.0}]}
-    shared = sum(r["end"] - r["start"] for r in result["ranges"])
-    result["share_seconds"] = round(shared, 1)
+    result = detect(f, step, duration)
     out.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
+    shared = result["share_seconds"]
     print(f"{out}: {result['method']}, {len(result['ranges'])} ranges, {shared / 60:.1f} of {duration / 60:.1f} min "
           f"get frames ({100 * (1 - shared / duration) if duration else 0:.0f}% skipped)")
 

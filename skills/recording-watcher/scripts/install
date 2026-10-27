@@ -26,6 +26,9 @@ if [[ "${1:-}" == --check ]]; then
   for dependency in uv t3-relay; do
     PATH="$job_path" command -v "$dependency" >/dev/null && echo "ok      $dependency on job PATH" || { echo "FAIL    $dependency not on job PATH"; ok=1; }
   done
+  for dependency in ffmpeg detect-screenshare download-fathom download-leexi; do   # video check; missing -> "not assessed"
+    PATH="$job_path" command -v "$dependency" >/dev/null && echo "ok      $dependency on job PATH" || echo "warn    $dependency not on job PATH: screen share reported as not assessed"
+  done
   for helper in recording-watcher; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] && echo "ok      $helper" || { echo "FAIL    missing or stale $helper; run $script_dir/install"; ok=1; }
   done

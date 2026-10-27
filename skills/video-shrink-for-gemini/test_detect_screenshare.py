@@ -1,4 +1,4 @@
-"""detect-screenshare: range merging (pure Python) and an end-to-end run on synthetic Meet/Loom frames."""
+"""detect-screenshare: range merging (pure Python), the synthetic Meet benchmark, and the crop hand-off to shrink-video."""
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 import json
@@ -11,77 +11,77 @@ import pytest
 HERE = Path(__file__).parent
 SCRIPT = HERE / "scripts" / "detect-screenshare"
 FRAMES = HERE / "fixtures" / "screenshare"
-loader = SourceFileLoader("detect_screenshare", str(SCRIPT))
-detect = module_from_spec(spec_from_loader("detect_screenshare", loader))
-loader.exec_module(detect)
 needs_tools = pytest.mark.skipif(not all(shutil.which(t) for t in ("ffmpeg", "ffprobe", "uv")),
                                  reason="needs ffmpeg, ffprobe and uv on PATH")
 
 
-def test_ranges_merge_gaps_pad_and_drop_single_frames():
-    flags = [False] * 5 + [True] * 10 + [False] * 5 + [True] * 10 + [False] * 30 + [True] + [False] * 9
-    ranges = detect.to_ranges(flags, step=2.0, duration=140.0, gap=20.0, pad=4.0)
-    # 10-30 s and 40-60 s merge across the 10 s gap; the lone frame at 120 s is dropped.
-    assert ranges == [{"start": 6.0, "end": 64.0, "kind": "share", "confidence": 0.8}]
+def load(name: str, path: Path):
+    loader = SourceFileLoader(name, str(path))
+    module = module_from_spec(spec_from_loader(name, loader))
+    loader.exec_module(module)
+    return module
 
 
-def test_ranges_clip_to_video_and_keep_far_runs_apart():
-    flags = [True] * 3 + [False] * 20 + [True] * 4
-    ranges = detect.to_ranges(flags, step=2.0, duration=53.0, gap=20.0, pad=4.0)
-    assert [(r["start"], r["end"]) for r in ranges] == [(0.0, 10.0), (42.0, 53.0)]
-    assert detect.to_ranges([False] * 10, step=2.0, duration=20.0) == []
+detect = load("detect_screenshare", SCRIPT)
+bench = load("screenshare_bench", HERE / "benchmark" / "run")
 
 
-def video(tmp: Path, name: str, timeline: list[tuple[str, int]], gop: int) -> Path:
+def test_ranges_merge_gaps_pad_and_drop_short_runs():
+    flags = [False] * 10 + [True] * 20 + [False] * 15 + [True] * 20 + [False] * 60 + [True] * 6 + [False] * 9
+    ranges = detect.to_ranges(flags, step=1.0, duration=140.0)
+    # 10-30 s and 45-65 s merge across the 15 s gap; the 6 s blip at 125 s is dropped.
+    assert ranges == [{"start": 8.0, "end": 67.0, "kind": "share", "confidence": 0.73}]
+
+
+def test_ranges_bridge_long_gap_only_while_the_share_layout_stays():
+    flags = [True] * 30 + [False] * 60 + [True] * 30
+    kept = [233] * 120                       # e.g. a near-black terminal: content votes fail, gutter stays
+    strip = [True] * 120
+    moved = [233] * 30 + [180] * 60 + [233] * 30
+    speaker = [True] * 30 + [False] * 60 + [True] * 30   # same gutter, but tall tiles side by side: no filmstrip
+    assert len(detect.to_ranges(flags, 1.0, 120.0, kept, strip)) == 1
+    assert len(detect.to_ranges(flags, 1.0, 120.0, moved, strip)) == 2
+    assert len(detect.to_ranges(flags, 1.0, 120.0, kept, speaker)) == 2
+    assert detect.to_ranges([False] * 10, 1.0, 10.0) == []
+
+
+def test_score_counts_seconds_and_boundaries():
+    result = {"duration": 40.0, "method": "meet-layout", "ranges": [{"start": 8.0, "end": 30.0}]}
+    s = bench.score([[10, 28]], result)
+    assert (s["tp"], s["fp"], s["fn"], s["errors"]) == (18, 4, 0, [[-2, 2]])
+    assert bench.score("full", {"method": "full-fallback"})["full_ok"]
+
+
+@needs_tools
+def test_synthetic_meet_benchmark(tmp_path):
+    """Speaker view (webcam or camera off), galleries and spotlight stay unshared; slides, live UI and a dark
+    editor are found within 3 s; a plain screen recording falls back to the whole video."""
+    subprocess.run([str(HERE / "benchmark" / "make-clips"), str(tmp_path)], check=True, capture_output=True)
+    scores = bench.run(tmp_path, tmp_path / "results")
+    overall = bench.report(scores)
+    assert overall["misses"] == 0 and overall["wrong_method"] == 0
+    assert overall["recall"] >= 0.98 and overall["max_boundary_error"] <= 3
+    assert all(s["fp"] == 0 for s in scores.values() if not s["errors"])  # no share: not a single second
+    crop = scores["speaker-live-ui"]["result"]["ranges"][0]["crop"]
+    assert crop[0] < 0.03 and 0.74 <= crop[0] + crop[2] <= 0.78  # share tile, filmstrip cut off
+
+
+def video(tmp: Path, name: str, timeline: list[tuple[str, int]]) -> Path:
     listing = tmp / f"{name}.txt"
     lines = [f"file '{FRAMES / frame}.jpg'\nduration {seconds}" for frame, seconds in timeline]
     listing.write_text("\n".join(lines + [f"file '{FRAMES / timeline[-1][0]}.jpg'"]) + "\n")
     out = tmp / f"{name}.mp4"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
-                    "-vf", "fps=2,format=yuv420p", "-c:v", "libx264", "-g", str(gop), str(out)], check=True)
+                    "-vf", "fps=2,format=yuv420p", "-c:v", "libx264", "-g", "2", str(out)], check=True)
     return out
-
-
-def run(path: Path, step: float | None = 2.0) -> dict:
-    out = path.with_suffix(".json")
-    cmd = ["uv", "run", "-q", "--script", str(SCRIPT), str(path), "--out", str(out)]
-    if step is not None:
-        cmd += ["--step", str(step)]
-    subprocess.run(cmd, check=True)
-    return json.loads(out.read_text())
-
-
-@needs_tools
-def test_default_cadence_keeps_short_share_and_skips_gallery(tmp_path):
-    path = video(tmp_path, "short-share", [("meet-gallery", 15), ("meet-share", 15), ("meet-gallery", 30)], gop=2)
-    result = run(path, step=None)
-    assert result["method"] == "meet-layout"
-    assert len(result["ranges"]) == 1
-    r = result["ranges"][0]
-    assert r["start"] == 0.0 and r["end"] == 45.0
-    assert r["crop"] is not None
-    gallery = video(tmp_path, "gallery", [("meet-gallery", 30)], gop=2)
-    assert run(gallery, step=None)["ranges"] == []
-
-
-@needs_tools
-def test_meet_layout_end_to_end(tmp_path):
-    # 1 s keyframes like Fathom MP4s (keyframe-only decode path).
-    path = video(tmp_path, "meet", [("meet-gallery", 20), ("meet-share", 30), ("meet-share-dark", 10),
-                                    ("meet-gallery", 10), ("meet-spotlight", 10), ("meet-gallery", 10)], gop=2)
-    result = run(path)
-    assert result["method"] == "meet-layout"
-    assert len(result["ranges"]) == 1
-    r = result["ranges"][0]
-    assert abs(r["start"] - 16) <= 2 and abs(r["end"] - 64) <= 2
-    # Share tile at x 6-460, y 28-334 of 640x360: filmstrip and dark margins cut off.
-    assert r["crop"] == pytest.approx([0.009, 0.078, 0.71, 0.85], abs=0.015)
 
 
 @needs_tools
 def test_shrink_video_crop_fills_frame_with_share_tile(tmp_path):
-    path = video(tmp_path, "meet", [("meet-gallery", 10), ("meet-share", 30), ("meet-gallery", 10)], gop=2)
-    plan = run(path)
+    path = video(tmp_path, "meet", [("meet-gallery", 10), ("meet-share", 30), ("meet-gallery", 10)])
+    subprocess.run(["uv", "run", "-q", "--script", str(SCRIPT), str(path), "--out", str(path.with_suffix(".json"))],
+                   check=True)
+    plan = json.loads(path.with_suffix(".json").read_text())
     subprocess.run([str(HERE / "scripts" / "shrink-video"), "--crop", str(path.with_suffix(".json")), str(path)],
                    check=True, capture_output=True)
     out = tmp_path / "meet.gemini.crop.mp4"
@@ -94,11 +94,3 @@ def test_shrink_video_crop_fills_frame_with_share_tile(tmp_path):
     r = plan["ranges"][0]
     assert top_band((r["start"] + r["end"]) / 2) > 150  # the share's light title bar, not Meet's dark header
     assert top_band(4) < 60                             # gallery outside the range stays whole
-
-
-@needs_tools
-def test_other_layout_falls_back_to_full_video(tmp_path):
-    path = video(tmp_path, "loom", [("loom", 30)], gop=250)  # sparse keyframes: full-decode path
-    result = run(path)
-    assert result["method"] == "full-fallback"
-    assert result["ranges"][0]["start"] == 0.0 and result["ranges"][0]["end"] == pytest.approx(result["duration"])

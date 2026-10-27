@@ -6,7 +6,8 @@ Prerequisites: T3 Code ≥ 0.1, `t3-relay` on PATH ([relay.md](../t3-manage-thre
 1. **Skills**, registered globally the way this machine already registers `t3-manage-thread`
    (e.g. the setup repo's `ai/skills`, picked up by its daily refresh):
    `pnpm dlx skills add pjmuller/skills -s recording-watcher -g -y`, same for `recording-followups`
-   and `video-shrink-for-gemini` (screen-share narration). Then `<skill dir>/scripts/install`.
+   and `video-shrink-for-gemini` (`detect-screenshare`, `download-fathom`: the poll checks each call's video
+   for screen shares), plus `leexi` for Leexi calls. Then `<skill dir>/scripts/install` for each.
 2. **Keys** into the owning project's mise env file `~/.config/mise-env/<org>/<repo>.env` (create it
    chmod 600 if missing; never in a repo, the config or the roster): `FATHOM_API_KEY=`,
    `LEEXI_KEY_ID=` + `LEEXI_KEY_SECRET=`, or `MONOLOGUE_API_KEY=`. Never echo values back.

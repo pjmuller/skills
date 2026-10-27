@@ -1,0 +1,106 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Score detect-screenshare against labelled clips: share-second precision/recall and boundary error.
+
+DIR/labels.json maps a clip name to {"video": path (absolute or relative to DIR), "shares": [[start, end], ...]
+seconds with a share layout on screen | "full" (not a Meet recording: expect full-fallback), "layout": note}.
+Synthetic set: `make-clips DIR` (public). Real calls stay private, outside git (README.md).
+
+Boundary error per labelled share: predicted start minus true start and predicted end minus true end of the
+ranges overlapping it (positive = later; padding shows as -2/+2); "miss" if none overlaps.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+DETECT = Path(__file__).resolve().parent.parent / "scripts" / "detect-screenshare"
+
+
+def score(label, result: dict) -> dict:
+    """One clip: true/false positive and missed seconds, boundary errors, verdict for non-Meet clips."""
+    if label == "full":
+        return {"full_ok": result["method"] == "full-fallback", "tp": 0, "fp": 0, "fn": 0, "errors": []}
+    n = int(result["duration"]) + 1
+    truth, pred = [False] * n, [False] * n
+    for a, b in label:
+        truth[int(a):min(n, int(b))] = [True] * (min(n, int(b)) - int(a))
+    for r in result["ranges"]:
+        a, b = int(r["start"]), min(n, int(r["end"]))
+        pred[a:b] = [True] * max(0, b - a)
+    errors = []
+    for a, b in label:
+        hit = [r for r in result["ranges"] if r["start"] < b and r["end"] > a]
+        errors.append([round(min(r["start"] for r in hit) - a), round(max(r["end"] for r in hit) - b)] if hit else "miss")
+    return {"tp": sum(t and p for t, p in zip(truth, pred)), "fp": sum(p and not t for t, p in zip(truth, pred)),
+            "fn": sum(t and not p for t, p in zip(truth, pred)), "errors": errors,
+            "full_ok": result["method"] == "meet-layout"}
+
+
+def run(directory: Path, out: Path, jobs: int = 4) -> dict:
+    """Detect every clip in directory/labels.json (results in `out`), return {name: score + result}."""
+    labels = json.loads((directory / "labels.json").read_text())
+    out.mkdir(parents=True, exist_ok=True)
+
+    def one(name: str) -> tuple[str, dict]:
+        spec = labels[name]
+        video = Path(spec["video"]).expanduser()
+        video = video if video.is_absolute() else directory / video
+        dest = out / f"{name}.json"
+        subprocess.run([str(DETECT), str(video), "--out", str(dest)], check=True, capture_output=True)
+        result = json.loads(dest.read_text())
+        return name, {**score(spec["shares"], result), "layout": spec.get("layout", ""), "result": result}
+
+    with ThreadPoolExecutor(jobs) as pool:
+        return dict(pool.map(one, [n for n in labels if not n.startswith("_")]))
+
+
+def report(scores: dict) -> dict:
+    """Print per clip and overall; return the overall numbers."""
+    tp = sum(s["tp"] for s in scores.values()); fp = sum(s["fp"] for s in scores.values())
+    fn = sum(s["fn"] for s in scores.values())
+    worst = 0
+    for name, s in scores.items():
+        flat = [abs(e) for pair in s["errors"] if pair != "miss" for e in pair]
+        worst = max([worst, *flat])
+        method = s["result"]["method"]
+        if not s["full_ok"]:
+            line = f"WRONG method {method}"
+        elif method == "full-fallback":
+            line = "full-fallback OK"
+        else:
+            p = s["tp"] / (s["tp"] + s["fp"]) if s["tp"] + s["fp"] else 1.0
+            r = s["tp"] / (s["tp"] + s["fn"]) if s["tp"] + s["fn"] else 1.0
+            line = f"P={p:.2f} R={r:.2f} fp={s['fp']}s fn={s['fn']}s boundary={s['errors']}"
+        print(f"{name:28} {line}   [{s['layout']}]")
+    overall = {"precision": tp / (tp + fp) if tp + fp else 1.0, "recall": tp / (tp + fn) if tp + fn else 1.0,
+               "max_boundary_error": worst, "misses": sum(e == "miss" for s in scores.values() for e in s["errors"]),
+               "wrong_method": sum(not s["full_ok"] for s in scores.values())}
+    print(f"OVERALL precision {overall['precision']:.3f} recall {overall['recall']:.3f} (share seconds {tp + fn}) · "
+          f"max boundary error {worst} s · missed shares {overall['misses']} · wrong method {overall['wrong_method']}")
+    return overall
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("dir", type=Path, help="directory with labels.json")
+    parser.add_argument("--out", type=Path, help="detector JSONs (default DIR/results)")
+    parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--min-precision", type=float, default=0.0)
+    parser.add_argument("--min-recall", type=float, default=0.0)
+    args = parser.parse_args()
+    overall = report(run(args.dir, args.out or args.dir / "results", args.jobs))
+    ok = (overall["precision"] >= args.min_precision and overall["recall"] >= args.min_recall
+          and not overall["wrong_method"])
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

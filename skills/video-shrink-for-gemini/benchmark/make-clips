@@ -1,0 +1,166 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=1.26"]
+# ///
+"""Write synthetic Google-Meet-like clips plus labels.json for benchmark/run (no real person, name or UI).
+
+Each clip is a timeline of layouts drawn the way a Meet bot records them: dark client background, top bar,
+rounded-ish tiles split by gutters. Webcam tiles move and carry sensor noise, avatar tiles are a circle on
+grey, screen tiles are light slides, a scrolling web app or a dark editor. Labels are exact: the seconds the
+presentation layout is on screen. Audio: none.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+from pathlib import Path
+
+import numpy as np
+
+W, H, FPS = 640, 360, 2
+BG = (18, 18, 20)                   # Meet client background as recorded (luma ~18)
+
+
+def tile_rects(layout: str) -> tuple[list, list]:
+    """(screen tile rects, person tile rects) as [x0, y0, x1, y1] fractions."""
+    if layout.startswith("share"):  # share{k}-{gutter}: big tile, k filmstrip tiles right of the gutter
+        k, gutter = int(layout[5]), float(layout.split("-")[1])
+        h = 0.255 * W * 9 / 16 / H
+        top = 0.5 - (k * h + (k - 1) * 0.02) / 2
+        film = [[gutter + 0.012, top + i * (h + 0.02), 0.99, top + i * (h + 0.02) + h] for i in range(k)]
+        return [[0.012, 0.08, gutter - 0.006, 0.92]], film
+    if layout.startswith("gallery"):
+        n = int(layout[7]); w = (0.98 - 0.02 - (n - 1) * 0.01) / n; h = min(0.84, w * W * 9 / 16 / H)
+        return [], [[0.02 + i * (w + 0.01), 0.5 - h / 2, 0.02 + i * (w + 0.01) + w, 0.5 + h / 2] for i in range(n)]
+    if layout == "grid":
+        return [], [[x, y, x + 0.47, y + 0.41] for y in (0.08, 0.51) for x in (0.02, 0.505)]
+    if layout == "speaker":         # 2-person call + bot: big other speaker, self and bot tiles on the right
+        return [], [[0.014, 0.28, 0.532, 0.80], [0.54, 0.28, 0.763, 0.80], [0.77, 0.28, 0.99, 0.80]]
+    if layout == "spotlight":
+        return [], [[0.05, 0.08, 0.95, 0.94]]
+    raise ValueError(layout)
+
+
+def webcam(h: int, w: int, t: float, seed: int, rng) -> np.ndarray:
+    y = np.linspace(0, 1, h)[:, None, None]
+    wall = np.array([205, 195, 180]) * (1 - 0.35 * y) + seed * 7 % 30
+    img = np.broadcast_to(wall, (h, w, 3)).copy()
+    cx, cy = w * (0.5 + 0.06 * np.sin(t * 0.9 + seed)), h * (0.45 + 0.03 * np.sin(t * 1.7 + seed))
+    yy, xx = np.mgrid[:h, :w]
+    face = ((xx - cx) / (0.16 * w)) ** 2 + ((yy - cy) / (0.26 * h)) ** 2 <= 1
+    shade = 1 - 0.25 * (xx - cx) / w
+    img[face] = (np.array([212, 156, 128]) * shade[face][:, None])
+    img[(yy > cy + 0.24 * h) & (np.abs(xx - cx) < 0.3 * w)] = (40, 52, 90)
+    img += rng.normal(0, 4, img.shape)  # sensor noise: no two frames match
+    return img
+
+
+def avatar(h: int, w: int) -> np.ndarray:
+    img = np.full((h, w, 3), (60, 64, 67), float)
+    yy, xx = np.mgrid[:h, :w]
+    img[(xx - w / 2) ** 2 + (yy - h / 2) ** 2 <= (0.18 * h) ** 2] = (200, 110, 60)
+    return img
+
+
+def screen(h: int, w: int, t: float, kind: str, rng_seed: int) -> np.ndarray:
+    dark = kind == "dark"
+    img = np.full((h, w, 3), (30, 31, 34) if dark else (250, 250, 250), float)
+    img[: max(4, h // 14)] = (45, 47, 52) if dark else (222, 226, 232)            # title / address bar
+    if kind == "live":
+        img[:, : w // 6] = (241, 243, 246)                                       # sidebar
+    page = int(t // 8) if kind == "slides" else 0
+    scroll = int(t) * 6 if kind == "live" else 0
+    rng = np.random.default_rng(rng_seed + page)
+    x0 = w // 5 if kind == "live" else w // 14
+    for row in range(-scroll // 9, h // 9 + 2):
+        y = h // 7 + row * 9 + scroll
+        if not h // 7 <= y < h - 4:
+            continue
+        r = np.random.default_rng(rng_seed * 1000 + row)
+        x, end = x0, x0 + int(r.uniform(0.3, 0.8) * (w - x0 - 8))
+        while x < end:                                                            # words of glyph strokes
+            word = int(r.integers(6, 22))
+            colour = (r.choice([200, 120, 230]), r.choice([200, 180, 130]), r.choice([200, 90, 250])) if dark else (60, 64, 67)
+            img[y:y + 3, x:min(end, x + word)] = colour
+            img[y + 1, x + 2:min(end, x + word):4] = img[0, 0]                    # gaps inside glyph runs
+            x += word + 5
+    if kind == "live":                                                            # button + moving pointer
+        img[h - 20:h - 10, w // 5:w // 5 + 40] = (26, 115, 232)
+        px, py = int(w * (0.3 + 0.2 * np.sin(t))), int(h * 0.6)
+        img[py:py + 8, px:px + 3] = 0
+    del rng
+    return img
+
+
+def frame(segment: dict, t: float, rng) -> np.ndarray:
+    if segment["layout"] == "nonmeet":
+        return screen(H, W, t, "live", 7).clip(0, 255).astype(np.uint8)
+    img = np.empty((H, W, 3), float); img[:] = BG
+    img[10:15, 10:60] = (200, 200, 200); img[10:15, 66:120] = (200, 200, 200)  # top bar: clock | code
+    screens, people = tile_rects(segment["layout"])
+    for x0, y0, x1, y1 in screens:
+        a, b, c, d = int(x0 * W), int(y0 * H), int(x1 * W), int(y1 * H)
+        img[b:d, a:c] = screen(d - b, c - a, t, segment["screen"], 3)
+    for i, (x0, y0, x1, y1) in enumerate(people):
+        a, b, c, d = int(x0 * W), int(y0 * H), int(x1 * W), int(y1 * H)
+        kind = segment.get("people", "webcam")
+        if i == len(people) - 1 and segment["layout"] in ("speaker", "grid") or (kind == "avatar" and i == 0):
+            img[b:d, a:c] = avatar(d - b, c - a) if kind == "avatar" and i == 0 else (22, 32, 48)  # bot / camera off
+        else:
+            img[b:d, a:c] = webcam(d - b, c - a, t, i, rng)
+        img[b:b + 2, a:a + 2] = BG; img[b:b + 2, c - 2:c] = BG; img[d - 2:d, a:a + 2] = BG; img[d - 2:d, c - 2:c] = BG
+    return img.clip(0, 255).astype(np.uint8)
+
+
+# name: (segments [(seconds, layout, extra)], keyframe spacing in s: 1 like Fathom, 50 sparse like Leexi)
+CLIPS = {
+    "speaker-webcam": ([(30, "speaker", {})], 1),
+    "speaker-camera-off": ([(30, "speaker", {"people": "avatar"})], 50),
+    "gallery3": ([(30, "gallery3", {})], 50),
+    "gallery4": ([(30, "gallery4", {})], 1),
+    "spotlight": ([(30, "spotlight", {})], 1),
+    "gallery2-slides": ([(8, "gallery2", {}), (20, "share2-0.73", {"screen": "slides"}), (8, "gallery2", {})], 50),
+    "grid-dark-editor": ([(6, "grid", {}), (24, "share3-0.77", {"screen": "dark"}), (6, "grid", {})], 1),
+    "speaker-live-ui": ([(10, "speaker", {}), (24, "share2-0.77", {"screen": "live"}), (6, "speaker", {})], 1),
+    "share-speaker-share": ([(20, "share2-0.77", {"screen": "slides"}), (60, "speaker", {}),
+                            (20, "share2-0.77", {"screen": "slides"})], 1),   # same gutter: must stay apart
+    "gallery3-short-demo": ([(10, "gallery3", {}), (12, "share3-0.73", {"screen": "live"}), (10, "gallery3", {})], 50),
+    "screen-recording": ([(20, "nonmeet", {})], 1),
+}
+
+
+def write(name: str, segments, gop: int, out: Path) -> dict:
+    rng = np.random.default_rng(len(name))
+    path = out / f"{name}.mp4"
+    proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                             "-s", f"{W}x{H}", "-r", str(FPS), "-i", "pipe:", "-c:v", "libx264", "-crf", "23",
+                             "-g", str(gop * FPS), "-pix_fmt", "yuv420p", str(path)], stdin=subprocess.PIPE)
+    t0, shares = 0, []
+    for seconds, layout, extra in segments:
+        seg = {"layout": layout, "screen": "slides", **extra}
+        for i in range(seconds * FPS):
+            proc.stdin.write(frame(seg, t0 + i / FPS, rng).tobytes())
+        if layout.startswith("share"):
+            shares.append([t0, t0 + seconds])
+        t0 += seconds
+    proc.stdin.close()
+    if proc.wait():
+        raise SystemExit(f"ffmpeg failed for {name}")
+    full = segments[0][1] == "nonmeet"
+    return {"video": path.name, "layout": " → ".join(s[1] for s in segments), "shares": "full" if full else shares}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("out", type=Path, help="directory for the clips and labels.json")
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+    labels = {name: write(name, segs, gop, args.out) for name, (segs, gop) in CLIPS.items()}
+    (args.out / "labels.json").write_text(json.dumps(labels, indent=1) + "\n")
+    print(f"{len(labels)} clips + labels.json in {args.out}")
+
+
+if __name__ == "__main__":
+    main()
