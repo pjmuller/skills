@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-27 — bitwarden: unlock retries in the same Terminal, text Sends with Touch ID
+
+- Terminal flow: a refused `bw unlock` gets up to 3 human-chosen attempts in the same window (CLI re-checked locked + same account between them; Return = again, n/Ctrl-C/EOF = cancel); the prompt names the vault's account email. Budget 5 min approval (was 6), 3 min for all attempts, 60 s operation; launcher waits the sum + 20 s (< 10 min tool call). Failure JSON gains `stage` and `retry_safe` (`false` after a possibly-created Send or an unverified lock); Ctrl-C, timeout and agent-side stop get distinct messages. Why: one mistyped password ended the whole request, and a "Cryptography error" looked like a dead end.
+- "Cryptography error, The decryption operation failed" documented (SKILL.md#unlock-refused): current bw unlocks via the SDK and prints this raw when the typed password does not open the locally stored key; usually a typo or another account's password, rarely stale local CLI data (human-decided `bw logout` + `bw-once login`, never automatic).
+- `send-text` goes to the Touch ID broker when the target vault is enrolled (`--thread`/`--why` claim): broker validates and freezes name/text/views/date before any window, rejects invisible/bidi/control characters, keeps the text behind **Show text** (screen recordings), creates once with no retry (ambiguous failures `retry_safe: false`), locks + verifies before returning the link. File Sends stay on the Terminal (`bw serve` refuses them). Why: enrolled users asked why a Send still needed the master password.
+
 ## 2026-10-27 — recording-followups: the overview lists only what is left to trigger
 
 - `recording-followups/SKILL.md` Deliverables: `followup-prompts.md` holds only prompts the user still has to launch or approve, each identical to its prompt file. An item leaves once its launch, handoff or completion is verified (even while the worker runs); prompt files stay, ids/links go to the debrief or a manifest. Nothing pending → no overview, or one line "No follow-ups left to trigger". The debrief status splits decisions waiting on the user from follow-ups already running; decisions owned by another thread are linked, not requeued. Why: overviews kept every launched and finished item, so the user re-read done work to find the one decision still theirs.

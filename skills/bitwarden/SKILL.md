@@ -59,8 +59,10 @@ Afterwards: the site's logout in the same tab ([session.md](session.md#browser-c
 - **Session holder**: `bw-once session start --ttl 60m --host a.example.com [--reason …]` (the human unlocks once;
   `--host` required, max 240 min); the same `list`/`copy` commands then use it. `session status|stop`.
 - **Per request**: `list`/`copy`/`send-*` open a real macOS Terminal (zsh/bash; fish unsupported), lock and
-  verify, show the request, the human presses Return and types the master password into official `bw unlock`. It waits
-  6 min for approval, then 180 s: **tell the human first**, run with a 10-minute timeout or in the background.
+  verify, show the request, the human presses Return and types the master password into official `bw unlock`; a
+  refused password gets up to 3 attempts in the same window (Return = again, n/Ctrl-C/Ctrl-D = cancel). Budget: 5 min
+  to approve, 3 min for all attempts, 60 s for the operation: **tell the human first** (which account's master
+  password: the vault's `email`, not the Mac login), run with a 10-minute timeout or in the background.
   Delivery is clipboard only (30 s auto-clear; `bw-once clear` right after the paste). `copy` without `--id`
   needs exactly one match (narrow with `--username`). The CLI is locked and verified before any delivery; a lock
   failure withholds the result: lock manually.
@@ -83,13 +85,17 @@ Touch ID searches every enrolled vault unless `--vault` is given.
 ## Send
 
 ```sh
-bw-once send-text --input-file /path/to/message.txt --name 'Account details'
+bw-once send-text --input-file /path/to/message.txt --name 'Account details' --thread "<title>" --why "<one line>"
 bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1 --days 7
 ```
 
-Approval shows exact text (or file name/bytes/SHA-256), views (default 1, max 100), expiry (default 7 days,
-`--days 1-31`); input is frozen before review. Caps: 600 UTF-8 text bytes, 50 MiB files (Premium). Return only
-UUID/link/expiry/deletion/views.
+Text Sends go to the **Touch ID broker** when the target vault (`--vault`, else the default) is enrolled: one window
+with the phrase, name, views, expiry date and the text behind Show text, one touch ([touchid.md](touchid.md), Send). File Sends, and
+vaults without Touch ID, use the Terminal (`bw serve` cannot create file Sends). Terminal approval shows exact text (or
+file name/bytes/SHA-256), views (default 1, max 100), expiry (default 7 days, `--days 1-31`); input is frozen before
+review. Caps: 600 UTF-8 text bytes (no invisible/bidi characters via Touch ID), 50 MiB files (Premium). Return only
+UUID/link/expiry/deletion/views. Failure JSON carries `stage` and `retry_safe`: `retry_safe: false` = a Send may
+exist (or the lock is unverified): **never ask again before the human checked the vault's Sends**.
 
 ## Install and health
 
@@ -97,9 +103,21 @@ UUID/link/expiry/deletion/views.
 downloads Bitwarden's signed CLI; it does not register the skill globally. Needs macOS, `uv`, `curl`, Xcode CLT.
 Start with `bw-once doctor` (no unlock). `status: unauthenticated` (never logged in, or refresh token expired after
 months without sync) → `bw-once [--vault N] login` opens the human Terminal for official `bw login` (password + 2FA
-typed there), then locks. Failures name the bw step (`bw unlock failed` = wrong
-password or cancelled). Bitwarden's own CLI Touch ID (server flag `biometrics-sdk-ipc`, `doctor` →
+typed there), then locks. Failures name the bw step plus `stage`/`retry_safe` ([unlock refused](#unlock-refused)).
+Bitwarden's own CLI Touch ID (server flag `biometrics-sdk-ipc`, `doctor` →
 `touch_id_flag`) is still off; the broker does not need it.
 
 References: [CLI](https://bitwarden.com/help/cli/) · [Send CLI](https://bitwarden.com/help/send-cli/) ·
 [Send limits](https://bitwarden.com/help/create-send/).
+
+## Unlock refused
+
+Current `bw` unlocks through Bitwarden's SDK and prints its raw error: **"Cryptography error, The decryption
+operation failed" means the typed password did not open this CLI context's stored account key**, not a server
+verdict ([unlock.command.ts](https://github.com/bitwarden/clients/blob/main/apps/cli/src/key-management/commands/unlock.command.ts)).
+Usually a typo or another account's password (Mac login, Google, PIN, the other vault's master password): name the
+vault's `email` and let the human retry in the same Terminal. The human is sure it is right (it works in the app) →
+the CLI's local login data may be stale (e.g. KDF/encryption changed in another app): the human, not the agent,
+decides to log that CLI context out (`bw logout` with the vault's `BITWARDENCLI_APPDATA_DIR`) and run
+`bw-once --vault N login`; that deletes only the local CLI cache, never vault data. `retry_safe: true` failures may
+simply be asked again.

@@ -29,8 +29,10 @@ from urllib.parse import urlsplit
 from urllib.request import urlopen
 import uuid
 
-WAIT_SECONDS = 360  # Vault still locked: time for the human to reach the Terminal and approve.
-AUTH_SECONDS = 180  # From approval: unlock, operation, lock. Launcher waits both + 20 s, under a 10-minute tool call.
+WAIT_SECONDS = 300  # Vault still locked: time for the human to reach the Terminal and approve.
+UNLOCK_SECONDS = 180  # From approval: every unlock attempt; a refused one is retried in the same Terminal.
+UNLOCK_ATTEMPTS = 3
+OPERATION_SECONDS = 60  # From unlock: the one operation, then lock. The launcher waits all three + 20 s (< 10 min).
 TTL_DEFAULT_MINUTES = 60
 TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
@@ -38,11 +40,24 @@ TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit
 BROKER_SECONDS = 330  # The broker releases nothing once 300 s passed since its start (renewal panels included).
 SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
+# bw >= 2026 unlocks through Bitwarden's SDK and prints its raw error: a password that doesn't open the locally
+# stored account key reads "Cryptography error, The decryption operation failed" (no "Invalid master password").
+UNLOCK_HINT = ("\"Cryptography error, The decryption operation failed\" = the typed password did not open this "
+               "account's stored key: usually a typo or another account's password, rarely stale local CLI data "
+               "(bitwarden skill SKILL.md#unlock-refused)")
 DEFAULT_MATCHES = {"base_domain": 0, "host": 1, "exact": 3, "never": 5}
 
 
 class Failure(Exception):
-    pass
+    """`details` reach the agent's JSON: `stage` (where it stopped) and `retry_safe` (asking again cannot duplicate)."""
+
+    def __init__(self, message, **details):
+        super().__init__(message)
+        self.details = details
+
+
+class Refused(Failure):
+    """Interactive `bw unlock`/`bw login` exited non-zero; its own message is already in the human's Terminal."""
 
 
 @contextmanager
@@ -221,7 +236,7 @@ class Vault:
                                     stdin=None if unlock or data is not None else subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
                                     stderr=None if unlock else subprocess.DEVNULL,
-                                    env=env, timeout=AUTH_SECONDS if unlock else 60)
+                                    env=env, timeout=UNLOCK_SECONDS if unlock else 60)
         except subprocess.TimeoutExpired:
             raise Failure("Bitwarden operation timed out") from None
         finally:
@@ -229,8 +244,9 @@ class Vault:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, terminal)
         if result.returncode:
             step = args[0] if args[0] in ("unlock", "login", "sync", "list", "get", "send", "lock", "status", "config") else "operation"
-            hint = " (wrong master password or cancelled?)" if step in ("unlock", "login") else "; inspect manually while locked"
-            raise Failure(f"bw {step} failed{hint}")
+            if unlock:
+                raise Refused(f"bw {step} failed (its message was shown in the Terminal)")
+            raise Failure(f"bw {step} failed; inspect manually while locked")
         return result.stdout
 
     def json(self, *args, **kwargs):
@@ -251,12 +267,23 @@ class Vault:
         if expected and str(status.get("userEmail") or "").lower() != expected:
             raise Failure(f"Vault '{self.config['name']}' CLI context is signed in as another account")
 
-    def unlock(self, request):
-        """Official interactive `bw unlock` in the human Terminal (Touch ID requests go to the broker instead)."""
-        key = self.call("unlock", "--raw", unlock=True)
-        key = key.decode().strip()
+    def unlock(self, again=None):
+        """Official interactive `bw unlock` in the human Terminal (Touch ID requests go to the broker instead).
+        A refused attempt has run nothing, so `again(attempt, email)` lets the human retry in the same Terminal."""
+        for attempt in range(1, UNLOCK_ATTEMPTS + 1):
+            try:
+                key = self.call("unlock", "--raw", unlock=True).decode().strip()
+                break
+            except Refused:
+                if attempt == UNLOCK_ATTEMPTS or again is None:
+                    raise Failure(f"bw unlock refused the master password ({attempt} attempt(s)); nothing ran. "
+                                  + UNLOCK_HINT, stage="unlock", retry_safe=True, attempts=attempt) from None
+                self.locked()  # Still locked and the same account before the human types again.
+                if not again(attempt, self.config.get("email")):
+                    raise Failure(f"Cancelled after {attempt} refused unlock attempt(s); nothing ran. " + UNLOCK_HINT,
+                                  stage="unlock", retry_safe=True, attempts=attempt) from None
         if not key or not re.fullmatch(r"[A-Za-z0-9+/=]+", key):
-            raise Failure("Unlock did not return a session")
+            raise Failure("Unlock did not return a session", stage="unlock", retry_safe=True)
         self.session = key
 
     def relock(self):
@@ -266,12 +293,14 @@ class Vault:
                 self.locked()  # Keep the former session for this verification.
             except Failure as error:
                 if "logged out" in str(error):
-                    raise Failure(f"Nothing to lock: {error}") from None
+                    raise Failure(f"Nothing to lock: {error}", stage="lock", retry_safe=False) from None
                 if "another account" in str(error):
-                    raise
-                raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
+                    raise Failure(str(error), stage="lock", retry_safe=False) from None
+                raise Failure("CLI lock verification failed; result withheld, lock manually now",
+                              stage="lock", retry_safe=False) from None
             except Exception:
-                raise Failure("CLI lock verification failed; result withheld, lock manually now") from None
+                raise Failure("CLI lock verification failed; result withheld, lock manually now",
+                              stage="lock", retry_safe=False) from None
             finally:
                 self.session = None
 
@@ -355,15 +384,32 @@ def confirm(request, payload, account=None):
         review = {key: payload[key] for key in ("name", "maxAccessCount", "deletionDate", "expirationDate")}
         review.update(payload.get("_review", {"exact_text": payload.get("text", {}).get("text")}))
         print(json.dumps(review, ensure_ascii=True), flush=True)
-    # Return approves: the master password typed next is the real consent. Read without echo, so a password
-    # typed here too early is neither shown nor used. Touch ID replaces bw's password prompt only once Bitwarden
-    # enables `biometrics-sdk-ipc` for the account's server (`bw-once doctor` → touch_id_flag).
-    answer = getpass.getpass("Press Return to continue, n = cancel (no password here): ")
+    # Return approves: the master password typed next is the real consent. Touch ID replaces bw's password prompt
+    # only once Bitwarden enables `biometrics-sdk-ipc` for the account's server (`bw-once doctor` → touch_id_flag).
+    return press_return("Press Return to continue, n = cancel (no password here): ")
+
+
+def press_return(prompt):
+    """Return/y = yes. Read without echo, so a password typed here too early is neither shown nor used; EOF = no."""
+    try:
+        answer = getpass.getpass(prompt)
+    except EOFError:
+        print("\nInput closed; request cancelled.", flush=True)
+        return False
     if answer.strip().lower() in ("", "y", "yes"):
         return True
     if answer.strip().lower() not in ("n", "no"):
         print("Unexpected input discarded unseen; request cancelled.", flush=True)
     return False
+
+
+def unlock_again(attempt, email):
+    """After a refused `bw unlock` (its message is just above): explain, then the human chooses to retry."""
+    account = email or "this vault's account"
+    print(f"\nbw unlock did not unlock (attempt {attempt} of {UNLOCK_ATTEMPTS}); nothing ran. Type the Bitwarden "
+          f"master password of {account} (not your Mac login, Google password or a PIN).\n"
+          + UNLOCK_HINT + ".", flush=True)
+    return press_return(f"Return = try again ({UNLOCK_ATTEMPTS - attempt} left), n = cancel: ")
 
 
 @lru_cache(maxsize=1)
@@ -549,7 +595,10 @@ def login_transaction(vault, request, ask=confirm):
         if "server" in vault.config:
             vault.call("config", "server", vault.config["server"])
         try:
-            key = vault.call("login", email, "--raw", unlock=True).decode().strip()
+            try:
+                key = vault.call("login", email, "--raw", unlock=True).decode().strip()
+            except Refused as error:
+                raise Failure(f"{error}; nothing changed, ask again", stage="login", retry_safe=True) from None
             vault.session = key if re.fullmatch(r"[A-Za-z0-9+/=]+", key) else None
         finally:
             vault.relock()
@@ -557,27 +606,38 @@ def login_transaction(vault, request, ask=confirm):
     return {"vault": request["vault"], "status": "locked"}
 
 
-def transaction(vault, request, ask=confirm, deliver=clipboard):
+def transaction(vault, request, ask=confirm, deliver=clipboard, again=None, unlocked=lambda: None):
     request = validate(request)
     same_vault(vault, request)
-    with mutex(request["vault"]):
-        if request["op"] == "copy" and deliver is clipboard and not (ROOT / "clipboard").is_file():
-            raise Failure("Clipboard helper missing; run installer first")
-        vault.relock()
-        try:
-            if request["op"] in ("list", "copy"):
-                vault.call("sync")
-                vault.locked()
-            with snapshot(request) as payload:
-                if not ask(request, payload, vault.config.get("email")):
-                    raise Failure("Request cancelled")
-                vault.unlock(request)
-                result, secret = operate(vault, request, payload)
-        finally:
+    stage = "prepare"
+    try:
+        with mutex(request["vault"]):
+            if request["op"] == "copy" and deliver is clipboard and not (ROOT / "clipboard").is_file():
+                raise Failure("Clipboard helper missing; run installer first")
             vault.relock()
-        if secret is not None:
-            deliver(secret)
-        return result
+            try:
+                if request["op"] in ("list", "copy"):
+                    vault.call("sync")
+                    vault.locked()
+                with snapshot(request) as payload:
+                    stage = "approval"
+                    if not ask(request, payload, vault.config.get("email")):
+                        raise Failure("Request cancelled")
+                    stage = "unlock"
+                    vault.unlock(again)
+                    unlocked()
+                    stage = "operation"
+                    result, secret = operate(vault, request, payload)
+            finally:
+                vault.relock()
+            if secret is not None:
+                deliver(secret)
+            return result
+    except Failure as error:
+        # Read-only operations can always be asked again; a Send whose create may have run cannot.
+        error.details.setdefault("stage", stage)
+        error.details.setdefault("retry_safe", stage != "operation" or not request["op"].startswith("send-"))
+        raise
 
 
 def broker(request):
@@ -598,10 +658,24 @@ def broker(request):
         if "pick" not in result and "recopy_until" not in result:  # Else it keeps running (pick / re-copies).
             child.wait(10)
         return result
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired, Failure) as error:  # Failure: Ctrl-C/SIGTERM while waiting.
+        if request["op"] == "send-text":
+            raise Failure(f"{error if isinstance(error, Failure) else 'Touch ID broker did not answer'}; a Send may "
+                          "exist: check the vault's Sends before asking again", stage="unknown", retry_safe=False) from None
+        if isinstance(error, Failure):
+            raise
         raise Failure("Touch ID broker failed; nothing released") from None
     finally:
         child.stdout.close()
+
+
+def broker_send(request, claim, vaults):
+    """Text Send with one touch: the broker validates, shows, dates and creates it; this process only forwards."""
+    request = validate(request)
+    with snapshot(request) as payload:
+        text = payload["text"]["text"]
+    return broker({"op": "send-text", "vaults": vaults, "name": request["name"], "views": request["views"],
+                   "days": request["days"], "text": text, **{key: value for key, value in claim.items() if value}})
 
 
 def submit_pick(token, item):
@@ -685,9 +759,12 @@ def broker_vaults(name=None):
     return vaults
 
 
-def broker_enrolled(vaults):
-    return bool(vaults) and sys.platform == "darwin" and (ROOT / "bw-broker").is_file() and \
-        broker({"op": "status", "vaults": vaults}).get("enrolled") is True
+def broker_enrolled(vaults, name=None):
+    """Touch ID is set up (for vault `name` when given: a Send goes to that one vault only)."""
+    if not vaults or sys.platform != "darwin" or not (ROOT / "bw-broker").is_file():
+        return False
+    status = broker({"op": "status", "vaults": vaults})
+    return status.get("enrolled") is True and (name is None or name in status.get("vaults", []))
 
 
 class Stop(Exception):
@@ -796,7 +873,7 @@ def serve_session(vault, request, announce=lambda status: None, deliver=clipboar
 
 
 def session_transaction(vault, request, ask=confirm, announce=lambda status: None, deliver=clipboard,
-                        audit=lambda line: None):
+                        audit=lambda line: None, again=None):
     request = validate(request)
     same_vault(vault, request)
     with mutex(request["vault"]):
@@ -806,7 +883,7 @@ def session_transaction(vault, request, ask=confirm, announce=lambda status: Non
             vault.locked()
             if not ask(request, None, vault.config.get("email")):
                 raise Failure("Request cancelled")
-            vault.unlock(request)
+            vault.unlock(again)
             serve_session(vault, request, announce, deliver, audit)
         finally:
             vault.relock()
@@ -889,14 +966,17 @@ def touch_id_flag(vault):
         return None
 
 
-def interrupted(*_):
-    raise Failure("Request interrupted or timed out")
+def interrupted(signum, _frame=None):
+    raise Failure({signal.SIGINT: "Cancelled with Ctrl-C",
+                   signal.SIGALRM: f"Timed out (approval {WAIT_SECONDS // 60} min, unlock attempts "
+                                   f"{UNLOCK_SECONDS // 60} min, operation {OPERATION_SECONDS} s)",
+                   signal.SIGTERM: "Stopped: the agent side stopped waiting"}.get(signum, "Request interrupted"))
 
 
 def timed_confirm(*args):
-    """The human may take WAIT_SECONDS to show up (vault locked); unlocking gets AUTH_SECONDS from approval."""
+    """The human may take WAIT_SECONDS to show up (vault locked); all unlock attempts get UNLOCK_SECONDS from approval."""
     approved = confirm(*args)
-    signal.alarm(AUTH_SECONDS)
+    signal.alarm(UNLOCK_SECONDS)
     return approved
 
 
@@ -921,13 +1001,15 @@ def worker(directory):
                       f"{status['hosts'] or 'any'}. "
                       "Each request is logged below; Ctrl-C or `bw-once session stop` locks earlier.", flush=True)
             result = {"ok": True, **session_transaction(Vault(request["vault"]), request, ask=timed_confirm, announce=announce,
-                                                        audit=lambda line: print(json.dumps(line), flush=True))}
+                                                        audit=lambda line: print(json.dumps(line), flush=True),
+                                                        again=unlock_again)}
         elif isinstance(request, dict) and request.get("op") == "login":
             result = {"ok": True, **login_transaction(Vault(request["vault"]), request, ask=timed_confirm)}
         else:
-            result = {"ok": True, **transaction(Vault(request.get("vault")), request, ask=timed_confirm)}
+            result = {"ok": True, **transaction(Vault(request.get("vault")), request, ask=timed_confirm,
+                                                again=unlock_again, unlocked=lambda: signal.alarm(OPERATION_SECONDS))}
     except Failure as error:
-        result = {"ok": False, "error": str(error)}
+        result = {"ok": False, "error": str(error), **error.details}
     except Exception:
         result = {"ok": False, "error": "Request failed; CLI result withheld"}
     finally:
@@ -938,7 +1020,8 @@ def worker(directory):
     if not publish(directory, result):
         print("Result channel closed; CLI cleanup finished. Close this Terminal window.", flush=True)
         return
-    print("Request finished. Close this Terminal window.", flush=True)
+    print("Request finished. Close this Terminal window." if result["ok"] else
+          f"Stopped: {result['error']}\nThe agent was told; close this Terminal window.", flush=True)
 
 
 def publish(directory, result):
@@ -960,6 +1043,15 @@ def launch(request):
             raise Failure("This vault's CLI context is already logged in")
     else:
         vault.locked()
+    try:
+        return wait_for_terminal(request)
+    except Failure as error:  # Also Ctrl-C/SIGTERM here, cleanup wait included: the worker may have created a Send.
+        error.details.setdefault("stage", "unknown")
+        error.details.setdefault("retry_safe", not request["op"].startswith("send-"))
+        raise
+
+
+def wait_for_terminal(request):
     with tempfile.TemporaryDirectory(prefix="bw-once-request-") as directory:
         path = Path(directory)
         private_json(path / "request.json", request)
@@ -969,8 +1061,8 @@ def launch(request):
                                      env=clean_env(), stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, timeout=15)
             if started.returncode:
-                raise Failure("Cannot open human Terminal")
-            deadline = time.monotonic() + WAIT_SECONDS + AUTH_SECONDS + 20
+                raise Failure("Cannot open human Terminal", stage="launch", retry_safe=True)
+            deadline = time.monotonic() + WAIT_SECONDS + UNLOCK_SECONDS + OPERATION_SECONDS + 20
             while time.monotonic() < deadline:
                 if (path / "result.json").is_file():
                     return json.loads((path / "result.json").read_text())
@@ -1022,6 +1114,9 @@ def main():
         send.add_argument("--name", required=True)
         send.add_argument("--views", type=int, default=1)
         send.add_argument("--days", type=int, default=SEND_DAYS_DEFAULT, help=f"expiry/deletion, 1-{SEND_DAYS_MAX}")
+        if op == "send-text":  # Touch ID panel claim; file Sends always use the Terminal (bw serve can't create them).
+            send.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
+            send.add_argument("--why", help="one line: why this Send is needed (shown as the agent's claim)")
     session = commands.add_parser("session").add_subparsers(dest="action")
     start = session.add_parser("start")
     start.add_argument("--ttl", default=f"{TTL_DEFAULT_MINUTES}m", help="minutes, e.g. 60m or 1h")
@@ -1098,12 +1193,16 @@ def main():
             if not result and to == "page":
                 raise Failure("--to page needs the Touch ID broker (bw-once touchid enroll)")
             result = with_fill_js(result or launch(args), selector)
+        elif args["op"] == "send-text":
+            claim = {"thread": args.pop("thread"), "why": args.pop("why")}
+            vaults = broker_vaults(args["vault"])
+            result = broker_send(args, claim, vaults) if broker_enrolled(vaults, args["vault"]) else launch(args)
         elif args["op"]:
             result = launch(args)
         else:
             parser.error("Choose a command")
     except Failure as error:
-        result = {"ok": False, "error": str(error)}
+        result = {"ok": False, "error": str(error), **error.details}
     except (Exception, KeyboardInterrupt):
         result = {"ok": False, "error": "Request failed or interrupted; result withheld"}
     print(json.dumps(result))

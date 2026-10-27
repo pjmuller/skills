@@ -50,6 +50,15 @@ func finish(_ result: [String: Any]) -> Never {
 
 func fail(_ message: String) -> Never { finish(["ok": false, "error": message]) }
 
+/// The front end closed its end of our stdout (killed, interrupted or timed out): a Send must not be created then.
+func callerGone() -> Bool {
+    #if BW_BROKER_TEST
+    if testEnv["BW_BROKER_TEST_CALLER_GONE"] == "1" { return true }
+    #endif
+    var out = pollfd(fd: 1, events: Int16(POLLOUT), revents: 0)
+    return poll(&out, 1, 0) == 1 && out.revents & Int16(POLLHUP | POLLERR) != 0
+}
+
 /// Answer the front end now and keep running (the agent's pick arrives later over a private socket).
 func emit(_ result: [String: Any]) {
     guard !stdoutWritten, let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return }
@@ -162,6 +171,29 @@ struct Request {
     let vaults: [Vault]
     var host = "", field = "", username: String? = nil, id: String? = nil, to = "clipboard"
     var thread: String? = nil, why: String? = nil
+    // send-text: frozen here, before any window, so a renewal re-run shows and creates the very same Send.
+    var sendName = "", sendText = "", views = 0, days = 0, until = ""
+}
+
+let sendTextLimit = 600  // UTF-8 bytes, as the front end's TEXT_LIMIT.
+
+/// Send text the panel can show faithfully: no controls but tab/newline, no invisible format or bidi characters.
+func sendText(_ value: Any?) -> String? {
+    guard let value = value as? String, !value.isEmpty, value.utf8.count <= sendTextLimit,
+          !value.unicodeScalars.contains(where: { scalar in
+              if [9, 10, 13].contains(scalar.value) { return false }
+              switch scalar.properties.generalCategory {
+              case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .surrogate, .unassigned: return true
+              default: return false
+              }
+          }) else { return nil }
+    return value
+}
+
+func boundedInt(_ value: Any?, _ range: ClosedRange<Int>) -> Int? {
+    guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+          !["d", "f"].contains(String(cString: number.objCType)), range.contains(number.intValue) else { return nil }
+    return number.intValue
 }
 
 func text(_ value: Any?, max: Int) -> String? {
@@ -180,7 +212,7 @@ func exactHost(_ value: Any?) -> String? {
 
 func parseRequest(_ data: Data) throws -> Request {
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let op = json["op"] as? String, ["list", "copy", "enroll", "status", "forget"].contains(op),
+          let op = json["op"] as? String, ["list", "copy", "send-text", "enroll", "status", "forget"].contains(op),
           let rawVaults = json["vaults"] as? [[String: Any]], !rawVaults.isEmpty, rawVaults.count <= 8 else {
         throw Failure(message: "Invalid broker request")
     }
@@ -203,16 +235,32 @@ func parseRequest(_ data: Data) throws -> Request {
     if op == "list" || op == "copy" {
         guard let host = exactHost(json["host"]) else { throw Failure(message: "Use an exact DNS host") }
         request.host = host
+    }
+    if op == "list" || op == "copy" || op == "send-text" {
         request.thread = json["thread"] is NSNull ? nil : text(json["thread"], max: 120)
         request.why = json["why"] is NSNull ? nil : text(json["why"], max: 200)
         if (json["thread"] != nil && !(json["thread"] is NSNull) && request.thread == nil)
             || (json["why"] != nil && !(json["why"] is NSNull) && request.why == nil) {
             throw Failure(message: "--thread (≤120) and --why (≤200) must be plain text")
         }
-        if let username = json["username"], !(username is NSNull) {
+        if op != "send-text", let username = json["username"], !(username is NSNull) {
             guard let value = text(username, max: 254) else { throw Failure(message: "Invalid username") }
             request.username = value.lowercased()
         }
+    }
+    if op == "send-text" {
+        guard vaults.count == 1 else { throw Failure(message: "A Send goes to exactly one vault") }
+        guard let name = text(json["name"], max: 200) else { throw Failure(message: "Send name must be 1-200 plain characters") }
+        guard let body = sendText(json["text"]) else {
+            throw Failure(message: "Send text must be 1-\(sendTextLimit) UTF-8 bytes without control, invisible or bidi characters")
+        }
+        guard let views = boundedInt(json["views"], 1...100) else { throw Failure(message: "Views must be 1-100") }
+        guard let days = boundedInt(json["days"], 1...31) else { throw Failure(message: "Days must be 1-31") }
+        request.sendName = name
+        request.sendText = body
+        request.views = views
+        request.days = days
+        request.until = ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(days) * 86400))
     }
     if op == "copy" {
         guard let field = json["field"] as? String, ["username", "password", "totp"].contains(field) else {
@@ -728,6 +776,21 @@ final class Serve {
             throw Failure(message: "\(vault.name): cannot list items")
         }
         return data
+    }
+
+    /// Text Send from the frozen request. Any failure is ambiguous (bw saves first, then re-reads): never retried.
+    func createSend(_ request: Request) throws -> [String: Any] {
+        let body: [String: Any] = ["type": 0, "name": request.sendName, "text": ["text": request.sendText, "hidden": true],
+                                   "maxAccessCount": request.views, "deletionDate": request.until,
+                                   "expirationDate": request.until, "disabled": false, "hideEmail": true]
+        guard let reply = try? call("POST", "/object/send", body), reply["success"] as? Bool == true,
+              let data = reply["data"] as? [String: Any], let link = data["accessUrl"] as? String,
+              let url = URL(string: link), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
+              let id = (data["id"] as? String)?.lowercased(), UUID(uuidString: id) != nil else {
+            throw Failure(message: "Send creation failed or its answer was unclear; a Send may exist: check the vault's Sends before asking again")
+        }
+        return ["id": id, "url": link, "expiry": data["expirationDate"] ?? NSNull(),
+                "deletion": data["deletionDate"] ?? NSNull(), "views": data["maxAccessCount"] ?? NSNull()]
     }
 
     func totp(_ id: String) throws -> String {
@@ -1268,6 +1331,15 @@ func enrollPanel(_ request: Request, existing: [String: Any]?, binary: String, k
 // MARK: - Request (list / copy)
 
 func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
+    if request.op == "send-text", let vault = request.vaults.first {
+        let digest = SHA256.hash(data: Data(request.sendText.utf8)).map { String(format: "%02x", $0) }.joined()
+        return [("Creates", "one text Send in \(vault.name) (\(vault.email)); never retried"),
+                ("Name", request.sendName),
+                ("Text", "\(request.sendText.count) characters · SHA-256 \(digest.prefix(12)) · shown below"),
+                ("Views", "\(request.views), then the link stops working"),
+                ("Expires", "\(request.until) (deleted then; \(request.days) day(s))"),
+                ("Goes to", "the agent gets only the link and dates; anyone holding the link can open it")]
+    }
     var what: String
     switch request.op {
     case "list": what = "names and usernames of matching logins" + (request.username.map { " with username \($0)" } ?? "")
@@ -1483,6 +1555,17 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     if claim.isEmpty { claim.append(("", "no reason given")) }
     panel.box("AGENT SAYS (unverified)", claim, tint: .systemOrange)
     panel.box("BW-ONCE WILL (checked)", describe(request, vaults: vaults.map(\.name)), tint: .systemGreen)
+    if request.op == "send-text" {
+        // Hidden until asked: the agent wrote the text already; the window must not leak it into a screen recording.
+        let shown = NSTextField(wrappingLabelWithString: "Text hidden · Show text displays it exactly as sent")
+        shown.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        shown.preferredMaxLayoutWidth = 480
+        panel.stack.addArrangedSubview(shown)
+        panel.button("Show text") {
+            shown.stringValue = request.sendText
+            panel.window.setContentSize(panel.stack.fittingSize)
+        }
+    }
     panel.line("Touch ID approves exactly the green box.", color: .secondaryLabelColor, size: 11)
 
     let context = LAContext()
@@ -1490,8 +1573,10 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     let gate = Gate()
     var serves: [Serve] = []
     var locks: [Int32] = []
+    var created: [String: Any]?  // send-text: set once its create was attempted; nothing may then retry it.
+    var unverifiedLock = false  // A vault whose preparation failed and whose lock could not be verified either.
     func cleanup() -> Bool {
-        let ok = serves.map { $0.lockAndClose() }.allSatisfy { $0 }  // Every vault, even after one failed.
+        let ok = serves.map { $0.lockAndClose() }.allSatisfy { $0 } && !unverifiedLock  // Every vault, even after one failed.
         serves = []
         locks.forEach { close($0) }
         locks = []
@@ -1519,7 +1604,10 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 DispatchQueue.global().async {
                     let outcome = Result { () throws -> Serve in
                         let serve = try Serve(vault, binary: binary)
-                        do { try serve.prepare() } catch { serve.lockAndClose(); throw error }
+                        do { try serve.prepare() } catch {
+                            if !serve.lockAndClose() { guardLock.lock(); unverifiedLock = true; guardLock.unlock() }
+                            throw error
+                        }
                         return serve
                     }
                     guardLock.lock(); prepared[vault.name] = outcome; guardLock.unlock()
@@ -1567,6 +1655,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     serves.append(serve)
                     guard let password = bundle[vault.name]?["password"], bundle[vault.name]?["email"] == vault.email,
                           try serve.unlock(password) else { rejected.append(vault); continue }
+                    if request.op == "send-text" { continue }
                     for entry in try serve.items() where matches(entry, host: request.host, defaultMatch: vault.defaultMatch) {
                         candidates.append((vault, entry, serve))
                     }
@@ -1588,6 +1677,33 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 return
             }
             bundle = [:]
+            if request.op == "send-text" {
+                guard let serve = serves.first else {
+                    throw Failure(message: unavailable.map { "\($0["vault"] ?? "?"): \($0["reason"] ?? "unavailable")" }
+                        .joined(separator: "; ") + "; nothing created")
+                }
+                // Exactly one create, and only while the approval stands and the front end still waits for its answer.
+                guard Date() < answerDeadline.addingTimeInterval(-60) else {
+                    throw Failure(message: "Request took too long; nothing created, ask again")
+                }
+                // Panel closed, or the front end gone (agent stopped or timed out): nobody would get the link.
+                guard !callerGone(), gate.commit() else { _ = cleanup(); fail("Request cancelled; nothing created") }
+                onMain { panel.setStatus("Approved · creating the Send…") }
+                created = [:]
+                let send = try serve.createSend(request)
+                created = send
+                guard cleanup() else {
+                    throw Failure(message: "Send \(send["id"] ?? "?") created, but lock verification failed: link withheld, run `bw lock` now")
+                }
+                onMain {
+                    panel.onCancel = {}
+                    panel.setStatus("✓ Send created (\(request.views) view(s), until \(request.until)) · vault locked", color: .systemGreen)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
+                        finish(["ok": true, "via": "touchid", "vault": serve.vault.name].merging(send) { $1 })
+                    }
+                }
+                return
+            }
             func metadata(_ entry: (Vault, [String: Any], Serve)) -> [String: Any] {
                 let login = entry.1["login"] as? [String: Any]
                 return ["vault": entry.0.name, "id": (entry.1["id"] as? String ?? "").lowercased(),
@@ -1675,12 +1791,17 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
         } catch {
             let message = (error as? Failure)?.message ?? "Request failed; nothing released"
             let locked = cleanup()
+            var answer: [String: Any] = ["ok": false, "error": locked ? message : message + "; lock verification failed, run `bw lock`"]
+            if request.op == "send-text" {
+                // Retry-safe only when no create was attempted and every vault is verified locked.
+                answer["stage"] = created == nil ? (locked ? "prepare" : "lock") : (created!.isEmpty ? "create" : "lock")
+                answer["retry_safe"] = created == nil && locked
+                if let id = created?["id"] { answer["send_id"] = id }
+            }
             onMain {
                 panel.onCancel = {}
                 panel.setStatus(message, color: .systemRed)
-                DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
-                    fail(locked ? message : message + "; lock verification failed, run `bw lock`")
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) { finish(answer) }
             }
         }
     }
