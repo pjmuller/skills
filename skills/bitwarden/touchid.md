@@ -52,6 +52,13 @@ bw-once touchid status | bw-once touchid forget
   (`--id`/`--username`) gets it again, each time in a small focus-free phrase window. Why: Google asks twice and a
   gcloud OAuth right after asks again. Cost: for 15 min any same-user process knowing the thread title can
   re-fill the clipboard with that password (shown each time; the green box says so). TOTP is never re-copied.
+- **Send** (text only: `bw serve` refuses file Sends): the broker validates name, views 1–100, days 1–31 and the
+  text (≤600 UTF-8 bytes; no control, format/bidi/zero-width, private-use characters, so the window shows what is
+  sent), and fixes the expiry date before any window; a renewal re-runs with that same frozen request. The window
+  shows account, name, views, date, length + SHA-256 prefix; the text only after **Show text** (screen recordings; the agent wrote it anyway, so the touch need not wait for it). After the touch it unlocks one vault,
+  creates the Send once (only if ≥60 s of the 300 s deadline remain), locks and verifies, then returns link and
+  dates. Any create failure is ambiguous (bw saves before it re-reads): `retry_safe: false`, never retried; a lock
+  failure after the create withholds the link and returns `send_id`.
 - **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
   a saved password → setup for that vault; then the request continues (second touch). Both show the phrase.
 

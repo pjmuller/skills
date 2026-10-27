@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-27 — bitwarden: unlock retries in the same Terminal, text Sends with Touch ID
+
+- Terminal flow: a refused `bw unlock` gets up to 3 human-chosen attempts in the same window (CLI re-checked locked + same account between them; Return = again, n/Ctrl-C/EOF = cancel); the prompt names the vault's account email. Budget 5 min approval (was 6), 3 min for all attempts, 60 s operation; launcher waits the sum + 20 s (< 10 min tool call). Failure JSON gains `stage` and `retry_safe` (`false` after a possibly-created Send or an unverified lock); Ctrl-C, timeout and agent-side stop get distinct messages. Why: one mistyped password ended the whole request, and a "Cryptography error" looked like a dead end.
+- "Cryptography error, The decryption operation failed" documented (SKILL.md#unlock-refused): current bw unlocks via the SDK and prints this raw when the typed password does not open the locally stored key; usually a typo or another account's password, rarely stale local CLI data (human-decided `bw logout` + `bw-once login`, never automatic).
+- `send-text` goes to the Touch ID broker when the target vault is enrolled (`--thread`/`--why` claim): broker validates and freezes name/text/views/date before any window, rejects invisible/bidi/control characters, keeps the text behind **Show text** (screen recordings), creates once with no retry (ambiguous failures `retry_safe: false`), locks + verifies before returning the link. File Sends stay on the Terminal (`bw serve` refuses them). Why: enrolled users asked why a Send still needed the master password.
+
 ## 2026-10-27 — screen-share detection from the video, with a benchmark
 
 - `detect-screenshare` rewritten: 1 frame/s at 320x180; Meet layout (gutter + a real filmstrip) only gates, the big tile's content decides (2 of 4 votes: flat pixels, grey pixels, static tile, no skin; plus some text edges); 10 s minimum run, gaps bridged while the share layout stays, 2 s padding. Why: speaker view looks like a share to a gutter rule (a 30-min 2-person call without share was 29 min "shared", crop on a face). Share-second precision 0.86 → 0.99 on 17 labelled calls, 0.96 → 0.996 on 5 held-out calls, recall ≥ 0.99, boundaries ±3 s (were up to 24 s). `--step` default 15 → 1; output drops `gutters`.

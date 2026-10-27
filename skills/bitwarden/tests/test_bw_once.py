@@ -40,7 +40,8 @@ if args[0]=='lock':
  state['locked']=True
  if config.get('cleanup_signal') and state['locks']==2:os.kill(os.getppid(),config['cleanup_signal'])
 elif args[0]=='unlock':
- if config.get('deny'):
+ if config.get('deny') or state.get('refused',0)<config.get('deny_times',0):
+  state['refused']=state.get('refused',0)+1;(root/'state').write_text(json.dumps(state))
   print(config['secret']);sys.exit(1)
  state['locked']=False
  print(config['session'])
@@ -63,6 +64,7 @@ else:
  elif args==['send','--fullObject','create']:
   data=json.loads(base64.b64decode(sys.stdin.buffer.read()))
   (root/'send_payload').write_text(json.dumps(data))
+  if config.get('fail_send'):print(config['secret'],file=sys.stderr);sys.exit(1)
   if data.get('file'):(root/'sent_bytes').write_bytes(pathlib.Path(data['file']['fileName']).read_bytes())
   print(json.dumps({'id':config['item']['id'],'accessUrl':'https://send.bitwarden.com/#fake/link',
    'key':'private-send-key','text':{'text':'private-send-text'},'expirationDate':data['expirationDate'],
@@ -223,7 +225,89 @@ def test_unlock_deadline_restarts_at_human_approval(monkeypatch):
     monkeypatch.setattr(bw.signal, "alarm", alarms.append)
     monkeypatch.setattr(bw, "confirm", lambda *_: alarms.append("asked") or True)
     assert bw.timed_confirm(request(), None) is True
-    assert alarms == ["asked", bw.AUTH_SECONDS]
+    assert alarms == ["asked", bw.UNLOCK_SECONDS]
+    # The launcher waits for every phase plus cleanup, inside a 10-minute agent tool call (osascript gets 15 s).
+    assert 15 + bw.WAIT_SECONDS + bw.UNLOCK_SECONDS + bw.OPERATION_SECONDS + 20 < 600
+
+
+def send_request(tmp_path, text="fixture send text"):
+    source = tmp_path / "message.txt"
+    source.write_text(text)
+    return {"op": "send-text", "vault": "default", "input_file": str(source), "name": "Details", "views": 1}
+
+
+def unlocks(events):
+    return sum(event["args"][0] == "unlock" for event in events())
+
+
+def sends(events):
+    return sum(event["args"][:2] == ["send", "--fullObject"] for event in events())
+
+
+def test_refused_unlock_is_retried_by_the_human_and_the_send_runs_once(fake, tmp_path):
+    directory, update, events = fake
+    update(deny_times=2)
+    asked = []
+    result = bw.transaction(bw.Vault(), send_request(tmp_path), ask=lambda *_: True,
+                            again=lambda attempt, email: asked.append(attempt) or True)
+    assert result["url"].startswith("https://") and asked == [1, 2]
+    assert unlocks(events) == 3 and sends(events) == 1
+    assert json.loads((directory / "state").read_text())["locked"]
+    calls = [event["args"][0] for event in events()]
+    assert calls[calls.index("unlock") + 1] == "status"  # Re-checked locked + account before the retry.
+
+
+@pytest.mark.parametrize("again,attempts,message", [(lambda *_: True, bw.UNLOCK_ATTEMPTS, "refused"),
+                                                    (lambda *_: False, 1, "Cancelled"), (None, 1, "refused")])
+def test_refused_unlock_stops_at_the_limit_or_cancel_and_is_safe_to_ask_again(fake, tmp_path, capsys, again, attempts, message):
+    directory, update, events = fake
+    update(deny=True)
+    with pytest.raises(bw.Failure, match=message) as caught:
+        bw.transaction(bw.Vault(), send_request(tmp_path), ask=lambda *_: True, again=again)
+    assert caught.value.details == {"stage": "unlock", "retry_safe": True, "attempts": attempts}
+    assert "Cryptography error" in str(caught.value) and "wrong" not in str(caught.value)
+    assert unlocks(events) == attempts and sends(events) == 0
+    assert json.loads((directory / "state").read_text())["locked"]
+    assert SECRET not in str(caught.value) + capsys.readouterr().out
+
+
+def test_failed_send_create_is_never_retried_and_says_so(fake, tmp_path, capsys):
+    directory, update, events = fake
+    update(fail_send=True)
+    with pytest.raises(bw.Failure) as caught:
+        bw.transaction(bw.Vault(), send_request(tmp_path), ask=lambda *_: True, again=lambda *_: True)
+    assert caught.value.details == {"stage": "operation", "retry_safe": False}
+    assert unlocks(events) == 1 and sends(events) == 1
+    assert json.loads((directory / "state").read_text())["locked"]
+    assert SECRET not in str(caught.value) + capsys.readouterr().out
+
+
+def test_read_only_operation_failure_and_lock_failure_report_retry_safety(fake):
+    directory, update, _ = fake
+    update(item={**ITEM, "type": 2})
+    with pytest.raises(bw.Failure) as caught:
+        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert caught.value.details == {"stage": "operation", "retry_safe": True}
+    (directory / "state").unlink()  # Lock counter restarts: the second lock (after the operation) fails.
+    update(item=ITEM, fail_lock=2)
+    with pytest.raises(bw.Failure) as caught:
+        bw.transaction(bw.Vault(), request(), ask=lambda *_: True, deliver=lambda _: pytest.fail("delivered"))
+    assert caught.value.details == {"stage": "lock", "retry_safe": False}
+
+
+def test_retry_prompt_names_the_account_and_eof_cancels(monkeypatch, capsys):
+    answers = iter(["", EOFError()])
+
+    def getpass(prompt):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(bw.getpass, "getpass", getpass)
+    assert bw.unlock_again(1, "a@example.com") is True
+    assert bw.unlock_again(2, "a@example.com") is False
+    out = capsys.readouterr().out
+    assert "a@example.com" in out and "Mac login" in out and "Cryptography error" in out and "cancelled" in out
 
 
 @pytest.mark.parametrize("answer,approved", [("", True), ("Y", True), ("n", False), (SECRET, False)])
@@ -290,7 +374,7 @@ def test_signal_during_final_lock_is_deferred_until_verification_and_session_cle
                             str(int(sig)), json.dumps(request())], capture_output=True, text=True, timeout=60)
     assert child.returncode == 0, child.stderr
     result = json.loads(child.stdout)
-    assert "interrupted" in result["error"]
+    assert result["error"].startswith(("Cancelled with Ctrl-C", "Stopped", "Timed out"))
     assert result["session"] is None and result["mask_restored"]
     assert events()[-1]["args"] == ["status"] and events()[-1]["session"]
     assert json.loads((directory / "state").read_text())["locked"]
@@ -622,8 +706,9 @@ def front(fake, monkeypatch, tmp_path):
     launched = []
     monkeypatch.setattr(bw, "launch", lambda args: launched.append(args) or {"ok": True, "via": "terminal"})
 
-    def run(*argv, enrolled=True):
-        (helpers / "broker-reply.json").write_text(json.dumps({"ok": True, "enrolled": enrolled, "copied": "password"}))
+    def run(*argv, enrolled=True, vaults=("other", "work")):
+        (helpers / "broker-reply.json").write_text(json.dumps({"ok": True, "enrolled": enrolled, "vaults": list(vaults),
+                                                               "copied": "password"}))
         monkeypatch.setattr(sys, "argv", ["bw-once", *argv])
         try:
             bw.main()
@@ -671,6 +756,31 @@ def test_not_enrolled_falls_back_to_the_terminal_without_claim_fields(front):
     run, launched = front
     run("copy", "--host", "admin.example.com", "--field", "password", "--why", "x", enrolled=False)
     assert len(launched) == 1 and "why" not in launched[0] and "thread" not in launched[0]
+
+
+@macos_only
+def test_enrolled_text_send_goes_to_the_broker_with_its_frozen_text_and_one_vault(front, tmp_path):
+    run, launched = front
+    source = tmp_path / "message.txt"
+    source.write_text("fixture send text")
+    sent = run("--vault", "other", "send-text", "--input-file", str(source), "--name", "Details", "--views", "2",
+               "--thread", "Hand-over", "--why", "share access")
+    assert sent == {"op": "send-text", "vaults": [{"name": "other", "email": "b@example.com",
+                                                   "appdata": os.path.realpath("/tmp/x"), "default_match": "base_domain"}],
+                    "name": "Details", "views": 2, "days": bw.SEND_DAYS_DEFAULT, "text": "fixture send text",
+                    "thread": "Hand-over", "why": "share access"}
+    assert launched == []
+
+
+@macos_only
+def test_file_send_and_unenrolled_vault_use_the_terminal(front, tmp_path):
+    run, launched = front
+    source = tmp_path / "message.txt"
+    source.write_text("fixture send text")
+    run("send-file", "--input-file", str(source), "--name", "Doc")
+    run("send-text", "--input-file", str(source), "--name", "Doc", "--why", "x", vaults=("other",))
+    assert [entry["op"] for entry in launched] == ["send-file", "send-text"]
+    assert "why" not in launched[1] and launched[1]["vault"] == "work"
 
 
 MATCHING_CASES = json.loads((Path(__file__).parent / "matching_cases.json").read_text())

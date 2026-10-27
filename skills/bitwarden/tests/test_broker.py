@@ -31,6 +31,7 @@ def login(item_id, secret, username, host=HOST, name="Example"):
 
 FAKE_SERVE = r'''
 import json, os, pathlib, socket, sys
+ID_B = "abcdef12-1234-1234-1234-123456789abc"
 root = pathlib.Path(os.environ["BITWARDENCLI_APPDATA_DIR"])
 cfg = json.loads((root / "config.json").read_text())
 statefile = root / "state"
@@ -71,6 +72,12 @@ while True:
     elif state["locked"]: code, reply = 400, {"success": False, "message": "Vault is locked."}
     elif path == "/list/object/items": reply["data"] = {"object": "list", "data": cfg["items"]}
     elif path.startswith("/object/totp/"): reply["data"] = {"object": "string", "data": "123456"}
+    elif path == "/object/send" and method == "POST":
+        with (root / "sends").open("a") as stream: stream.write(json.dumps(data) + "\n")
+        if cfg.get("fail_send"): code, reply = 400, {"success": False, "message": "fixture failure"}
+        else: reply["data"] = {"object": "send", "id": ID_B, "accessUrl": "https://send.example.com/#/fixture/key",
+                               "expirationDate": data["expirationDate"], "deletionDate": data["deletionDate"],
+                               "maxAccessCount": data["maxAccessCount"], "text": data["text"]}
     elif path != "/sync": code, reply = 404, {"success": False}
     statefile.write_text(json.dumps(state))
     out = json.dumps(reply).encode()
@@ -148,7 +155,7 @@ def world(broker, tmp_path):
     def unclip():
         (broker / "clip").unlink(missing_ok=True)
 
-    return {"run": run, "start": start, "binary": broker / "bw-broker", "unclip": unclip, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
+    return {"vault_dirs": {name: vault["appdata"] for name, vault in vaults.items()}, "run": run, "start": start, "binary": broker / "bw-broker", "unclip": unclip, "pick": pick, "sockets": sockets, "configure": configure, "events": events, "locked": locked, "clip": clip, "store": tmp_path / "store.json"}
 
 
 def enroll(world):
@@ -578,3 +585,78 @@ def test_base_domain_recopy_cannot_move_to_sibling_destination(world, monkeypatc
     finally:
         if child.poll() is None:
             child.terminate(); child.wait(10)
+
+
+SEND_TEXT = "fixture send text\nline two"
+
+
+def sent(world, name="testa"):
+    path = Path(world["vault_dirs"][name]) / "sends"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def send(world, names=("testa",), **fields):
+    return world["run"]("send-text", names=names, **{"name": "Access details", "text": SEND_TEXT, "views": 2, "days": 3,
+                                                     "thread": "Hand-over", **fields})
+
+
+def test_touch_id_text_send_shows_the_exact_frozen_text_creates_once_and_locks(world):
+    enroll(world)
+    before = len(world["events"]("testa"))
+    result, panel = send(world)
+    assert result["ok"] and result["via"] == "touchid" and result["vault"] == "testa"
+    assert result["url"].startswith("https://") and result["id"] == ID_B and result["views"] == 2
+    [created] = sent(world)
+    assert created["text"] == {"text": SEND_TEXT, "hidden": True} and created["maxAccessCount"] == 2
+    assert created["deletionDate"] == created["expirationDate"] and created["hideEmail"] is True
+    assert SEND_TEXT not in panel and "Text hidden" in panel and "Hand-over" in panel  # Shown only on request.
+    assert created["deletionDate"] in panel and "a@example.com" in panel
+    assert world["locked"]("testa") and MASTER["testa"] not in panel + json.dumps(result)
+    paths = [e.get("path") for e in world["events"]("testa")[before:]]
+    assert paths.index("/unlock") < paths.index("/object/send") < paths.index("/lock") and "/list/object/items" not in paths
+
+
+def test_cancelled_touch_creates_nothing(world):
+    enroll(world)
+    before = len(world["events"]("testa"))
+    result, _ = send(world, touch="cancel")
+    assert result["ok"] is False and sent(world) == [] and world["locked"]("testa")
+    assert "/unlock" not in [e.get("path") for e in world["events"]("testa")[before:]]
+
+
+def test_failed_create_is_reported_ambiguous_and_never_retried(world):
+    enroll(world)
+    world["configure"]("testa", fail_send=True)
+    result, _ = send(world)
+    assert result["ok"] is False and result["retry_safe"] is False and result["stage"] == "create"
+    assert "may exist" in result["error"] and len(sent(world)) == 1 and world["locked"]("testa")
+
+
+def test_rejected_saved_password_renews_then_creates_the_same_send_once(world):
+    enroll(world)
+    world["configure"]("testa", password="new-master-a")
+    result, panel = send(world, typed={"testa": "new-master-a"})
+    assert result["ok"] and "rejected the saved master password" in panel
+    assert [entry["text"]["text"] for entry in sent(world)] == [SEND_TEXT]
+
+
+def test_lock_failure_after_create_withholds_the_link_but_names_the_send(world):
+    enroll(world)
+    world["configure"]("testa", fail_lock=True)
+    result, _ = send(world)
+    assert result["ok"] is False and "url" not in result and result["send_id"] == ID_B
+    assert result["retry_safe"] is False and result["stage"] == "lock" and "bw lock" in result["error"]
+
+
+@pytest.mark.parametrize("fields", [{"text": "pay\u202eevil"}, {"text": "a\u200bb"}, {"text": "x" * 601},
+                                    {"text": ""}, {"views": 0}, {"views": True}, {"days": 32}, {"name": "a\nb"}])
+def test_send_validation_rejects_before_any_window(world, fields):
+    enroll(world)
+    result, panel = send(world, **fields)
+    assert result["ok"] is False and "panel:" not in panel and sent(world) == []
+
+
+def test_send_goes_to_exactly_one_vault(world):
+    enroll(world)
+    result, panel = send(world, names=("testa", "testb"))
+    assert result == {"ok": False, "error": "A Send goes to exactly one vault"} and "panel:" not in panel
