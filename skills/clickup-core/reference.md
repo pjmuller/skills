@@ -71,8 +71,9 @@ Probed against live lists, 2026-09/10:
 - **No auto-number field** (`auto_number`/`unique_id` → `FIELD_422`). The task id is already unique;
   sequential ids need the Custom Task IDs ClickApp (paid plans, per Space, UI only, renumbers the
   Space).
-- **Date-only fields** are stored at midnight in the operator's ClickUp timezone (`GET /user`), not
-  UTC: convert before writing epoch ms and read the day back.
+- **Date-only fields**: compute epoch ms in the operator's ClickUp timezone (`GET /user`), not UTC;
+  ClickUp normalises the stored time ([docs](https://developer.clickup.com/docs/customfields#date):
+  04:00 local), so compare the local day on readback, never the timestamp.
 
 ## Chat
 

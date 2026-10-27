@@ -75,8 +75,9 @@ presented deck and expected export count.
   `two-cols-header` offers a shared heading with `::left::` and `::right::` slots.
   Theme support varies; choose layout for the message.
 - `public/diagram.svg` is `/diagram.svg`. Local assets for offline delivery;
-  `image-left`/`image-right` or plain HTML for intentional cropping. In HTML use
-  `<img :src="'/logo.png'">`: a static `src` trips Slidev's import guard.
+  `image-left`/`image-right` or plain HTML for intentional cropping. Static `<img src>` is the
+  default (keeps `--base` rewriting); only if it trips Slidev's import guard, use `:src` and
+  prefix the base yourself on subpath hosting.
 - Markdown, HTML and Vue work together; reusable components in `components/` auto-import.
   Keep blank lines around Markdown/code fences nested inside HTML blocks.
 - Mermaid: fenced `mermaid` block; `{scale: 0.8}` is a starting point. Render, inspect labels,

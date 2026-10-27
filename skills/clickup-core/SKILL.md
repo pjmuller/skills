@@ -71,7 +71,9 @@ Defaults; the wrapper may override. Every write costs a human's attention.
 - The body is the record, a comment is a ping. Substance (what shipped or deviated, what to test,
   links, output) goes in the body as a dated `## <date> — <whoami>` section
   (`--append-description-file`); the comment is a `--mention` plus "see description" (wording:
-  wrapper), never a repeat. Same for `handoff` and `review --text`.
+  wrapper), never a repeat. `handoff` posts its `--text` as the comment: append the substance first,
+  then `handoff --text` with the short ping. `review` appends its text to the body itself; add
+  `--comment` only when the wrapper wants the verdict repeated.
 - Two writes per ticket: status at start, one handoff/review at the end. No progress notes.
 - A substantive description append is a handoff too: after verified readback, one brief
   native-mention comment to the owner/reviewer pointing to the dated section, even when status
@@ -114,8 +116,8 @@ Description appends use ClickUp's private content seam and verify on readback, f
 ## Writes and verification
 
 GETs retry 429 (reset ≤ 30 s); writes never auto-retry and read back; report only the verified
-URL. `delete` / `detach` need `--yes`. An update never changes the assignee, including the move to
-`to test` (the other person tests, not owns); a new task gets exactly one assignee (who: wrapper).
+URL. `delete` / `detach` need `--yes`. An update keeps the assignees unless reassignment is requested, including the move to
+`to test` (the other person tests, not owns); who gets a new task: wrapper policy.
 Live checks: `whoami`, `topology`, one
 `task --comments`. A disposable create/delete needs authorization, a clear title and cleanup in a
 finally path. Never send test mentions or comments to people.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — review fixes on the moved lessons
+
+- clickup-core: `handoff` posts its text as the comment (append substance first, ping second); `review` already appends to the body, `--comment` only when wanted. Assignees kept unless reassignment is requested; who gets a new task is wrapper policy. Date-only fields: compare the local day, ClickUp normalises the time. slides: static `src` stays the default (keeps `--base`), `:src` only when the import guard trips. Why: opposite-model review found the moved wording overgeneralised (subpath decks broke, standard commands violated the body/comment rule).
+
 ## 2026-10-27 — browser.md: T3 preview and CDP gotchas from a personal wrapper
 
 - `t3-manage-thread/browser.md` gains a "T3 preview" section (own tab, explicit `profileId` + incognito for untrusted pages, session-gated downloads, hidden-tab screenshot stall, popups, print-view trap, cross-origin iframes, paste in unviewed tabs, local HTML, blank window), Google password route past T3's missing passkeys, CDP tab/cookie/daemon mechanics and ending idle computer-use sessions. `agents-md/global.md` port step includes uncommitted edits. Why: these lived in the owner's private browser notes; every T3 user hits them.
