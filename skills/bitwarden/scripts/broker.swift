@@ -50,6 +50,15 @@ func finish(_ result: [String: Any]) -> Never {
 
 func fail(_ message: String) -> Never { finish(["ok": false, "error": message]) }
 
+/// The front end closed its end of our stdout (killed, interrupted or timed out): a Send must not be created then.
+func callerGone() -> Bool {
+    #if BW_BROKER_TEST
+    if testEnv["BW_BROKER_TEST_CALLER_GONE"] == "1" { return true }
+    #endif
+    var out = pollfd(fd: 1, events: Int16(POLLOUT), revents: 0)
+    return poll(&out, 1, 0) == 1 && out.revents & Int16(POLLHUP | POLLERR) != 0
+}
+
 /// Answer the front end now and keep running (the agent's pick arrives later over a private socket).
 func emit(_ result: [String: Any]) {
     guard !stdoutWritten, let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return }
@@ -1565,8 +1574,9 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     var serves: [Serve] = []
     var locks: [Int32] = []
     var created: [String: Any]?  // send-text: set once its create was attempted; nothing may then retry it.
+    var unverifiedLock = false  // A vault whose preparation failed and whose lock could not be verified either.
     func cleanup() -> Bool {
-        let ok = serves.map { $0.lockAndClose() }.allSatisfy { $0 }  // Every vault, even after one failed.
+        let ok = serves.map { $0.lockAndClose() }.allSatisfy { $0 } && !unverifiedLock  // Every vault, even after one failed.
         serves = []
         locks.forEach { close($0) }
         locks = []
@@ -1594,7 +1604,10 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 DispatchQueue.global().async {
                     let outcome = Result { () throws -> Serve in
                         let serve = try Serve(vault, binary: binary)
-                        do { try serve.prepare() } catch { serve.lockAndClose(); throw error }
+                        do { try serve.prepare() } catch {
+                            if !serve.lockAndClose() { guardLock.lock(); unverifiedLock = true; guardLock.unlock() }
+                            throw error
+                        }
                         return serve
                     }
                     guardLock.lock(); prepared[vault.name] = outcome; guardLock.unlock()
@@ -1673,7 +1686,8 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 guard Date() < answerDeadline.addingTimeInterval(-60) else {
                     throw Failure(message: "Request took too long; nothing created, ask again")
                 }
-                guard gate.commit() else { _ = cleanup(); fail("Request cancelled; nothing created") }
+                // Panel closed, or the front end gone (agent stopped or timed out): nobody would get the link.
+                guard !callerGone(), gate.commit() else { _ = cleanup(); fail("Request cancelled; nothing created") }
                 onMain { panel.setStatus("Approved · creating the Send…") }
                 created = [:]
                 let send = try serve.createSend(request)

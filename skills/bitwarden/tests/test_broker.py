@@ -660,3 +660,17 @@ def test_send_goes_to_exactly_one_vault(world):
     enroll(world)
     result, panel = send(world, names=("testa", "testb"))
     assert result == {"ok": False, "error": "A Send goes to exactly one vault"} and "panel:" not in panel
+
+
+def test_unlocked_vault_whose_lock_fails_is_never_reported_retry_safe(world):
+    enroll(world)
+    world["configure"]("testa", fail_lock=True)
+    (Path(world["vault_dirs"]["testa"]) / "state").write_text(json.dumps({"locked": False}))
+    result, _ = send(world)
+    assert result["ok"] is False and result["retry_safe"] is False and "bw lock" in result["error"] and sent(world) == []
+
+
+def test_no_send_once_the_front_end_is_gone(world):
+    enroll(world)
+    result, _ = send(world, extra_env={"BW_BROKER_TEST_CALLER_GONE": "1"})
+    assert result["ok"] is False and "nothing created" in result["error"] and sent(world) == [] and world["locked"]("testa")

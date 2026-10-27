@@ -658,10 +658,12 @@ def broker(request):
         if "pick" not in result and "recopy_until" not in result:  # Else it keeps running (pick / re-copies).
             child.wait(10)
         return result
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, subprocess.TimeoutExpired, Failure) as error:  # Failure: Ctrl-C/SIGTERM while waiting.
         if request["op"] == "send-text":
-            raise Failure("Touch ID broker did not answer; a Send may exist: check the vault's Sends before asking "
-                          "again", stage="unknown", retry_safe=False) from None
+            raise Failure(f"{error if isinstance(error, Failure) else 'Touch ID broker did not answer'}; a Send may "
+                          "exist: check the vault's Sends before asking again", stage="unknown", retry_safe=False) from None
+        if isinstance(error, Failure):
+            raise
         raise Failure("Touch ID broker failed; nothing released") from None
     finally:
         child.stdout.close()
@@ -1050,14 +1052,17 @@ def launch(request):
                                      env=clean_env(), stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, timeout=15)
             if started.returncode:
-                raise Failure("Cannot open human Terminal")
+                raise Failure("Cannot open human Terminal", stage="launch", retry_safe=True)
             deadline = time.monotonic() + WAIT_SECONDS + UNLOCK_SECONDS + OPERATION_SECONDS + 20
             while time.monotonic() < deadline:
                 if (path / "result.json").is_file():
                     return json.loads((path / "result.json").read_text())
                 time.sleep(0.2)
-            raise Failure("Human Terminal request timed out", stage="unknown",
-                          retry_safe=not request["op"].startswith("send-"))
+            raise Failure("Human Terminal request timed out")
+        except Failure as error:  # Also Ctrl-C/SIGTERM on this side: the worker may already have created a Send.
+            error.details.setdefault("stage", "unknown")
+            error.details.setdefault("retry_safe", not request["op"].startswith("send-"))
+            raise
         finally:
             if request["op"] != "session-start" and (path / "worker.json").is_file() and not (path / "result.json").is_file():
                 try:

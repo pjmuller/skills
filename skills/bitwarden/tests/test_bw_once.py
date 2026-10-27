@@ -859,3 +859,20 @@ def test_missing_or_incomplete_psl_is_actionable_and_never_delivers(fake, monkey
         assert json.loads((directory / "state").read_text())["locked"]
     finally:
         bw.suffix_rules.cache_clear()
+
+
+@macos_only
+def test_interrupted_wait_for_a_touch_id_send_is_never_retry_safe(monkeypatch, tmp_path):
+    (tmp_path / "bw-broker").write_text("#!/bin/sh\ncat >/dev/null\nsleep 2\n")
+    (tmp_path / "bw-broker").chmod(0o700)
+    monkeypatch.setattr(bw, "ROOT", tmp_path)
+
+    def interrupted(*_):
+        raise bw.Failure("Cancelled with Ctrl-C")
+    monkeypatch.setattr(bw.select, "select", interrupted)
+    with pytest.raises(bw.Failure, match="may exist") as caught:
+        bw.broker({"op": "send-text", "vaults": []})
+    assert caught.value.details == {"stage": "unknown", "retry_safe": False}
+    with pytest.raises(bw.Failure, match="Ctrl-C") as caught:
+        bw.broker({"op": "copy", "vaults": []})
+    assert caught.value.details == {}
