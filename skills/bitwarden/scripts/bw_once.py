@@ -1043,6 +1043,15 @@ def launch(request):
             raise Failure("This vault's CLI context is already logged in")
     else:
         vault.locked()
+    try:
+        return wait_for_terminal(request)
+    except Failure as error:  # Also Ctrl-C/SIGTERM here, cleanup wait included: the worker may have created a Send.
+        error.details.setdefault("stage", "unknown")
+        error.details.setdefault("retry_safe", not request["op"].startswith("send-"))
+        raise
+
+
+def wait_for_terminal(request):
     with tempfile.TemporaryDirectory(prefix="bw-once-request-") as directory:
         path = Path(directory)
         private_json(path / "request.json", request)
@@ -1059,10 +1068,6 @@ def launch(request):
                     return json.loads((path / "result.json").read_text())
                 time.sleep(0.2)
             raise Failure("Human Terminal request timed out")
-        except Failure as error:  # Also Ctrl-C/SIGTERM on this side: the worker may already have created a Send.
-            error.details.setdefault("stage", "unknown")
-            error.details.setdefault("retry_safe", not request["op"].startswith("send-"))
-            raise
         finally:
             if request["op"] != "session-start" and (path / "worker.json").is_file() and not (path / "result.json").is_file():
                 try:

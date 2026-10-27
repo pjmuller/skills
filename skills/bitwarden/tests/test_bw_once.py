@@ -876,3 +876,14 @@ def test_interrupted_wait_for_a_touch_id_send_is_never_retry_safe(monkeypatch, t
     with pytest.raises(bw.Failure, match="Ctrl-C") as caught:
         bw.broker({"op": "copy", "vaults": []})
     assert caught.value.details == {}
+
+
+@macos_only
+@pytest.mark.parametrize("op,safe", [("send-text", False), ("copy", True)])
+def test_interrupted_terminal_wait_flags_a_possible_send(fake, monkeypatch, tmp_path, op, safe):
+    def interrupted(_request):
+        raise bw.Failure("Cancelled with Ctrl-C")  # E.g. during the worker cleanup wait.
+    monkeypatch.setattr(bw, "wait_for_terminal", interrupted)
+    with pytest.raises(bw.Failure) as caught:
+        bw.launch(send_request(tmp_path) if op == "send-text" else request())
+    assert caught.value.details == {"stage": "unknown", "retry_safe": safe}
