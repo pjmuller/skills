@@ -203,6 +203,7 @@ def record_session(device, session: dict, folder: Path, record, ask=lambda _text
                     raise KeyboardInterrupt("cancelled during the knob takes")
                 if answer.lower() == "r":
                     (folder / session["takes"].pop()["file"]).unlink(missing_ok=True)
+                    write_json(folder / "session.json", session)
                     number -= 1
                 else:
                     confirmed = True
@@ -219,11 +220,12 @@ def record_session(device, session: dict, folder: Path, record, ask=lambda _text
                 print(f"\nGain sweep done: {'gain ' + format(pick.setting, '.2f') if pick.take else pick.reason}"
                       " stays set for the next takes.")
             if phase == "knob":
-                answer = ask(f"Knob take {number - len(levels)}/{len(knob)}: knob {setting}, then Enter{redo}")
+                answer = ask(f"Take {number - len(levels)}/{len(knob)}: {setting}, then Enter{redo}")
                 if answer is None:
                     raise KeyboardInterrupt("cancelled during the knob takes")
                 if answer.lower() == "r" and redo:
                     (folder / session["takes"].pop()["file"]).unlink(missing_ok=True)
+                    write_json(folder / "session.json", session)
                     number -= 2
                     continue
             take = {"index": number, "phase": phase}
@@ -276,7 +278,7 @@ def capture(folder: Path, confirm: bool) -> dict:
     levels, knob = session["levels"], session.get("knob") or []
     plan = [f"gains {', '.join(map(str, levels))}"] if levels else []
     if knob:
-        plan.append(f"knob {', '.join(knob)} (Enter before each)" if session.get("knob_phase", "knob") == "knob"
+        plan.append(f"{len(knob)} manual setups, Enter before each" if session.get("knob_phase", "knob") == "knob"
                     else f"{len(knob)} takes at the current level")
     print(f"\n{device.name}: {' then '.join(plan) or 'current level'}.\n"
           f"After the beep, at your normal distance and loudness, say:\n\n    {session['sentence']}\n")
@@ -305,10 +307,11 @@ def capture(folder: Path, confirm: bool) -> dict:
     return session
 
 
-def capture_in_terminal(folder: Path, enter_window: float, reserve: float) -> dict:
+def capture_in_terminal(folder: Path, enter_window: float, reserve: float, step: float) -> dict:
     """Agent shells have no TTY, and their host app may lack microphone access (silent zeros): the
     capture runs in a Terminal.app window where the speaker presses Enter when ready. This side waits
-    for the Enter window plus the worst-case session (`reserve`), so it never gives up mid-recording."""
+    for the Enter window plus the planned session (`reserve`), and `step` past every session.json
+    write: redos add takes, so it never gives up on a capture that is still progressing."""
     session = json.loads((folder / "session.json").read_text())
     session["enter_deadline"] = time.time() + enter_window
     write_json(folder / "session.json", session)
@@ -318,11 +321,13 @@ def capture_in_terminal(folder: Path, enter_window: float, reserve: float) -> di
     script.chmod(0o755)
     subprocess.run(["open", "-a", "Terminal", str(script)], check=True)
     print(f"capture window opened in Terminal; waiting up to {wait:.0f}s for the speaker", flush=True)
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
+    deadline = time.time() + wait
+    while time.time() < deadline:
         session = json.loads((folder / "session.json").read_text())
         if session.get("status") not in ("ready", "recording"):
             return session
+        if session.get("status") == "recording":
+            deadline = max(deadline, (folder / "session.json").stat().st_mtime + step)
         time.sleep(1)
     # Never leave a capture running unsupervised: ask it to stop and wait for the gain restore.
     (folder / CANCEL_FILE).touch()
@@ -398,11 +403,11 @@ def report(folder: Path, stt: bool) -> tuple[Path, analysis.Recommendation | Non
         lines += recommendation_lines("Input gain", rec, "")
     if knob_rec:
         at = session.get("gain_pick")
-        title = "Knob" if knob_takes[0]["phase"] == "knob" else "Best take"
+        title = "Manual setup" if knob_takes[0]["phase"] == "knob" else "Best take"
         lines += recommendation_lines(f"{title} (at gain {at})" if at is not None else title, knob_rec, "")
     if knob_rec and knob_takes[0]["phase"] == "knob":
-        lines += ["Knob and software gain multiply: if the knob pick is not where it started, a short gain sweep "
-                  "around the gain pick at that knob position confirms the pair.", ""]
+        lines += ["A knob and the software gain multiply: if the manual pick turned the knob, a short gain sweep "
+                  "at that knob position confirms the pair.", ""]
     if warning:
         lines += ["> [!WARNING]", f"> {warning}.", ""]
     if takes and all(t["metrics"].peak_dbfs <= -119 for t in takes):
@@ -504,6 +509,7 @@ def cmd_run(args) -> None:
     worst_take = SETTLE_SECONDS + START_TIMEOUT + PLAYER_SLACK + sum(COUNTDOWN[-1]) + args.seconds + 5 + 5  # start, stop limits
     prompts = (len(knob) + 1) * KNOB_PROMPT_SECONDS if args.knob else 0  # Enter per knob take + Done
     reserve = takes * worst_take + prompts + 60  # + gain pick analysis and slack
+    step = worst_take + (KNOB_PROMPT_SECONDS if args.knob else 0) + 30  # per take, redos included
     print(f"device={device.name}  gain={device.gain() if device.gain_supported else 'fixed'}  "
           f"levels={levels}  knob={knob}  ≈{seconds:.0f}s of recording")
     if args.dry_run:
@@ -520,7 +526,7 @@ def cmd_run(args) -> None:
                "sentence": args.sentence, "language": args.language, "seconds": args.seconds, "takes": []}
     write_json(folder / "session.json", session)
     print(f"session={folder}", flush=True)
-    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, args.wait, reserve)
+    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, args.wait, reserve, step)
     if session["status"] != "recorded":
         fail(f"capture {session['status']}; session {folder}", 1)
     path, rec = report(folder, stt=not args.no_stt)
@@ -560,8 +566,9 @@ def main() -> None:
     run = sub.add_parser("run", help="record and report")
     run.add_argument("--device")
     run.add_argument("--levels", default=DEFAULT_LEVELS, help=f"gains to test, default {DEFAULT_LEVELS}")
-    run.add_argument("--knob", help="after the gain sweep, one take per hardware-knob label at the picked gain, "
-                     "Enter between takes, e.g. 'as is,-50%%,+50%%'")
+    run.add_argument("--manual", "--knob", dest="knob", help="after the gain sweep (or alone with --keep-gain): "
+                     "one take per comma-separated setup the speaker makes by hand (knob, distance, voice), Enter "
+                     "before each, e.g. 'knob as is,knob -50%%,knob +50%%'")
     run.add_argument("--keep-gain", action="store_true", help="no gain sweep: --knob takes, or --takes at the current level")
     run.add_argument("--takes", type=int, default=1, help="with --keep-gain and no --knob (default 1)")
     run.add_argument("--sentence", default=DEFAULT_SENTENCE, help="what the speaker says (reference for WER only)")

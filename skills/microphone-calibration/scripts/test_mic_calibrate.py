@@ -197,7 +197,7 @@ def test_knob_takes_use_the_picked_gain(tmp_path, keep):
 
     cli.record_session(device, session, tmp_path, record, ask=lambda text: prompts.append(text) or "")
     assert session["gain_pick"] == 0.5 and knob_gains == [0.5, 0.5]
-    assert [p.split(":")[0].split("?")[0] for p in prompts] == ["Knob take 1/2", "Knob take 2/2", "Done"]
+    assert [p.split(":")[0].split("?")[0] for p in prompts] == ["Take 1/2", "Take 2/2", "Done"]
     assert device.gain() == (0.5 if keep else 0.42)
 
 
@@ -220,6 +220,7 @@ def test_left_out_words_are_a_slip_not_a_mic_error():
     sentence = "Hello, I'm Sam, I'm from Ghent, and I love tea."
     assert analysis.is_slip(sentence, "Hello, I'm Sam and I'm from Ghent.")
     assert not analysis.is_slip(sentence, "Hello, I'm Pam, I'm from Ghent and I love tea.")
+    assert not analysis.is_slip(sentence, "") and not analysis.is_slip(sentence, "Hello tea.")
     takes = [{"setting": "as is", "metrics": fake(-10), "wer": 0.38, "slip": True},
              {"setting": "-50%", "metrics": fake(-17), "wer": 0.0}]
     assert analysis.recommend(takes).setting == "as is"
@@ -314,6 +315,6 @@ def test_report_embeds_clips_and_recommends(tmp_path):
     subprocess.run([sys.executable, str(SCRIPTS / "mic-calibrate"), "report", str(tmp_path), "--no-stt"],
                    check=True, capture_output=True)
     text = (tmp_path / "report.md").read_text()
-    assert "Input gain: **0.60**" in text and "Knob (at gain 0.6): **+50%**" in text
+    assert "Input gain: **0.60**" in text and "Manual setup (at gain 0.6): **+50%**" in text
     assert f"]({tmp_path.resolve() / takes[0]['file']})" in text
     assert "clipping" in text

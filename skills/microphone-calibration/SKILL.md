@@ -13,22 +13,23 @@ Same sentence, distance, posture and loudness every take; only back-to-back take
 
 1. `mic-calibrate devices`: name, channels, settable gain. **No settable gain** (hardware knob, many
    USB mics) → the tool refuses to sweep; never "simulate" gain by amplifying afterwards. Instead
-   `run --keep-gain --knob 'as is,-50%,+50%'`: the speaker turns the knob, Enter before each take.
+   `run --keep-gain --manual 'knob as is,knob -50%,knob +50%'`: the speaker turns the knob, Enter
+   before each take.
 2. Agree with the speaker first: device, mic position, the sentence (~5 s, their own words are
    fine), and that they are ready now. Never start a capture unannounced. `run --dry-run` shows
    device, levels and duration without recording or changing anything.
-3. `mic-calibrate run --device NAME --sentence "…" [--levels 0.25,0.5,0.75,1.0] [--knob LABELS]`.
+3. `mic-calibrate run --device NAME --sentence "…" [--levels 0.25,0.5,0.75,1.0] [--manual SETUPS]`.
    Without a TTY (every agent shell) the capture opens in a **Terminal.app window**: it shows the
    sentence and waits for Enter. Per take: set the gain, one beep, the speaker talks, the take
-   ends 0.8 s after they stop (`--seconds` caps it). No spoken prompts. `--knob` (mic with a
-   hardware gain knob) appends takes at the gain picked from the sweep; the window asks for Enter
-   after each knob turn, `r` + Enter redoes the previous knob take (a slip). Agent apps may lack
-   microphone access (digital silence) and have no TTY: never capture in the agent's own shell.
-   First use: macOS asks to allow Terminal's microphone. Run `run` in the background; it waits up
-   to `--wait`.
+   ends 0.8 s after they stop (`--seconds` caps it). No spoken prompts. `--manual` (alias `--knob`)
+   appends takes at the gain picked from the sweep, one per setup the speaker makes by hand (knob,
+   distance, voice: `'soft voice · 5 cm · knob +50%,…'`); Enter before each, `r` + Enter redoes the
+   previous one (a slip). Agent apps may lack microphone access (digital silence) and have no TTY:
+   never capture in the agent's own shell. First use: macOS asks to allow Terminal's microphone.
+   Run `run` in the background: it waits `--wait` for the Enter, then as long as takes progress.
 4. The original gain is restored after the last take, on Ctrl-C and when the window closes. A
-   killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (with `--knob`: keeps the
-   gain the knob takes used; or later `mic-calibrate gain --device NAME VALUE`) only when the
+   killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (with `--manual`: keeps the
+   gain the manual takes used; or later `mic-calibrate gain --device NAME VALUE`) only when the
    speaker asked for it.
 5. Deliver `report.md`: recommendation, table, clips embedded by absolute path
    (`![take 2](/abs/…/take-2-gain-0.50.wav)`), transcripts. `results.json` has the same data.

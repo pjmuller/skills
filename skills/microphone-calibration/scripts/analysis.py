@@ -193,9 +193,10 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
 
 
 def is_slip(reference: str, transcript: str) -> bool:
-    """Words left out and nothing misheard: more likely the speaker skipping words than the mic."""
+    """Words left out, nothing misheard, at least half heard: likely the speaker skipping words, not the mic."""
     substitutions, deletions, insertions = edit_counts(reference, transcript)
-    return substitutions == 0 and deletions >= 2 and insertions <= 1
+    heard = len(words(reference)) - deletions  # empty or near-empty recognition is the mic's failure
+    return substitutions == 0 and deletions >= 2 and insertions <= 1 and heard >= len(words(reference)) / 2
 
 
 def verdict(metrics: Metrics) -> str:
