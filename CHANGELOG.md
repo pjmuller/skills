@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — google-workspace-core: generic lessons out of wrappers
+
+- New `references/mymaps.md` (My Maps: Drive discovery, browser/Data Portability export, UI-only edits). `drafts.md`: wrapper signatures (once, before quoted history, both alternatives) and "draft vs send is wrapper policy, default draft". `rest.md`: raw `api` pagination/bounded reads, Calendar via `api`, `doc-read --out`. `integration.md`: runnable import example, `ws.session.http`, `scopes` is a minimum not a ceiling, wrappers link instead of restating. `troubleshooting.md`: token lifetime (Testing 7 days; Gmail tokens die on password change) and the unverified-app notice/100-user cap. `auth export-token` wording corrected (writes a file). Why: PJ's personal wrapper had grown to restate these; every core user should get them.
+
 ## 2026-10-26 — audit follow-ups: shorter schedule list, skill usage, claude-swap removed
 
 - `t3-schedule list` (text/markdown) hides finished one-shot jobs; `--all` shows them, `--json` stays complete. Why: 266 of 323 jobs were retired; "what's scheduled?" cost ~34k tokens per call (135 KB → 20 KB).

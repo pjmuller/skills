@@ -14,8 +14,19 @@ approve every scope. Never copy credentials into a repository or worktree.
 | --- | --- |
 | Worktree lacks the ignored `.env` | Use `config_dir/client.json`; don't copy credentials into the worktree. |
 | Variables come from mise or a shell env file | Run through `mise exec --` from the repo root. |
-| `invalid_grant` on refresh | Token revoked/expired: the account owner runs `auth mint --force`. |
+| `invalid_grant` on refresh | Token revoked/expired ([lifetime](#token-lifetime-and-unverified-apps)): the account owner runs `auth mint --force` (replaces the existing, dead cache). |
 | Network failure | Retry later; don't re-consent. |
+
+## Token lifetime and unverified apps
+
+An External OAuth app in **Testing** issues refresh tokens that die after 7 days; publish it (**In
+production**) for long-lived ones. In production a refresh token still dies when the user revokes it,
+it goes unused for 6 months, the password changes **and** it carries Gmail scopes, or the account
+exceeds 100 live tokens per client ([Google](https://developers.google.com/identity/protocols/oauth2#expiration)).
+An unverified production app asking sensitive/restricted scopes (Gmail, full Drive) shows a "Google
+hasn't verified this app" notice before consent and is capped at 100 new users
+([Google](https://support.google.com/cloud/answer/7454865)): fine for a handful of own accounts,
+verification needed beyond that. A separate Cloud project is just as unverified.
 
 ## API disabled or missing scope?
 

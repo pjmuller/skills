@@ -25,7 +25,18 @@ from the highest index down. Below: API behaviour the commands absorb, relevant 
 - `slides-thumbnail` downloads from `lh*.googleusercontent.com`: a sandbox egress allowlist needs
   `*.googleusercontent.com` besides `*.googleapis.com`. `slides-export-pdf` stays on googleapis.
 
+**Raw `api` / importable client**
+- One request per call: follow `nextPageToken` before claiming a complete result. Fetch metadata
+  first, bodies only for the relevant items; print selected fields, never whole HTML messages.
+
+**Calendar** (no subcommand; needs a calendar scope)
+- `api --json GET https://www.googleapis.com/calendar/v3/calendars/<id>/events --param timeMin=…
+  --param timeMax=… --param singleEvents=true --param orderBy=startTime` (`<id>` = the calendar's email,
+  `primary` for the account's own). Inserts: `POST …/events`, only when requested.
+
 **Docs**
+- `doc-read --out PATH` writes the Markdown owner-only and refuses to follow a symlink or overwrite
+  without `--force`.
 - Markdown export escapes Markdown-ish characters (`>>` → `\>\>`); edit from `doc-outline`
   indexes, not the export. Content starts at index 1 (a `sectionBreak` occupies 0–1).
 

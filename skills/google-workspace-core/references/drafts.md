@@ -36,6 +36,16 @@ Read the latest thread before composing: advancing the reply target does not upd
 text. Body-only `gmail-draft-update` and `gmail-draft-send` preserve the existing reply target.
 The builder sets no Date header; Gmail supplies it. Quotes preserve the source Date and offset.
 
+## Signatures
+
+API drafts and sends never get the Gmail web signature (it is a compose-window feature of
+[sendAs](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs)).
+When the wrapper supplies one, put it once at the end of the newly authored text (the core appends
+quoted history after it on replies), replacing a bare closing name rather than stacking; with
+`--html-file`, the same visible signature in both alternatives. Check the decoded read-back.
+
+Draft or send is the wrapper's policy; without one, deliver a draft and let the human send it.
+
 ## Attachments
 
 - `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send`, `gmail-draft-update`: one part per file

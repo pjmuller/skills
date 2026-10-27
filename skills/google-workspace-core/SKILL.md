@@ -19,8 +19,8 @@ the account's scopes, the user's request and the wrapper's policy.
 Hard rules:
 
 - **Secrets:** data commands refresh an existing offline token and verify the account; only `auth
-  mint` opens browser consent. `auth export-env` / `auth export-token` print secrets: provisioning
-  only, never log, paste or commit. Never cat/grep `token.json`, `client.json` or a `.env`; use `doctor`.
+  mint` opens browser consent. `auth export-env` prints secrets, `auth export-token` writes the refresh token to an owner-only
+  file: provisioning only, never log, paste or commit. Never cat/grep `token.json`, `client.json` or a `.env`; use `doctor`.
 - **Writes:** only requested ones; preserve unrelated content; read the result back. Drive deletion
   is trash; `slides-delete` needs `--yes`; Gmail sends are not idempotent. Never send mail or edit a
   document just to prove access.
@@ -46,11 +46,12 @@ take a Google URL or bare id; slide arguments a 1-based number, objectId or past
 Open when needed:
 
 - New wrapper, `workspace.json` keys, credential resolution → [integration](references/integration.md)
-- Dropping to `*-batch` / `api`; Slides, Docs, Sheets, Drive API gotchas → [rest](references/rest.md)
-- Writing or editing a draft (HTML twin, From, `--attach`), what an access check proves → [drafts](references/drafts.md)
+- Dropping to `*-batch` / `api` (pagination, Calendar); Slides, Docs, Sheets, Drive API gotchas → [rest](references/rest.md)
+- Writing or editing a draft (HTML twin, From, `--attach`, signatures, draft vs send), what an access check proves → [drafts](references/drafts.md)
 - Gmail link that names no account; the user's mailbox inventory → [accounts](references/accounts.md)
 - Finding old mail (`gmail-search` → `gmail-export` → grep), query cheat sheet → [gmail-search](references/gmail-search.md)
-- Credential errors, 403, first machine → [troubleshooting](references/troubleshooting.md)
+- Credential errors, 403, first machine, token lifetime → [troubleshooting](references/troubleshooting.md)
+- Google My Maps (no content API) → [mymaps](references/mymaps.md)
 
 Offline tests: `uv run --project <core> pytest <core>/scripts/tests -q`; `scripts/install --check`
 verifies dependencies.

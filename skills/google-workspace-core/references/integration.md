@@ -6,7 +6,9 @@ never a wrapper, `workspace.json` or credential file.
 
 A wrapper is `SKILL.md` + `workspace.json` (+ its own domain scripts on `sheet-batch` or the
 importable API); no CLI copy, argparse or auth code. Its docs call the core with an explicit
-`--config` (a shell function for brevity, not a launcher script). Start from
+`--config` (a shell function for brevity, not a launcher script). Its prose holds only what
+is specific to that account or user (scopes, resource ids, approval policy, preferences); for
+mechanics it links these references instead of restating them, and generic lessons land here. Start from
 [templates/workspace.json](../templates/workspace.json), put a desktop OAuth client outside the
 repository, run `auth mint`. Old per-repo command names (`me`, `sheet-get`, `gws_auth.py`, …) are
 gone: map them via `gws.py --help`.
@@ -18,7 +20,7 @@ resolve against the config file.
 
 | Key | Meaning |
 | --- | --- |
-| `account`, `config_dir`, `scopes` (required) | Address every call is verified against; owner-only dir for `token.json` (+ optional `client.json`); scopes the token must carry (superset OK). |
+| `account`, `config_dir`, `scopes` (required) | Address every call is verified against; owner-only dir for `token.json` (+ optional `client.json`); scopes the token must carry (a minimum: supersets pass, so this is no read-only ceiling; the consent decides). |
 | `mint_scopes` | What `auth mint` requests (default `scopes`). The core never widens consent; a token without `userinfo.email` is identified via the Gmail profile. |
 | `client_env` | Env files holding `GOOGLE_WORKSPACE_CLIENT_ID`/`_SECRET`. |
 | `legacy_token` / `offline_token_file` | Pre-existing token read in place / refresh-token import file and default `auth export-token` target. |
@@ -39,10 +41,21 @@ Credential resolution (`scripts/gws_core/auth.py`):
 
 ## Importable API
 
-`from gws_core import load_config, credentials, Workspace` (`scripts/gws_core/__init__.py`). Only
+```python
+import sys
+sys.path.insert(0, "<core>/scripts")
+from gws_core import Workspace, load_config
+
+with Workspace(load_config("<wrapper>/workspace.json")) as ws:
+    print(ws.gmail.profile()["emailAddress"])
+    ws.api("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList")
+```
+
+Run with `uv run --with google-auth --with httpx --with requests python script.py` (absolute paths
+work from any directory). `from gws_core import load_config, credentials, Workspace` (`scripts/gws_core/__init__.py`). Only
 `config`/`errors` load eagerly, so `credentials` alone skips httpx and the consent stack.
 `Workspace` is one authenticated session (`drive`, `docs`, `sheets`, `slides`, `gmail`, `api()`,
-`whoami()`) with no process-global state, so two accounts can share a process. `gws_core.render`
+`whoami()`; `ws.session.http` is the authenticated httpx client) with no process-global state, so two accounts can share a process. `gws_core.render`
 prints the CLI's compact tables. Errors are `WorkspaceError` subclasses (`ConfigError`, `AuthError`,
 `ApiError.status`), never `SystemExit`.
 
