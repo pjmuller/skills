@@ -1,8 +1,8 @@
 """Level measurements, transcript accuracy and the gain recommendation (pure Python, no numpy).
 
-Every take is: pre-beep quiet (noise floor) → beep (excluded) → speech window. Metrics come from the
-unnormalized original; the analysis channel is the one with the most speech energy (some interfaces
-put the mic on one channel only), clipping and peaks count across all channels.
+Every take is: quiet wait → three-beep countdown (excluded by its tone) → speech → a short quiet tail.
+Metrics come from the unnormalized original; the analysis channel is the one with the most energy
+(some interfaces put the mic on one channel only), clipping and peaks count across all channels.
 """
 from __future__ import annotations
 
@@ -25,6 +25,12 @@ QUIET_PEAK_DB = -20.0
 SNR_TIE_DB = 3.0
 BEEP_HZ = 1000.0
 BEEP_SHARE = 0.6  # frames with more of their energy in the beep tone are excluded
+SKIP_SECONDS = 0.15  # capture start-up
+NOISE_PERCENTILE = 0.2  # the take is mostly quiet waiting and countdown gaps; speech is the loud part
+# Live end-of-take: stop once this much speech was heard and then this much quiet (speaker finished).
+END_MIN_SPEECH = 0.6
+END_QUIET_SECONDS = 0.8
+END_ABOVE_NOISE_DB = 12.0
 
 
 def db(value: float) -> float:
@@ -77,15 +83,16 @@ def tone_share(samples, rate: int, frequency: float = BEEP_HZ) -> float:
     return 2 * tone / (len(samples) * energy) if energy > 1e-12 else 0.0
 
 
-def measure(channels: list, rate: int, noise_window: tuple[float, float], speech_start: float) -> Metrics:
-    """Noise from the pre-beep window; everything else from frames after speech_start minus beep frames.
+def _percentile(values: list[float], share: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(share * len(ordered)))] if ordered else 0.0
 
-    The beep's position in the file is not known precisely (player and capture latency vary by
-    ~1 s), so beep frames are found by their pure tone instead of by timestamps.
-    """
+
+def measure(channels: list, rate: int) -> Metrics:
+    """Frames after start-up minus beep frames. Noise floor = a low percentile of those frames; speech =
+    frames clearly above it. The beep's position varies by ~1 s (player latency), hence tone detection."""
     frame = max(1, int(FRAME_SECONDS * rate))
-    noise_cut = slice(int(noise_window[0] * rate), int(noise_window[1] * rate))
-    starts = range(int(speech_start * rate), len(channels[0]) - frame + 1, frame)
+    starts = range(int(SKIP_SECONDS * rate), len(channels[0]) - frame + 1, frame)
     # Per channel: summing channels can cancel an out-of-phase beep that still sets the peak.
     beep = {n for n, start in enumerate(starts)
             if any(tone_share(c[start:start + frame], rate) > BEEP_SHARE for c in channels)}
@@ -96,8 +103,8 @@ def measure(channels: list, rate: int, noise_window: tuple[float, float], speech
         return _rms_power(channel[start:start + frame])
 
     best = max(range(len(channels)), key=lambda c: sum(power(channels[c], start) for start in kept))
-    noise = power_db(_rms_power(channels[best][noise_cut]))
     frames = [power(channels[best], start) for start in kept]
+    noise = power_db(_percentile(frames, NOISE_PERCENTILE))
     active = [p for p in frames if power_db(p) > noise + ACTIVE_ABOVE_NOISE_DB]
     speech_level = power_db(sum(active) / len(active)) if active else -120.0
     window = [x for channel in channels for start in kept for x in channel[start:start + frame]]
@@ -112,6 +119,35 @@ def measure(channels: list, rate: int, noise_window: tuple[float, float], speech
         snr_db=round(speech_level - noise, 1) if active else 0.0,
         speech_seconds=round(len(active) * frame / rate, 2),
     )
+
+
+class SpeechEnd:
+    """Live: feed mono frames, `finished` turns true once the speaker said something and went quiet."""
+
+    def __init__(self, rate: int):
+        self.rate, self.powers, self.speech, self.quiet = rate, [], 0.0, 0.0
+
+    def feed(self, samples) -> None:
+        seconds = len(samples) / self.rate
+        if tone_share(samples, self.rate) > BEEP_SHARE:
+            return
+        level = _rms_power(samples)
+        self.powers.append(level)
+        if len(self.powers) < 10:
+            return
+        if power_db(level) > power_db(_percentile(self.powers, NOISE_PERCENTILE)) + END_ABOVE_NOISE_DB:
+            self.speech += seconds
+            self.quiet = 0.0
+        elif self.speech:
+            self.quiet += seconds
+
+    def restart(self) -> None:
+        """Countdown over: keep the noise history, forget sounds made while waiting (breath, typing)."""
+        self.speech = self.quiet = 0.0
+
+    @property
+    def finished(self) -> bool:
+        return self.speech >= END_MIN_SPEECH and self.quiet >= END_QUIET_SECONDS
 
 
 # Unambiguous English contractions only ('s and 'd have several expansions).
@@ -152,36 +188,38 @@ def verdict(metrics: Metrics) -> str:
 
 @dataclass
 class Recommendation:
-    gain: float | None
+    take: dict | None  # the tested take to use; its "setting" is a gain or a knob label
     reason: str
     next_step: str = ""
 
+    @property
+    def setting(self):
+        return self.take["setting"] if self.take else None
+
 
 def recommend(takes: list[dict]) -> Recommendation:
-    """takes: [{"gain": float, "metrics": Metrics, "wer": float | None}] → one tested gain, never extrapolated."""
+    """takes: [{"setting", "metrics", "wer", optional "gain"}] → one tested setting, never extrapolated."""
     spoken = [take for take in takes if verdict(take["metrics"]) != "no speech detected"]
     if not spoken:
         return Recommendation(None, "no take contains detectable speech", "check the device and mic position, rerun")
     safe = [take for take in spoken if verdict(take["metrics"]) in ("ok", "quiet")]
     if not safe:
-        lowest = min(take["gain"] for take in spoken)
+        lowest = min(spoken, key=lambda take: take["metrics"].peak_dbfs)["setting"]
         return Recommendation(None, "every take clips or has no headroom",
-                              f"rerun with levels below {lowest:.2f} or speak further from the mic")
+                              f"go below the lowest tested setting ({lowest}) or speak further from the mic")
     best_snr = max(take["metrics"].snr_db for take in safe)
     close = [take for take in safe if take["metrics"].snr_db >= best_snr - SNR_TIE_DB]
     known = [take["wer"] for take in close if take["wer"] is not None]
     if known:
         close = [take for take in close if take["wer"] is None or take["wer"] <= min(known) + 0.1]
-    pick = min(close, key=lambda take: (abs(take["metrics"].peak_dbfs - TARGET_PEAK_DB), -take["gain"]))
+    pick = min(close, key=lambda take: (abs(take["metrics"].peak_dbfs - TARGET_PEAK_DB), -(take.get("gain") or 0)))
     m = pick["metrics"]
     reason = (f"peak {m.peak_dbfs} dBFS (target ≈ {TARGET_PEAK_DB:.0f}), no clipping, "
               f"SNR {m.snr_db} dB (best safe {best_snr} dB)")
     next_step = ""
     if verdict(m) == "quiet":
-        highest = max(take["gain"] for take in takes)
-        next_step = (f"even the best safe take peaks below {QUIET_PEAK_DB:.0f} dBFS; move closer"
-                     + ("" if highest >= 0.99 else f" or test levels above {highest:.2f}"))
-    return Recommendation(pick["gain"], reason, next_step)
+        next_step = f"even the best safe take peaks below {QUIET_PEAK_DB:.0f} dBFS; move closer or test higher settings"
+    return Recommendation(pick, reason, next_step)
 
 
 def gain_tracking_warning(takes: list[dict]) -> str:

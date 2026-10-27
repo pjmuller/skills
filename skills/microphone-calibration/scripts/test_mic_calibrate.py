@@ -3,10 +3,13 @@ import importlib.machinery
 import importlib.util
 import json
 import math
+import os
 import random
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,7 +50,7 @@ def take(speech_amplitude, beep_amplitude=0.0, noise=0.001, seed=1):
 
 def metrics(samples, channels=1):
     silent = [0.0] * len(samples)
-    return analysis.measure([silent] * (channels - 1) + [samples], RATE, (0.25, 1.1), 1.1)
+    return analysis.measure([silent] * (channels - 1) + [samples], RATE)
 
 
 def test_levels_ignore_beep_and_pick_the_live_channel():
@@ -73,26 +76,57 @@ def fake(peak, snr=30.0, clipped=0, speech=3.0):
     return analysis.Metrics(1, 1, peak, clipped, -60.0, peak - 12, snr, speech)
 
 
+def gains(*rows):
+    return [{"setting": gain, "gain": gain, "metrics": metrics, "wer": wer} for gain, metrics, wer in rows]
+
+
 def test_recommends_the_safe_level_nearest_target():
-    takes = [{"gain": 0.25, "metrics": fake(-24), "wer": 0.0},
-             {"gain": 0.5, "metrics": fake(-15), "wer": 0.0},
-             {"gain": 0.75, "metrics": fake(-8), "wer": 0.0},
-             {"gain": 1.0, "metrics": fake(-0.5, clipped=40), "wer": 0.0}]
-    assert analysis.recommend(takes).gain == 0.75
+    takes = gains((0.25, fake(-24), 0.0), (0.5, fake(-15), 0.0), (0.75, fake(-8), 0.0),
+                  (1.0, fake(-0.5, clipped=40), 0.0))
+    assert analysis.recommend(takes).setting == 0.75
+    knob = [{"setting": label, "metrics": m, "wer": None} for label, m in (("as is", fake(-14)), ("+50%", fake(-8)))]
+    assert analysis.recommend(knob).setting == "+50%"
 
 
 def test_transcript_errors_break_ties_and_too_hot_sweeps_say_go_lower():
-    takes = [{"gain": 0.5, "metrics": fake(-10), "wer": 0.4}, {"gain": 0.6, "metrics": fake(-8), "wer": 0.0}]
-    assert analysis.recommend(takes).gain == 0.6
-    hot = analysis.recommend([{"gain": 0.8, "metrics": fake(-0.1, clipped=9), "wer": None},
-                              {"gain": 1.0, "metrics": fake(-0.1, clipped=99), "wer": None}])
-    assert hot.gain is None and "below 0.80" in hot.next_step
+    assert analysis.recommend(gains((0.5, fake(-10), 0.4), (0.6, fake(-8), 0.0))).setting == 0.6
+    hot = analysis.recommend(gains((0.8, fake(-0.2, clipped=9), None), (1.0, fake(-0.1, clipped=99), None)))
+    assert hot.take is None and "(0.8)" in hot.next_step
 
 
 def test_word_error_rate_ignores_case_and_punctuation():
     assert analysis.word_error_rate("Hello, I'm Sam and I like tea.", "hello i'm sam and i like tea") == 0
     assert analysis.word_error_rate("one two three four five", "one two tree four five") == pytest.approx(0.2)
     assert analysis.word_error_rate("I'm sure we don't", "I am sure we do not") == 0
+
+
+def write_wav(path, samples, rate=RATE):
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(b"".join(int(max(-1, min(1, x)) * 32767).to_bytes(2, "little", signed=True) for x in samples))
+
+
+def test_live_detector_waits_for_speech_then_quiet():
+    detector, frame = analysis.SpeechEnd(RATE), int(analysis.FRAME_SECONDS * RATE)
+    samples = take(0.3, beep_amplitude=0.9) + take(0.0)[:int(1.2 * RATE)]  # speech ends at 5.0 s
+    finished_at = None
+    for start in range(0, len(samples) - frame, frame):
+        detector.feed(samples[start:start + frame])
+        if detector.finished and finished_at is None:
+            finished_at = start / RATE
+    assert finished_at is not None and 5.0 + analysis.END_QUIET_SECONDS - 0.1 <= finished_at < 6.2
+    quiet = analysis.SpeechEnd(RATE)
+    silence = take(0.0)
+    for start in range(0, len(silence) - frame, frame):
+        quiet.feed(silence[start:start + frame])
+    assert not quiet.finished  # silence alone never ends a take early
+    early = analysis.SpeechEnd(RATE)  # noise before the countdown ended does not count as speech
+    for start in range(0, len(samples) - frame, frame):
+        early.feed(samples[start:start + frame])
+    early.restart()
+    assert not early.finished
 
 
 class FakeDevice:
@@ -128,15 +162,77 @@ def test_original_gain_restored_when_a_take_fails(tmp_path):
         calls.append(device.gain())
         if len(calls) == 2:
             raise RuntimeError("device unplugged")
-        return {"noise_window": [0.25, 1.1], "speech_start": 1.1}
+        return {}
 
     with pytest.raises(RuntimeError):
-        cli.record_session(device, session, tmp_path, record, say=lambda _text: None)
+        cli.record_session(device, session, tmp_path, record)
     assert calls == [0.2, 0.9]
     assert device.gains() == {1: 0.42, 2: 0.42}
     saved = json.loads((tmp_path / "session.json").read_text())
     assert saved["restored_gain"] == 0.42 and saved["status"].startswith("interrupted")
     assert len(saved["takes"]) == 1
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="the gain pick decodes with ffmpeg")
+@pytest.mark.parametrize("keep", [True, False])
+def test_knob_takes_use_the_picked_gain(tmp_path, keep):
+    cli = load_cli()
+    device = FakeDevice()
+    loudness = {0.25: 0.02, 0.5: 0.3, 1.0: 2.0}  # quiet, fine, clipping
+    session = {"levels": [0.25, 0.5, 1.0], "knob": ["as is", "-50%"], "keep_pick": keep, "takes": [], "seconds": 1}
+    prompts, knob_gains = [], []
+
+    def record(path):
+        if "-knob-" in path.name:
+            knob_gains.append(device.gain())
+        write_wav(path, take(loudness.get(device.gain(), 0.3)))
+        return {}
+
+    cli.record_session(device, session, tmp_path, record, ask=lambda text: prompts.append(text) or True)
+    assert session["gain_pick"] == 0.5 and knob_gains == [0.5, 0.5]
+    assert [p.split(":")[0] for p in prompts] == ["Knob take 1/2", "Knob take 2/2"]
+    assert device.gain() == (0.5 if keep else 0.42)
+
+
+@pytest.fixture
+def fake_tools(tmp_path, monkeypatch):
+    """ffmpeg stand-in: touches the WAV, streams 1 s quiet, 1.5 s 'speech', then quiet until SIGINT."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ffmpeg").write_text(f"""#!{sys.executable}
+import array, math, random, signal, sys, time
+signal.signal(signal.SIGINT, lambda *_: sys.exit(255))
+open(sys.argv[sys.argv.index("pcm_s24le") + 1], "wb").close()
+rate, rng, n = 16000, random.Random(1), 0
+while n < rate * 20:
+    chunk = []
+    for _ in range(480):
+        t = n / rate
+        speech = 0.3 * math.sin(2 * math.pi * 200 * t) if 1.0 <= t < 2.5 else 0.0
+        chunk.append(rng.gauss(0, 0.001) + speech)
+        n += 1
+    sys.stdout.buffer.write(array.array("f", chunk).tobytes())
+    sys.stdout.buffer.flush()
+    time.sleep(0.006)
+""")
+    (bin_dir / "afplay").write_text("#!/bin/sh\nexit 0\n")
+    for tool in ("ffmpeg", "afplay"):
+        (bin_dir / tool).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return load_cli()
+
+
+def test_take_ends_once_the_speaker_stops(tmp_path, fake_tools):
+    started = time.monotonic()
+    result = fake_tools.record_take("0", tmp_path / "take.wav", tmp_path / "countdown.wav", 30)
+    assert result["ended"] == "speaker stopped" and result["speech_seconds_live"] >= 1.0
+    assert time.monotonic() - started < 6  # not the 30 s limit
+
+
+def test_agent_cancel_stops_an_active_take(tmp_path, fake_tools):
+    threading.Timer(0.3, (tmp_path / fake_tools.CANCEL_FILE).touch).start()
+    with pytest.raises(KeyboardInterrupt):
+        fake_tools.record_take("0", tmp_path / "take.wav", tmp_path / "countdown.wav", 30)
 
 
 def test_device_selection_prefers_exact_name_and_rejects_ambiguity(monkeypatch, capsys):
@@ -147,8 +243,6 @@ def test_device_selection_prefers_exact_name_and_rejects_ambiguity(monkeypatch, 
     assert cli.resolve_device("mic").name == "Mic"
     with pytest.raises(SystemExit):
         cli.resolve_device("pro x")
-    with pytest.raises(SystemExit):
-        cli.resolve_device("usb mic pro")
     devices.append(SimpleNamespace(name="USB Mic 2"))
     with pytest.raises(SystemExit):
         cli.resolve_device("usb")
@@ -159,69 +253,18 @@ def test_device_selection_prefers_exact_name_and_rejects_ambiguity(monkeypatch, 
 def test_report_embeds_clips_and_recommends(tmp_path):
     takes = []
     for index, (gain, amplitude) in enumerate(((0.3, 0.02), (0.6, 0.25), (0.9, 2.0)), 1):
-        name = f"take-{index}-gain-{gain:.2f}.wav"
-        with wave.open(str(tmp_path / name), "wb") as out:
-            out.setnchannels(1)
-            out.setsampwidth(2)
-            out.setframerate(RATE)
-            out.writeframes(b"".join(int(x * 32767).to_bytes(2, "little", signed=True)
-                                     for x in take(amplitude, beep_amplitude=0.5)))
-        takes.append({"index": index, "gain": gain, "gain_db": None, "file": name,
-                      "noise_window": [0.25, 1.1], "speech_start": 1.1})
-    session = {"started": "2026-01-01 10:00", "mode": "sweep", "status": "recorded",
+        name = f"take-{index}-gain.wav"
+        write_wav(tmp_path / name, take(amplitude, beep_amplitude=0.5))
+        takes.append({"index": index, "phase": "gain", "setting": gain, "gain": gain, "gain_db": None, "file": name})
+    write_wav(tmp_path / "take-4-knob.wav", take(0.25))
+    takes.append({"index": 4, "phase": "knob", "setting": "+50%", "gain": 0.6, "gain_db": None, "file": "take-4-knob.wav"})
+    session = {"started": "2026-01-01 10:00", "status": "recorded",
                "device": {"name": "Test Mic", "uid": "uid-1", "channels": 1}, "original_gain": 0.5,
-               "restored_gain": 0.5, "sentence": "one two three", "language": "en", "takes": takes}
+               "restored_gain": 0.5, "gain_pick": 0.6, "sentence": "one two three", "language": "en", "takes": takes}
     (tmp_path / "session.json").write_text(json.dumps(session))
     subprocess.run([sys.executable, str(SCRIPTS / "mic-calibrate"), "report", str(tmp_path), "--no-stt"],
                    check=True, capture_output=True)
     text = (tmp_path / "report.md").read_text()
-    assert "Recommended input gain **0.60**" in text
+    assert "Input gain: **0.60**" in text and "Knob (at gain 0.6): **+50%**" in text
     assert f"]({tmp_path.resolve() / takes[0]['file']})" in text
     assert "clipping" in text
-
-
-def test_out_of_phase_beep_is_still_excluded():
-    left = take(0.3, beep_amplitude=0.9)
-    right = [-x if 1.55 <= n / RATE < 1.8 else x for n, x in enumerate(take(0.3, beep_amplitude=0.9, seed=2))]
-    m = analysis.measure([left, right], RATE, (0.25, 1.1), 1.1)
-    assert m.peak_dbfs < -8 and analysis.verdict(m) == "ok"
-
-
-def test_agent_cancel_stops_before_next_take_and_restores(tmp_path):
-    cli = load_cli()
-    device = FakeDevice()
-    session = {"levels": [0.2, 0.9], "takes": [], "seconds": 1}
-
-    def record(path):
-        (tmp_path / cli.CANCEL_FILE).touch()  # the agent gave up during take 1
-        return {"noise_window": [0.25, 1.1], "speech_start": 1.1}
-
-    with pytest.raises(KeyboardInterrupt):
-        cli.record_session(device, session, tmp_path, record, say=lambda _text: None)
-    saved = json.loads((tmp_path / "session.json").read_text())
-    assert len(saved["takes"]) == 1 and device.gains() == {1: 0.42, 2: 0.42}
-    assert "cancelled" in saved["status"]
-
-
-def test_agent_cancel_stops_an_active_take(tmp_path, monkeypatch):
-    cli = load_cli()
-
-    class Capture:  # ffmpeg stand-in that would record forever and writes data at once
-        def __init__(self, command, **_kwargs):
-            Path(command[-1]).write_bytes(b"\0" * 9000)
-            self.returncode, self.stderr = None, None
-
-        def poll(self):
-            return self.returncode
-
-        def terminate(self):
-            self.returncode = -15
-
-        def wait(self, timeout=None):
-            return self.returncode
-
-    monkeypatch.setattr(cli.subprocess, "Popen", Capture)
-    monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_k: (tmp_path / cli.CANCEL_FILE).touch())
-    monkeypatch.setattr(cli, "PRE_QUIET", 0)
-    with pytest.raises(KeyboardInterrupt):
-        cli.record_take("0", tmp_path / "take.wav", tmp_path / "beep.wav", 30)

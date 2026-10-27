@@ -6,9 +6,11 @@
 
   devices                     list inputs: channels, settable gain, current gain
   gain [--device D] [VALUE]   read or set input gain (0.0-1.0)
-  run [--device D] ...        one take per --levels (beep before each), original gain restored, then
-                              report.md; --keep-gain records --takes at the current level. Without a
-                              TTY (agents) the capture opens in Terminal.app; the speaker presses Enter
+  run [--device D] ...        one take per --levels (three-beep countdown, ends when the speaker stops),
+                              then optional --knob takes at the picked gain (Enter between: the speaker
+                              turns the hardware knob), then report.md. Original gain restored unless
+                              --apply-recommended. --keep-gain: no gain sweep. Without a TTY (agents)
+                              the capture opens in Terminal.app; the speaker presses Enter to start
   capture SESSION_DIR         the recording half of run (what the Terminal window executes)
   report SESSION_DIR          re-analyse an existing session (metrics, STT, recommendation)
   restore SESSION_DIR         put back the gain saved in session.json (after a killed run)
@@ -19,6 +21,7 @@ macOS only (CoreAudio, avfoundation). STT: `transcribe-local` (video-shrink-for-
 from __future__ import annotations
 
 import argparse
+import array
 import json
 import os
 import re
@@ -36,11 +39,14 @@ import analysis  # noqa: E402
 
 DEFAULT_LEVELS = "0.25,0.5,0.75,1.0"
 DEFAULT_SENTENCE = "The quick brown fox jumps over the lazy dog, then naps in the warm sun."
-PRE_QUIET = 1.2      # seconds of waiting before the beep: the noise-floor window
-BEEP_SECONDS = 0.15
-PLAYER_SLACK = 1.5    # afplay needs 0.4-1.2 s to start; the beep is excluded by its tone, not by time
+# Two short beeps and a long one, one file: afplay's 0.4-1.2 s start latency then shifts the whole
+# countdown instead of breaking its rhythm. All at the analysis' beep tone, so takes exclude them.
+COUNTDOWN = ((0.0, 0.1), (0.45, 0.1), (0.9, 0.3))
+PLAYER_SLACK = 1.5    # worst afplay start latency
+LIVE_RATE = 16000     # the speech-end detector's copy of the stream; the WAV keeps the native format
 SETTLE_SECONDS = 0.3
 ENTER_TIMEOUT = 900
+KNOB_PROMPT_SECONDS = 120  # per knob take: time to turn the knob and press Enter
 CANCEL_FILE = "cancel"  # written by the agent side when it stops waiting; checked before every take
 
 
@@ -80,10 +86,6 @@ def ffmpeg_index(name: str) -> str:
     return found[0]
 
 
-def speak(text: str) -> None:
-    subprocess.run(["say", text], check=False)
-
-
 def write_json(path: Path, data: dict) -> None:
     # Atomic: the agent side polls session.json while the Terminal side writes it.
     partial = path.with_suffix(".partial")
@@ -91,104 +93,145 @@ def write_json(path: Path, data: dict) -> None:
     partial.replace(path)
 
 
-def record_take(index: str, path: Path, beep: Path, seconds: float) -> dict:
-    """Bounded capture: quiet wait → beep → speech. Windows are seconds into the file."""
-    total = PRE_QUIET + PLAYER_SLACK + seconds
-    process = subprocess.Popen(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-                                "-f", "avfoundation", "-i", f":{index}", "-t", f"{total:.2f}",
-                                "-c:a", "pcm_s24le", str(path)], stderr=subprocess.PIPE, text=True)
+def stop(process: subprocess.Popen, drain=None) -> None:
+    """SIGINT lets ffmpeg finish the WAV header; keep draining its pipe so it never blocks on a write."""
+    if process.poll() is None:
+        process.send_signal(signal.SIGINT)
+        deadline = time.monotonic() + 5
+        while process.poll() is None and time.monotonic() < deadline:
+            if drain is not None and select.select([drain], [], [], 0.1)[0]:
+                os.read(drain, 65536)
+            else:
+                time.sleep(0.05)
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def record_take(index: str, path: Path, countdown: Path, max_seconds: float) -> dict:
+    """Countdown, then speech; ends 0.8 s after the speaker stops, or max_seconds after the countdown."""
+    command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "avfoundation",
+               "-i", f":{index}", "-t", f"{PLAYER_SLACK + COUNTDOWN[-1][0] + max_seconds + 2:.2f}",
+               "-map", "0:a", "-c:a", "pcm_s24le", str(path),
+               "-map", "0:a", "-ac", "1", "-ar", str(LIVE_RATE), "-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, frame = process.stdout.fileno(), int(analysis.FRAME_SECONDS * LIVE_RATE) * 4
+    detector, buffer, player, countdown_end, ended = analysis.SpeechEnd(LIVE_RATE), bytearray(), None, None, "limit"
+    cancel, started = path.parent / CANCEL_FILE, time.monotonic()
     try:
-        deadline = time.monotonic() + 8
-        # Samples flowing = capture started. The file lags capture, so the beep lands later in the file
-        # than measured here: the noise window, which ends before the player starts, stays beep-free.
-        while not (path.exists() and path.stat().st_size > 8192):
-            if process.poll() is not None or time.monotonic() > deadline:
-                process.kill()
-                raise RuntimeError(f"capture did not start: {(process.stderr.read() or 'timeout').strip()}")
-            time.sleep(0.01)
-        started = time.monotonic()
-        time.sleep(PRE_QUIET)
-        beep_at = time.monotonic() - started
-        subprocess.run(["afplay", str(beep)], check=False)
-        beep_end = time.monotonic() - started
-        cancel, deadline = path.parent / CANCEL_FILE, time.monotonic() + total + 10
-        while process.poll() is None:  # the agent side may cancel mid-take; finally stops ffmpeg
+        while True:
             if cancel.exists():
                 raise KeyboardInterrupt("cancelled by the waiting agent")
-            if time.monotonic() > deadline:
-                raise RuntimeError("ffmpeg did not stop at its -t limit")
-            time.sleep(0.1)
+            if not select.select([out], [], [], 0.2)[0]:
+                if player is None and time.monotonic() - started > 8:
+                    raise RuntimeError("capture did not start: " + (process.stderr.read1(4096).decode() or "timeout"))
+                continue
+            chunk = os.read(out, 65536)
+            if not chunk:
+                break  # ffmpeg reached its -t limit
+            if player is None:  # samples flowing = capture running: start the countdown
+                player = subprocess.Popen(["afplay", str(countdown)])
+            buffer += chunk
+            while len(buffer) >= frame:
+                detector.feed(array.array("f", bytes(buffer[:frame])))
+                del buffer[:frame]
+            now = time.monotonic()
+            if countdown_end is None and player.poll() is not None:
+                countdown_end = now
+                detector.restart()
+            if countdown_end is not None and detector.finished:
+                ended = "speaker stopped"
+                break
+            if countdown_end is not None and now - countdown_end > max_seconds:
+                break
     finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-    if process.returncode:
-        raise RuntimeError(f"ffmpeg failed: {process.stderr.read().strip()}")
-    noise_end = round(max(0.35, beep_at - 0.1), 3)
-    return {"noise_window": [0.25, noise_end], "speech_start": noise_end, "beep_played": [round(beep_at, 3), round(beep_end, 3)]}
+        if player is not None and player.poll() is None:
+            player.kill()
+        stop(process, out)
+    if process.returncode not in (0, 255, -signal.SIGINT):  # 255: ffmpeg's exit code after SIGINT
+        raise RuntimeError(f"ffmpeg failed ({process.returncode}): {process.stderr.read().decode().strip()}")
+    return {"ended": ended, "speech_seconds_live": round(detector.speech, 2)}
 
 
-def make_beep(path: Path) -> None:
+def make_countdown(path: Path) -> None:
+    beeps = "+".join(f"between(t\\,{start}\\,{start + length})" for start, length in COUNTDOWN)  # lavfi: escaped commas
+    length = COUNTDOWN[-1][0] + COUNTDOWN[-1][1]
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
-                    f"sine=frequency=1000:duration={BEEP_SECONDS}", "-af", "volume=0.5", str(path)], check=True)
+                    f"aevalsrc=0.5*sin(2*PI*{analysis.BEEP_HZ:.0f}*t)*({beeps}):s=48000:d={length}", str(path)],
+                   check=True)
 
 
 def interrupted(signum, _frame):
     raise KeyboardInterrupt(f"signal {signum}")
 
 
-def record_session(device, session: dict, folder: Path, record, say=speak) -> None:
-    """record(path) → windows. One take per level; the original gain comes back whatever happens."""
-    levels = session["levels"]
+def gain_pick(folder: Path, takes: list[dict]):
+    """Between the phases: pick from the gain takes by levels alone (no STT yet)."""
+    measured = [{**take, "metrics": analysis.measure(*analysis.read_wav(folder / take["file"])), "wer": None}
+                for take in takes]
+    return analysis.recommend(measured)
 
+
+def record_session(device, session: dict, folder: Path, record, ask=lambda _text: True) -> None:
+    """record(path) → take fields; ask(prompt) → False cancels. Gain phase, then knob phase at the picked
+    gain. The original gain comes back whatever happens, unless the session keeps the pick."""
+    levels, knob = session["levels"], session.get("knob") or []
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGTERM, signal.SIGHUP)}
-    if any(level is not None for level in levels):
+    if levels and device.gain_supported:
         session["original_gains"] = {str(k): v for k, v in device.gains().items()}
         session["original_gain"] = round(device.gain(), 4)
     session["status"] = "recording"
     write_json(folder / "session.json", session)
+    steps = [("gain", level) for level in levels] + [(session.get("knob_phase", "knob"), label) for label in knob]
+    keep = False
     try:
-        say(f"Microphone calibration, {len(levels)} takes. After each beep, say your sentence.")
-        for number, level in enumerate(levels, 1):
+        for number, (phase, setting) in enumerate(steps, 1):
             if (folder / CANCEL_FILE).exists():
                 raise KeyboardInterrupt("cancelled by the waiting agent")
-            take = {"index": number}
-            if level is not None:
-                take["gain_requested"] = level
-                take["gain"] = round(device.set_gain(level), 4)
+            if phase != "gain" and number == len(levels) + 1 and levels:
+                pick = gain_pick(folder, [t for t in session["takes"] if t["phase"] == "gain"])
+                if pick.take:
+                    device.set_gain(pick.setting)
+                session["gain_pick"] = pick.setting
+                print(f"\nGain sweep done: {'gain ' + format(pick.setting, '.2f') if pick.take else pick.reason}"
+                      " stays set for the next takes.")
+            if phase == "knob" and not ask(f"Knob take {number - len(levels)}/{len(knob)}: knob {setting}, then Enter"):
+                raise KeyboardInterrupt("cancelled during the knob takes")
+            take = {"index": number, "phase": phase}
+            if phase == "gain":
+                take["gain"] = round(device.set_gain(setting), 4)
+                take["setting"] = take["gain"]
                 time.sleep(SETTLE_SECONDS)
             else:
                 take["gain"] = round(device.gain(), 4) if device.gain_supported else None
+                take["setting"] = setting
             take["gain_db"] = device.gain_db() if device.gain_supported else None
-            take["file"] = f"take-{number}" + (f"-gain-{take['gain']:.2f}" if take["gain"] is not None else "") + ".wav"
-            say(f"Take {number} of {len(levels)}.")
-            print(f"take {number}/{len(levels)}  gain={take['gain']}", flush=True)
+            slug = re.sub(r"[^a-z0-9]+", "", str(setting).lower().replace("-", "minus").replace("+", "plus"))
+            take["file"] = f"take-{number}-{phase}-{slug or 'asis'}.wav"
+            print(f"take {number}/{len(steps)}  {phase} {setting}", flush=True)
             take.update(record(folder / take["file"]))
             session["takes"].append(take)
             write_json(folder / "session.json", session)
-        say("Done.")
         session["status"] = "recorded"
+        keep = session.get("keep_pick") and session.get("gain_pick") is not None
     except BaseException as error:
         session["status"] = f"interrupted: {str(error) or type(error).__name__}"
         raise
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-        if session.get("original_gains"):
+        if session.get("original_gains") and not keep:
             device.set_gains({int(k): v for k, v in session["original_gains"].items()})
             session["restored_gain"] = round(device.gain(), 4)
             print(f"restored gain {session['restored_gain']}", flush=True)
+        elif keep:
+            print(f"gain left at the pick {session['gain_pick']:.2f}", flush=True)
         write_json(folder / "session.json", session)
 
 
-def wait_for_enter(deadline: float, cancel: Path) -> bool:
+def wait_for_enter(deadline: float, cancel: Path, prompt: str = "Press Enter to start") -> bool:
     """Enter → True; deadline (wall clock) or a cancel request from the agent side → False."""
-    print(f"Press Enter to start (Ctrl-C cancels; gives up at {datetime.fromtimestamp(deadline):%H:%M}) ",
-          end="", flush=True)
+    print(f"{prompt} (Ctrl-C cancels; gives up at {datetime.fromtimestamp(deadline):%H:%M}) ", end="", flush=True)
     while time.time() < deadline and not cancel.exists():
         ready, _, _ = select.select([sys.stdin], [], [], 1)
         if ready:
@@ -202,30 +245,35 @@ def capture(folder: Path, confirm: bool) -> dict:
     session = json.loads((folder / "session.json").read_text())
     device = coreaudio().by_uid(session["device"]["uid"])
     index = ffmpeg_index(device.name)
-    levels = session["levels"]
-    print(f"\n{device.name}: {len(levels)} takes"
-          + (f" at gains {', '.join(str(level) for level in levels)}" if levels[0] is not None else " at the current level")
-          + f".\nAfter each beep, say at your normal distance and loudness:\n\n    {session['sentence']}\n")
+    levels, knob = session["levels"], session.get("knob") or []
+    plan = [f"gains {', '.join(map(str, levels))}"] if levels else []
+    if knob:
+        plan.append(f"knob {', '.join(knob)} (Enter before each)" if session.get("knob_phase", "knob") == "knob"
+                    else f"{len(knob)} takes at the current level")
+    print(f"\n{device.name}: {' then '.join(plan) or 'current level'}.\n"
+          f"After the third beep, at your normal distance and loudness, say:\n\n    {session['sentence']}\n")
     signal.signal(signal.SIGHUP, interrupted)  # closing the window must not leave the agent waiting
+    deadline = session.get("enter_deadline") or time.time() + ENTER_TIMEOUT
+    cancel = folder / CANCEL_FILE
     try:
-        deadline = session.get("enter_deadline") or time.time() + ENTER_TIMEOUT
-        ready = not confirm or wait_for_enter(deadline, folder / CANCEL_FILE)
+        ready = not confirm or wait_for_enter(deadline, cancel)
     except KeyboardInterrupt:
         ready = False
     if not ready:
         session["status"] = "cancelled before recording"
         write_json(folder / "session.json", session)
         fail(session["status"])
-    beep = folder / "beep.wav"
-    make_beep(beep)
+    countdown = folder / "countdown.wav"
+    make_countdown(countdown)
     try:
-        record_session(device, session, folder, lambda path: record_take(index, path, beep, session["seconds"]))
+        record_session(device, session, folder, lambda path: record_take(index, path, countdown, session["seconds"]),
+                       ask=lambda prompt: wait_for_enter(time.time() + KNOB_PROMPT_SECONDS, cancel, prompt))
     except KeyboardInterrupt:
         fail(f"interrupted; partial session in {folder}", 130)
     except RuntimeError as error:
         fail(f"{error}; partial session in {folder}")
     finally:
-        beep.unlink(missing_ok=True)
+        countdown.unlink(missing_ok=True)
     return session
 
 
@@ -279,75 +327,92 @@ def row(*cells) -> str:
     return "| " + " | ".join(str(cell) for cell in cells) + " |"
 
 
+def recommendation_lines(title: str, rec: analysis.Recommendation, unit: str) -> list[str]:
+    if rec.take:
+        shown = f"{rec.setting:.2f}" if isinstance(rec.setting, float) else rec.setting
+        lines = ["> [!IMPORTANT]", f"> {title}: **{unit}{shown}**: {rec.reason}."]
+    else:
+        lines = ["> [!IMPORTANT]", f"> {title}: none, {rec.reason}."]
+    return lines + ([f"> Next: {rec.next_step}."] if rec.next_step else []) + [""]
+
+
 def report(folder: Path, stt: bool) -> tuple[Path, analysis.Recommendation | None]:
     folder = folder.resolve()
     session = json.loads((folder / "session.json").read_text())
     takes = []
     for take in session["takes"]:
-        channels, rate = analysis.read_wav(folder / take["file"])
-        metrics = analysis.measure(channels, rate, tuple(take["noise_window"]), take["speech_start"])
-        takes.append({**take, "metrics": metrics, "wer": None, "transcript": None})
+        metrics = analysis.measure(*analysis.read_wav(folder / take["file"]))
+        takes.append({"phase": "gain", "setting": take.get("gain"), **take, "metrics": metrics,
+                      "wer": None, "transcript": None})
     if stt:
         texts = transcribe(folder, [take["file"] for take in takes], session.get("language"))
         for take in takes:
             if take["file"] in texts:
                 take["transcript"] = texts[take["file"]]
                 take["wer"] = round(analysis.word_error_rate(session["sentence"], take["transcript"]), 3)
-    sweep = session.get("mode") == "sweep"
-    rec = analysis.recommend(takes) if sweep else None
-    warning = analysis.gain_tracking_warning(takes) if sweep else ""
+    gain_takes = [t for t in takes if t["phase"] == "gain"]
+    knob_takes = [t for t in takes if t["phase"] != "gain"]
+    rec = analysis.recommend(gain_takes) if gain_takes else None
+    knob_rec = analysis.recommend(knob_takes) if knob_takes else None
+    warning = analysis.gain_tracking_warning(gain_takes)
     device = session["device"]
     original = session.get("original_gain")
 
+    end = (f"restored {session['restored_gain']}" if session.get("restored_gain") is not None
+           else f"left at the pick {session['gain_pick']}" if session.get("gain_pick") is not None else "")
     lines = [f"# Microphone calibration: {device['name']}", "",
              f"{session['started']} · {device['channels']} ch · "
              + (f"original gain {original}" if original is not None else "gain left untouched")
-             + (f" (restored {session['restored_gain']})" if session.get("restored_gain") is not None else ""), ""]
+             + (f" ({end})" if end else ""), ""]
     if rec:
-        if rec.gain is not None:
-            lines += ["> [!IMPORTANT]", f"> Recommended input gain **{rec.gain:.2f}**: {rec.reason}."]
-        else:
-            lines += ["> [!IMPORTANT]", f"> No recommendation: {rec.reason}."]
-        if rec.next_step:
-            lines.append(f"> Next: {rec.next_step}.")
-        lines.append("")
+        lines += recommendation_lines("Input gain", rec, "")
+    if knob_rec:
+        at = session.get("gain_pick")
+        title = "Knob" if knob_takes[0]["phase"] == "knob" else "Best take"
+        lines += recommendation_lines(f"{title} (at gain {at})" if at is not None else title, knob_rec, "")
+    if knob_rec and knob_takes[0]["phase"] == "knob":
+        lines += ["Knob and software gain multiply: if the knob pick is not where it started, a short gain sweep "
+                  "around the gain pick at that knob position confirms the pair.", ""]
     if warning:
         lines += ["> [!WARNING]", f"> {warning}.", ""]
-    if all(t["metrics"].peak_dbfs <= -119 for t in takes):
+    if takes and all(t["metrics"].peak_dbfs <= -119 for t in takes):
         lines += ["> [!WARNING]", "> Digital silence in every take: microphone permission for this app, "
                   "or a muted device.", ""]
-    lines += [row("Take", "Gain", "Device dB", "Peak dBFS", "Clipped", "Noise dBFS", "Speech dBFS", "SNR dB",
+    lines += [row("Take", "Phase", "Setting", "Gain", "Peak dBFS", "Clipped", "Noise dBFS", "Speech dBFS", "SNR dB",
                   "Speech s", "WER", "Verdict"),
-              row(*["---"] * 11)]
+              row(*["---"] * 12)]
     for t in takes:
         m = t["metrics"]
-        lines.append(row(t["index"], t["gain"] if t["gain"] is not None else "fixed",
-                         f"{t['gain_db']:.1f}" if t.get("gain_db") is not None else "–",
+        lines.append(row(t["index"], t["phase"], t["setting"], t["gain"] if t["gain"] is not None else "fixed",
                          m.peak_dbfs, m.clipped_samples, m.noise_dbfs, m.speech_dbfs, m.snr_db, m.speech_seconds,
                          f"{t['wer']:.0%}" if t["wer"] is not None else "–", analysis.verdict(m)))
     lines += ["", "## Listen", ""]
-    lines += [f"![take {t['index']} gain {t['gain']}]({folder / t['file']})" for t in takes]
+    lines += [f"![take {t['index']} {t['phase']} {t['setting']}]({folder / t['file']})" for t in takes]
     lines += ["", "## Transcripts", "", f"Reference (spoken, never sent to STT): “{session['sentence']}”", ""]
     if any(t["transcript"] is not None for t in takes):
-        lines += [f"{t['index']}. gain {t['gain']}: “{t['transcript']}”" for t in takes]
+        lines += [f"{t['index']}. {t['phase']} {t['setting']}: “{t['transcript']}”" for t in takes]
         lines += ["", "Local Whisper (`transcribe-local`), same settings per take, no hint. Equal transcripts "
                   "do not mean equal audio; your dictation engine may differ."]
     else:
         lines.append("Not transcribed (`--no-stt`, or `transcribe-local` not on PATH).")
     lines += ["", "<details><summary>Method and limits</summary>", "",
-              f"- Noise floor: RMS of the quiet wait before each beep; speech: {analysis.FRAME_SECONDS * 1000:.0f} ms "
-              f"frames more than {analysis.ACTIVE_ABOVE_NOISE_DB:.0f} dB above it, on the loudest channel; "
-              "peaks and clipping across all channels, beep excluded.",
+              f"- Noise floor: the quietest {analysis.NOISE_PERCENTILE:.0%} of {analysis.FRAME_SECONDS * 1000:.0f} ms "
+              f"frames (waiting, countdown gaps, tail); speech: frames more than {analysis.ACTIVE_ABOVE_NOISE_DB:.0f} dB "
+              "above it, on the loudest channel; peaks and clipping across all channels; countdown beeps excluded "
+              "by their tone.",
               f"- Pick: no clipping, peak ≤ {analysis.HOT_PEAK_DB:.0f} dBFS, SNR within {analysis.SNR_TIE_DB:.0f} dB "
-              f"of the best, then peak closest to {analysis.TARGET_PEAK_DB:.0f} dBFS. Only tested levels are recommended.",
+              f"of the best, then peak closest to {analysis.TARGET_PEAK_DB:.0f} dBFS. Only tested settings are "
+              "recommended. The knob takes use the gain picked from levels alone (before STT).",
               "- Input gain usually raises voice and room noise together, so SNR barely moves; the main risks are "
-              "clipping (too high) and a weak signal (too low).",
-              "- One sentence per level: louder or softer delivery, distance and onboard AGC shift the numbers. "
-              "Not a global optimum; confirm by listening and one dictation at the picked level.",
+              "clipping (too high) and a weak signal (too low). An analog knob before the converter can lift a "
+              "quiet signal above converter noise; software gain after it cannot.",
+              "- One sentence per setting: louder or softer delivery, distance and onboard AGC shift the numbers. "
+              "Not a global optimum; confirm by listening and one dictation at the pick.",
               "- Originals are unnormalized 24-bit WAV; nothing here amplifies after capture.", "", "</details>", ""]
     path = folder / "report.md"
     path.write_text("\n".join(lines))
-    results = {"recommendation": vars(rec) if rec else None, "warning": warning,
+    results = {"gain": rec.setting if rec else None, "knob": knob_rec.setting if knob_rec else None,
+               "warning": warning,
                "takes": [{**{k: v for k, v in t.items() if k != "metrics"}, "metrics": analysis.as_dict(t["metrics"])}
                          for t in takes]}
     write_json(folder / "results.json", results)
@@ -387,41 +452,47 @@ def cmd_gain(args) -> None:
 
 
 def cmd_run(args) -> None:
-    for tool in ("ffmpeg", "ffprobe", "say", "afplay"):
+    for tool in ("ffmpeg", "ffprobe", "afplay"):
         if not shutil.which(tool):
             fail(f"missing {tool}")
     if not 1 <= args.seconds <= 30:
         fail("--seconds must be between 1 and 30 (bounded takes)", 2)
     device = resolve_device(args.device)
+    knob = [label.strip() for label in (args.knob or "").split(",") if label.strip()]
     if args.keep_gain:
-        levels: list[float | None] = [None] * args.takes
+        levels: list[float] = []
+        knob = knob or [f"fixed {n}" for n in range(1, args.takes + 1)]
     elif not device.gain_supported:
-        fail(f"{device.name}: input gain is not software-controllable. Set the hardware knob yourself and use "
-             "--keep-gain (one session per knob position), or pick another --device.", 3)
+        fail(f"{device.name}: input gain is not software-controllable. Use --keep-gain --knob 'as is,-50%,+50%' "
+             "(the speaker turns the hardware knob between takes), or pick another --device.", 3)
     else:
         levels = parse_levels(args.levels)
-    seconds = len(levels) * (2.5 + PRE_QUIET + PLAYER_SLACK + args.seconds) + 4
+    takes = len(levels) + len(knob)
+    seconds = takes * (SETTLE_SECONDS + PLAYER_SLACK + COUNTDOWN[-1][0] + 5) + 4
     print(f"device={device.name}  gain={device.gain() if device.gain_supported else 'fixed'}  "
-          f"levels={levels}  ≈{seconds:.0f}s of recording")
+          f"levels={levels}  knob={knob}  ≈{seconds:.0f}s of recording")
     if args.dry_run:
         print(f"ffmpeg index {ffmpeg_index(device.name)} · dry run, nothing recorded or changed")
         return
     slug = re.sub(r"[^a-z0-9]+", "-", device.name.lower()).strip("-")
     folder = (Path(args.out).expanduser() / f"{datetime.now():%Y%m%d-%H%M%S}-{slug}").resolve()
     folder.mkdir(parents=True)
-    session = {"started": f"{datetime.now():%Y-%m-%d %H:%M}", "mode": "fixed" if args.keep_gain else "sweep",
-               "status": "ready", "device": {"name": device.name, "uid": device.uid, "channels": device.channels},
-               "levels": levels, "sentence": args.sentence, "language": args.language, "seconds": args.seconds,
-               "takes": []}
+    # With a knob phase the takes were made at the gain pick: keeping it is what --apply-recommended means.
+    session = {"started": f"{datetime.now():%Y-%m-%d %H:%M}", "status": "ready",
+               "device": {"name": device.name, "uid": device.uid, "channels": device.channels},
+               "levels": levels, "knob": knob, "knob_phase": "fixed" if args.keep_gain and not args.knob else "knob",
+               "keep_pick": bool(args.apply_recommended and levels and knob),
+               "sentence": args.sentence, "language": args.language, "seconds": args.seconds, "takes": []}
     write_json(folder / "session.json", session)
     print(f"session={folder}", flush=True)
-    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, args.wait, seconds)
+    wait = args.wait + (len(knob) * KNOB_PROMPT_SECONDS if session["knob_phase"] == "knob" else 0)
+    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, wait, seconds)
     if session["status"] != "recorded":
         fail(f"capture {session['status']}; session {folder}", 1)
     path, rec = report(folder, stt=not args.no_stt)
-    if args.apply_recommended and rec and rec.gain is not None:
-        device.set_gain(rec.gain)
-        print(f"applied recommended gain {rec.gain:.2f}")
+    if args.apply_recommended and rec and rec.take and not session.get("keep_pick"):
+        device.set_gain(rec.setting)
+        print(f"applied recommended gain {rec.setting:.2f}")
     print(f"report={path}")
 
 
@@ -455,15 +526,19 @@ def main() -> None:
     run = sub.add_parser("run", help="record and report")
     run.add_argument("--device")
     run.add_argument("--levels", default=DEFAULT_LEVELS, help=f"gains to test, default {DEFAULT_LEVELS}")
-    run.add_argument("--keep-gain", action="store_true", help="do not touch gain; record --takes at the current level")
-    run.add_argument("--takes", type=int, default=1, help="with --keep-gain (default 1)")
+    run.add_argument("--knob", help="after the gain sweep, one take per hardware-knob label at the picked gain, "
+                     "Enter between takes, e.g. 'as is,-50%%,+50%%'")
+    run.add_argument("--keep-gain", action="store_true", help="no gain sweep: --knob takes, or --takes at the current level")
+    run.add_argument("--takes", type=int, default=1, help="with --keep-gain and no --knob (default 1)")
     run.add_argument("--sentence", default=DEFAULT_SENTENCE, help="what the speaker says (reference for WER only)")
     run.add_argument("--language", default="en", help="STT language code, '' = auto-detect")
-    run.add_argument("--seconds", type=float, default=6.0, help="speech window after each beep")
+    run.add_argument("--seconds", type=float, default=8.0, help="longest speech after the countdown; a take "
+                     "ends sooner, once the speaker stops")
     run.add_argument("--out", default=os.environ.get("MIC_CALIBRATION_DIR", "~/Downloads/microphone-calibration"))
     run.add_argument("--wait", type=float, default=540, help="seconds to wait for the Terminal capture (no TTY)")
     run.add_argument("--no-stt", action="store_true")
-    run.add_argument("--apply-recommended", action="store_true", help="leave the recommended gain set")
+    run.add_argument("--apply-recommended", action="store_true", help="leave the recommended gain set "
+                     "(with --knob: the gain the knob takes used)")
     run.add_argument("--dry-run", action="store_true", help="resolve device and plan only")
     run.set_defaults(func=cmd_run)
     for name, func in (("capture", cmd_capture), ("report", cmd_report), ("restore", cmd_restore)):

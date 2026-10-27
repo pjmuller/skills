@@ -13,19 +13,22 @@ Same sentence, distance, posture and loudness every take; only back-to-back take
 
 1. `mic-calibrate devices`: name, channels, settable gain. **No settable gain** (hardware knob, many
    USB mics) → the tool refuses to sweep; never "simulate" gain by amplifying afterwards. Instead
-   `run --keep-gain`, one session per knob position the speaker sets.
+   `run --keep-gain --knob 'as is,-50%,+50%'`: the speaker turns the knob, Enter before each take.
 2. Agree with the speaker first: device, mic position, the sentence (~5 s, their own words are
    fine), and that they are ready now. Never start a capture unannounced. `run --dry-run` shows
    device, levels and duration without recording or changing anything.
-3. `mic-calibrate run --device NAME --sentence "…" [--levels 0.25,0.5,0.75,1.0] [--language en]`.
+3. `mic-calibrate run --device NAME --sentence "…" [--levels 0.25,0.5,0.75,1.0] [--knob LABELS]`.
    Without a TTY (every agent shell) the capture opens in a **Terminal.app window**: it shows the
-   sentence, waits for Enter, then per take sets the gain, says "Take N", records a quiet second
-   (noise floor), beeps, and records `--seconds` of speech. Agent apps without microphone access
-   record digital silence, hence never capture in the agent's own shell. First use: macOS asks to
-   allow Terminal's microphone. Run `run` in the background; it waits up to `--wait`.
+   sentence and waits for Enter. Per take: set the gain, three beeps (short, short, long), the
+   speaker talks, the take ends 0.8 s after they stop (`--seconds` caps it). No spoken prompts.
+   `--knob` (mic with a hardware gain knob) appends takes at the gain picked from the sweep; the
+   window asks for Enter after each knob turn. Agent apps may lack microphone access (digital
+   silence) and have no TTY: never capture in the agent's own shell. First use: macOS asks to allow
+   Terminal's microphone. Run `run` in the background; it waits up to `--wait`.
 4. The original gain is restored after the last take, on Ctrl-C and when the window closes. A
-   killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (or later
-   `mic-calibrate gain --device NAME VALUE`) only after the speaker agrees.
+   killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (with `--knob`: keeps the
+   gain the knob takes used; or later `mic-calibrate gain --device NAME VALUE`) only when the
+   speaker asked for it.
 5. Deliver `report.md`: recommendation, table, clips embedded by absolute path
    (`![take 2](/abs/…/take-2-gain-0.50.wav)`), transcripts. `results.json` has the same data.
    Re-analyse without recording: `mic-calibrate report SESSION_DIR [--no-stt]`.
@@ -36,12 +39,14 @@ case-insensitive substring. Other system audio settings stay untouched.
 
 ## Read the result
 
-- **Measured**: peak and clipping (all channels), noise floor (quiet wait before the beep), speech
-  level and SNR (loudest channel, beep frames removed by their 1 kHz tone). The pick is a
+- **Measured**: peak and clipping (all channels), noise floor (quietest 20% of frames: waiting,
+  countdown gaps, tail), speech level and SNR (loudest channel, beep frames removed by their 1 kHz tone). The pick is a
   **tested** level: no clipping, peak ≤ -3 dBFS, SNR within 3 dB of the best, then peak nearest
   -9 dBFS; transcript errors break ties. Refine with a narrower sweep around it (e.g. `0.6,0.7,0.8`).
-- **Expect** SNR to barely change: gain raises voice and room noise together. Gain decides clipping
-  versus a weak signal; distance and room decide SNR.
+- **Expect** SNR to barely change with software gain: it raises voice and room noise together. Gain
+  decides clipping versus a weak signal; distance and room decide SNR. An analog knob before the
+  converter can lift a weak signal above converter noise. Knob and gain multiply: after a knob pick
+  that moved, a short gain sweep at that knob position confirms the pair.
 - **STT**: `transcribe-local` (sibling `video-shrink-for-gemini`, local Whisper; nothing uploaded),
   same settings per take, the sentence is never passed as a hint. Bilingual speaker → one session
   per language (`--language`), each with a sentence in that language. Equal transcripts do not mean

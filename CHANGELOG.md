@@ -350,6 +350,8 @@
 
 ## Unreleased
 
+- **microphone-calibration: faster takes, hardware knob.** No spoken prompts: one three-beep countdown (short, short, long; one player call, so its start latency cannot break the rhythm), and each take ends 0.8 s after the speaker stops (live detector on a 16 kHz copy of the stream; the 24-bit WAV stays untouched), capped by `--seconds` (default 8). Noise floor = quietest 20% of frames, no dedicated silent wait. `--knob 'as is,-50%,+50%'` appends takes at the gain picked from the sweep, Enter after each knob turn; the report adds a knob pick. `--keep-gain --knob …` for mics without software gain.
+
 - New `public-footprint-audit`: consent-based public-web privacy research, evidence states, concise lockdown checklist and removal rechecks. Keeps personal findings outside public skill sources.
 
 - agents-md template: explicit “auto-settle” defaults to settling after verified completion; keep open only for material findings, risks or decisions needing human attention. Why: the sidebar should surface work requiring the user's eyes, not routine results.
