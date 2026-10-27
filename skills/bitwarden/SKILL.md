@@ -1,6 +1,6 @@
 ---
 name: bitwarden
-description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\") or share a secret/file through a one-view Bitwarden Send. One approved field per Touch ID or Terminal unlock; never a vault session."
+description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\"), share a secret/file through a one-view Bitwarden Send, or hand API keys to a colleague's agent and install a received Send link into their env (`bw-receive`, no account needed). One approved field per Touch ID or Terminal unlock; never a vault session."
 ---
 
 `bw-once` releases **one field** (username, password or generated TOTP) of one URI-matched login, or creates a
@@ -97,10 +97,14 @@ review. Caps: 600 UTF-8 text bytes (no invisible/bidi characters via Touch ID), 
 UUID/link/expiry/deletion/views. Failure JSON carries `stage` and `retry_safe`: `retry_safe: false` = a Send may
 exist (or the lock is unverified): **never ask again before the human checked the vault's Sends**.
 
+**Secrets for a colleague's agent** (JSON bundle, 1 view, link by DM; their agent runs `bw-receive` into its env file,
+no Bitwarden account, values never printed): [receive.md](receive.md).
+
 ## Install and health
 
 `scripts/install` (`--check` verifies) links `~/.local/bin/bw-once`, builds the clipboard helper and broker, and
 downloads Bitwarden's signed CLI; it does not register the skill globally. Needs macOS, `uv`, `curl`, Xcode CLT.
+Receivers only: `scripts/install --receive-only` (needs `uv` and any Bitwarden CLI, no Xcode).
 Start with `bw-once doctor` (no unlock). `status: unauthenticated` (never logged in, or refresh token expired after
 months without sync) → `bw-once [--vault N] login` opens the human Terminal for official `bw login` (password + 2FA
 typed there), then locks. Failures name the bw step plus `stage`/`retry_safe` ([unlock refused](#unlock-refused)).

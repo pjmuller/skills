@@ -23,10 +23,11 @@ Linux/WSL thread helpers are supported by code paths but not live-tested here.
 
 ## Direct commit or pull request
 
-Collaborators with write access (and their agents) decide per change; this overrides any personal
-"always merge" or "always PR" rule. The owner may commit directly. The owner's agents may merge a PR
-only when the owner explicitly authorized it (for that PR or session) and the checks above and any
-required review pass; running on the owner's machine is not that authorization.
+**The owner (pjmuller) and agents working the owner's own request commit straight to `main`**, any size,
+after the checks above; no PR. The rules below are for collaborators with write access (and their agents),
+who decide per change; they override any personal "always merge" or "always PR" rule. Merging someone
+else's PR needs the owner's explicit go for that PR or session; running on the owner's machine is not
+that go.
 
 - **Direct to `main`** (pull first, checks above green, then push): small changes the agent is
   confident help every user: a bug fix, a missing edge case, a doc correction, a lesson learned.

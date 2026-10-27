@@ -1,0 +1,163 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Receive a one-view Bitwarden text Send holding {"NAME": "value", ...} into a chmod-600 dotenv file.
+
+  bw-receive --link-file F --into ~/.config/mise-env/<org>/<repo>.env --expect NAME[,NAME...]
+  bw-receive --from-stage DIR --into ... --expect ...     # retry the install without fetching again
+
+Prints statuses, names and lengths only, never values, the link or Bitwarden's raw output. Fetches ONCE with the
+official `bw` CLI in a throwaway, logged-out profile (no Bitwarden account needed): one fetch is one view, even when
+something later fails, so a failed install keeps the staged payload for --from-stage. An identical existing value
+is kept; a different one stops everything (nothing written). Recipe and limits: receive.md.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PLAIN = re.compile(r"^[A-Za-z0-9_\-./:+=@,%]+$")  # written unquoted; anything else goes in single quotes
+STAGE_ROOT = Path.home() / ".cache/secret-handoff"
+
+
+def die(status: str, hint: str = "") -> None:
+    print(f"{status}{': ' + hint if hint else ''}")
+    sys.exit(1)
+
+
+def literal(raw: str) -> str | None:
+    """The value a dotenv line means, or None when it can't be checked here ($ expansion, escapes, comments)."""
+    raw = raw.strip()
+    if m := re.fullmatch(r"'([^']*)'", raw):
+        return m[1]
+    if m := re.fullmatch(r'"([^"$\\`]*)"', raw):
+        return m[1]
+    return raw if PLAIN.match(raw) or raw == "" else None
+
+
+def repr_single(value: str) -> str:
+    return f"'{value}'"  # dotenv single quotes are literal: no $ expansion, no escapes
+
+
+def fetch(link_file: Path, bw: str) -> Path:
+    link = link_file.read_text().strip()
+    if not re.match(r"^https://(vault\.bitwarden\.(com|eu)|send\.bitwarden\.com)/#/send/[\w-]+/[\w-]+$", link):
+        die("BAD_LINK", "not a Bitwarden cloud Send link (check the file, don't print it)")
+    STAGE_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stage = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=STAGE_ROOT))
+    (stage / "cli").mkdir(mode=0o700)
+    env = {"HOME": os.environ["HOME"], "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+           "BITWARDENCLI_APPDATA_DIR": str(stage / "cli"), "BW_NOINTERACTION": "true"}
+    with open(stage / "payload.json", "wb", opener=lambda p, f: os.open(p, f, 0o600)) as out, \
+         open(stage / "error.log", "wb", opener=lambda p, f: os.open(p, f, 0o600)) as err:
+        try:
+            code = subprocess.run([bw, "receive", link], stdout=out, stderr=err, env=env, cwd=stage, timeout=120).returncode
+        except subprocess.TimeoutExpired:
+            code = -1
+    shutil.rmtree(stage / "cli", ignore_errors=True)
+    if code != 0:
+        gone = b"Not found" in (stage / "error.log").read_bytes()
+        if gone:
+            shutil.rmtree(stage)
+        die("RECEIVE_FAILED", "link used up, expired or wrong: ask the sender for a NEW link, don't retry this one"
+            if gone else f"the view may be consumed; stage {stage} kept, tell the sender before any retry")
+    print(f"RECEIVED stage={stage}")
+    return stage
+
+
+def install(stage: Path, target: Path, expect: list[str]) -> None:
+    try:
+        data = json.loads((stage / "payload.json").read_text())
+    except (OSError, ValueError):
+        die("BAD_PAYLOAD", f"not JSON; stage {stage} kept for the sender to inspect")
+    if not isinstance(data, dict) or sorted(data) != sorted(expect):
+        # Names only from --expect: an inverted bundle ({"<secret>": "NAME"}) must not print its keys.
+        missing = sorted(set(expect) - set(data)) if isinstance(data, dict) else expect
+        extra = len(set(data) - set(expect)) if isinstance(data, dict) else "?"
+        die("UNEXPECTED_NAMES", f"missing {missing}, {extra} unexpected key(s); stage {stage} kept, ask for a new Send")
+    for k, v in data.items():
+        if not isinstance(v, str) or not v or not v.isprintable() or "'" in v:
+            die("BAD_VALUE", f"{k} is empty, multi-line or holds a single quote: send it as a file Send instead")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if target.is_symlink():
+        die("REFUSED", f"{target} is a symlink")
+    try:  # no truncation, no symlink: a lock path pointing at the env file must not empty it
+        lock = os.open(target.with_name(target.name + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        die("REFUSED", f"{target.name}.lock is a symlink or not writable")
+    with os.fdopen(lock) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        lines = target.read_text().splitlines() if target.exists() else []
+        for line in lines:  # a quote left open spans lines: mise reads that differently than a line scan would
+            if (m := re.match(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(['\"])(.*)$", line)) and m[2].count(m[1]) % 2 == 0:
+                die("REFUSED", f"{target} has a multi-line quoted value; nothing written, stage {stage} kept for --from-stage")
+        current = {m[1]: m[2] for line in lines if (m := re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", line))}
+        statuses = {}
+        for k, v in data.items():
+            if k not in current:
+                statuses[k] = "installed"
+            elif literal(current[k]) == v:
+                statuses[k] = "already_present"
+            else:  # different, or written in a form (expansion, escapes) this can't compare
+                die("CONFLICT", f"{target} already sets {k} to something else; nothing written, ask the human which wins")
+        new = [f"{k}={v if PLAIN.match(v) else repr_single(v)}" for k, v in data.items() if statuses[k] == "installed"]
+        if new:
+            fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+            with os.fdopen(fd, "w") as f:
+                f.write("\n".join(lines + new) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, target)
+        os.chmod(target, 0o600)
+    shutil.rmtree(stage)
+    for k, v in data.items():
+        print(f"{statuses[k].upper()} {k} (length {len(v)}) -> {target}")
+
+
+def default_bw() -> str:
+    """`bw` on PATH (e.g. brew bitwarden-cli), else the signed CLI bw-once's installer downloaded."""
+    for bundled in (Path(__file__).resolve().parent / "bw", Path.home() / ".local/lib/bw-once/bw"):
+        if not shutil.which("bw") and bundled.is_file() and os.access(bundled, os.X_OK):
+            return str(bundled)
+    return shutil.which("bw") or "bw"
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--link-file", type=Path)
+    src.add_argument("--from-stage", type=Path)
+    ap.add_argument("--into", type=Path, required=True)
+    ap.add_argument("--expect", required=True, help="comma-separated variable names")
+    ap.add_argument("--bw", default=None, help="Bitwarden CLI (default: bw on PATH, else bw-once's)")
+    a = ap.parse_args()
+    os.umask(0o077)
+    expect = [n.strip() for n in a.expect.split(",") if n.strip()]
+    if not expect or not all(NAME.match(n) for n in expect):
+        die("BAD_EXPECT", "names must look like ENV_VAR_NAMES")
+    target = a.into.expanduser()
+    bw = a.bw or default_bw()
+    bw = str(Path(bw).expanduser().resolve()) if "/" in bw else bw  # bw runs inside the stage dir
+    if a.link_file:
+        stage = fetch(a.link_file.expanduser(), bw)
+    else:  # only a stage this command made: install() deletes it afterwards
+        stage = a.from_stage.expanduser()
+        if stage.is_symlink() or stage.resolve().parent != STAGE_ROOT.resolve() or not (stage / "payload.json").is_file():
+            die("BAD_STAGE", f"--from-stage takes a directory printed by bw-receive under {STAGE_ROOT}")
+    install(stage, target, expect)
+
+
+if __name__ == "__main__":
+    main()

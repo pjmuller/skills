@@ -1,18 +1,46 @@
 #!/bin/sh
 set -eu
 check=false
+receive_only=false
 prefix="$HOME/.local"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --check) check=true; shift;;
+    --receive-only) receive_only=true; shift;;
     --prefix) [ "$#" -ge 2 ] || exit 2; prefix=$2; shift 2;;
-    *) echo "usage: $0 [--check] [--prefix ABSOLUTE_PATH]" >&2; exit 2;;
+    *) echo "usage: $0 [--check] [--receive-only] [--prefix ABSOLUTE_PATH]" >&2; exit 2;;
   esac
 done
 case "$prefix" in /*) ;; *) echo "Install prefix must be absolute" >&2; exit 2;; esac
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 target="$prefix/lib/bw-once"
 command_path="$prefix/bin/bw-once"
+receive_path="$prefix/bin/bw-receive"
+# bw-receive (receive.md) needs only uv and a Bitwarden CLI, no vault: colleagues who only receive Sends stop here.
+link_receive() {
+  if [ -e "$receive_path" ] || [ -L "$receive_path" ]; then
+    [ -L "$receive_path" ] && [ "$(readlink "$receive_path")" = "$target/bw-receive" ] || {
+      echo "Refusing to replace another command at $receive_path" >&2; exit 1; }
+  fi
+  mkdir -p "$target" "$prefix/bin"
+  chmod 700 "$target"
+  cp "$source_dir/bw-receive" "$target/bw-receive"
+  chmod 700 "$target/bw-receive"
+  ln -sf "$target/bw-receive" "$receive_path"
+}
+check_receive() {
+  [ -L "$receive_path" ] && [ "$(readlink "$receive_path")" = "$target/bw-receive" ] \
+    && cmp -s "$source_dir/bw-receive" "$target/bw-receive" || { echo "bw-receive missing or stale; rerun installer" >&2; exit 1; }
+  command -v bw >/dev/null || [ -x "$target/bw" ] || { echo "No Bitwarden CLI: brew install bitwarden-cli" >&2; exit 1; }
+}
+if [ "$receive_only" = true ]; then
+  command -v uv >/dev/null || { echo "Missing uv; install it separately" >&2; exit 1; }
+  if [ "$check" = true ]; then check_receive; echo "bw-receive ready"; exit 0; fi
+  link_receive
+  command -v bw >/dev/null || [ -x "$target/bw" ] || echo "Now install a Bitwarden CLI: brew install bitwarden-cli" >&2
+  echo "Installed $receive_path"
+  exit 0
+fi
 # Only Bitwarden Inc's notarized CLI may receive a master password (the broker re-checks before every use).
 requirement='anchor apple generic and identifier "bw" and certificate leaf[subject.OU] = "LTZ2PFU5D6"'
 for dependency in uv xcrun curl codesign; do
@@ -31,6 +59,7 @@ if [ "$check" = true ]; then
   done
   [ "${BW_ONCE_SKIP_CLI_DOWNLOAD:-}" = 1 ] || codesign --verify -R="$requirement" "$target/bw" 2>/dev/null || {
     echo "Bitwarden CLI missing or unsigned; rerun installer" >&2; exit 1; }
+  check_receive
   echo "bw-once ready ($("$target/bw" --version 2>/dev/null) signed Bitwarden CLI); helper on PATH, skill not globally registered"
   exit 0
 fi
@@ -88,4 +117,5 @@ elif [ ! -x "$target/bw" ] || [ "$("$target/bw" --version 2>/dev/null)" != "$ver
   rm -rf "$download"
 fi
 ln -sf "$target/bw-once" "$command_path"
+link_receive
 echo "Installed $command_path with Bitwarden CLI $version; skill not globally registered"

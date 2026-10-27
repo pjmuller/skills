@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-27 — bitwarden: `bw-receive` hands secrets to a colleague's agent; owner commits directly
+
+- New `bw-receive` (`bitwarden/receive.md`): installs a one-view text Send holding `{"NAME": "value"}` into a chmod-600 dotenv file (e.g. `~/.config/mise-env/<org>/<repo>.env`), printing statuses, names and lengths only. Fetches once with the official `bw` in a throwaway logged-out profile (no Bitwarden account), stages the payload so a failed install retries with `--from-stage` instead of a second fetch, keeps identical values, refuses a different existing value, rejects unexpected names. `scripts/install --receive-only` links just this command (uv + any bw, no Xcode); the full install links it too. Why: handing API keys to colleagues' agents was ad hoc, and a live test showed `bw receive --obj` burns the one view and prints the plaintext.
+- `AGENTS.md`: the owner and agents working the owner's own request commit straight to `main`, any size; the PR rules are for collaborators. Why: the previous wording made the owner's agents open PRs for new commands in the owner's own repo.
+
 ## 2026-10-27 — bitwarden: unlock retries in the same Terminal, text Sends with Touch ID
 
 - Terminal flow: a refused `bw unlock` gets up to 3 human-chosen attempts in the same window (CLI re-checked locked + same account between them; Return = again, n/Ctrl-C/EOF = cancel); the prompt names the vault's account email. Budget 5 min approval (was 6), 3 min for all attempts, 60 s operation; launcher waits the sum + 20 s (< 10 min tool call). Failure JSON gains `stage` and `retry_safe` (`false` after a possibly-created Send or an unverified lock); Ctrl-C, timeout and agent-side stop get distinct messages. Why: one mistyped password ended the whole request, and a "Cryptography error" looked like a dead end.
