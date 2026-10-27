@@ -188,10 +188,34 @@ def test_knob_takes_use_the_picked_gain(tmp_path, keep):
         write_wav(path, take(loudness.get(device.gain(), 0.3)))
         return {}
 
-    cli.record_session(device, session, tmp_path, record, ask=lambda text: prompts.append(text) or True)
+    cli.record_session(device, session, tmp_path, record, ask=lambda text: prompts.append(text) or "")
     assert session["gain_pick"] == 0.5 and knob_gains == [0.5, 0.5]
-    assert [p.split(":")[0] for p in prompts] == ["Knob take 1/2", "Knob take 2/2"]
+    assert [p.split(":")[0].split("?")[0] for p in prompts] == ["Knob take 1/2", "Knob take 2/2", "Done"]
     assert device.gain() == (0.5 if keep else 0.42)
+
+
+def test_redo_replaces_the_slipped_knob_take(tmp_path):
+    cli = load_cli()
+    session = {"levels": [], "knob": ["as is", "-50%"], "takes": [], "seconds": 1}
+    answers, recorded = iter(["", "r", "", "", ""]), []  # slip in take 1, noticed at the take-2 prompt
+
+    def record(path):
+        recorded.append(path.name)
+        path.write_bytes(b"")
+        return {}
+
+    cli.record_session(FakeDevice(), session, tmp_path, record, ask=lambda _text: next(answers))
+    assert recorded == ["take-1-knob-asis.wav", "take-1-knob-asis.wav", "take-2-knob-minus50.wav"]
+    assert [t["setting"] for t in session["takes"]] == ["as is", "-50%"]
+
+
+def test_left_out_words_are_a_slip_not_a_mic_error():
+    sentence = "Hello, I'm Sam, I'm from Ghent, and I love tea."
+    assert analysis.is_slip(sentence, "Hello, I'm Sam and I'm from Ghent.")
+    assert not analysis.is_slip(sentence, "Hello, I'm Pam, I'm from Ghent and I love tea.")
+    takes = [{"setting": "as is", "metrics": fake(-10), "wer": 0.38, "slip": True},
+             {"setting": "-50%", "metrics": fake(-17), "wer": 0.0}]
+    assert analysis.recommend(takes).setting == "as is"
 
 
 @pytest.fixture

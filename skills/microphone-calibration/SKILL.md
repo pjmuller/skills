@@ -19,12 +19,13 @@ Same sentence, distance, posture and loudness every take; only back-to-back take
    device, levels and duration without recording or changing anything.
 3. `mic-calibrate run --device NAME --sentence "…" [--levels 0.25,0.5,0.75,1.0] [--knob LABELS]`.
    Without a TTY (every agent shell) the capture opens in a **Terminal.app window**: it shows the
-   sentence and waits for Enter. Per take: set the gain, three beeps (short, short, long), the
-   speaker talks, the take ends 0.8 s after they stop (`--seconds` caps it). No spoken prompts.
-   `--knob` (mic with a hardware gain knob) appends takes at the gain picked from the sweep; the
-   window asks for Enter after each knob turn. Agent apps may lack microphone access (digital
-   silence) and have no TTY: never capture in the agent's own shell. First use: macOS asks to allow
-   Terminal's microphone. Run `run` in the background; it waits up to `--wait`.
+   sentence and waits for Enter. Per take: set the gain, one beep, the speaker talks, the take
+   ends 0.8 s after they stop (`--seconds` caps it). No spoken prompts. `--knob` (mic with a
+   hardware gain knob) appends takes at the gain picked from the sweep; the window asks for Enter
+   after each knob turn, `r` + Enter redoes the previous knob take (a slip). Agent apps may lack
+   microphone access (digital silence) and have no TTY: never capture in the agent's own shell.
+   First use: macOS asks to allow Terminal's microphone. Run `run` in the background; it waits up
+   to `--wait`.
 4. The original gain is restored after the last take, on Ctrl-C and when the window closes. A
    killed run: `mic-calibrate restore SESSION_DIR`. `--apply-recommended` (with `--knob`: keeps the
    gain the knob takes used; or later `mic-calibrate gain --device NAME VALUE`) only when the
@@ -39,10 +40,11 @@ case-insensitive substring. Other system audio settings stay untouched.
 
 ## Read the result
 
-- **Measured**: peak and clipping (all channels), noise floor (quietest 20% of frames: waiting,
-  countdown gaps, tail), speech level and SNR (loudest channel, beep frames removed by their 1 kHz tone). The pick is a
-  **tested** level: no clipping, peak ≤ -3 dBFS, SNR within 3 dB of the best, then peak nearest
-  -9 dBFS; transcript errors break ties. Refine with a narrower sweep around it (e.g. `0.6,0.7,0.8`).
+- **Measured**: peak and clipping (all channels), noise floor (quietest 20% of frames: waiting
+  and tail), speech level and SNR (loudest channel, beep frames removed by their 1 kHz tone). The
+  pick is a **tested** level: no clipping, peak ≤ -3 dBFS, SNR within 3 dB of the best, then peak
+  nearest -9 dBFS; transcript errors break ties, except "slip?" takes (words only left out: the
+  speaker). Refine with a narrower sweep around it (e.g. `0.6,0.7,0.8`).
 - **Expect** SNR to barely change with software gain: it raises voice and room noise together. Gain
   decides clipping versus a weak signal; distance and room decide SNR. An analog knob before the
   converter can lift a weak signal above converter noise. Knob and gain multiply: after a knob pick

@@ -6,7 +6,7 @@
 
   devices                     list inputs: channels, settable gain, current gain
   gain [--device D] [VALUE]   read or set input gain (0.0-1.0)
-  run [--device D] ...        one take per --levels (three-beep countdown, ends when the speaker stops),
+  run [--device D] ...        one take per --levels (a beep, then speech; ends when the speaker stops),
                               then optional --knob takes at the picked gain (Enter between: the speaker
                               turns the hardware knob), then report.md. Original gain restored unless
                               --apply-recommended. --keep-gain: no gain sweep. Without a TTY (agents)
@@ -39,9 +39,9 @@ import analysis  # noqa: E402
 
 DEFAULT_LEVELS = "0.25,0.5,0.75,1.0"
 DEFAULT_SENTENCE = "The quick brown fox jumps over the lazy dog, then naps in the warm sun."
-# Two short beeps and a long one, one file: afplay's 0.4-1.2 s start latency then shifts the whole
-# countdown instead of breaking its rhythm. All at the analysis' beep tone, so takes exclude them.
-COUNTDOWN = ((0.0, 0.1), (0.45, 0.1), (0.9, 0.3))
+# One beep (start, length) at the analysis' beep tone, so takes exclude it. A tuple: more beeps would
+# stay in rhythm because one player call plays them all (afplay starts 0.4-1.2 s late).
+COUNTDOWN = ((0.0, 0.2),)
 PLAYER_SLACK = 1.5    # worst afplay start latency
 LIVE_RATE = 16000     # the speech-end detector's copy of the stream; the WAV keeps the native format
 SETTLE_SECONDS = 0.3
@@ -109,7 +109,7 @@ def stop(process: subprocess.Popen, drain=None) -> None:
 
 
 def record_take(index: str, path: Path, countdown: Path, max_seconds: float) -> dict:
-    """Countdown, then speech; ends 0.8 s after the speaker stops, or max_seconds after the countdown."""
+    """Beep, then speech; ends 0.8 s after the speaker stops, or max_seconds after the beep."""
     command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "avfoundation",
                "-i", f":{index}", "-t", f"{PLAYER_SLACK + COUNTDOWN[-1][0] + max_seconds + 2:.2f}",
                "-map", "0:a", "-c:a", "pcm_s24le", str(path),
@@ -172,9 +172,10 @@ def gain_pick(folder: Path, takes: list[dict]):
     return analysis.recommend(measured)
 
 
-def record_session(device, session: dict, folder: Path, record, ask=lambda _text: True) -> None:
-    """record(path) → take fields; ask(prompt) → False cancels. Gain phase, then knob phase at the picked
-    gain. The original gain comes back whatever happens, unless the session keeps the pick."""
+def record_session(device, session: dict, folder: Path, record, ask=lambda _text: "") -> None:
+    """record(path) → take fields; ask(prompt) → typed line, None cancels, "r" redoes the previous knob
+    take (a slip). Gain phase, then knob phase at the picked gain. The original gain comes back whatever
+    happens, unless the session keeps the pick."""
     levels, knob = session["levels"], session.get("knob") or []
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGTERM, signal.SIGHUP)}
     if levels and device.gain_supported:
@@ -185,7 +186,20 @@ def record_session(device, session: dict, folder: Path, record, ask=lambda _text
     steps = [("gain", level) for level in levels] + [(session.get("knob_phase", "knob"), label) for label in knob]
     keep = False
     try:
-        for number, (phase, setting) in enumerate(steps, 1):
+        number, confirmed = 0, not (steps and steps[-1][0] == "knob")
+        while number < len(steps) or not confirmed:
+            redo = f"  ·  r Enter: redo take {number}" if number and steps[number - 1][0] == "knob" else ""
+            if number == len(steps):  # after the last knob take: one chance to redo it
+                if (answer := ask(f"Done? Enter{redo}")) is None:
+                    raise KeyboardInterrupt("cancelled during the knob takes")
+                if answer.lower() == "r":
+                    (folder / session["takes"].pop()["file"]).unlink(missing_ok=True)
+                    number -= 1
+                else:
+                    confirmed = True
+                continue
+            phase, setting = steps[number]
+            number += 1
             if (folder / CANCEL_FILE).exists():
                 raise KeyboardInterrupt("cancelled by the waiting agent")
             if phase != "gain" and number == len(levels) + 1 and levels:
@@ -195,8 +209,14 @@ def record_session(device, session: dict, folder: Path, record, ask=lambda _text
                 session["gain_pick"] = pick.setting
                 print(f"\nGain sweep done: {'gain ' + format(pick.setting, '.2f') if pick.take else pick.reason}"
                       " stays set for the next takes.")
-            if phase == "knob" and not ask(f"Knob take {number - len(levels)}/{len(knob)}: knob {setting}, then Enter"):
-                raise KeyboardInterrupt("cancelled during the knob takes")
+            if phase == "knob":
+                answer = ask(f"Knob take {number - len(levels)}/{len(knob)}: knob {setting}, then Enter{redo}")
+                if answer is None:
+                    raise KeyboardInterrupt("cancelled during the knob takes")
+                if answer.lower() == "r" and redo:
+                    (folder / session["takes"].pop()["file"]).unlink(missing_ok=True)
+                    number -= 2
+                    continue
             take = {"index": number, "phase": phase}
             if phase == "gain":
                 take["gain"] = round(device.set_gain(setting), 4)
@@ -229,15 +249,14 @@ def record_session(device, session: dict, folder: Path, record, ask=lambda _text
         write_json(folder / "session.json", session)
 
 
-def wait_for_enter(deadline: float, cancel: Path, prompt: str = "Press Enter to start") -> bool:
-    """Enter → True; deadline (wall clock) or a cancel request from the agent side → False."""
+def wait_for_enter(deadline: float, cancel: Path, prompt: str = "Press Enter to start") -> str | None:
+    """The typed line ("" for plain Enter); None at the deadline (wall clock) or on the agent's cancel."""
     print(f"{prompt} (Ctrl-C cancels; gives up at {datetime.fromtimestamp(deadline):%H:%M}) ", end="", flush=True)
     while time.time() < deadline and not cancel.exists():
         ready, _, _ = select.select([sys.stdin], [], [], 1)
         if ready:
-            sys.stdin.readline()
-            return True
-    return False
+            return sys.stdin.readline().strip()
+    return None
 
 
 def capture(folder: Path, confirm: bool) -> dict:
@@ -251,12 +270,12 @@ def capture(folder: Path, confirm: bool) -> dict:
         plan.append(f"knob {', '.join(knob)} (Enter before each)" if session.get("knob_phase", "knob") == "knob"
                     else f"{len(knob)} takes at the current level")
     print(f"\n{device.name}: {' then '.join(plan) or 'current level'}.\n"
-          f"After the third beep, at your normal distance and loudness, say:\n\n    {session['sentence']}\n")
+          f"After the beep, at your normal distance and loudness, say:\n\n    {session['sentence']}\n")
     signal.signal(signal.SIGHUP, interrupted)  # closing the window must not leave the agent waiting
     deadline = session.get("enter_deadline") or time.time() + ENTER_TIMEOUT
     cancel = folder / CANCEL_FILE
     try:
-        ready = not confirm or wait_for_enter(deadline, cancel)
+        ready = not confirm or wait_for_enter(deadline, cancel) is not None
     except KeyboardInterrupt:
         ready = False
     if not ready:
@@ -350,6 +369,7 @@ def report(folder: Path, stt: bool) -> tuple[Path, analysis.Recommendation | Non
             if take["file"] in texts:
                 take["transcript"] = texts[take["file"]]
                 take["wer"] = round(analysis.word_error_rate(session["sentence"], take["transcript"]), 3)
+                take["slip"] = analysis.is_slip(session["sentence"], take["transcript"])
     gain_takes = [t for t in takes if t["phase"] == "gain"]
     knob_takes = [t for t in takes if t["phase"] != "gain"]
     rec = analysis.recommend(gain_takes) if gain_takes else None
@@ -385,21 +405,23 @@ def report(folder: Path, stt: bool) -> tuple[Path, analysis.Recommendation | Non
         m = t["metrics"]
         lines.append(row(t["index"], t["phase"], t["setting"], t["gain"] if t["gain"] is not None else "fixed",
                          m.peak_dbfs, m.clipped_samples, m.noise_dbfs, m.speech_dbfs, m.snr_db, m.speech_seconds,
-                         f"{t['wer']:.0%}" if t["wer"] is not None else "–", analysis.verdict(m)))
+                         (f"{t['wer']:.0%}" + (" (slip?)" if t.get("slip") else "")) if t["wer"] is not None else "–",
+                         analysis.verdict(m)))
     lines += ["", "## Listen", ""]
     lines += [f"![take {t['index']} {t['phase']} {t['setting']}]({folder / t['file']})" for t in takes]
     lines += ["", "## Transcripts", "", f"Reference (spoken, never sent to STT): “{session['sentence']}”", ""]
     if any(t["transcript"] is not None for t in takes):
         lines += [f"{t['index']}. {t['phase']} {t['setting']}: “{t['transcript']}”" for t in takes]
         lines += ["", "Local Whisper (`transcribe-local`), same settings per take, no hint. Equal transcripts "
-                  "do not mean equal audio; your dictation engine may differ."]
+                  "do not mean equal audio; your dictation engine may differ. “slip?” = words only left out, "
+                  "likely the speaker: that WER does not rank the take."]
     else:
         lines.append("Not transcribed (`--no-stt`, or `transcribe-local` not on PATH).")
     lines += ["", "<details><summary>Method and limits</summary>", "",
               f"- Noise floor: the quietest {analysis.NOISE_PERCENTILE:.0%} of {analysis.FRAME_SECONDS * 1000:.0f} ms "
-              f"frames (waiting, countdown gaps, tail); speech: frames more than {analysis.ACTIVE_ABOVE_NOISE_DB:.0f} dB "
-              "above it, on the loudest channel; peaks and clipping across all channels; countdown beeps excluded "
-              "by their tone.",
+              f"frames (waiting, tail); speech: frames more than {analysis.ACTIVE_ABOVE_NOISE_DB:.0f} dB "
+              "above it, on the loudest channel; peaks and clipping across all channels; the beep excluded "
+              "by its tone.",
               f"- Pick: no clipping, peak ≤ {analysis.HOT_PEAK_DB:.0f} dBFS, SNR within {analysis.SNR_TIE_DB:.0f} dB "
               f"of the best, then peak closest to {analysis.TARGET_PEAK_DB:.0f} dBFS. Only tested settings are "
               "recommended. The knob takes use the gain picked from levels alone (before STT).",

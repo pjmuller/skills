@@ -1,6 +1,6 @@
 """Level measurements, transcript accuracy and the gain recommendation (pure Python, no numpy).
 
-Every take is: quiet wait → three-beep countdown (excluded by its tone) → speech → a short quiet tail.
+Every take is: quiet wait → beep (excluded by its tone) → speech → a short quiet tail.
 Metrics come from the unnormalized original; the analysis channel is the one with the most energy
 (some interfaces put the mic on one channel only), clipping and peaks count across all channels.
 """
@@ -26,7 +26,7 @@ SNR_TIE_DB = 3.0
 BEEP_HZ = 1000.0
 BEEP_SHARE = 0.6  # frames with more of their energy in the beep tone are excluded
 SKIP_SECONDS = 0.15  # capture start-up
-NOISE_PERCENTILE = 0.2  # the take is mostly quiet waiting and countdown gaps; speech is the loud part
+NOISE_PERCENTILE = 0.2  # ~a third of a take is waiting and tail; speech is the loud part
 # Live end-of-take: stop once this much speech was heard and then this much quiet (speaker finished).
 END_MIN_SPEECH = 0.6
 END_QUIET_SECONDS = 0.8
@@ -161,17 +161,34 @@ def words(text: str) -> list[str]:
     return re.findall(r"[\w']+", text)
 
 
-def word_error_rate(reference: str, hypothesis: str) -> float:
+def edit_counts(reference: str, hypothesis: str) -> tuple[int, int, int]:
+    """(substitutions, deletions, insertions) of the cheapest word alignment, fewest substitutions on ties."""
     ref, hyp = words(reference), words(hypothesis)
-    if not ref:
-        return 0.0 if not hyp else 1.0
-    previous = list(range(len(hyp) + 1))
+    previous = [(j, 0, 0, j) for j in range(len(hyp) + 1)]  # (cost, subs, dels, ins)
     for i, word in enumerate(ref, 1):
-        current = [i]
+        current = [(i, 0, i, 0)]
         for j, other in enumerate(hyp, 1):
-            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (word != other)))
+            cost, subs, dels, ins = previous[j - 1]
+            match = (cost + (word != other), subs + (word != other), dels, ins)
+            cost, subs, dels, ins = previous[j]
+            delete = (cost + 1, subs, dels + 1, ins)
+            cost, subs, dels, ins = current[j - 1]
+            insert = (cost + 1, subs, dels, ins + 1)
+            current.append(min(match, delete, insert, key=lambda option: option[:2]))
         previous = current
-    return previous[-1] / len(ref)
+    return previous[-1][1:]
+
+
+def word_error_rate(reference: str, hypothesis: str) -> float:
+    if not words(reference):
+        return 0.0 if not words(hypothesis) else 1.0
+    return sum(edit_counts(reference, hypothesis)) / len(words(reference))
+
+
+def is_slip(reference: str, transcript: str) -> bool:
+    """Words left out and nothing misheard: more likely the speaker skipping words than the mic."""
+    substitutions, deletions, insertions = edit_counts(reference, transcript)
+    return substitutions == 0 and deletions >= 2 and insertions <= 1
 
 
 def verdict(metrics: Metrics) -> str:
@@ -209,9 +226,11 @@ def recommend(takes: list[dict]) -> Recommendation:
                               f"go below the lowest tested setting ({lowest}) or speak further from the mic")
     best_snr = max(take["metrics"].snr_db for take in safe)
     close = [take for take in safe if take["metrics"].snr_db >= best_snr - SNR_TIE_DB]
-    known = [take["wer"] for take in close if take["wer"] is not None]
+    # A speaker slip (words left out) says nothing about the mic: its WER does not rank the take.
+    known = [take["wer"] for take in close if take["wer"] is not None and not take.get("slip")]
     if known:
-        close = [take for take in close if take["wer"] is None or take["wer"] <= min(known) + 0.1]
+        close = [take for take in close
+                 if take["wer"] is None or take.get("slip") or take["wer"] <= min(known) + 0.1]
     pick = min(close, key=lambda take: (abs(take["metrics"].peak_dbfs - TARGET_PEAK_DB), -(take.get("gain") or 0)))
     m = pick["metrics"]
     reason = (f"peak {m.peak_dbfs} dBFS (target ≈ {TARGET_PEAK_DB:.0f}), no clipping, "
