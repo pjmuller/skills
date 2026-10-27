@@ -33,8 +33,9 @@ this overrides any personal "always merge" or "always PR" rule:
   feel, removed command/flag, `agents-md/global-template.md` policy, installers, cross-skill
   plumbing. The PR states the intent and who it helps.
 - **Not here at all**: personal or company-specific preferences, accounts, names, paths. Those go in
-  the contributor's own setup repo or global prompt; make the core configurable only when several
-  users need it.
+  the contributor's own setup repo, global prompt or the repo's wrapper skill; make the core
+  configurable only when several users need it. The reverse holds too: a generic lesson found in a
+  wrapper moves here ([core and wrapper](README.md#core-and-wrapper)).
 
 Public repo: never commit secrets, customer data or private facts about people.
 

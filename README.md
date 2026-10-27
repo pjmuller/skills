@@ -30,6 +30,19 @@ register its instructions. `~/.local/bin` must be on the login-shell `PATH`.
 Start a new agent session after changing registration because harnesses may cache
 their discovered skill list.
 
+## Core and wrapper
+
+Many skills here are a **core** (`*-core`, `slides`, `whatsapp-bridge`, …): copied into a repo and
+replaced on update. A thin repo-owned **wrapper** skill beside it holds only that repo's or person's
+DNA: accounts, resource ids, config files, brand, approval policy, facts no other user shares.
+
+- Workflows, gotchas, recipes and lessons another user would benefit from belong in the core.
+  The wrapper links the core file or section; it never restates it.
+- Improvement found while using a wrapper → improve the core here (see
+  [Contributing](#contributing)), then refresh the copies; edit the wrapper only for its own DNA.
+- Healthy test: swap the wrapper's accounts and ids for another company's; whatever still reads true
+  belongs in the core.
+
 Most-used skills first.
 
 | Skill | You need it when… | Scope | Register (then `scripts/install` + `--check`) |
