@@ -1,60 +1,50 @@
 # Recording brief
 
-You get {{COUNT}} recording(s), {{DURATIONS}}, showing {{SITUATION}}.
-Mode: {{MODE}}. Spoken language: {{LANGUAGE}}; do not translate.
-Speakers: {{SPEAKERS}}; uncertain identity → Unknown.
-Deliver one markdown document per recording, following the applicable blocks below.
-Local execution: write each document to its specified absolute output path;
-return only paths and coverage gaps. Do not leave the transcript only in chat.
-Mixed mode requires both sections, aligned by timestamps.
+{{COUNT}} recording(s), {{DURATIONS}}: {{SITUATION}}
+Who reads this: {{PURPOSE}} They will not watch the video, so record exactly what is said and visible: no causes,
+diagnoses, suggestions or quality judgments.
+Mode: {{MODE}}. Language: {{LANGUAGE}}; do not translate. Speakers: {{SPEAKERS}}; unsure → Unknown.
 
-## Visual-first rules (visual-first and mixed)
+## Screen (visual-first and mixed)
 
-Write sequential visual narration a text-only coding agent can act on.
-One numbered step per visible action, with `[hh:mm:ss]`: “User opened page X
-(URL/title visible), saw Y, clicked Z, then …”. Quote exact on-screen text.
-List the visible state: headings, table rows, error banners and values relevant
-to that action; distinguish before/after states. Note anything that looks like a
-bug or unexpected state using the visible evidence, without diagnosing causes.
-No interpretation beyond what is visible. Mark unreadable text and gaps in sampled
-frames; never invent clicks, hidden state or URLs. Include meaningful unchanged
-states once rather than repeating them. Preserve action order.
-For opaque IDs, use UNREADABLE when any character is uncertain. Label inventory
-matches candidate-assisted and links assembled from IDs constructed, not observed.
-Do not extract frames or run tools to chase small text during the first draft;
-return its time/title for independent source-frame verification afterward.
+Numbered steps, one per visible action, `[hh:mm:ss]`: page (URL/title as visible), what was clicked or typed, the
+resulting state, before → after. At 00:00:00 and whenever a new screen appears, list once what a reader needs from it:
+headings, labels, tags, buttons, rows, values and banners, quoted exactly. Look closely at: {{LOOK_FOR}}
+- Quote screen text from the pixels, never from the word list or context; unsure → UNREADABLE. Copy URLs and IDs
+  character for character, any uncertain character → UNREADABLE; never construct one.
+- Frames are sampled about once per second: a state missing from them is "not seen", never "blank". Write an action
+  only when you saw it happen; never invent clicks, links or tabs to explain a change. A page or content that appears
+  at once, with no visible action or loading, is a likely cut: `[cut? hh:mm:ss] home page → privacy page; how it got
+  there not seen`. Speech about a state is not a visual event.
+- Never copy tokens, meeting codes or personal fields (national number, birth date, address, phone, patient name):
+  write `[redacted: kind]`.
 
-## Transcript-first rules (transcript-first and mixed)
+## Speech (transcript-first and mixed)
 
-Use `[hh:mm:ss] Speaker: …` blocks, close to the spoken words: no summaries,
-interpretation or conclusions. Keep tangents, numbers, names and hesitations;
-do not fix grammar. Use `[inaudible]` and `(?)` after uncertain names.
-In transcript-first mode, add brief `[screen: app / page / record]` context only
-when it clarifies speech. Mixed mode also gets the full visual section above.
-Spell names/product terms as in the context; do not replace visible wording.
+`[hh:mm:ss] Speaker: …` close to verbatim: keep hesitations, tangents, numbers and names; no grammar fixes or
+summaries. `[inaudible]`; `(?)` after an uncertain name. Transcript-first adds `[screen: …]` only where it clarifies
+speech. Mixed: both sections, aligned by timestamps.
 
-## Feedback walkthrough rules (only when someone narrates feedback on a product screen)
+## Feedback items (only when someone narrates feedback on a product)
 
-Recording started at {{WALLCLOCK}} (local time); add the absolute time next to every feedback item so
-it can be matched to server logs. End with `## Feedback items`: one numbered entry per complaint, bug,
-wish, praise or "leave it like this", each with timestamp, screen/URL, element, the speaker's words
-close to verbatim, and what was visible. The speaker's diagnosis is a claim, not a fact: under "what
-was visible" give the raw on-screen values (counts, order, labels) and never restate the claim as
-something you saw. Mark an item the speaker says to keep as it is `leave alone`. Then list, as items
-marked `unnarrated`, visible defects nobody mentioned (wrapped or overlapping labels, truncated text,
-a count that contradicts another, an error banner): a reviewer misses those while listening. No solutions.
+Recording started {{WALLCLOCK}}. End with `## Feedback items`: one entry per complaint, bug, wish, praise or "leave
+it like this" (`leave alone`): timestamp + absolute time, screen/URL, element, the speaker's words, and the raw
+on-screen values (a claim stays in the speech, never becomes something you saw). Then `unnarrated`: visible defects
+nobody mentioned (wrapped or truncated text, contradicting counts, error banners), described literally.
 
-## Vocabulary (spell these exactly; ASR and speech both get them wrong)
+## Key frames ({{KEYFRAMES}})
+
+When requested, the last section is `## Key frames` (after any feedback items): 1–4 lines `- [hh:mm:ss] what the still shows (item N)`, for
+moments a reader must see rather than read (small icons, layout anomalies, error or loading states, dense tables), at
+a second when that state is fully rendered.
+
+## Words to listen for (spell them like this when heard)
 
 {{VOCABULARY}}
 
-Spelled forms here win over what you think you hear; a term outside this list that sounds like a
-name gets `(?)`.
-
 ## Skips
 
-Condense these to `[skipped hh:mm:ss–hh:mm:ss: reason]`:
-{{SKIPS}}
+Condense to `[skipped hh:mm:ss–hh:mm:ss: reason]`: {{SKIPS}}
 
-## Context
+## Context (reference for recognition and spelling, never evidence of what happened)
 {{CONTEXT_INTRO}}

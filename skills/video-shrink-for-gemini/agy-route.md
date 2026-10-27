@@ -20,8 +20,9 @@ opted out.
    prompt. Sandboxed `osascript` can fail silently (empty `clipboard info`): run it unsandboxed.
    Headless stream-json takes text blocks only; do not invent video attachment JSON
    ([media-paste docs](https://antigravity.google/docs/cli/prompting/)).
-4. Send the brief with an absolute `<name>.transcript.md` path; require direct media perception
-   (not logs or source code); approve that file write.
+4. Send the brief with an absolute `<name>.transcript.md` path and add what the API route does not
+   need: "write the document to that path; return only the path and coverage gaps; perceive the media
+   directly: no shell commands, frame extraction or other files". Approve that file write.
 5. Read the file; check speech, visual changes, timestamps and coverage against the recording;
    report gaps; exit the CLI. A `media_summary_generation` 503 is harmless; a main-run 429 blocks.
    Spinning with no output file → read the session log (`~/.gemini/antigravity-cli/log/`) for

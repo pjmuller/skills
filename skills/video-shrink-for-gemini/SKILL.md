@@ -8,7 +8,8 @@ description: "Use for \"transcribe this video/call\", \"what happens in this rec
 Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a paste-prompt for the user),
 built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source. Helpers (`--help`
 each, which also holds their measurements): `shrink-video`, `build-prompt`, `download-fathom`,
-`download-loom`, `detect-screenshare`, `transcribe-gemini`, `transcribe-local`, `transcribe-openai`.
+`download-loom`, `detect-screenshare`, `transcribe-gemini`, `extract-keyframes`, `transcribe-local`,
+`transcribe-openai`.
 `scripts/install` links them; `--check` verifies deps and the key.
 
 Route: `transcribe-gemini` (Gemini API) → continuous audiovisual narrative; native `agy` only
@@ -49,10 +50,30 @@ shrinking only speeds the upload. Native `agy` rejects attachments over **50 MiB
 
 ## Prompt
 
-**Ground the vocabulary first, every time**: 30–80 exact spellings seen written (people,
-company/product/feature names, vendors, project enums, places, language variety such as Flemish
-Dutch) from `AGENTS.md`/skill docs, glossaries, the vendor transcript's summary and speakers,
-recent notes, ticket titles. Without them Gemini and OpenAI invent plausible spellings.
+**Brief the caller context first, every time.** [prompt-template.md](prompt-template.md) wants the
+situation, a one-line purpose (who reads it, why fidelity matters), speakers, **words to listen for**
+(spoken names and terms; generous is fine; without them Gemini and OpenAI invent plausible spellings)
+and `{{LOOK_FOR}}` (the small things that matter on this screen). Screen labels (UI copy, a deck) go in
+as context files: reference for recognising labels, never evidence; Gemini quotes the pixels. Leave out
+engineering/internal docs: their jargon leaked into the narration (5 hits → 0 without). Keep
+`{{LOOK_FOR}}` on topic: "the address bar" on a prototype call made Gemini copy one URL three times and
+misread its ID in 3/6 runs (0/3 without). Two caller briefs:
+
+```text
+Situation: Sam walks Acme's staging onboarding, narrating feedback (English, Flemish accent).
+Purpose: a coding agent turns each remark into a change: needs screen, URL, element label, Sam's words.
+Speakers: Sam (narrator, voice only). Words to listen for: Acme, Northwind, Lena, Stripe, onboarding.
+Look for: step indicator, ticked/unticked boxes, status icons, red banners. Key frames: requested.
+Context: ui-copy.md + a ≤10-line screen brief naming deliberate oddities ("the add-on link opens a doc").
+```
+
+```text
+Situation: Sam Janssens (Acme) and Jo Peeters (Globex) meet on Google Meet; no screen share.
+Purpose: Sam's agent drafts follow-ups from who said what: speaker attribution and wording matter.
+Speakers: Sam Janssens (tile "Sam Janssens"), Jo Peeters (tile "Jo Peeters"), French accent.
+Words to listen for: Globex, Initech, Odoo, VAT replay. Look for: n/a. Key frames: not requested: skip.
+Context: the vendor transcript, a fallible hint for hard words, never for speakers.
+```
 
 Fill [prompt-template.md](prompt-template.md), then `build-prompt --header header.md --out
 session.gemini-prompt.md CONTEXT_FILE...` (appends context files verbatim). **Shared screen is an
@@ -63,9 +84,11 @@ watches for timing but names slides/frames/labels by their real titles. Opaque U
 **Product feedback walkthrough** (someone clicks through an app narrating changes): `--preset ui`
 (1 fps: at 0.5 fps a Backspace-removed chip or 200 ms spinner falls between frames; same cost), keep
 the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (CleanShot filenames
-carry it) so items line up with server logs, and pass the owning screen's skill doc plus the app's
-UI copy (i18n/strings or templates) so Gemini quotes real labels. A paused recording breaks the
-video time = wall clock mapping: time slow steps from server data, not video offsets. Then
+carry it) so items line up with server logs, and pass a short screen brief plus the app's UI copy
+(i18n/strings or templates). Set `{{KEYFRAMES}}` to `requested`, then `extract-keyframes
+<name>.transcript.md ORIGINAL [--offset S]` cuts ≤4 stills from the original and links them: they
+showed what the text misread (status icons, an unticked list); off for talking-head calls. A
+paused recording breaks the video time = wall clock mapping: time slow steps from server data, not video offsets. Then
 [feedback-round](../recording-followups/feedback-round.md).
 
 ## Execute and verify
@@ -89,7 +112,9 @@ invented. `low` only for long videos whose screen doesn't matter.
 is sent. Don't locate shares from transcript cues ("share my screen"): they miss most starts.
 
 Verify: read the file; check speech, visual changes, timestamps and coverage against the recording;
-report gaps. Keep the vendor transcript untouched; corrections go in annotations beside it. Its
+report gaps. Apply corrections in the transcript file itself and replace its `Verification: none
+yet.` with `Checked: <times → frame/whisper paths>; corrections applied; gaps: …`: a separate
+verification note never reaches downstream agents. Keep the vendor transcript untouched. The
 provenance header says "work from this text": downstream briefs point at **this**
 file, never at raw vendor ASR, so no later thread re-watches the video.
 

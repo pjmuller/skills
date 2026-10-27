@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27 — video-shrink-for-gemini: concise prompt, honest provenance, opt-in key frames
+
+- `prompt-template.md` rewritten (489 → 435 words; agent-only lines moved to `agy-route.md`): one-line `{{PURPOSE}}` (who reads it; no diagnoses or suggestions), `{{LOOK_FOR}}` caller hints, "words to listen for" instead of a spelling quota, context = reference never evidence, quote the pixels, `[cut? …]` only for jumps without action or loading, `[redacted: kind]` for personal fields, opt-in `{{KEYFRAMES}}`. Why: benchmark on 7 frozen-fact clips (3–6 reps per arm, $4.31): non-inferior to the old template on small text, URLs, speech and speakers; engineering-doc jargon leaks 15 → 0, invented items fewer, Meet-clip privacy traps 6/12 → 9/12. New placeholders: callers filling the template must add `{{PURPOSE}}`, `{{LOOK_FOR}}`, `{{KEYFRAMES}}`.
+- `transcribe-gemini` header: "Gemini draft of … Verification: none yet." (was "Verified transcript of"); SKILL.md: corrections go into the transcript itself and replace that line. Why: drafts were labelled verified before anyone checked, and side-file corrections never reached downstream agents.
+- New `extract-keyframes TRANSCRIPT ORIGINAL [--offset S]`: cuts the ≤4 `## Key frames` stills from the original and links them. Why: stills showed what the text misread (status icons, an unticked list) for ≈0 Gemini cost.
+- SKILL.md: two caller-brief examples replace the "30–80 terms" guidance.
+
 ## 2026-10-27 — T3 0.1.3 merged MCP tools: new names in docs
 
 - `t3-manage-thread` (browser, workers, permission-ceiling), `bitwarden`, `t3-route` test cases: `preview_click/type/press` → `preview_act {action}`, `t3_queue_list/cancel` → `t3_queue {action}`, `t3_thread_configuration` → `t3_thread_configure` without `modelSelection` (= read). Why: T3 0.1.3 ([#25423](https://github.com/pingdotgg/t3code/pull/25423)) merged 18 tools into action tools; agents following the old names hit "tool not found". Needs T3 ≥ 0.1.3 (older T3 still has only the old names).

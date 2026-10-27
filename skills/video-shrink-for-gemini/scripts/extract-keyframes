@@ -1,0 +1,87 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Turn a transcript's `## Key frames` lines into stills cut from the ORIGINAL recording. No model call.
+
+  extract-keyframes TRANSCRIPT.md SOURCE [--offset SECONDS] [--max 4]
+
+Reads `- [hh:mm:ss] what the still shows` under `## Key frames` (requested via the prompt template's
+{{KEYFRAMES}}), grabs one frame per line from SOURCE at offset + t + 0.5 s (Gemini samples 1 fps and stamps the
+second a state is visible; mid-second lands on it), writes <transcript stem>.frames/kf-hhmmss.jpg (1280 px wide)
+and links each line with its source and source time. Idempotent: re-running replaces the links. Exit 3: no
+section (not requested, or Gemini listed none); any other failure is an error.
+--offset: where the transcribed clip starts inside SOURCE. SOURCE is the original, not the .gemini.mp4 (smaller,
+re-encoded). Measured 2026-10-27 on 2-min walkthrough excerpts: 9/9 stills showed what the line claimed, two showed
+what the text got wrong (status icons, an unticked list); stills cannot recover sub-second screens Gemini never saw.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+LINE = re.compile(r"\s*[-*]\s*[`*]*\[(?:(\d+):)?(\d+):(\d+)(?:\.\d+)?\][`*]*\s*(.*)")  # fraction ignored
+SECTION = re.compile(r"(?m)^#{1,3} Key frames.*$")
+
+
+def clock(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("transcript", type=Path)
+    ap.add_argument("source", type=Path, help="the original recording")
+    ap.add_argument("--offset", type=float, default=0.0, help="clip start inside SOURCE, seconds")
+    ap.add_argument("--max", type=int, default=4)
+    a = ap.parse_args()
+
+    text = a.transcript.read_text(encoding="utf-8")
+    heading = SECTION.search(text)
+    if not heading:
+        print(f"{a.transcript}: no ## Key frames section (not requested, or Gemini listed none)", file=sys.stderr)
+        raise SystemExit(3)
+    duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                     str(a.source)], check=True, capture_output=True, text=True).stdout)
+    head, tail = text[:heading.end()], text[heading.end():]
+    section, rest = (re.split(r"(?m)^(?=#{1,3} )", tail, maxsplit=1) + [""])[:2]
+    outdir = a.transcript.with_name(a.transcript.name.removesuffix(".md") + ".frames")
+    outdir.mkdir(exist_ok=True)
+    lines, n, used = [], 0, set()
+    for line in section.splitlines():
+        if line.lstrip().startswith("![") and lines:  # a previous run's link: regenerated below
+            continue
+        m = LINE.match(line)
+        if not m or n >= a.max:
+            lines.append(line)
+            continue
+        h, mi, s, what = m.groups()
+        t = int(h or 0) * 3600 + int(mi) * 60 + int(s)
+        src_t = a.offset + t + 0.5  # mid-second
+        if a.offset + t >= duration:
+            raise SystemExit(f"[{clock(t)}] is past the end of {a.source} ({duration:.1f} s): wrong --offset or source?")
+        stem = f"kf-{clock(src_t).replace(':', '')}"
+        name = f"{stem}.jpg" if f"{stem}.jpg" not in used else f"{stem}-{n + 1}.jpg"  # two lines, same second
+        used.add(name)
+        still = outdir / name
+        still.unlink(missing_ok=True)
+        grab = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{src_t:.2f}", "-i", str(a.source),
+                "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", str(still)]
+        if subprocess.run(grab, capture_output=True).returncode or not still.exists():
+            # The final second can hold no frame at t + 0.5 s: take the recording's last frame instead.
+            src_t = duration
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-sseof", "-1.5", "-i", str(a.source),
+                            "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", "-update", "1", str(still)], check=True)
+        lines.append(f"- [{clock(t)}] {what}\n  ![{clock(t)}](<{outdir.name}/{name}>) "  # <>: names with spaces
+                     f"<!-- source {a.source.resolve()} @ {src_t:.1f}s -->")
+        n += 1
+    a.transcript.write_text(head + "\n".join(lines).rstrip("\n") + "\n" + ("\n" + rest if rest else ""), encoding="utf-8")
+    print(f"{n} frames → {outdir}")
+
+
+if __name__ == "__main__":
+    main()

@@ -12,7 +12,8 @@ artifacts for two tickets and displaced speech timestamps while eventually findi
 An independently fetched ID/title inventory may assist matching. Record its source, ordering, cap
 and date; it is an open set, never a nearest-match vocabulary. **Every seeded ID is
 candidate-assisted**, even if the model calls it visually read. Keep inventory content separate
-from spoken evidence. Domain wrappers own retrieval. Never seed the first perception pass with a
+from spoken evidence; say so in the prompt's context intro ("IDs matched from this inventory are
+candidate-assisted; links built from IDs are constructed, not observed"). Domain wrappers own retrieval. Never seed the first perception pass with a
 prior synthesis's answers.
 
 Measured (six short runs, two ticket pairs in one recording, 2026-09): seeding matched 4/4 IDs and

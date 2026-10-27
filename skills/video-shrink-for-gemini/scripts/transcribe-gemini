@@ -130,7 +130,8 @@ def provenance_header(video: Path, prompt: Path, model: str, thinking: str, reso
               else "whole video")
     return "\n".join([
         "<!-- provenance: Gemini audiovisual pass -->",
-        f"- Verified transcript of: {video.resolve()} (frames: {frames}; audio throughout)",
+        # The verifier replaces "none yet" with `Checked: <times → frame/whisper paths>; corrections applied; gaps: …`.
+        f"- Gemini draft of: {video.resolve()} (frames: {frames}; audio throughout). Verification: none yet.",
         f"- Pass: {model} · thinking {thinking} · media resolution {resolution} · {when}",
         f"- Prompt (speakers, vocabulary, context files): {prompt.resolve()}",
         "- Work from this text. Do not re-run the video pass; re-open the video only to check one timestamp "
@@ -157,9 +158,8 @@ def main() -> None:
     prompt = args.prompt.read_text(encoding="utf-8")
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_level=args.thinking),
-        # The shared prompt template also serves agent runs that write files; here the reply is the file.
-        system_instruction="Reply with the complete markdown document itself. You have no file access: ignore "
-                           "instructions to write files or to return only paths.")
+        # The reply is the file (agent routes get their file-writing instructions from agy-route.md, not the template).
+        system_instruction="Reply with the complete markdown document itself.")
     config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
 
     with tempfile.TemporaryDirectory() as tmp:

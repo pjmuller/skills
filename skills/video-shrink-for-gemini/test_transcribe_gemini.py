@@ -16,6 +16,7 @@ def test_provenance_header_names_source_and_forbids_rerun(tmp_path):
     assert head.startswith("<!-- provenance: Gemini audiovisual pass -->")
     assert str(video.resolve()) in head and str(prompt.resolve()) in head
     assert "2 screen-share ranges" in head and "Do not re-run the video pass" in head
+    assert "Gemini draft of:" in head and "Verification: none yet." in head and "Verified" not in head
     assert tg.provenance_header(video, prompt, "m", "low", "low", {"method": "full-fallback"}, "x").count("whole video") == 1
     voice = tg.provenance_header(tmp_path / "note.ogg", prompt, "m", "low", "low", {"method": "full-fallback"}, "x")
     assert "frames: none, audio file" in voice and tg.AUDIO_MIME[".ogg"] == "audio/ogg"
