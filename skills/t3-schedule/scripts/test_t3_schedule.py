@@ -708,7 +708,10 @@ def test_pending_resumes(tmp_path, monkeypatch):
 def test_list_hides_finished_jobs_unless_all(tmp_path, monkeypatch, capsys):
     import argparse
     import json
+    import subprocess
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Fake launchd (no launchctl on Linux CI): only the live job is loaded.
+    monkeypatch.setattr(mod, "launchctl", lambda *a: subprocess.CompletedProcess(a, 0 if a[-1].endswith(".live") else 1, "", ""))
     for name, extra in {"live": {}, "done": {"retired": "fired 2026-09-01"}}.items():
         p = mod.paths(name)
         p["spec"].parent.mkdir(parents=True, exist_ok=True)
@@ -719,9 +722,10 @@ def test_list_hides_finished_jobs_unless_all(tmp_path, monkeypatch, capsys):
         out = capsys.readouterr().out
         assert "live" in out and "done" not in out.replace("1 finished jobs hidden", "") and "1 finished jobs hidden" in out
     mod.cmd_list(argparse.Namespace(json=False, markdown=True, all=True))
-    assert "| done |" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "| done |" in out and "| active | yes |" in out and "NOT loaded (t3-schedule refresh)" in out
     mod.cmd_list(argparse.Namespace(json=True, markdown=False, all=False))
-    assert {s["name"] for s in json.loads(capsys.readouterr().out)} == {"live", "done"}
+    assert {s["name"]: s["loaded"] for s in json.loads(capsys.readouterr().out)} == {"live": True, "done": False}
 
 
 def test_fire_unconfirmed_leaves_marker_and_never_refires(tmp_path, monkeypatch, capsys):
