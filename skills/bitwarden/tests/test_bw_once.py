@@ -881,6 +881,9 @@ def test_interrupted_wait_for_a_touch_id_send_is_never_retry_safe(monkeypatch, t
 @macos_only
 @pytest.mark.parametrize("op,safe", [("send-text", False), ("copy", True)])
 def test_interrupted_terminal_wait_flags_a_possible_send(fake, monkeypatch, tmp_path, op, safe):
+    directory, _, _ = fake
+    (directory / "state").write_text(json.dumps({"locked": True, "locks": 0}))  # Launch checks locked first.
+
     def interrupted(_request):
         raise bw.Failure("Cancelled with Ctrl-C")  # E.g. during the worker cleanup wait.
     monkeypatch.setattr(bw, "wait_for_terminal", interrupted)
