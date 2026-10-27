@@ -172,17 +172,27 @@ def default_ai_label() -> bool:
     return value
 
 
+def _badge(target: str, ai_label: bool | None) -> bool:
+    """Resolve the AI badge for one send. WhatsApp rejects a badged group message with server error
+    479 (seen 2026-10-27; it still worked 2026-10-11), so groups never take the default badge."""
+    if not target.endswith("@g.us"):
+        return default_ai_label() if ai_label is None else ai_label
+    if ai_label:
+        raise ValueError("WhatsApp rejects the AI badge in groups (server error 479); send without --ai-label")
+    return False
+
+
 def send_text(target: str, text: str, ai_label: bool | None = None) -> str:
     """Send once to an explicit international number or allowlisted group JID; return message ID.
 
     ai_label=True/False shows or hides WhatsApp's native "AI" badge on this one message;
-    None uses default_ai_label().
+    None uses default_ai_label() (never in groups, see _badge).
     """
     from .store import normalize_target
     target = normalize_target(target)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("text must not be empty")
-    return _call("send", ai_label=default_ai_label() if ai_label is None else ai_label, target=target, text=text)
+    return _call("send", ai_label=_badge(target, ai_label), target=target, text=text)
 
 
 def send_document(target: str, path: str | Path, caption: str = "", *,
@@ -202,7 +212,7 @@ def _send_attachment(kind, target, path, caption, filename, mimetype, ai_label):
     from .store import normalize_target
     target = normalize_target(target)
     metadata, _ = attachment(path, kind, caption, filename, mimetype)
-    return _call("send_" + kind, ai_label=default_ai_label() if ai_label is None else ai_label,
+    return _call("send_" + kind, ai_label=_badge(target, ai_label),
                  target=target, **metadata)
 
 

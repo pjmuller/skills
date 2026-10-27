@@ -318,7 +318,10 @@ def main():
         except (ValueError, RuntimeError) as exc:
             result = {"error": str(exc)}
         except Exception as exc:
-            result = {"error": f"WhatsApp {type(exc).__name__}; operation failed or send outcome unknown. Do not retry blindly."}
+            # whatsmeow's reason (e.g. a group key error) is the only diagnosis; it carries no message text.
+            reason = " ".join(str(exc).split())[:300]
+            result = {"error": f"WhatsApp {type(exc).__name__}: {reason or 'no detail'}; operation failed "
+                               "or send outcome unknown. Do not retry blindly."}
         print("WA_RESULT=" + json.dumps(result), flush=True)
     # Neonize can retain a non-daemon FFI thread after Stop on QR timeout (seen on 0.4.3).
     # Store transactions and our lock are closed; this isolated process is done.

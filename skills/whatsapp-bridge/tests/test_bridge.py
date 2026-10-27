@@ -38,6 +38,16 @@ class SafetyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 send_text('+32470123456', 'hi')
 
+    def test_groups_never_take_the_ai_badge(self):
+        group = '120363421529066560@g.us'
+        with tempfile.TemporaryDirectory() as tmp, patch('whatsapp_bridge.store.STATE', Path(tmp)), \
+                patch('whatsapp_bridge._call', return_value='id') as call:
+            (Path(tmp) / 'settings.json').write_text('{"ai_label_default": true}')
+            send_text(group, 'hi')
+            self.assertFalse(call.call_args.kwargs['ai_label'])
+            with self.assertRaises(ValueError):
+                send_text(group, 'hi', ai_label=True)
+
     def test_group_targets_need_explicit_allowlist_entry(self):
         group = '120363421529066560@g.us'
         self.assertEqual(normalize_target(group), group)
