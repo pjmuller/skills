@@ -1,5 +1,6 @@
 """One command surface for every account: help without credentials, and correct dispatch."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -138,16 +139,19 @@ def test_network_failures_name_a_host_outside_googleapis():
 
 def test_draft_prints_a_mail_ref_line_t3_mail_link_can_claim(capsys):
     from gws_core.cli import cmd_gmail_draft
-    draft = {"id": "r-1", "message": {"id": "m1", "threadId": "19e875318442de06"}, "verified": {"files": 0}}
+    draft = {"id": "r-1", "message": {"id": "m1", "threadId": "19e875318442de06"}, "verified": {"files": 0}, "replyToMessage": "latest"}
     ws = SimpleNamespace(config=SimpleNamespace(account="Operator@Example.com"),
                          gmail=SimpleNamespace(create_draft=lambda *a, **k: draft))
     args = build_parser().parse_args(["gmail-draft", "--to", "a@b.c", "--subject", "s", "--body", "b"])
     args.json = False
     cmd_gmail_draft(args, ws)
-    assert "\nMail-ref: gmail:19e875318442de06 operator@example.com\n" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "\nMail-ref: gmail:19e875318442de06 operator@example.com\n" in output
+    assert "Reply-to-message: latest\n" in output
     args.json = True
     cmd_gmail_draft(args, ws)
     captured = capsys.readouterr()
+    assert json.loads(captured.out)["replyToMessage"] == "latest"
     assert captured.err.startswith("Mail-ref: gmail:19e875318442de06 operator@example.com\nOpen: ")
 
 

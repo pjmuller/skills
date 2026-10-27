@@ -29,6 +29,13 @@ Diagnose wrapping from the decoded MIME body (`api GET …/messages/<id> --param
 lines: quoted-printable soft breaks vanish on decode. `format=flowed` is no fix (needs RFC 3676
 encoding and client support). Never send a test email without authorization.
 
+Replies: `--reply-to-message ID` resolves the message's thread and quotes/references its latest
+non-draft message (including your own sent mail), ordered by Gmail's `internalDate`. The CLI prints
+`Reply-to-message: <id>`; JSON includes `replyToMessage`. Recipients stay as explicitly supplied.
+Read the latest thread before composing: advancing the reply target does not update your authored
+text. Body-only `gmail-draft-update` and `gmail-draft-send` preserve the existing reply target.
+The builder sets no Date header; Gmail supplies it. Quotes preserve the source Date and offset.
+
 ## Attachments
 
 - `--attach PATH` (repeatable) on `gmail-draft`, `gmail-send`, `gmail-draft-update`: one part per file

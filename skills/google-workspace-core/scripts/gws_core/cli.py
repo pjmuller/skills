@@ -457,6 +457,8 @@ def cmd_gmail_draft(a, ws):
     message = draft.get("message") or {}
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
+    if draft.get("replyToMessage") and not a.json:
+        print(f"Reply-to-message: {draft['replyToMessage']}")
     print_mail_ref(ws, message.get("threadId"), a.json)
     print_draft_url(ws, draft, a.json)
 
@@ -468,6 +470,8 @@ def cmd_gmail_send(a, ws):
                          from_=a.from_addr)
     out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})  "
                       f"files={sent['verified']['files']}")
+    if sent.get("replyToMessage") and not a.json:
+        print(f"Reply-to-message: {sent['replyToMessage']}")
     print_mail_ref(ws, sent.get("threadId"), a.json)
 
 
@@ -1084,7 +1088,7 @@ def build_parser() -> argparse.ArgumentParser:
         alternative.add_argument("--html-file",
                                  help="keep the body as plain text and attach this HTML alternative")
         command.add_argument("--reply-to-message",
-                             help="message id to thread and quote; subject must match")
+                             help="reply to and quote the latest non-draft in this message's thread; subject must match")
         command.add_argument("--from", dest="from_addr",
                              help="send-as alias or 'Name <alias>' (default: the mailbox's "
                                   "default send-as identity)")

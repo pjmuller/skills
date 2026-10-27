@@ -503,6 +503,16 @@ class GmailClient:
               html: bool = False, html_body: str | None = None,
               reply_to_message: str | None = None, attach: list[str] | None = None,
               from_: str | None = None) -> tuple[str, str | None]:
+        """Build MIME and thread id; replies follow the latest non-draft in the thread."""
+        raw, thread_id, _ = self._build(
+            to, subject, body, cc=cc, html=html, html_body=html_body,
+            reply_to_message=reply_to_message, attach=attach, from_=from_)
+        return raw, thread_id
+
+    def _build(self, to: str, subject: str, body: str, *, cc: str | None = None,
+              html: bool = False, html_body: str | None = None,
+              reply_to_message: str | None = None, attach: list[str] | None = None,
+              from_: str | None = None) -> tuple[str, str | None, str | None]:
         """Build the base64url MIME payload; replies thread, quote and keep the subject.
 
         Always multipart/alternative. Plain `body` gets an escaped HTML twin: Gmail web opens a
@@ -520,13 +530,22 @@ class GmailClient:
             message["Cc"] = cc
         message["Subject"] = subject
         thread_id = None
+        replied_to = None
         quote_plain = quote_html = ""
         if reply_to_message:
-            original = self.view(self.get(reply_to_message), trim=True)
+            seed = self.get(reply_to_message)
+            thread = self.thread(seed["threadId"])
+            candidates = [m for m in thread.get("messages", []) if "DRAFT" not in m.get("labelIds", [])]
+            if not candidates:
+                raise WorkspaceError(f"thread {seed['threadId']} has no non-draft message to reply to")
+            # Gmail internalDate orders the mailbox, independent of sender time zones/Date headers.
+            latest = max(enumerate(candidates), key=lambda pair: (int(pair[1]["internalDate"]), pair[0]))[1]
+            replied_to = latest["id"]
+            original = self.view(latest, trim=True)
             reference = original["headers"].get("Message-ID")
             if not reference:
                 raise WorkspaceError(
-                    f"message {reply_to_message} has no Message-ID header; cannot thread a reply")
+                    f"message {replied_to} has no Message-ID header; cannot thread a reply")
             if normalized_subject(subject) != normalized_subject(original["headers"].get("Subject", "")):
                 raise WorkspaceError(
                     "reply subject must match the original (an added Re: prefix is allowed) to "
@@ -552,7 +571,7 @@ class GmailClient:
             message.add_alternative((html_body or _text_html(body)) + quote_html, subtype="html")
         add_attachments(message, files)
         raw = base64.urlsafe_b64encode(message.as_bytes(policy=SMTP)).decode("ascii")
-        return raw, thread_id
+        return raw, thread_id, replied_to
 
     def _payload(self, raw: str, thread_id: str | None) -> dict[str, Any]:
         payload: dict[str, Any] = {"raw": raw}
@@ -562,7 +581,7 @@ class GmailClient:
 
     def create_draft(self, to: str, subject: str, body: str, **kw) -> dict:
         """Create a draft. Nothing is sent. With `attach`, the stored files are read back."""
-        raw, thread_id = self.build(to, subject, body, **kw)
+        raw, thread_id, replied_to = self._build(to, subject, body, **kw)
         draft = self.session.api("POST", f"{GMAIL}/drafts",
                                  json={"message": self._payload(raw, thread_id)})
         files = 0
@@ -570,17 +589,17 @@ class GmailClient:
             stored = self.session.api("GET", f"{GMAIL}/drafts/{draft['id']}", params={"format": "full"})
             files = self._stored_files(stored.get("message") or {}, len(kw["attach"]),
                                        f"draft {draft['id']}", "gmail-draft-get")
-        return {**draft, "verified": {"files": files}}
+        return {**draft, "verified": {"files": files}, "replyToMessage": replied_to}
 
     def send(self, to: str, subject: str, body: str, **kw) -> dict:
         """Send immediately. No idempotency guard: one call is one mail."""
-        raw, thread_id = self.build(to, subject, body, **kw)
+        raw, thread_id, replied_to = self._build(to, subject, body, **kw)
         sent = self.session.api("POST", f"{GMAIL}/messages/send", json=self._payload(raw, thread_id))
         files = 0
         if kw.get("attach"):
             files = self._stored_files(self.get(sent["id"]), len(kw["attach"]),
                                        f"message {sent['id']} was sent but", "gmail-get")
-        return {**sent, "verified": {"files": files}}
+        return {**sent, "verified": {"files": files}, "replyToMessage": replied_to}
 
     def _stored_files(self, message: dict, expected: int, what: str, inspect: str) -> int:
         files = len(self.attachment_index(message.get("payload") or {}))

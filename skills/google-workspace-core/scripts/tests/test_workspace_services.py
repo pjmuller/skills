@@ -93,13 +93,13 @@ def test_sheets_values_and_native_tables():
 
 
 def test_gmail_reply_threads_quotes_and_guards_the_subject():
-    original = {"id": "m1", "threadId": "t1", "payload": {
+    original = {"id": "m1", "threadId": "t1", "internalDate": "1000", "payload": {
         "headers": [{"name": "Subject", "value": "Offerte"},
                     {"name": "Message-ID", "value": "<abc@mail>"},
                     {"name": "From", "value": "her@example.com"},
                     {"name": "Date", "value": "Mon, 1 Sep 2026 10:00:00 +0200"}],
         **body_part("Graag een offerte.\n\n> oude tekst")}}
-    session = FakeSession([Recorded(original), Recorded({"id": "d1", "message": {"id": "m2"}})])
+    session = FakeSession([Recorded(original), Recorded({"messages": [original]}), Recorded({"id": "d1", "message": {"id": "m2"}})])
     gmail = GmailClient(session, sender=ACCOUNT)
     gmail.create_draft("her@example.com", "Re: Offerte", "Hier is ze.", reply_to_message="m1")
     payload = session.calls[-1][2]["json"]["message"]
@@ -109,7 +109,7 @@ def test_gmail_reply_threads_quotes_and_guards_the_subject():
     assert "> Graag een offerte." in message.get_body(("plain",)).get_content()
     assert '<div class="gmail_quote">' in message.get_body(("html",)).get_content()
 
-    session = FakeSession([Recorded(original)])
+    session = FakeSession([Recorded(original), Recorded({"messages": [original]})])
     with pytest.raises(WorkspaceError, match="reply subject must match"):
         GmailClient(session, sender=ACCOUNT).send("her@example.com", "Iets anders", "x",
                                                   reply_to_message="m1")
@@ -647,3 +647,48 @@ def test_session_keeps_a_query_string_inside_the_url():
         or Recorded({})})()
     session.send("GET", "https://slides.googleapis.com/v1/presentations/p?fields=title", params={"x": "1"})
     assert recorded == [("https://slides.googleapis.com/v1/presentations/p", {"fields": "title", "x": "1"})]
+
+
+@pytest.mark.parametrize("operation", ["create_draft", "send", "build"])
+def test_reply_advances_to_sent_message_and_ignores_drafts(operation):
+    def mail(mid, timestamp, labels, text):
+        return {"id": mid, "threadId": "t1", "internalDate": str(timestamp), "labelIds": labels,
+                "payload": {"headers": [
+                    {"name": "Subject", "value": "Topic"},
+                    {"name": "Message-ID", "value": f"<{mid}@example.com>"},
+                    {"name": "References", "value": "<root@example.com>"},
+                    {"name": "From", "value": ACCOUNT if "SENT" in labels else "other@example.com"},
+                    {"name": "Date", "value": "Mon, 26 Oct 2026 11:19:07 -0500"}],
+                    **body_part(text)}}
+    inbound = mail("inbound", 1000, ["INBOX"], "Old inbound")
+    sent = mail("sent", 2000, ["SENT"], "Latest sent")
+    draft = mail("draft", 3000, ["DRAFT"], "Unsent draft")
+    session = FakeSession([Recorded(inbound), Recorded({"messages": [sent, draft, inbound]}),
+                           Recorded({"id": "result", "message": {"id": "new", "threadId": "t1"}})])
+    result = getattr(GmailClient(session, sender=ACCOUNT), operation)(
+        "other@example.com", "Re: Topic", "Follow-up", reply_to_message="inbound")
+    if operation == "build":
+        raw, thread_id = result
+        assert thread_id == "t1"
+    else:
+        assert result["replyToMessage"] == "sent"
+        payload = session.calls[-1][2]["json"]
+        payload = payload["message"] if operation == "create_draft" else payload
+        assert payload["threadId"] == "t1"
+        raw = payload["raw"]
+    message = message_from_bytes(base64.urlsafe_b64decode(raw), policy=default)
+    assert message["In-Reply-To"] == "<sent@example.com>"
+    assert message["References"] == "<root@example.com> <sent@example.com>"
+    assert message["To"] == "other@example.com"
+    assert message["Date"] is None  # Gmail supplies Date; the builder adds no local/US offset.
+    for subtype in ("plain", "html"):
+        quoted = message.get_body((subtype,)).get_content()
+        assert "Latest sent" in quoted and "Old inbound" not in quoted and "Unsent draft" not in quoted
+
+
+def test_reply_refuses_thread_with_only_drafts():
+    seed = {"id": "draft", "threadId": "t1", "labelIds": ["DRAFT"]}
+    session = FakeSession([Recorded(seed), Recorded({"messages": [seed]})])
+    with pytest.raises(WorkspaceError, match="no non-draft message"):
+        GmailClient(session, sender=ACCOUNT).create_draft("a@example.com", "Topic", "Hi", reply_to_message="draft")
+    assert all(method == "GET" for method, _, _ in session.calls)
