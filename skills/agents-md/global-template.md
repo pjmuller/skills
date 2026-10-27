@@ -72,7 +72,7 @@ AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-
 ## Skill docs (`.agents/skills/` canonical; `.claude/skills` = committed symlink `../.agents/skills`)
 Few global skills. Machine/prompt maintenance → personal setup repo; product workflows → their project repo; a skill source repo distributes templates/tools, not personal config.
 Content: the **INTENT** behind each component + which source files to open; progressive disclosure, no god files; reference filenames/methods, not snippets. Update after a coding task.
-Lessons learned go there (skills / AGENTS.md), never harness memory: colleagues' agents must behave the same.
+Lessons learned go there (skills / AGENTS.md), never harness memory: colleagues' agents must behave the same. Wrapper of a copied core = DNA only (accounts, ids, policy); a generic lesson goes to the canonical core.
 Fix > note: a DX flaw gets the core fix in code/config, not a workaround note.
 **Improvement loop**: after a substantial recurring task, ask what would have made it easier (context, tool, seed data, error message); apply cheap fixes, propose the rest in ≤3 lines.
 Pushed a shared skill core that projects carry as a committed copy → refresh every consumer repo in the same session.

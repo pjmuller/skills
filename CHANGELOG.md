@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — global template: wrappers hold DNA only
+
+- `agents-md/global-template.md` Skill docs: "Wrapper of a copied core = DNA only (accounts, ids, policy); a generic lesson goes to the canonical core." Why: agents improving a skill inside a consumer repo edited the local wrapper, so lessons stayed in one company's repo while colleagues and public users of the core never got them; an audit found generic workflows restated in wrappers across 10 repos ([core and wrapper](README.md#core-and-wrapper)).
+
 ## 2026-10-27 — wrapper lessons moved into nine cores
 
 - `clickup-core`: body-is-record/comment-is-ping, listing someone's work (`active_statuses`), assignee invariant, new-ticket body and "deleted stays deleted", MCP-connector ban, screenshots read; `reference.md` gains description-Markdown rewrites and "Workspace admin limits" (statuses add-only, dropdowns UI-only, no auto-number, date-field timezone); new `review.md` for reviewing a ticket another agent wrote.
