@@ -122,6 +122,13 @@ def test_live_detector_waits_for_speech_then_quiet():
     for start in range(0, len(silence) - frame, frame):
         quiet.feed(silence[start:start + frame])
     assert not quiet.finished  # silence alone never ends a take early
+    long_talk = analysis.SpeechEnd(RATE)  # baseline frozen at the beep: long speech never turns into "quiet"
+    voiced = take(0.0)[:int(1.2 * RATE)] + [0.3 * math.sin(2 * math.pi * 200 * n / RATE) for n in range(10 * RATE)]
+    for start in range(0, len(voiced) - frame, frame):
+        long_talk.feed(voiced[start:start + frame])
+        if start == int(1.2 * RATE) // frame * frame:
+            long_talk.restart()
+        assert not long_talk.finished
     early = analysis.SpeechEnd(RATE)  # noise before the countdown ended does not count as speech
     for start in range(0, len(samples) - frame, frame):
         early.feed(samples[start:start + frame])
@@ -220,13 +227,18 @@ def test_left_out_words_are_a_slip_not_a_mic_error():
 
 @pytest.fixture
 def fake_tools(tmp_path, monkeypatch):
-    """ffmpeg stand-in: touches the WAV, streams 1 s quiet, 1.5 s 'speech', then quiet until SIGINT."""
+    """ffmpeg stand-in: touches the WAV, streams 1 s quiet, 1.5 s 'speech', then quiet until SIGINT.
+    FAKE_FFMPEG=silent sends nothing, =stall stops sending after the first chunk."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "ffmpeg").write_text(f"""#!{sys.executable}
 import array, math, random, signal, sys, time
+import os
 signal.signal(signal.SIGINT, lambda *_: sys.exit(255))
 open(sys.argv[sys.argv.index("pcm_s24le") + 1], "wb").close()
+mode = os.environ.get("FAKE_FFMPEG", "")
+if mode == "silent":
+    time.sleep(60)
 rate, rng, n = 16000, random.Random(1), 0
 while n < rate * 20:
     chunk = []
@@ -237,6 +249,8 @@ while n < rate * 20:
         n += 1
     sys.stdout.buffer.write(array.array("f", chunk).tobytes())
     sys.stdout.buffer.flush()
+    if mode == "stall":
+        time.sleep(60)
     time.sleep(0.006)
 """)
     (bin_dir / "afplay").write_text("#!/bin/sh\nexit 0\n")
@@ -251,6 +265,17 @@ def test_take_ends_once_the_speaker_stops(tmp_path, fake_tools):
     result = fake_tools.record_take("0", tmp_path / "take.wav", tmp_path / "countdown.wav", 30)
     assert result["ended"] == "speaker stopped" and result["speech_seconds_live"] >= 1.0
     assert time.monotonic() - started < 6  # not the 30 s limit
+
+
+def test_silent_or_stalled_capture_never_hangs(tmp_path, fake_tools, monkeypatch):
+    monkeypatch.setattr(fake_tools, "START_TIMEOUT", 0.5)
+    monkeypatch.setenv("FAKE_FFMPEG", "silent")
+    with pytest.raises(RuntimeError, match="did not start"):
+        fake_tools.record_take("0", tmp_path / "take.wav", tmp_path / "countdown.wav", 1)
+    monkeypatch.setenv("FAKE_FFMPEG", "stall")
+    started = time.monotonic()
+    assert fake_tools.record_take("0", tmp_path / "take.wav", tmp_path / "countdown.wav", 1)["ended"] == "limit"
+    assert time.monotonic() - started < 4
 
 
 def test_agent_cancel_stops_an_active_take(tmp_path, fake_tools):

@@ -122,28 +122,35 @@ def measure(channels: list, rate: int) -> Metrics:
 
 
 class SpeechEnd:
-    """Live: feed mono frames, `finished` turns true once the speaker said something and went quiet."""
+    """Live: feed mono frames, `finished` turns true once the speaker said something and went quiet.
+
+    The noise baseline freezes at `restart()` (end of the beep): a running percentile would drift up
+    into long continuous speech and then call that speech "quiet"."""
 
     def __init__(self, rate: int):
-        self.rate, self.powers, self.speech, self.quiet = rate, [], 0.0, 0.0
+        self.rate, self.powers, self.speech, self.quiet, self.noise = rate, [], 0.0, 0.0, None
 
     def feed(self, samples) -> None:
         seconds = len(samples) / self.rate
         if tone_share(samples, self.rate) > BEEP_SHARE:
             return
         level = _rms_power(samples)
-        self.powers.append(level)
-        if len(self.powers) < 10:
-            return
-        if power_db(level) > power_db(_percentile(self.powers, NOISE_PERCENTILE)) + END_ABOVE_NOISE_DB:
+        if self.noise is None:
+            self.powers.append(level)
+            if len(self.powers) < 10:
+                return
+        noise = self.noise if self.noise is not None else _percentile(self.powers, NOISE_PERCENTILE)
+        if power_db(level) > power_db(noise) + END_ABOVE_NOISE_DB:
             self.speech += seconds
             self.quiet = 0.0
         elif self.speech:
             self.quiet += seconds
 
     def restart(self) -> None:
-        """Countdown over: keep the noise history, forget sounds made while waiting (breath, typing)."""
+        """Beep over: freeze the noise baseline from the wait, forget sounds made while waiting."""
         self.speech = self.quiet = 0.0
+        if len(self.powers) >= 5:
+            self.noise = _percentile(self.powers, NOISE_PERCENTILE)
 
     @property
     def finished(self) -> bool:

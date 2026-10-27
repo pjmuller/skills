@@ -30,6 +30,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,7 @@ COUNTDOWN = ((0.0, 0.2),)
 PLAYER_SLACK = 1.5    # worst afplay start latency
 LIVE_RATE = 16000     # the speech-end detector's copy of the stream; the WAV keeps the native format
 SETTLE_SECONDS = 0.3
+START_TIMEOUT = 8.0   # seconds without audio before a take fails
 ENTER_TIMEOUT = 900
 KNOB_PROMPT_SECONDS = 120  # per knob take: time to turn the knob and press Enter
 CANCEL_FILE = "cancel"  # written by the agent side when it stops waiting; checked before every take
@@ -114,17 +116,30 @@ def record_take(index: str, path: Path, countdown: Path, max_seconds: float) -> 
                "-i", f":{index}", "-t", f"{PLAYER_SLACK + COUNTDOWN[-1][0] + max_seconds + 2:.2f}",
                "-map", "0:a", "-c:a", "pcm_s24le", str(path),
                "-map", "0:a", "-ac", "1", "-ar", str(LIVE_RATE), "-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    errors = tempfile.TemporaryFile()  # a file, not a pipe: reading it never blocks, writing never stalls ffmpeg
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
     out, frame = process.stdout.fileno(), int(analysis.FRAME_SECONDS * LIVE_RATE) * 4
     detector, buffer, player, countdown_end, ended = analysis.SpeechEnd(LIVE_RATE), bytearray(), None, None, "limit"
     cancel, started = path.parent / CANCEL_FILE, time.monotonic()
+    hard_stop = started + START_TIMEOUT + PLAYER_SLACK + COUNTDOWN[-1][0] + max_seconds + 5  # even if afplay or ffmpeg stall
+
+    def stderr_text() -> str:
+        errors.seek(0)
+        return errors.read().decode(errors="replace").strip()
+
     try:
         while True:
+            now = time.monotonic()
             if cancel.exists():
                 raise KeyboardInterrupt("cancelled by the waiting agent")
+            if countdown_end is None and player is not None and player.poll() is not None:
+                countdown_end = now
+                detector.restart()
+            if player is None and now - started > START_TIMEOUT:
+                raise RuntimeError(f"capture did not start: {stderr_text() or 'no audio from the device'}")
+            if (countdown_end is not None and now - countdown_end > max_seconds) or now > hard_stop:
+                break
             if not select.select([out], [], [], 0.2)[0]:
-                if player is None and time.monotonic() - started > 8:
-                    raise RuntimeError("capture did not start: " + (process.stderr.read1(4096).decode() or "timeout"))
                 continue
             chunk = os.read(out, 65536)
             if not chunk:
@@ -135,21 +150,15 @@ def record_take(index: str, path: Path, countdown: Path, max_seconds: float) -> 
             while len(buffer) >= frame:
                 detector.feed(array.array("f", bytes(buffer[:frame])))
                 del buffer[:frame]
-            now = time.monotonic()
-            if countdown_end is None and player.poll() is not None:
-                countdown_end = now
-                detector.restart()
             if countdown_end is not None and detector.finished:
                 ended = "speaker stopped"
-                break
-            if countdown_end is not None and now - countdown_end > max_seconds:
                 break
     finally:
         if player is not None and player.poll() is None:
             player.kill()
         stop(process, out)
     if process.returncode not in (0, 255, -signal.SIGINT):  # 255: ffmpeg's exit code after SIGINT
-        raise RuntimeError(f"ffmpeg failed ({process.returncode}): {process.stderr.read().decode().strip()}")
+        raise RuntimeError(f"ffmpeg failed ({process.returncode}): {stderr_text()}")
     return {"ended": ended, "speech_seconds_live": round(detector.speech, 2)}
 
 
@@ -296,13 +305,14 @@ def capture(folder: Path, confirm: bool) -> dict:
     return session
 
 
-def capture_in_terminal(folder: Path, wait: float, recording_seconds: float) -> dict:
+def capture_in_terminal(folder: Path, enter_window: float, reserve: float) -> dict:
     """Agent shells have no TTY, and their host app may lack microphone access (silent zeros): the
-    capture runs in a Terminal.app window where the speaker presses Enter when ready. The window
-    stops waiting for Enter early enough that the recording finishes inside this side's wait."""
+    capture runs in a Terminal.app window where the speaker presses Enter when ready. This side waits
+    for the Enter window plus the worst-case session (`reserve`), so it never gives up mid-recording."""
     session = json.loads((folder / "session.json").read_text())
-    session["enter_deadline"] = time.time() + max(60.0, wait - recording_seconds - 30)
+    session["enter_deadline"] = time.time() + enter_window
     write_json(folder / "session.json", session)
+    wait = enter_window + reserve
     script = folder / "capture.command"
     script.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{Path(__file__).resolve()}' capture '{folder}'\n")
     script.chmod(0o755)
@@ -490,7 +500,10 @@ def cmd_run(args) -> None:
     else:
         levels = parse_levels(args.levels)
     takes = len(levels) + len(knob)
-    seconds = takes * (SETTLE_SECONDS + PLAYER_SLACK + COUNTDOWN[-1][0] + 5) + 4
+    seconds = takes * (SETTLE_SECONDS + PLAYER_SLACK + 5)  # typical: a 4 s sentence
+    worst_take = SETTLE_SECONDS + START_TIMEOUT + PLAYER_SLACK + sum(COUNTDOWN[-1]) + args.seconds + 5 + 5  # start, stop limits
+    prompts = (len(knob) + 1) * KNOB_PROMPT_SECONDS if args.knob else 0  # Enter per knob take + Done
+    reserve = takes * worst_take + prompts + 60  # + gain pick analysis and slack
     print(f"device={device.name}  gain={device.gain() if device.gain_supported else 'fixed'}  "
           f"levels={levels}  knob={knob}  ≈{seconds:.0f}s of recording")
     if args.dry_run:
@@ -507,8 +520,7 @@ def cmd_run(args) -> None:
                "sentence": args.sentence, "language": args.language, "seconds": args.seconds, "takes": []}
     write_json(folder / "session.json", session)
     print(f"session={folder}", flush=True)
-    wait = args.wait + (len(knob) * KNOB_PROMPT_SECONDS if session["knob_phase"] == "knob" else 0)
-    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, wait, seconds)
+    session = capture(folder, confirm=True) if sys.stdin.isatty() else capture_in_terminal(folder, args.wait, reserve)
     if session["status"] != "recorded":
         fail(f"capture {session['status']}; session {folder}", 1)
     path, rec = report(folder, stt=not args.no_stt)
@@ -557,7 +569,8 @@ def main() -> None:
     run.add_argument("--seconds", type=float, default=8.0, help="longest speech after the countdown; a take "
                      "ends sooner, once the speaker stops")
     run.add_argument("--out", default=os.environ.get("MIC_CALIBRATION_DIR", "~/Downloads/microphone-calibration"))
-    run.add_argument("--wait", type=float, default=540, help="seconds to wait for the Terminal capture (no TTY)")
+    run.add_argument("--wait", type=float, default=540, help="seconds the speaker has to press Enter in the Terminal "
+                     "window (no TTY); the session's worst-case duration is added on top")
     run.add_argument("--no-stt", action="store_true")
     run.add_argument("--apply-recommended", action="store_true", help="leave the recommended gain set "
                      "(with --knob: the gain the knob takes used)")
