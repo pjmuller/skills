@@ -17,13 +17,20 @@ for the prompt step. Automatic per-call entry: [recording-watcher](../recording-
 
 1. **Debrief note** in the project's notes location (else `~/Downloads`). Per topic: said,
    decided, open, timestamps. Personal to-dos and items for a colleague in their own list, never
-   mixed into the delegable prompts.
-2. **`~/Downloads/<date>-<who>-followup-prompts.md`**: the overview the user reads. Top: the spawn
-   recipe and one current status line, updated as items start. Then one `## N. <title>` per
-   delegable item, identical to its prompt file.
+   mixed into the delegable prompts. Its status splits **decisions waiting on the user** from
+   **follow-ups already running** (thread/ticket link, what each waits on). A decision another
+   thread owns is linked there, never requeued.
+2. **`~/Downloads/<date>-<who>-followup-prompts.md`**: what the user **still has to trigger**,
+   nothing else: prompts held for manual launch or explicit approval. Top: the spawn recipe and
+   one status line. Then one `## N. <title>` per pending item, identical to its prompt file. An
+   item leaves once its launch, handoff (ticket, other thread) or completion is verified, even
+   while the worker runs; a worker's awaited output is not a new trigger. Nothing pending → no
+   overview, or an existing one becomes the single line "No follow-ups left to trigger" (no
+   catalogue of finished work).
 3. **One file per prompt**: `~/Downloads/<date>-<who>-prompt-N.md` (title line + body). Launch by
    path so extra instructions are a quick edit, not a retype: `t3_thread_launch` with `message:
-   "Read and execute <absolute path>"`.
+   "Read and execute <absolute path>"`. Files stay after launch (a worker may still read them);
+   thread ids and links go in the debrief or a manifest so a retry cannot launch twice.
 
 ## Prompt shape (each one stands alone)
 
@@ -82,4 +89,5 @@ here ([which one](../t3-manage-thread/workers.md#which-one)).
   Without such a policy or a direct execution request, the files are the deliverable. Deduplicate
   existing work before launching.
 - **Additions at spawn time**: verbatim → spawn the file; small additions → append an `Additions
-  from <user>:` paragraph; changed intent → rewrite the file. Keep the overview in sync.
+  from <user>:` paragraph; changed intent → rewrite the file. A pending item's overview section
+  stays identical to its file; on launch it leaves the overview (Deliverables 2).

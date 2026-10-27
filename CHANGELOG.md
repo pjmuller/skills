@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — recording-followups: the overview lists only what is left to trigger
+
+- `recording-followups/SKILL.md` Deliverables: `followup-prompts.md` holds only prompts the user still has to launch or approve, each identical to its prompt file. An item leaves once its launch, handoff or completion is verified (even while the worker runs); prompt files stay, ids/links go to the debrief or a manifest. Nothing pending → no overview, or one line "No follow-ups left to trigger". The debrief status splits decisions waiting on the user from follow-ups already running; decisions owned by another thread are linked, not requeued. Why: overviews kept every launched and finished item, so the user re-read done work to find the one decision still theirs.
+
 ## 2026-10-27 — screen-share detection from the video, with a benchmark
 
 - `detect-screenshare` rewritten: 1 frame/s at 320x180; Meet layout (gutter + a real filmstrip) only gates, the big tile's content decides (2 of 4 votes: flat pixels, grey pixels, static tile, no skin; plus some text edges); 10 s minimum run, gaps bridged while the share layout stays, 2 s padding. Why: speaker view looks like a share to a gutter rule (a 30-min 2-person call without share was 29 min "shared", crop on a face). Share-second precision 0.86 → 0.99 on 17 labelled calls, 0.96 → 0.996 on 5 held-out calls, recall ≥ 0.99, boundaries ±3 s (were up to 24 s). `--step` default 15 → 1; output drops `gutters`.
