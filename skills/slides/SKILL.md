@@ -37,8 +37,10 @@ answer would change the deck. A deck read without a speaker may need more contex
 - **Images earn their space** (explain, make memorable, set an intended mood). Generated art:
   coherent direction, purposeful humour, no generic AI decoration; respect "brainstorm, don't
   generate yet". Use brand assets; no private information in screenshots.
-- **Presenter notes** (live talks): short cues the speaker could forget (example, nuance,
-  transition, demo); no copy of the slide or script unless asked, no review history. Reveal only
+- **Presenter notes: skip unless asked** (by the user, a wrapper or the deck's own doc). Slides and
+  the exported PDF stand on their own: headlines carry the argument, the key fact sits on the slide;
+  no separate notes export. When asked (live talks): short cues the speaker could forget (example,
+  nuance, transition, demo); no copy of the slide or script, no review history. Reveal only
   when order helps. Estimate speaking time incl. demos, pauses and questions; cut an overfull talk;
   rehearse for real timing where possible.
 

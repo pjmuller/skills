@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — slides: presenter notes only when asked
+
+- `slides/SKILL.md`: presenter notes are skipped unless the user, a wrapper or the deck's own doc asks; slides and the exported PDF must stand on their own. Why: the same "skip unless asked" line sat in all 7 project-slides wrappers; it is the better default for decks shared as PDFs, and decks that need notes already say so.
+
 ## 2026-10-27 — review fixes on the moved lessons
 
 - clickup-core: `handoff` posts its text as the comment (append substance first, ping second); `review` already appends to the body, `--comment` only when wanted. Assignees kept unless reassignment is requested; who gets a new task is wrapper policy. Date-only fields: compare the local day, ClickUp normalises the time. slides: static `src` stays the default (keeps `--base`), `:src` only when the import guard trips. Why: opposite-model review found the moved wording overgeneralised (subpath decks broke, standard commands violated the body/comment rule).
