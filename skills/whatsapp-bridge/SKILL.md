@@ -27,7 +27,9 @@ Ban/abuse guardrails for an unofficial protocol client: breaking them risks the 
 - Reading any chat is allowed. Never print or copy session/credential files (`~/.config/whatsapp-bridge/`, 0700).
 - Long prompts/reports → `.md`/`.txt` attachment with a short caption, not a huge chat body.
 - **AI badge**: `--ai-label`/`--no-ai-label` (API `ai_label=`); else `{"ai_label_default": true}` in
-  `~/.config/whatsapp-bridge/settings.json`, else off. When to badge = wrapper policy. Works in groups too (our patch).
+  `~/.config/whatsapp-bridge/settings.json`, else off. When to badge = wrapper policy. **1:1 chats only**: WhatsApp
+  now rejects a badged group message (server error 479, seen 2026-10-27), so groups skip the default and refuse
+  an explicit `--ai-label` before sending.
 
 ## Pairing
 

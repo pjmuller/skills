@@ -6,6 +6,10 @@
 - "Cryptography error, The decryption operation failed" documented (SKILL.md#unlock-refused): current bw unlocks via the SDK and prints this raw when the typed password does not open the locally stored key; usually a typo or another account's password, rarely stale local CLI data (human-decided `bw logout` + `bw-once login`, never automatic).
 - `send-text` goes to the Touch ID broker when the target vault is enrolled (`--thread`/`--why` claim): broker validates and freezes name/text/views/date before any window, rejects invisible/bidi/control characters, keeps the text behind **Show text** (screen recordings), creates once with no retry (ambiguous failures `retry_safe: false`), locks + verifies before returning the link. File Sends stay on the Terminal (`bw serve` refuses them). Why: enrolled users asked why a Send still needed the master password.
 
+## 2026-10-27 — recording-followups: the overview lists only what is left to trigger
+
+- `recording-followups/SKILL.md` Deliverables: `followup-prompts.md` holds only prompts the user still has to launch or approve, each identical to its prompt file. An item leaves once its launch, handoff or completion is verified (even while the worker runs); prompt files stay, ids/links go to the debrief or a manifest. Nothing pending → no overview, or one line "No follow-ups left to trigger". The debrief status splits decisions waiting on the user from follow-ups already running; decisions owned by another thread are linked, not requeued. Why: overviews kept every launched and finished item, so the user re-read done work to find the one decision still theirs.
+
 ## 2026-10-27 — screen-share detection from the video, with a benchmark
 
 - `detect-screenshare` rewritten: 1 frame/s at 320x180; Meet layout (gutter + a real filmstrip) only gates, the big tile's content decides (2 of 4 votes: flat pixels, grey pixels, static tile, no skin; plus some text edges); 10 s minimum run, gaps bridged while the share layout stays, 2 s padding. Why: speaker view looks like a share to a gutter rule (a 30-min 2-person call without share was 29 min "shared", crop on a face). Share-second precision 0.86 → 0.99 on 17 labelled calls, 0.96 → 0.996 on 5 held-out calls, recall ≥ 0.99, boundaries ±3 s (were up to 24 s). `--step` default 15 → 1; output drops `gutters`.
@@ -355,6 +359,8 @@
 
 
 ## Unreleased
+
+- **microphone-calibration: faster takes, hardware knob.** No spoken prompts: one beep, and each take ends 0.8 s after the speaker stops (live detector on a 16 kHz copy of the stream; the 24-bit WAV stays untouched), capped by `--seconds` (default 8). Noise floor = quietest 20% of frames, no dedicated silent wait. `--manual 'knob as is,knob +50%,soft voice · 5 cm,…'` (alias `--knob`) appends takes at the gain picked from the sweep, one per setup the speaker makes by hand (knob, distance, voice), Enter before each, `r` + Enter redoes a slipped take; the report adds a manual pick. `--wait` is now the window to press Enter; the agent then waits as long as takes progress. Transcripts that only leave words out (no word misheard) are marked “slip?” and no longer rank takes: a live run's knob pick flipped on one forgotten half-sentence. `--keep-gain --manual …` for mics without software gain.
 
 - New `public-footprint-audit`: consent-based public-web privacy research, evidence states, concise lockdown checklist and removal rechecks. Keeps personal findings outside public skill sources.
 

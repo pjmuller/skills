@@ -26,7 +26,9 @@ stores; `verify_embed` proves they landed.
 `[[file:NAME]]` is a pre-pass (`link_attachments`) to `[NAME](<attachment url>)` from the target
 task's one GET: exact title, else unique case-insensitive; duplicates → newest `date`. Bare
 filename titles outside code/links/URLs get the same rewrite (stderr `linked attachment:`).
-`create` has no attachments yet, so it fails closed.
+Local images / ```mermaid blocks: `collect_media` (before any write) → `upload_media` → this
+pre-pass on the re-read task; `create` = POST without body, upload, PUT body. Other `[[file:]]`
+refs on `create` still fail closed.
 
 Task mentions resolve title and workspace before posting; the created comment is re-read by id.
 `comment_text`, a plain `@Name` or a plain URL is not a native mention. No native Doc-chip write

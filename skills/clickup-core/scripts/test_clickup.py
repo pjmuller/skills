@@ -485,9 +485,90 @@ class FileReferenceCommandTests(unittest.TestCase):
                                                  name=None, embed=False, json=True))
         self.assertEqual(uploaded, ["/tmp/3.png", "/tmp/2.png", "/tmp/1.png"])
         self.assertEqual([r["reference"] for r in json.loads(buf.getvalue())],
-                         ["[[file:1.png]]", "[[file:2.png]]", "[[file:3.png]]"])
+                         ["![[file:1.png]]", "![[file:2.png]]", "![[file:3.png]]"])  # images: inline form
         with self.assertRaises(SystemExit):
             MODULE["cmd_attach"](SimpleNamespace(id="t1", file=["/tmp/1.png", "/tmp/2.png"], name="x", embed=False, json=True))
+
+
+class MediaTests(unittest.TestCase):
+    """Local images and ```mermaid blocks become attachments shown inline (2026-10-27)."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = Path(tempfile.mkdtemp())
+        self.png = self.dir / "shot.png"
+        self.png.write_bytes(b"png")
+        g = MODULE["collect_media"].__globals__
+        self.addCleanup(g.__setitem__, "render_mermaid", g["render_mermaid"])
+        self.rendered = []
+        g["render_mermaid"] = lambda src: self.rendered.append(src) or self.png.with_name("diagram-abc.png")
+
+    def test_local_image_and_mermaid_become_inline_file_refs(self):
+        md = f"Voor:\n![voor]({self.png})\n```mermaid\nflowchart TD\n  A-->B\n```\nklaar"
+        text, uploads = MODULE["collect_media"](md)
+        self.assertEqual(text, "Voor:\n![[file:shot.png]]\n![[file:diagram-abc.png]]\nklaar")
+        self.assertEqual([n for _, n in uploads], ["shot.png", "diagram-abc.png"])
+        self.assertEqual(self.rendered, ["flowchart TD\n  A-->B\n"])
+
+    def test_urls_code_and_same_basename(self):
+        other = self.dir / "sub"
+        other.mkdir()
+        (other / "shot.png").write_bytes(b"x")
+        md = (f"![a]({self.png})\n![b]({other / 'shot.png'})\n![c]({self.png})\n"
+              "![web](https://x.test/a.png) `![code](nope.png)`\n```\n![fenced](nope.png)\n```")
+        text, uploads = MODULE["collect_media"](md)
+        self.assertEqual(text.splitlines()[:3], ["![[file:shot.png]]", "![[file:shot-2.png]]", "![[file:shot.png]]"])
+        self.assertIn("![web](https://x.test/a.png) `![code](nope.png)`", text)
+        self.assertIn("![fenced](nope.png)", text)
+        self.assertEqual([n for _, n in uploads], ["shot.png", "shot-2.png"])
+
+    def test_missing_local_image_fails_closed(self):
+        with self.assertRaises(SystemExit):
+            MODULE["collect_media"]("![x](/nope/missing.png)")
+        with self.assertRaises(SystemExit):
+            MODULE["collect_media"]("```mermaid\nflowchart TD")
+        for inline in (f"voor ![s]({self.png}) na", f"- ![s]({self.png})"):
+            with self.assertRaises(SystemExit):
+                MODULE["collect_media"](inline)
+
+    def test_create_rejects_unknown_file_ref_before_post(self):
+        from types import SimpleNamespace
+        g = MODULE["cmd_create"].__globals__
+        calls = []
+        for name in ("api", "upload_attachment", "LISTS", "CONFIG"):
+            self.addCleanup(g.__setitem__, name, g[name])
+        g["api"] = lambda method, path, **kw: calls.append(method) or {"id": "t9", "attachments": []}
+        g["upload_attachment"] = lambda *x, **k: calls.append("UPLOAD")
+        g["LISTS"], g["CONFIG"] = {"dev": "1"}, {}
+        a = SimpleNamespace(list="dev", status=None, assignee=None, priority=None, customer=None, tag=None, parent=None,
+                            name="n", description=f"![s]({self.png})\nzie [[file:nope.pdf]]", description_file=None, json=False)
+        with self.assertRaises(SystemExit):
+            MODULE["cmd_create"](a)
+        self.assertEqual(calls, [])
+
+    def test_create_with_image_creates_uploads_then_writes_body(self):
+        from types import SimpleNamespace
+        g = MODULE["cmd_create"].__globals__
+        calls = []
+        for name in ("api", "upload_attachment", "verify_task_content", "read_back", "LISTS", "CONFIG"):
+            self.addCleanup(g.__setitem__, name, g[name])
+        task = {"id": "t9", "url": "u", "attachments": []}
+
+        def fake_api(method, path, **kw):
+            calls.append((method, path))
+            return task
+        g["api"] = fake_api
+        g["upload_attachment"] = lambda tid, f, name=None: calls.append(("UPLOAD", name)) or task["attachments"].append(
+            {"title": name, "url": "https://att.test/shot.png", "date": "1"})
+        g["verify_task_content"] = lambda tid, content: calls.append(("VERIFY", json.loads(content)))
+        g["read_back"] = lambda tid, as_json: None
+        g["LISTS"] = {"dev": "1"}
+        g["CONFIG"] = {}
+        a = SimpleNamespace(list="dev", status=None, assignee=None, priority=None, customer=None, tag=None,
+                            parent=None, name="n", description=f"zie\n![s]({self.png})", description_file=None, json=False)
+        MODULE["cmd_create"](a)
+        self.assertEqual([c[0] for c in calls], ["POST", "UPLOAD", "GET", "PUT", "VERIFY"])
+        self.assertIn({"insert": {"image": "https://att.test/shot.png"}}, calls[-1][1]["ops"])
 
 
 class LinksBeforeCodeBlockTests(unittest.TestCase):

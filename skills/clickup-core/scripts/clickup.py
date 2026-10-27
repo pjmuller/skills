@@ -3,8 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = ["requests", "websocket-client"]
 # ///
-"""Workspace-configured ClickUp CLI. See ../SKILL.md and --help."""
+"""Workspace-configured ClickUp CLI. See ../SKILL.md and --help.
+
+Images/diagrams: write `![](path.png)` or a ```mermaid block in any description/comment Markdown;
+the CLI uploads (renders) them and shows them inline, also on `create`."""
 import argparse
+import hashlib
 import json
 import mimetypes
 import os
@@ -683,6 +687,92 @@ def link_attachments(text: str | None, task: dict | None) -> str | None:
         elif not fenced:
             lines[i] = line(s)
     return "\n".join(lines)
+
+
+# --- local images + ```mermaid -> attachments shown inline ------------------------------------
+# Agents write Markdown as anywhere else: `![alt](./shot.png)` (a local file) and ```mermaid fences.
+# `collect_media` runs BEFORE any write (missing file / render error fails closed), rewriting each to
+# `![[file:NAME]]`; `upload_media` attaches the files, then the usual `link_attachments` pre-pass
+# resolves them against the re-read task. `create` therefore creates first, uploads, then writes the
+# body. Comments degrade images to links (ClickUp comment parts have no image op).
+_LOCAL_IMAGE = re.compile(r"`[^`\n]+`|!\[(?P<alt>[^\]\n]*)\]\((?P<path>(?!https?://)[^)\s]+)\)")
+MERMAID_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "clickup-mermaid"
+
+
+def render_mermaid(src: str) -> Path:
+    from mermaid_png import render_png  # sibling script; lazy: pnpm/Chrome only when a diagram is used
+    MERMAID_DIR.mkdir(exist_ok=True)
+    png = MERMAID_DIR / f"diagram-{hashlib.sha1(src.encode()).hexdigest()[:8]}.png"
+    if not png.exists():
+        png.with_suffix(".mmd").write_text(src)
+        try:
+            render_png(png.with_suffix(".mmd"), png)
+        except RuntimeError as e:
+            sys.exit(str(e))
+    print(f"rendered mermaid: {png} (open it to check the layout)", file=sys.stderr)
+    return png
+
+
+def collect_media(text: str | None) -> tuple[str | None, list[tuple[Path, str]]]:
+    """Rewrite local images and ```mermaid blocks to `![[file:NAME]]`; return (text, [(file, NAME)])."""
+    if text is None or ("```mermaid" not in text and "](" not in text):
+        return text, []
+    uploads: list[tuple[Path, str]] = []
+    names: dict[Path, str] = {}
+
+    def name_for(path: Path) -> str:
+        if path not in names:
+            name, n = path.name, 2
+            while name in names.values():
+                name, n = f"{path.stem}-{n}{path.suffix}", n + 1
+            names[path] = name
+            uploads.append((path, name))
+        return names[path]
+
+    def local(m):
+        if not m["path"]:
+            return m[0]  # code span
+        path = Path(unquote(m["path"])).expanduser().resolve()
+        if not path.is_file():
+            sys.exit(f"local image not found: {m['path']} (resolved {path}); fix the path or use an https URL")
+        if m[0] != m.string.strip():  # ClickUp shows an image only as its own block, never inline/in a list
+            sys.exit(f"put the image {m['path']} on its own line (ClickUp has no inline or list-item images)")
+        return f"![[file:{name_for(path)}]]"
+
+    out, block, fenced = [], None, False
+    for s in text.split("\n"):
+        fence = s.strip().startswith("```")
+        if block is not None:
+            if fence:
+                out.append(f"![[file:{name_for(render_mermaid(chr(10).join(block) + chr(10)))}]]")
+                block = None
+            else:
+                block.append(s)
+        elif not fenced and s.strip().startswith("```mermaid"):
+            block = []
+        elif fence:
+            fenced = not fenced
+            out.append(s)
+        else:
+            out.append(s if fenced else _LOCAL_IMAGE.sub(local, s))
+    if block is not None:
+        sys.exit("unclosed ```mermaid block")
+    return "\n".join(out), uploads
+
+
+def upload_media(task_id: str, uploads: list[tuple[Path, str]]) -> bool:
+    for path, name in reversed(uploads):  # ClickUp lists newest first: keep reading order
+        upload_attachment(task_id, str(path), name)
+        print(f"attached: {name}", file=sys.stderr)
+    return bool(uploads)
+
+
+def with_media(text: str | None, task_id: str, current: dict) -> tuple[str | None, dict]:
+    """Existing task: collect + upload media, then resolve `[[file:]]` against the re-read task."""
+    text, uploads = collect_media(text)
+    if upload_media(task_id, uploads):
+        current = get_task(task_id)
+    return link_attachments(text, current), current
 
 
 def get_task(task_id: str, markdown: bool = False) -> dict:
@@ -1391,14 +1481,26 @@ def cmd_create(a):
         body["tags"] = a.tag
     if a.parent:
         body["parent"] = task_id_of(a.parent)
-    desc = link_attachments(description_of(a), None)  # no attachments yet: [[file:]] fails closed
-    if desc is not None:
-        body["content"] = md_to_delta(desc)
-        validate_description(body["content"])
+    text, uploads = collect_media(description_of(a))
+    if uploads:  # images need the task to exist: create, attach, then write the body
+        mine = "|".join(re.escape(f"![[file:{n}]]") for _, n in uploads)
+        link_attachments(re.sub(mine, "", text), None)  # any other [[file:]] fails closed before POST
+        validate_description(md_to_delta(text))
+    else:
+        desc = link_attachments(text, None)  # no attachments yet: [[file:]] fails closed
+        if desc is not None:
+            body["content"] = md_to_delta(desc)
+            validate_description(body["content"])
     t = api("POST", f"/list/{lid}/task", data=json.dumps(body))
     # Make partial success recoverable even when rich-content readback fails.
     print(f"created task {t['id']} {t.get('url', '')}", file=sys.stderr)
-    if "content" in body:
+    if uploads:
+        upload_media(t["id"], uploads)
+        content = md_to_delta(link_attachments(text, get_task(t["id"])))
+        validate_description(content)
+        api("PUT", f"/task/{t['id']}", data=json.dumps({"content": content}))
+        verify_task_content(t["id"], content)
+    elif "content" in body:
         verify_task_content(t["id"], body["content"])
     if a.customer:
         set_customer(t["id"], task_id_of(a.customer))
@@ -1416,10 +1518,10 @@ def cmd_update(a):
             body[key] = getattr(a, key)
     if a.priority:
         body["priority"] = PRIORITY[a.priority]
-    desc = link_attachments(description_of(a), current)
-    extra = link_attachments(description_of(a, "append_"), current)
-    if desc is not None and extra is not None:
+    if description_of(a) is not None and description_of(a, "append_") is not None:
         sys.exit("pass either --description* or --append-description*, not both")
+    desc, current = with_media(description_of(a), a.id, current)
+    extra, current = with_media(description_of(a, "append_"), a.id, current)
     if desc is not None:
         body["content"] = md_to_delta(desc)
     elif extra is not None:
@@ -1455,7 +1557,7 @@ def cmd_comment(a):
     if a.mention_first is not None and not a.mention:
         sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
     refuse_literal_mention(a.text, a.mention)
-    text = link_attachments(a.text, get_task(a.id))
+    text, _ = with_media(a.text, a.id, get_task(a.id))
     post_comment(a.id, text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
                  reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None,
                  ai=not getattr(a, "no_ai_label", False))
@@ -1477,7 +1579,7 @@ def cmd_handoff(a):
     status = a.status or policy("handoff_status", "to test")
     check_status(list_key_of(current), status)
     mention = counterpart(current, a.mention)
-    text = link_attachments(a.text, current)
+    text, current = with_media(a.text, a.id, current)
     if current["status"]["status"] != status:
         api("PUT", f"/task/{a.id}", data=json.dumps({"status": status}))
     post_comment(a.id, text, mention, False, quiet=a.json, ai=not a.no_ai_label)
@@ -1492,7 +1594,7 @@ def cmd_review(a):
     text = a.text or (policy("review_ok_text", f"reviewed by {me['username']}'s coding agent, ✅ all fine") if a.verdict == "ok" else None)
     if not text:
         sys.exit("--text required for --verdict to-test")
-    text = link_attachments(text, current)
+    text, current = with_media(text, a.id, current)
     recipient = a.mention or policy("review_mention")
     mention = user_id(recipient) if recipient else counterpart(current)
     header = policy("review_header")
@@ -1519,6 +1621,12 @@ def upload_attachment(tid, filename, name=None):
     return r.json()
 
 
+def file_reference(title: str) -> str:
+    """What to paste in Markdown: images inline (`![[file:]]`), anything else as a link."""
+    image = (mimetypes.guess_type(title)[0] or "").startswith("image/")
+    return f"{'!' if image else ''}[[file:{title}]]"
+
+
 def cmd_attach(a):
     files = a.file if isinstance(a.file, list) else [a.file]
     if len(files) > 1:
@@ -1527,7 +1635,7 @@ def cmd_attach(a):
         # ClickUp lists attachments newest first: upload last-first so the task shows (and the
         # viewer's arrows step through) them in the order given.
         results = {f: upload_attachment(a.id, f) for f in reversed(files)}
-        rows = [{**results[f], "reference": f"[[file:{results[f].get('title') or Path(f).name}]]"} for f in files]
+        rows = [{**results[f], "reference": file_reference(results[f].get('title') or Path(f).name)} for f in files]
         out(rows, a.json, "\n".join(f"{r.get('url')}\nreference: {r['reference']}" for r in rows))
         return
     file = files[0]
@@ -1537,7 +1645,7 @@ def cmd_attach(a):
         write_task_content(a.id, appended_ops_content(a.id, ops))
         verify_embed(a.id, ops[0])
         result["embedded"] = kind
-    result["reference"] = f"[[file:{result.get('title') or a.name or Path(file).name}]]"
+    result["reference"] = file_reference(result.get('title') or a.name or Path(file).name)
     out(result, a.json, f"{result.get('url') or json.dumps(result)}\nreference: {result['reference']}")
 
 
@@ -1593,6 +1701,9 @@ def cmd_delete(a):
     out({"deleted": a.id}, a.json, f"deleted {a.id}")
 
 
+MD_HELP = "Markdown; local images `![](shot.png)` and ```mermaid blocks are uploaded and shown inline"
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     pre = argparse.ArgumentParser(add_help=False)
@@ -1637,8 +1748,8 @@ def main(argv=None):
         if cmd in ("create", "update"):
             s.add_argument("--name", required=cmd == "create")
             s.add_argument("--priority", choices=list(PRIORITY))
-            s.add_argument("--description")
-            s.add_argument("--description-file")
+            s.add_argument("--description", help=MD_HELP)
+            s.add_argument("--description-file", help=MD_HELP)
             s.add_argument("--customer")
         if cmd in ("create", "update", "close", "handoff"): s.add_argument("--status")
         if cmd == "create":
@@ -1647,11 +1758,11 @@ def main(argv=None):
             s.add_argument("--tag", action="append")
             s.add_argument("--parent")
         if cmd == "update":
-            s.add_argument("--append-description")
-            s.add_argument("--append-description-file")
+            s.add_argument("--append-description", help=MD_HELP)
+            s.add_argument("--append-description-file", help=MD_HELP)
             s.add_argument("--add-assignee", action="append")
             s.add_argument("--rem-assignee", action="append")
-        if cmd in ("comment", "handoff", "review"): s.add_argument("--text", required=cmd != "review")
+        if cmd in ("comment", "handoff", "review"): s.add_argument("--text", required=cmd != "review", help=MD_HELP + " (comments: as a link)")
         if cmd in ("comment", "handoff", "review"): s.add_argument("--mention")
         if cmd in ("comment", "handoff", "review"):
             s.add_argument("--no-ai-label", action="store_true",

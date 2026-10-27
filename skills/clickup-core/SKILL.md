@@ -1,6 +1,6 @@
 ---
 name: clickup-core
-description: "Use for any ClickUp read or write: a task or app.clickup.com link, \"make a ticket\", \"comment on / hand off / review this task\", attachments and screenshots, a Loom in a ticket, a ClickUp chat or DM, a SyncUp recording. Read the project's clickup wrapper first (workspace config, house policy)."
+description: "Use for any ClickUp read or write: a task or app.clickup.com link, \"make a ticket\", \"comment on / hand off / review this task\", screenshots and diagrams shown inline (local images, Mermaid), a Loom in a ticket, a ClickUp chat or DM, a SyncUp recording. Read the project's clickup wrapper first (workspace config, house policy)."
 ---
 
 This core owns the CLI, the rich-content/mention engine and the comment defaults below. The
@@ -97,15 +97,17 @@ tables, images, `@alias` / `[@Name](#user_mention#ID)`, `[[task-id]]` or task UR
 Description appends use ClickUp's private content seam and verify on readback, failing closed
 ([reference.md](reference.md)). Readback proves stored mentions, not notification delivery.
 
-- `[[file:NAME]]` links that task's attachment (newest version; unknown name fails before
-  writing); `![[file:NAME]]` shows it as an image, also in a table cell (before/after tables).
-  `attach` first. Bare attachment filenames are auto-linked (ClickUp would make `x.md` a dead link).
+- **Images and diagrams: just write them in the Markdown**, on `create` too. `![alt](./shot.png)`
+  (local path, on its own line) is uploaded and shown inline; a ```mermaid block (≤8 boxes, product words) is
+  rendered locally to PNG, uploaded and shown inline. stderr prints the PNG path: open it to check
+  the layout. Comments show them as links. First new diagram layout: ask the reader for a screenshot.
+- `[[file:NAME]]` links an attachment already on the task, `![[file:NAME]]` shows it inline (also in
+  a table cell); `attach` prints the right form. Unknown names fail before writing. Bare attachment
+  filenames are auto-linked (ClickUp would make `x.md` a dead link).
 - ClickUp strips every description link followed by a code block, on every save; description
   writes refuse that. Put code blocks before links, or files in a comment.
-- Diagrams for a flow or hand-off: Mermaid, ≤8 boxes, product words.
-  `uv run scripts/mermaid_png.py flow.mmd` → open the PNG yourself → `attach` → `![[file:flow.png]]`
-  next to the text it explains. First new layout: ask the reader for a screenshot.
-- Several screenshots: one `attach ID a.png b.png` in reading order. Real screenshots beat mockups.
+- Screenshots belong next to the text they explain (`![](a.png)` per spot); `attach ID a.png b.png`
+  only for a plain gallery. Real screenshots beat mockups.
 - `task ID --download-attachments` → `/tmp/cu-ID` (or `--dir`); the token never goes to media hosts.
   Open screenshots yourself: the body shows only their remote URLs.
   `--download-looms` runs [scripts/loom.py](scripts/loom.py): read transcript AND frames, scrub
