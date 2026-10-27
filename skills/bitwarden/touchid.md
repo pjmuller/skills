@@ -57,10 +57,22 @@ bw-once touchid status | bw-once touchid forget
   sent), and fixes the expiry date before any window; a renewal re-runs with that same frozen request. The window
   shows account, name, views, date, length + SHA-256 prefix; the text only after **Show text** (screen recordings; the agent wrote it anyway, so the touch need not wait for it). After the touch it unlocks one vault,
   creates the Send once (only if ≥60 s of the 300 s deadline remain), locks and verifies, then returns link and
-  dates. Any create failure is ambiguous (bw saves before it re-reads): `retry_safe: false`, never retried; a lock
-  failure after the create withholds the link and returns `send_id`.
-- **Renewal, no expiry**: enclave refuses (fingerprints changed) → setup window for all vaults; Bitwarden rejects
-  a saved password → setup for that vault; then the request continues (second touch). Both show the phrase.
+  dates. No sync first: a Send needs no fresh logins, and each Send changes the vault, so the next sync downloads it
+  whole (3.7 MB took over a minute on a poor link). The create may take until the front end gives up, so a slow
+  server still returns its link. Any create failure is ambiguous (bw saves before it re-reads): `retry_safe: false`,
+  never retried, `reason` says why (timeout, bw's message, malformed answer); a lock failure after the create
+  withholds the link and returns `send_id`.
+- **Progress**: the window says "Approved · …" right after the touch (waiting for Bitwarden, searching/unlocking,
+  creating). A `bw serve` call that times out ends that connection (its late answer would be read as the next
+  call's) and the vault is locked through a fresh one; a sync over 120 s makes that vault unavailable.
+- **Renewal, no expiry**: the enclave refuses **and** the enrolled fingerprints' hash differs from the one saved at
+  sealing (the hash `.biometryCurrentSet` binds into the key) → setup window for all vaults; Bitwarden rejects a
+  saved password → setup for that vault; then the request continues (second touch). Both show the phrase. Any other
+  refusal (cancel, Mac locked, lid closed, lockout) releases nothing and asks for no password: `Touch ID did not
+  complete`, with a debug-safe `reason` (error domain/code). Why: on 2026-10-27 a request on a locked Mac with the
+  lid closed was refused instantly (`errSecInteractionNotAllowed`) and opened a renewal window; typing master
+  passwords into windows after a non-event is phishing practice. Items sealed before then get the hash after their
+  next good touch; until then only a locked Mac is known benign.
 
 Matching: `matchScope`/`baseDomain`; `scripts/build_broker.py` compiles the vendored public suffix list into the
 binary ([matching.md](matching.md)).

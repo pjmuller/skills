@@ -69,16 +69,19 @@ while True:
         else: code, reply = 400, {"success": False, "message": "Invalid master password."}
     elif path == "/lock":
         if not cfg.get("fail_lock"): state["locked"] = True
+    elif path == "/sync":  # Real bw syncs a locked vault too (checked 2026-10-27).
+        if cfg.get("slow_sync"): import time; time.sleep(cfg["slow_sync"])  # The whole vault over a poor link.
     elif state["locked"]: code, reply = 400, {"success": False, "message": "Vault is locked."}
     elif path == "/list/object/items": reply["data"] = {"object": "list", "data": cfg["items"]}
     elif path.startswith("/object/totp/"): reply["data"] = {"object": "string", "data": "123456"}
     elif path == "/object/send" and method == "POST":
         with (root / "sends").open("a") as stream: stream.write(json.dumps(data) + "\n")
-        if cfg.get("fail_send"): code, reply = 400, {"success": False, "message": "fixture failure"}
+        if cfg.get("slow_send"): import time; time.sleep(cfg["slow_send"])  # A slow server: bw answers late.
+        if cfg.get("fail_send"): code, reply = 400, {"success": False, "message": cfg.get("echo", "") + "fixture failure"}
         else: reply["data"] = {"object": "send", "id": ID_B, "accessUrl": "https://send.example.com/#/fixture/key",
                                "expirationDate": data["expirationDate"], "deletionDate": data["deletionDate"],
                                "maxAccessCount": data["maxAccessCount"], "text": data["text"]}
-    elif path != "/sync": code, reply = 404, {"success": False}
+    else: code, reply = 404, {"success": False}
     statefile.write_text(json.dumps(state))
     out = json.dumps(reply).encode()
     sock.sendall(b"HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % (code, len(out)) + out)
@@ -425,10 +428,50 @@ def test_changed_master_password_renews_that_vault_and_continues(world):
 
 def test_broken_seal_asks_all_passwords_once_and_continues(world):
     enroll(world)
-    result, panel = world["run"]("copy", host=HOST, field="password", touch="broken-once", typed=MASTER)
+    result, panel = world["run"]("copy", host=HOST, field="password", touch="broken-once", typed=MASTER,
+                                 extra_env={"BW_BROKER_TEST_BIO": "bio-2"})  # Fingerprints changed since enrolment.
     assert result["ok"] and world["clip"]() == SECRET_A
     assert "fingerprints changed" in panel and panel.count("Master password for") == 2
     assert all(world["locked"](name) for name in MASTER)
+    assert json.loads(world["store"].read_text())["sealed"]["bio"] == "bio-2"
+
+
+@pytest.mark.parametrize("touch, bio, reason", [("locked", "bio-1", "fingerprints unchanged"),
+                                                ("broken-once", "bio-1", "fingerprints unchanged"),
+                                                ("locked", "unavailable", "Touch ID unavailable")])
+def test_refused_touch_with_unchanged_fingerprints_never_asks_for_passwords(world, touch, bio, reason):
+    """2026-10-27: a request on a locked Mac (lid closed) was refused instantly and opened the renewal window."""
+    enroll(world)
+    stored, before = world["store"].read_text(), {name: len(world["events"](name)) for name in MASTER}
+    result, panel = world["run"]("copy", host=HOST, field="password", touch=touch, typed=MASTER,
+                                 extra_env={"BW_BROKER_TEST_BIO": bio})
+    assert result["ok"] is False and "nothing released" in result["error"] and reason in result["reason"]
+    assert "Master password for" not in panel and world["store"].read_text() == stored and world["clip"]() is None
+    assert all(world["locked"](name) and "/unlock" not in [e.get("path") for e in world["events"](name)[before[name]:]]
+               for name in MASTER)
+
+
+def test_seal_without_fingerprint_hash_gets_it_after_a_good_touch(world):
+    enroll(world)
+    stored = json.loads(world["store"].read_text())
+    del stored["sealed"]["bio"]  # Sealed by a build before 2026-10-27.
+    world["store"].write_text(json.dumps(stored))
+    result, panel = world["run"]("copy", host=HOST, field="password", touch="locked")
+    assert result["ok"] is False and "Mac locked" in result["reason"] and "Master password for" not in panel
+    result, _ = world["run"]("copy", host=HOST, field="password")
+    assert result["ok"] and json.loads(world["store"].read_text())["sealed"]["bio"] == "bio-1"
+
+
+def test_slow_sync_marks_that_vault_unavailable_and_never_reuses_its_connection(world):
+    """2026-10-27: a sync slower than the socket timeout left its late reply to be read as the unlock's answer."""
+    enroll(world)
+    before = len(world["events"]("testa"))
+    world["configure"]("testa", slow_sync=5)  # Over the 4 s sync budget (2 x BW_BROKER_TEST_TIMEOUT).
+    result, panel = world["run"]("copy", host=HOST, field="password")
+    assert result["ok"] is False and "testa" in result["error"] and "sync did not finish" in result["error"]
+    assert world["clip"]() is None and all(world["locked"](name) for name in MASTER)
+    assert "/unlock" not in [e.get("path") for e in world["events"]("testa")[before:]]
+    assert panel.index("touch:") < panel.index("status: Approved · waiting for Bitwarden")
 
 
 def test_lock_failure_releases_nothing(world):
@@ -614,6 +657,8 @@ def test_touch_id_text_send_shows_the_exact_frozen_text_creates_once_and_locks(w
     assert world["locked"]("testa") and MASTER["testa"] not in panel + json.dumps(result)
     paths = [e.get("path") for e in world["events"]("testa")[before:]]
     assert paths.index("/unlock") < paths.index("/object/send") < paths.index("/lock") and "/list/object/items" not in paths
+    assert "/sync" not in paths  # A Send needs no fresh logins (and would re-download the vault it just changed).
+    assert panel.index("touch:") < panel.index("status: Approved · waiting") < panel.index("status: Approved · creating")
 
 
 def test_cancelled_touch_creates_nothing(world):
@@ -630,6 +675,29 @@ def test_failed_create_is_reported_ambiguous_and_never_retried(world):
     result, _ = send(world)
     assert result["ok"] is False and result["retry_safe"] is False and result["stage"] == "create"
     assert "may exist" in result["error"] and len(sent(world)) == 1 and world["locked"]("testa")
+    assert result["reason"] == "bw: fixture failure"
+
+
+def test_failure_reason_never_quotes_the_send(world):
+    enroll(world)
+    text = "x" * 300 + "-fixture-tail-" + "y" * 200
+    world["configure"]("testa", fail_send=True, echo="Bad text: " + text[-120:])  # Partial echo, past 200 chars.
+    result, _ = send(world, text=text)
+    assert result["reason"] == "bw: message withheld" and result["retry_safe"] is False
+
+
+def test_slow_create_still_returns_its_link(world):
+    enroll(world)
+    world["configure"]("testa", slow_send=3)  # Over the 2 s per-call timeout; the create may use the request's budget.
+    result, _ = send(world)
+    assert result["ok"] and result["url"].startswith("https://") and len(sent(world)) == 1 and world["locked"]("testa")
+
+
+def test_touch_id_that_could_not_run_creates_nothing_and_is_retry_safe(world):
+    enroll(world)
+    result, panel = send(world, touch="locked")
+    assert result["ok"] is False and result["retry_safe"] is True and result["stage"] == "approve"
+    assert "-25308" in result["reason"] and sent(world) == [] and "Master password for" not in panel
 
 
 def test_rejected_saved_password_renews_then_creates_the_same_send_once(world):

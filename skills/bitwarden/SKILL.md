@@ -94,8 +94,9 @@ with the phrase, name, views, expiry date and the text behind Show text, one tou
 vaults without Touch ID, use the Terminal (`bw serve` cannot create file Sends). Terminal approval shows exact text (or
 file name/bytes/SHA-256), views (default 1, max 100), expiry (default 7 days, `--days 1-31`); input is frozen before
 review. Caps: 600 UTF-8 text bytes (no invisible/bidi characters via Touch ID), 50 MiB files (Premium). Return only
-UUID/link/expiry/deletion/views. Failure JSON carries `stage` and `retry_safe`: `retry_safe: false` = a Send may
-exist (or the lock is unverified): **never ask again before the human checked the vault's Sends**.
+UUID/link/expiry/deletion/views. Failure JSON carries `stage`, `retry_safe` and (Touch ID) a debug-safe `reason`
+(error code, timeout, bw's message; never values): `retry_safe: false` = a Send may exist (or the lock is
+unverified): **never ask again before the human checked the vault's Sends**.
 
 **Secrets for a colleague's agent** (JSON bundle, 1 view, link by DM; their agent runs `bw-receive` into its env file,
 no Bitwarden account, values never printed): [receive.md](receive.md).

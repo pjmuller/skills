@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27 — bitwarden: Touch ID broker no longer mistakes a locked Mac for new fingerprints, shows progress, keeps slow Sends
+
+- Renewal (type master passwords) only when the enclave refuses **and** the enrolled-fingerprint hash differs from the one now saved at sealing; cancel, a locked Mac, a closed lid or lockout → "Touch ID did not complete", nothing released, no password window. Why: a request on PJ's locked Mac (lid closed, away) was refused instantly (`errSecInteractionNotAllowed`, AKS `e00002e2`, hash unchanged) and asked for the master passwords as if fingerprints had changed: phishing practice. Older seals gain the hash after their next good touch.
+- The window says "Approved · …" right after the touch. Why: a vault sync (3.7 MB, over a minute on a poor link) kept "Touch ID to approve…" on screen after a registered touch, and the human cancelled.
+- `bw serve` connection: a timed-out call ends it (lock via a fresh one); sync budget 120 s, else that vault is unavailable (named in the error). Why: a sync answering after the 60 s timeout was read as the unlock's reply and the unlock's as the Send's, so a likely created Send came back "answer unclear".
+- Text Sends skip the sync and the create may wait until the front end gives up; failure JSON gains a debug-safe `reason` (error code, timeout, bw's message, never values). Why: each Send changes the vault so the next sync re-downloads it, and the swallowed bw reply left the cause unknown.
+
 ## 2026-10-27 — bitwarden: `bw-receive` hands secrets to a colleague's agent; owner commits directly
 
 - New `bw-receive` (`bitwarden/receive.md`): installs a one-view text Send holding `{"NAME": "value"}` into a chmod-600 dotenv file (e.g. `~/.config/mise-env/<org>/<repo>.env`), printing statuses, names and lengths only. Fetches once with the official `bw` in a throwaway logged-out profile (no Bitwarden account), stages the payload so a failed install retries with `--from-stage` instead of a second fetch, keeps identical values, refuses a different existing value, rejects unexpected names. `scripts/install --receive-only` links just this command (uv + any bw, no Xcode); the full install links it too. Why: handing API keys to colleagues' agents was ad hoc, and a live test showed `bw receive --obj` burns the one view and prints the plaintext.

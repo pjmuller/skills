@@ -16,7 +16,8 @@ import Security
 
 // MARK: - Basics
 
-struct Failure: Error { let message: String }
+/// `reason`: debug-safe detail for the failure JSON (error class/code, timings), never a value.
+struct Failure: Error { let message: String; var reason: String? = nil }
 
 #if BW_BROKER_TEST
 // Test build only (pytest compiles it with -D BW_BROKER_TEST): fake CLI, file store, fake enclave, hidden panel.
@@ -79,6 +80,15 @@ let answerSeconds: Double = {
     #endif
 }()
 let answerDeadline = Date().addingTimeInterval(answerSeconds)
+
+/// How long one `bw serve` call may take (the sync twice, the Send create until the front end gives up).
+let serveSeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_TIMEOUT"] ?? "60")!
+    #else
+    return 60
+    #endif
+}()
 
 let pickSeconds: Double = {
     #if BW_BROKER_TEST
@@ -563,7 +573,9 @@ func hkdf(_ shared: SharedSecret, _ ephemeral: P256.KeyAgreement.PublicKey) -> S
 
 func seal(_ passwords: [String: [String: String]]) throws -> [String: String] {
     #if BW_BROKER_TEST
-    return ["fake": try JSONSerialization.data(withJSONObject: passwords).base64EncodedString()]
+    var fake = ["fake": try JSONSerialization.data(withJSONObject: passwords).base64EncodedString()]
+    fake["bio"] = biometryState()
+    return fake
     #endif
     guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
                                                        [.privateKeyUsage, .biometryCurrentSet], nil) else {
@@ -574,23 +586,41 @@ func seal(_ passwords: [String: [String: String]]) throws -> [String: String] {
     let box = try AES.GCM.seal(try JSONSerialization.data(withJSONObject: passwords),
                                using: hkdf(try ephemeral.sharedSecretFromKeyAgreement(with: key.publicKey),
                                            ephemeral.publicKey))
-    return ["key": key.dataRepresentation.base64EncodedString(),
-            "ephemeral": ephemeral.publicKey.x963Representation.base64EncodedString(),
-            "box": box.combined!.base64EncodedString()]
+    var sealed = ["key": key.dataRepresentation.base64EncodedString(),
+                  "ephemeral": ephemeral.publicKey.x963Representation.base64EncodedString(),
+                  "box": box.combined!.base64EncodedString()]
+    sealed["bio"] = biometryState()
+    return sealed
 }
 
-enum Unseal { case cancelled, broken }
+/// The enrolled fingerprints' hash (the same one `.biometryCurrentSet` binds into the key's ACL); nil when Touch ID
+/// can't be used now (lid closed without a Touch ID keyboard, lockout, no fingerprint). No UI.
+func biometryState() -> String? {
+    #if BW_BROKER_TEST
+    let state = testEnv["BW_BROKER_TEST_BIO"] ?? "bio-1"
+    return state == "unavailable" ? nil : state
+    #endif
+    let context = LAContext()
+    guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return nil }
+    if #available(macOS 15, *) { return context.domainState.biometry.stateHash?.base64EncodedString() }
+    return (context.value(forKey: "evaluatedPolicyDomainState") as? Data)?.base64EncodedString()  // Pre-15 name, no warning.
+}
+
+/// `failed`: nothing released, ask again. `broken`: the key can never open again → renewal (types master passwords).
+enum Unseal: Error { case cancelled, failed(String), broken(String) }
 
 func unseal(_ sealed: [String: String], context: LAContext) throws -> [String: [String: String]] {
     #if BW_BROKER_TEST
     FileHandle.standardError.write(Data("touch: \(context.localizedReason)\n".utf8))
     switch testEnv["BW_BROKER_TEST_TOUCH"] {
     case "cancel": throw Unseal.cancelled
-    case "broken-once":  // Broken until the renewal re-seals (as a new enclave key would).
+    case "locked":  // What the enclave answers on a locked Mac (2026-10-27): no sheet, instant refusal.
+        throw unsealFailure(NSError(domain: NSOSStatusErrorDomain, code: Int(errSecInteractionNotAllowed)), sealed)
+    case "broken-once":  // Refused until the renewal re-seals (as a new enclave key would).
         let marker = testEnv["BW_BROKER_TEST_STORE"]! + ".renewed"
         if !FileManager.default.fileExists(atPath: marker) {
             FileManager.default.createFile(atPath: marker, contents: nil)
-            throw Unseal.broken
+            throw unsealFailure(NSError(domain: "CryptoTokenKit", code: -3), sealed)
         }
         fallthrough
     default: return try JSONSerialization.jsonObject(with: Data(base64Encoded: sealed["fake"]!)!) as! [String: [String: String]]
@@ -598,14 +628,14 @@ func unseal(_ sealed: [String: String], context: LAContext) throws -> [String: [
     #endif
     guard let keyData = Data(base64Encoded: sealed["key"] ?? ""),
           let ephemeralData = Data(base64Encoded: sealed["ephemeral"] ?? ""),
-          let boxData = Data(base64Encoded: sealed["box"] ?? "") else { throw Unseal.broken }
+          let boxData = Data(base64Encoded: sealed["box"] ?? "") else { throw Unseal.broken("damaged item") }
     do {
         let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: keyData, authenticationContext: context)
         let ephemeral = try P256.KeyAgreement.PublicKey(x963Representation: ephemeralData)
         let shared = try key.sharedSecretFromKeyAgreement(with: ephemeral)  // The Touch ID sheet appears here.
         let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: boxData), using: hkdf(shared, ephemeral))
         guard let bundle = try JSONSerialization.jsonObject(with: plain) as? [String: [String: String]] else {
-            throw Unseal.broken
+            throw Unseal.broken("damaged item")
         }
         return bundle
     } catch let error as LAError where [.userCancel, .systemCancel, .appCancel, .userFallback, .authenticationFailed]
@@ -614,10 +644,25 @@ func unseal(_ sealed: [String: String], context: LAContext) throws -> [String: [
     } catch let error as Unseal {
         throw error
     } catch {
-        throw Unseal.broken  // Fingerprints changed (key invalidated) or damaged item.
+        throw unsealFailure(error, sealed)
     }
 }
-extension Unseal: Error {}
+
+/// Renewal only on a positive sign that the key is gone: the fingerprints differ from those at sealing. 2026-10-27: a
+/// request on a locked Mac (lid closed, owner away) was refused instantly (errSecInteractionNotAllowed, AKS e00002e2)
+/// with the fingerprint hash unchanged, and asked for the master passwords as if they had changed.
+func unsealFailure(_ error: Error, _ sealed: [String: String]) -> Unseal {
+    let ns = error as NSError
+    let code = "\(ns.domain) \(ns.code)"
+    if ns.domain == LAErrorDomain { return .failed("Touch ID: \(code)") }
+    guard let now = biometryState() else { return .failed("enclave: \(code); Touch ID unavailable (lid closed? locked out?)") }
+    if let then = sealed["bio"] {
+        return then == now ? .failed("enclave: \(code); fingerprints unchanged") : .broken("enclave: \(code); fingerprints changed")
+    }
+    // Sealed before the hash was kept (it is added after the next good touch): only a locked Mac is known benign.
+    return ns.domain == NSOSStatusErrorDomain && ns.code == Int(errSecInteractionNotAllowed)
+        ? .failed("enclave: \(code); Mac locked") : .broken("enclave: \(code); seal without fingerprint hash")
+}
 
 let phraseWords = ["amber", "anchor", "aspen", "badger", "basil", "beacon", "birch", "bison", "cedar", "cobalt",
                    "comet", "copper", "coral", "dune", "ember", "falcon", "fennel", "fjord", "garnet", "glacier",
@@ -667,6 +712,9 @@ final class Serve {
     private var pid: pid_t = 0
     private var fd: Int32 = -1
     private var closed = true  // Armed only once a verified process exists, so a failed init never recurses.
+    // After a timeout bw's late answer would be read as the next call's (2026-10-27: a slow sync's reply taken for the
+    // unlock's, the unlock's for the Send's): a call that failed mid-way ends this connection.
+    private var broken = false
 
     init(_ vault: Vault, binary: String) throws {
         self.vault = vault
@@ -703,15 +751,17 @@ final class Serve {
             throw Failure(message: "The started Bitwarden CLI is not signed by Bitwarden Inc; nothing sent")
         }
         closed = false
-        #if BW_BROKER_TEST
-        var timeout = timeval(tv_sec: Int(testEnv["BW_BROKER_TEST_TIMEOUT"] ?? "60")!, tv_usec: 0)
-        #else
-        var timeout = timeval(tv_sec: 60, tv_usec: 0)
-        #endif
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     }
 
-    func call(_ method: String, _ path: String, _ body: [String: Any]? = nil) throws -> [String: Any] {
+    /// `seconds`: how long bw may take to answer (default `serveSeconds`).
+    func call(_ method: String, _ path: String, _ body: [String: Any]? = nil, seconds: Double = serveSeconds) throws -> [String: Any] {
+        guard !broken else { throw Failure(message: "Bitwarden CLI connection lost", reason: "after an earlier timeout") }
+        var timeout = timeval(tv_sec: Int(seconds), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        do { return try exchange(method, path, body) } catch { broken = true; throw error }
+    }
+
+    private func exchange(_ method: String, _ path: String, _ body: [String: Any]?) throws -> [String: Any] {
         let payload = try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data()
         var request = Data(("\(method) \(path) HTTP/1.1\r\nHost: localhost:8087\r\nContent-Type: application/json\r\n"
                             + "Content-Length: \(payload.count)\r\nConnection: keep-alive\r\n\r\n").utf8)
@@ -740,7 +790,10 @@ final class Serve {
             }
             if let end = headerEnd, response.count - end.upperBound >= length { break }
             let n = read(fd, &buffer, buffer.count)
-            guard n > 0 else { throw Failure(message: "Bitwarden CLI did not answer") }
+            guard n > 0 else {
+                throw Failure(message: "Bitwarden CLI did not answer", reason: n < 0 && errno == EAGAIN
+                    ? "no answer to \(method) \(path) in time" : "connection closed during \(method) \(path)")
+            }
             response.append(contentsOf: buffer[0..<n])
         }
         let bodyData = response[headerEnd!.upperBound..<(headerEnd!.upperBound + length)]
@@ -756,13 +809,20 @@ final class Serve {
         return ((template["status"] as? String) ?? "unknown", ((template["userEmail"] as? String) ?? "").lowercased())
     }
 
-    /// Locked, right account, fresh encrypted cache: ready for an unlock after the human approves.
-    func prepare() throws {
+    /// Locked, right account, and with `sync` a fresh encrypted cache: ready for an unlock after the human approves.
+    /// A Send needs no fresh logins, and each one changes the vault, so the next sync downloads it whole (3.7 MB took
+    /// over 60 s on a poor link, 2026-10-27).
+    func prepare(sync: Bool = true) throws {
         let (state, email) = try status()
         if state == "unauthenticated" { throw Failure(message: "\(vault.name): CLI logged out; run `bw-once --vault \(vault.name) login`") }
         guard state == "locked" else { throw Failure(message: "\(vault.name): CLI must be locked (status \(state))") }
         guard email == vault.email else { throw Failure(message: "\(vault.name): CLI is signed in as another account") }
-        _ = try? call("POST", "/sync")  // Stale cache beats no answer; sync failure is not fatal.
+        guard sync else { return }
+        // bw answering success: false (offline) is fine, stale cache beats no answer; no answer in time ends the connection.
+        do { _ = try call("POST", "/sync", seconds: 2 * serveSeconds) } catch {
+            throw Failure(message: "\(vault.name): Bitwarden sync did not finish in \(Int(2 * serveSeconds)) s (slow network?)",
+                          reason: (error as? Failure)?.reason)
+        }
     }
 
     func unlock(_ password: String) throws -> Bool {
@@ -778,16 +838,37 @@ final class Serve {
         return data
     }
 
-    /// Text Send from the frozen request. Any failure is ambiguous (bw saves first, then re-reads): never retried.
+    /// Text Send from the frozen request. Any failure is ambiguous (bw saves first, then re-reads): never retried. bw may
+    /// take until the front end gives up (a slow server is no reason to lose a created Send's link).
     func createSend(_ request: Request) throws -> [String: Any] {
         let body: [String: Any] = ["type": 0, "name": request.sendName, "text": ["text": request.sendText, "hidden": true],
                                    "maxAccessCount": request.views, "deletionDate": request.until,
                                    "expirationDate": request.until, "disabled": false, "hideEmail": true]
-        guard let reply = try? call("POST", "/object/send", body), reply["success"] as? Bool == true,
-              let data = reply["data"] as? [String: Any], let link = data["accessUrl"] as? String,
+        func unclear(_ reason: String) -> Failure {
+            Failure(message: "Send creation failed or its answer was unclear; a Send may exist: check the vault's Sends before asking again",
+                    reason: reason)
+        }
+        let started = Date()
+        let reply: [String: Any]
+        do {
+            reply = try call("POST", "/object/send", body, seconds: max(serveSeconds, answerDeadline.timeIntervalSinceNow + 20))
+        } catch {
+            throw unclear(((error as? Failure)?.reason ?? "\(type(of: error))") + " after \(Int(-started.timeIntervalSinceNow)) s")
+        }
+        guard reply["success"] as? Bool == true else {
+            // bw's own words (e.g. "Premium status is required…"), unless they quote the Send.
+            // Checked whole, before shortening: any 16-character stretch of the text (or the whole name) withholds it.
+            let message = reply["message"] as? String ?? ""
+            let chars = Array(request.sendText)
+            let quotes = message.contains(request.sendName) || (chars.count <= 16 ? message.contains(request.sendText)
+                : (0...(chars.count - 16)).contains { message.contains(String(chars[$0..<($0 + 16)])) })
+            let said = quotes ? "message withheld" : text(String(message.prefix(200)), max: 200) ?? "no plain message"
+            throw unclear("bw: " + said)
+        }
+        guard let data = reply["data"] as? [String: Any], let link = data["accessUrl"] as? String,
               let url = URL(string: link), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
               let id = (data["id"] as? String)?.lowercased(), UUID(uuidString: id) != nil else {
-            throw Failure(message: "Send creation failed or its answer was unclear; a Send may exist: check the vault's Sends before asking again")
+            throw unclear("bw said success without a valid https link and id")
         }
         return ["id": id, "url": link, "expiry": data["expirationDate"] ?? NSNull(),
                 "deletion": data["deletionDate"] ?? NSNull(), "views": data["maxAccessCount"] ?? NSNull()]
@@ -1595,7 +1676,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     DispatchQueue.global().async {
         do {
             locks = try lockVaults(vaults)
-            // Prepare while the human reads: start each vault's CLI, check locked + account, sync.
+            // Prepare while the human reads: start each vault's CLI, check locked + account, sync (logins only).
             let group = DispatchGroup()
             var prepared: [String: Result<Serve, Error>] = [:]
             let guardLock = NSLock()
@@ -1604,7 +1685,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 DispatchQueue.global().async {
                     let outcome = Result { () throws -> Serve in
                         let serve = try Serve(vault, binary: binary)
-                        do { try serve.prepare() } catch {
+                        do { try serve.prepare(sync: request.op != "send-text") } catch {
                             if !serve.lockAndClose() { guardLock.lock(); unverifiedLock = true; guardLock.unlock() }
                             throw error
                         }
@@ -1614,19 +1695,25 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     group.leave()
                 }
             }
+            let sealed = item["sealed"] as? [String: String] ?? [:]
             var bundle: [String: [String: String]]
             do {
-                bundle = try unseal(item["sealed"] as? [String: String] ?? [:], context: context)
-            } catch Unseal.cancelled {
-                group.wait()
-                serves = prepared.values.compactMap { try? $0.get() }
-                _ = cleanup()
-                fail("Request cancelled")
+                bundle = try unseal(sealed, context: context)
             } catch {
                 group.wait()
                 serves = prepared.values.compactMap { try? $0.get() }
-                _ = cleanup()
-                if gate.isCancelled { fail("Request cancelled") }
+                let locked = cleanup()
+                guard case Unseal.broken = error, !gate.isCancelled else {
+                    // Cancelled, or Touch ID could not run (Mac locked, lid closed): a non-event never asks for passwords.
+                    var answer: [String: Any] = ["ok": false, "error": "Request cancelled"]
+                    if case Unseal.failed(let reason) = error, !gate.isCancelled {
+                        answer["error"] = "Touch ID did not complete; nothing released, ask again"
+                        answer["reason"] = reason
+                    }
+                    if !locked { answer["error"] = "\(answer["error"]!); lock verification failed, run `bw lock`" }
+                    if request.op == "send-text" { answer["stage"] = locked ? "approve" : "lock"; answer["retry_safe"] = locked }
+                    finish(answer)
+                }
                 onMain {
                     panel.onCancel = {}
                     panel.window.close()
@@ -1636,13 +1723,18 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 }
                 return
             }
+            if sealed["bio"] == nil, let bio = biometryState() {  // Sealed before the hash was kept: add the one that opened.
+                try? keychainSave(item.merging(["sealed": sealed.merging(["bio": bio]) { $1 }]) { $1 })
+            }
+            // The touch shows at once, even while a vault still syncs (2026-10-27: a minute of "Touch ID to approve…").
+            onMain { panel.setStatus("Approved · waiting for Bitwarden…") }
             group.wait()
             if gate.isCancelled {
                 serves = prepared.values.compactMap { try? $0.get() }
                 _ = cleanup()
                 fail("Request cancelled")
             }
-            onMain { panel.setStatus("Approved · searching…") }
+            onMain { panel.setStatus(request.op == "send-text" ? "Approved · unlocking…" : "Approved · searching…") }
             var candidates: [(Vault, [String: Any], Serve)] = []
             var choices: [([String: Any], String)] = []  // (metadata, field value) when the agent must pick.
             var unavailable = skipped
@@ -1737,7 +1829,9 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     throw Failure(message: (picked.isEmpty ? "No login matches the destination and URI rules; Exact/StartsWith/Regex require a full URL and are excluded; Never is excluded. This does not establish that the account is absent from the vault" : "\(picked.count) logins match; pass --username or --id")
                         + (candidates.isEmpty ? "" : "; candidates: "
                         + candidates.map { "\($0.0.name)/\($0.1["name"] as? String ?? "?")/\((($0.1["login"] as? [String: Any])?["username"] as? String) ?? "-")" }
-                        .joined(separator: ", ")))
+                        .joined(separator: ", "))
+                        + (unavailable.isEmpty ? "" : "; not searched: "
+                        + unavailable.map { "\($0["vault"] ?? "?") (\($0["reason"] ?? "?"))" }.joined(separator: ", ")))
                 }
                 if choices.isEmpty {
                     let login = chosen.1["login"] as? [String: Any]
@@ -1792,6 +1886,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             let message = (error as? Failure)?.message ?? "Request failed; nothing released"
             let locked = cleanup()
             var answer: [String: Any] = ["ok": false, "error": locked ? message : message + "; lock verification failed, run `bw lock`"]
+            answer["reason"] = (error as? Failure)?.reason
             if request.op == "send-text" {
                 // Retry-safe only when no create was attempted and every vault is verified locked.
                 answer["stage"] = created == nil ? (locked ? "prepare" : "lock") : (created!.isEmpty ? "create" : "lock")
