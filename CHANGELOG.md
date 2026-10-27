@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-27 — browser.md: T3 preview and CDP gotchas from a personal wrapper
+
+- `t3-manage-thread/browser.md` gains a "T3 preview" section (own tab, explicit `profileId` + incognito for untrusted pages, session-gated downloads, hidden-tab screenshot stall, popups, print-view trap, cross-origin iframes, paste in unviewed tabs, local HTML, blank window), Google password route past T3's missing passkeys, CDP tab/cookie/daemon mechanics and ending idle computer-use sessions. `agents-md/global.md` port step includes uncommitted edits. Why: these lived in the owner's private browser notes; every T3 user hits them.
+
 ## 2026-10-27 — global template: wrappers hold DNA only
 
 - `agents-md/global-template.md` Skill docs: "Wrapper of a copied core = DNA only (accounts, ids, policy); a generic lesson goes to the canonical core." Why: agents improving a skill inside a consumer repo edited the local wrapper, so lessons stayed in one company's repo while colleagues and public users of the core never got them; an audit found generic workflows restated in wrappers across 10 repos ([core and wrapper](README.md#core-and-wrapper)).

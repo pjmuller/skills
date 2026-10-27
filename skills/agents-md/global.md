@@ -113,7 +113,7 @@ check of step 6; set the marker to the tag even when everything was skipped.
 
 ## Port a live file's improvements into a shared template
 
-On request, walk `git log -p <last-ported>.. -- <live file>` hunk by hunk: a behaviour rule
+On request, walk `git log -p <last-ported>.. -- <live file>` hunk by hunk (plus `git diff` for uncommitted edits): a behaviour rule
 any colleague would want → port, reworded neutrally; a personal fact (path, account, company,
 ID, colleague name) → placeholder or skip; a removal → remove from the template too unless it
 was personal. Record the new last-ported commit beside the live file, not in the public
