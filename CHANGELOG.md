@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28 — t3-route, mailbox-review-core: north star states the value
+
+- Both intros now say why to use the skill and how a user gets value: the router is one intake that finds the owning repo, reuses the thread that owns the task and spreads account load, then steps aside; the mailbox review is expert prep before the operator opens drafts (master/apprentice), with the 🧭 thread as the place to settle decisions and lessons. Why: a colleague got little value from either because the purpose was implicit; agents can now answer "what is this for" from the skill itself.
+
 ## 2026-10-28 — clickup-core: images inline in comments, images readable on demand
 
 - Comments, replies, `handoff` and `review --comment` show local images, mermaid diagrams and `![[file:NAME]]` inline (the web app's `image` part on a task attachment, sized from the image header) instead of a bare attachment URL. Other image URLs stay links; a readback missing an image fails. Local image paths may contain spaces (they used to post a broken `!link`). Why: a colleague's handoff showed four screenshots as plain links, by core design, not their mistake.

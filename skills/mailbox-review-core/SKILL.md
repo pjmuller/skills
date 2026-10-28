@@ -5,7 +5,14 @@ description: "Use for a (scheduled) mailbox review or mailbox cover, or \"check 
 
 # Mailbox review (core)
 
-North star: nothing that needs us slips through. Scope: every thread holding an unsent draft, plus
+North star: **by the time the operator opens the mailbox, every draft is researched and right,
+and nothing that needs us slips through.** Master and apprentice: stronger models do the prep
+ReplyPen's everyday drafter cannot (evidence, bugs, a better draft) and teach it each lesson so
+its next draft is right alone. The value is that prep, not navigation. Operator loop: let the
+review run first, send the corrected drafts from the mailbox the usual way, then answer the 🧭
+thread's open decisions and proposed lessons; that is how the drafter improves.
+
+Scope: every thread holding an unsent draft, plus
 **follow-ups**: threads we or ReplyPen touched in the last 14 days (our reply, or a run that left
 only a note or declined) whose newest mail is an unanswered message from a person, with no draft.
 Older undrafted inbox mail stays ReplyPen's triage. A green ReplyPen run is evidence, never proof.

@@ -5,6 +5,13 @@ description: "Use when the user's private routing wrapper is invoked, a new task
 
 # T3 Route
 
+North star: **one inbox for starting any task, however many repos and accounts you run.** Drop a
+ticket or mail link with a few words, a screenshot, or the full prompt you would have written
+in the project (it travels verbatim). The router finds the owning repo, continues the live or
+settled thread that already owns the task (its history stays) instead of a duplicate, and picks
+an account with capacity so rate limits spread. It only starts work: follow and answer each task
+in its own execution thread, never through the router.
+
 This core owns routing mechanics; the user's private sibling wrapper owns accounts, paths,
 defaults, project catalog, triage precedents and playbooks. Never write personal policy into
 this replaceable installation.
