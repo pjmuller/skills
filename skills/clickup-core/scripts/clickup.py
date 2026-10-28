@@ -1013,9 +1013,28 @@ def render(comment: dict) -> str:
             return f"@{part.get('user', {}).get('username', part.get('user', {}).get('id', 'user'))}"
         if part.get("type") == "task_mention":
             return part.get("text") or f"[[{part.get('task_mention', {}).get('task_id', 'task')}]]"
+        if part.get("type") == "table-embed":
+            return table_markdown(part["table-embed"])
         text, link = part.get("text", ""), (part.get("attributes") or {}).get("link")
+        if not text and part.get("type"):
+            return f"[{part['type']}]"  # unknown non-text part: visible, never silently empty
         return f"[{text}]({link})" if link and link != text.strip() else text
     return "".join(part_text(p) for p in comment["comment"])
+
+
+def table_markdown(table: dict) -> str:
+    """A comment `table-embed` (cells keyed "row:col", 1-based) as a Markdown table."""
+    cells = table.get("cells") or {}
+    keys = [tuple(map(int, k.split(":"))) for k in cells]
+    if not keys:
+        return "[table]"
+    def cell(r, c):
+        ops = (cells.get(f"{r}:{c}") or {}).get("content") or []
+        text = "".join(o["insert"] for o in ops if isinstance(o.get("insert"), str))
+        return " ".join(text.split()).replace("|", "\\|")
+    rows, cols = max(r for r, _ in keys), max(c for _, c in keys)
+    lines = ["| " + " | ".join(cell(r, c) for c in range(1, cols + 1)) + " |" for r in range(1, rows + 1)]
+    return "\n".join([lines[0], "|" + "---|" * cols, *lines[1:]]) + "\n"
 
 
 # ClickUp's comment API has no AI/bot/author-badge field (create comment: comment_text/comment,
@@ -1430,11 +1449,9 @@ def cmd_task(a):
     t["content"] = get_task_content(a.id)
     result = {"task": t}
     thread = []
-    if not a.no_comments or a.download_looms:
+    if not a.no_comments:  # opt-out wins everywhere: --download-looms then scans the body only
         raw = fetch_comments(a.id)
-        thread = discussion(raw)
-        if not a.no_comments:
-            result["discussion"] = thread
+        thread = result["discussion"] = discussion(raw)
         if a.comments:
             result["comments"] = raw
     if a.download_attachments:

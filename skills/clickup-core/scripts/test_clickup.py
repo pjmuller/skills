@@ -450,6 +450,19 @@ class TaskDiscussionTests(unittest.TestCase):
                          {"text": " and "}, {"text": "https://x.test", "attributes": {"link": "https://x.test"}}]}
         self.assertEqual(MODULE["render"](c), "@Sam Example see [the Loom](https://www.loom.com/share/abc) and https://x.test")
 
+    def test_render_keeps_table_cells_and_marks_unknown_parts(self):
+        parts = comment_parts("| Item | State |\n|---|---|\n| Ship | blocked |\n\nafter")
+        self.assertEqual(MODULE["render"]({"comment": parts}),
+                         "| Item | State |\n|---|---|\n| Ship | blocked |\n\nafter")
+        self.assertEqual(MODULE["render"]({"comment": [{"type": "frame"}]}), "[frame]")
+
+    def test_no_comments_with_looms_scans_body_only(self):
+        g = MODULE["cmd_task"].__globals__
+        self.addCleanup(g.__setitem__, "download_looms", g["download_looms"])
+        g["download_looms"] = lambda t, thread, d: [len(thread)]
+        self.assertEqual(self.run_task(no_comments=True, download_looms=True)["looms"], [0])
+        self.assertEqual(self.calls, [])
+
     def test_cli_rejects_comments_with_no_comments(self):
         from contextlib import redirect_stderr
         from io import StringIO

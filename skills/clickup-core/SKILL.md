@@ -39,7 +39,7 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
 - `handoff` / `review` implement the wrapper's `[policy]`; recipients must be unambiguous.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
 - `task` returns `{"task", "discussion"}`: every comment oldest first with threaded replies
-  (author, ISO date, text with links), since comments often hold the latest decision. Read it before
+  (author, ISO date, text with links and tables), since comments often hold the latest decision. Read it before
   acting on the body. `--no-comments` = metadata only (routing previews, bulk scans); `--comments`
   adds the raw API objects; `replies_missing` flags a thread the API returned short.
 - Listing someone's work: `tasks --assignee X` pages to the end and groups by the status actually
