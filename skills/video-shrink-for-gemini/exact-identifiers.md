@@ -4,6 +4,22 @@ Small opaque IDs get confidently fabricated even when speech and page titles are
 model or a "read character by character" instruction is not verification. Keep observed text,
 candidate matches and constructed links separate.
 
+> [!IMPORTANT]
+> The video finds the moment and its context; the ID comes from the system of record (API, ticket,
+> document) by title/time/tenant, labelled looked-up. Gemini almost never writes `?`/`UNREADABLE`
+> and repeats the same wrong ID across runs: agreement is not verification. An ID the API 404s is a misread.
+
+What a bot recording holds (Leexi, 2026-10-28, 4 Meet calls, 3.8 Flash high, unseeded, IDs checked
+against the API): the bot records the whole call at 1280×720, the share tile is ≈916×584 px, so a
+1920 px screen arrives ~2× smaller, before any processing (crop + x264 lose nothing visible).
+- ~7 px in the original (address bar, bold record handle, doc links): pipeline read 31/37 distinct
+  handles over a 35-min review and 26/30 on short clips; a ×2 crop of that region read 30/30.
+  The misses are near-misses (`ccd6d82d` → `cc6d682d` twice); a long pass also invented ~18 IDs.
+- ~5 px (grey list metadata, status bar, macOS window title): ambiguous in the original itself; every
+  route returned plausible wrong values (a date read 2020 for 2026).
+- Need the pixels: presenter pastes the link/ID in chat or zooms in for 2 s, or the screen is recorded
+  locally or by Meet's own recorder (up to 1080p, Workspace Business Standard+) instead of a bot.
+
 First draft: native audiovisual perception only, no shell commands, frame extraction or filesystem
 searches; read only the named prompt, write only the draft; `UNREADABLE` plus time/title for
 uncertain characters. This bounds effort: an unconstrained focused prompt generated 58 image
