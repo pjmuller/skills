@@ -1821,7 +1821,16 @@ def cmd_comments(a):
         root = next((c for c in comments if str(c["id"]) == root_id), None)
         if root is None:
             sys.exit(f"comment {root_id} not found on task {a.id}")
-        comments = [root] + chronological(fetch_replies(root_id, int(root.get("reply_count") or 0) or 1))
+        replies = chronological(fetch_replies(root_id, int(root.get("reply_count") or 0) or 1))
+        if getattr(a, "raw", False):
+            return out([root] + replies, True)
+        # Readable like `task`'s discussion; a link's ?threadedComment= is the reply the sender pointed at.
+        picked = (parse_qs(urlparse(a.thread).query).get("threadedComment") or [""])[0]
+        thread = comment_row(root) | {"replies": [comment_row(r) for r in replies]}
+        for row in thread["replies"]:
+            if row["id"] == picked:
+                row["selected"] = True
+        return out(thread, True)
     out(comments, a.json)
 
 
@@ -2032,7 +2041,9 @@ def main(argv=None):
                            help="put the --mention at the top, after PREFIX ('' = mention leads); requires --mention")
             s.add_argument("--reply-to", metavar="REF", help="thread root comment id or URL with ?comment=; posts a threaded reply")
         if cmd == "comments":
-            s.add_argument("--thread", metavar="REF", help="only this thread: root comment + replies (id or URL with ?comment=)")
+            s.add_argument("--thread", metavar="REF", help="only this thread, readable: root + replies; a URL's "
+                           "?threadedComment= reply is marked selected (id or URL with ?comment=)")
+            s.add_argument("--raw", action="store_true", help="with --thread: ClickUp's raw comment objects instead")
         if cmd == "review":
             s.add_argument("--verdict", choices=["ok", "to-test"], required=True)
             s.add_argument("--comment", action="store_true")

@@ -47,7 +47,7 @@ def test_last_second_takes_the_final_frame(tmp_path):
                     "-f", "lavfi", "-i", "color=blue:size=64x64:rate=30:duration=0.2", "-filter_complex",
                     "[0][1]concat=n=2:v=1", str(source)], check=True)
     transcript = tmp_path / "end.md"
-    transcript.write_text("## Key frames\n\n- [00:00:04] Blue final screen\n")
+    transcript.write_text("## Key Frames\n\n- [00:00:04] Blue final screen\n")  # heading case varies
     subprocess.run([str(SCRIPT), str(transcript), str(source)], check=True, capture_output=True)
     still = tmp_path / "end.frames" / "kf-000004.jpg"
     pixel = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(still), "-vf", "scale=1:1", "-f", "rawvideo",

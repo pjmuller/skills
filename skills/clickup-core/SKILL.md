@@ -35,7 +35,8 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
 - Agent comments (`comment`, `handoff`, `review --comment`) get a leading ✨ (ClickUp has no AI
   badge for API comments). Never type ✨ yourself; `--no-ai-label` only for a human's own words.
 - `--mention ALIAS` always names the recipient; `--mention-first PREFIX` moves it to the top.
-  `--reply-to` / `comments --thread` take the thread root (`?comment=` URL or id).
+  `--reply-to` / `comments --thread` take the thread root (`?comment=` URL or id). `comments --thread <URL>`
+  prints root + replies readably and marks the link's `?threadedComment=` reply `selected` (`--raw`: API objects).
 - `handoff` / `review` implement the wrapper's `[policy]`; recipients must be unambiguous.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
 - `task` returns `{"task", "discussion"}`: every comment oldest first with threaded replies

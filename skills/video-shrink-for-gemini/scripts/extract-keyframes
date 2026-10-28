@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 LINE = re.compile(r"\s*[-*]\s*[`*]*\[(?:(\d+):)?(\d+):(\d+)(?:\.\d+)?\][`*]*\s*(.*)")  # fraction ignored
-SECTION = re.compile(r"(?m)^#{1,3} Key frames.*$")
+SECTION = re.compile(r"(?mi)^#{1,3} Key frames.*$")  # Gemini also writes "Key Frames"
 
 
 def clock(seconds: float) -> str:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28 — clickup-core: a comment link reads like a conversation; extract-keyframes accepts "Key Frames"
+
+- `clickup-core` `comments --thread <URL>` prints root + replies as readable rows (author, date, text, images, like `task`'s discussion) and marks the link's `?threadedComment=` reply `selected`; `--raw` keeps ClickUp's API objects. Why: a pasted reply link returned ~10 KB of rich-text parts and no hint which reply the sender meant.
+- `video-shrink-for-gemini` `extract-keyframes`: the `## Key frames` heading match is case-insensitive. Why: Gemini wrote `## Key Frames` and the stills were refused (reported from a colleague's machine).
+
 ## 2026-10-28 — t3-route, mailbox-review-core: north star states the value
 
 - Both intros now say why to use the skill and how a user gets value: the router is one intake that finds the owning repo, reuses the thread that owns the task and spreads account load, then steps aside; the mailbox review is expert prep before the operator opens drafts (master/apprentice), with the 🧭 thread as the place to settle decisions and lessons. Why: a colleague got little value from either because the purpose was implicit; agents can now answer "what is this for" from the skill itself.

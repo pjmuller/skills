@@ -365,7 +365,13 @@ class CommentThreadTests(unittest.TestCase):
         from types import SimpleNamespace
         buf = StringIO()
         with redirect_stdout(buf):
-            MODULE["cmd_comments"](SimpleNamespace(id="869ej1uy0", thread=URL, json=True))
+            MODULE["cmd_comments"](SimpleNamespace(id="869ej1uy0", thread=URL.replace("threadedComment=902", "threadedComment=r9"), json=False, raw=False))
+        thread = json.loads(buf.getvalue())
+        self.assertEqual((thread["id"], thread["text"]), ("901", "root"))
+        self.assertEqual([(r["id"], r.get("selected")) for r in thread["replies"]], [("r9", True)])
+        buf = StringIO()
+        with redirect_stdout(buf):
+            MODULE["cmd_comments"](SimpleNamespace(id="869ej1uy0", thread=URL, json=True, raw=True))
         self.assertEqual([c["id"] for c in json.loads(buf.getvalue())], ["901", "r9"])
 
 
