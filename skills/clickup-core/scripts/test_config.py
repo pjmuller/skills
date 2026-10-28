@@ -240,7 +240,7 @@ def test_task_json_keeps_markdown_and_lossless_content(cli, config, monkeypatch,
         return {"id": tid, "markdown_description": "**Useful**"}
     monkeypatch.setattr(cli, "get_task", get_task)
     monkeypatch.setattr(cli, "get_task_content", lambda tid: '{"ops":[{"insert":"Useful"}]}')
-    cli.main(["task", "abc123", "--json", "--config", str(config)])
+    cli.main(["task", "abc123", "--no-comments", "--json", "--config", str(config)])  # opt-out: no comment GET
     task = json.loads(capsys.readouterr().out)["task"]
     assert task["markdown_description"] == "**Useful**"
     assert json.loads(task["content"])["ops"] == [{"insert": "Useful"}]

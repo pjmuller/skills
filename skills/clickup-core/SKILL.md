@@ -38,7 +38,10 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
   `--reply-to` / `comments --thread` take the thread root (`?comment=` URL or id).
 - `handoff` / `review` implement the wrapper's `[policy]`; recipients must be unambiguous.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
-- `--json task` returns `{"task": ...}` plus requested comments/downloads.
+- `task` returns `{"task", "discussion"}`: every comment oldest first with threaded replies
+  (author, ISO date, text with links), since comments often hold the latest decision. Read it before
+  acting on the body. `--no-comments` = metadata only (routing previews, bulk scans); `--comments`
+  adds the raw API objects; `replies_missing` flags a thread the API returned short.
 - Listing someone's work: `tasks --assignee X` pages to the end and groups by the status actually
   returned; never trust a server-side `--status` filter to drop finished work. Report the active
   queue (`[policy] active_statuses`, marked `*`) apart from backlog, skip closed, flag shared
@@ -51,7 +54,7 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
 Bounded duplicate check, then reuse, extend or succeed; create only after it. Per list in the
 wrapper's lookup scope: `search --list L --summary --json --include-closed --updated-since <date>` plus one
 pass without the date (older open work), several `--search` stems/aliases (spelling, spaces and
-hyphens matter; drop `--titles-only` on no hit). Read candidates with `task ID --comments --json`;
+hyphens matter; drop `--titles-only` on no hit). Read candidates with `task ID --json` (body + discussion);
 compare intent and outcome, not titles; finished work may have no ticket (check code/skills too).
 `--updated-since` (strictly newer, UTC) never implies `--include-closed` and comments may not bump
 `date_updated`, so a recent pass or an incomplete scope proves no absence. After an uncertain
@@ -138,5 +141,5 @@ GETs retry 429 (reset ≤ 30 s); writes never auto-retry and read back; report o
 URL. `delete` / `detach` need `--yes`. An update keeps the assignees unless reassignment is requested, including the move to
 `to test` (the other person tests, not owns); who gets a new task: wrapper policy.
 Live checks: `whoami`, `topology`, one
-`task --comments`. A disposable create/delete needs authorization, a clear title and cleanup in a
+`task`. A disposable create/delete needs authorization, a clear title and cleanup in a
 finally path. Never send test mentions or comments to people.

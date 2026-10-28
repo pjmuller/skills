@@ -369,6 +369,94 @@ class CommentThreadTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in json.loads(buf.getvalue())], ["901", "r9"])
 
 
+class TaskDiscussionTests(unittest.TestCase):
+    """`task` reads the discussion by default: comments often carry the decisions the body lacks."""
+
+    def setUp(self):
+        self.calls = []
+        g = MODULE["cmd_task"].__globals__
+        for name in ("api", "get_task", "get_task_content"):
+            self.addCleanup(g.__setitem__, name, g[name])
+        g["api"] = self.fake_api
+        g["get_task"] = lambda tid, markdown=False: {"id": tid, "name": "T"}
+        g["get_task_content"] = lambda tid: {"ops": []}
+
+    @staticmethod
+    def comment(cid, date, text="x", replies=0, user="Alex Example"):
+        return {"id": str(cid), "date": str(date), "reply_count": replies, "user": {"username": user},
+                "comment": [{"text": text}], "comment_text": text}
+
+    def fake_api(self, method, path, params=None, **kw):
+        self.calls.append((path, dict(params or {})))
+        if path == "/comment/c1/reply":
+            return {"comments": [self.comment("r2", 1_700_000_300_000, "second", user="Sam Example"),
+                                 self.comment("r1", 1_700_000_200_000, "first")]}
+        if not params:  # page 1: 25 newest, the oldest of them repeats on page 2
+            return {"comments": [self.comment(f"n{i}", 1_700_001_000_000 - i) for i in range(24)]
+                    + [self.comment("c1", 1_700_000_100_000, "root", replies=2)]}
+        return {"comments": [self.comment("c1", 1_700_000_100_000, "root", replies=2),
+                             self.comment("c0", 1_700_000_000_000, "see [demo]")]}
+
+    def run_task(self, **flags):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        args = dict(id="t1", json=True, comments=False, no_comments=False,
+                    download_attachments=False, download_looms=False, dir=None) | flags
+        buf = StringIO()
+        with redirect_stdout(buf):
+            MODULE["cmd_task"](SimpleNamespace(**args))
+        return json.loads(buf.getvalue())
+
+    def test_default_includes_full_discussion_oldest_first_with_replies(self):
+        out = self.run_task()
+        thread = out["discussion"]
+        self.assertNotIn("comments", out)
+        self.assertEqual(len(thread), 26)  # both pages, the repeated cursor comment once
+        self.assertEqual([c["id"] for c in thread[:2]], ["c0", "c1"])
+        self.assertEqual(thread[0], {"id": "c0", "date": "2023-11-14T22:13:20.000Z",
+                                     "author": "Alex Example", "text": "see [demo]"})
+        self.assertEqual([(r["id"], r["author"]) for r in thread[1]["replies"]],
+                         [("r1", "Alex Example"), ("r2", "Sam Example")])
+        self.assertNotIn("replies_missing", thread[1])
+        self.assertEqual(self.calls[1][1], {"start": "1700000100000", "start_id": "c1"})
+
+    def test_no_comments_is_metadata_only_and_never_calls_the_comment_api(self):
+        self.assertEqual(self.run_task(no_comments=True), {"task": {"id": "t1", "name": "T", "content": {"ops": []}}})
+        self.assertEqual(self.calls, [])
+
+    def test_comments_flag_keeps_raw_objects_next_to_discussion(self):
+        out = self.run_task(comments=True)
+        self.assertEqual(out["comments"][0]["comment_text"], "x")
+        self.assertEqual(len(out["comments"]), 26)
+        self.assertIn("discussion", out)
+
+    def test_short_reply_page_is_flagged_not_silently_dropped(self):
+        orig = self.fake_api
+        def api(method, path, params=None, **kw):
+            res = orig(method, path, params, **kw)
+            return {"comments": res["comments"][:1]} if path == "/comment/c1/reply" else res
+        MODULE["cmd_task"].__globals__["api"] = api
+        from contextlib import redirect_stderr
+        from io import StringIO
+        with redirect_stderr(StringIO()) as err:
+            root = self.run_task()["discussion"][1]
+        self.assertEqual(root["replies_missing"], 1)
+        self.assertIn("reports 2 replies", err.getvalue())
+
+    def test_render_keeps_link_targets_and_mentions_in_part_order(self):
+        c = {"comment": [{"type": "tag", "user": {"username": "Sam Example"}}, {"text": " see "},
+                         {"text": "the Loom", "attributes": {"link": "https://www.loom.com/share/abc"}},
+                         {"text": " and "}, {"text": "https://x.test", "attributes": {"link": "https://x.test"}}]}
+        self.assertEqual(MODULE["render"](c), "@Sam Example see [the Loom](https://www.loom.com/share/abc) and https://x.test")
+
+    def test_cli_rejects_comments_with_no_comments(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            MODULE["main"](["task", "t1", "--comments", "--no-comments"])
+
+
 class PickAttachmentTests(unittest.TestCase):
     ROWS = [{"id": "aaa-1.md", "title": "brief.md"}, {"id": "bbb-2.md", "title": "brief.md"},
             {"id": "ccc-3.jpg", "title": "shot.jpg"}]

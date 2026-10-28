@@ -18,7 +18,7 @@ review header, statuses and the verdict's language: the wrapper's `[policy]`.
 
 ## Flow
 
-1. `task ID --comments` plus `--download-attachments`; open the screenshots and recordings. Extract
+1. `task ID --download-attachments` (body + full discussion); open the screenshots and recordings. Extract
    symptoms, claimed cause, claimed changes (PRs, SHAs, deploys) and claimed verification.
 2. Verify in the real code: read the diff, check the cause explains **all** symptoms, check the fix
    is deployed where the ticket says, run the tests/greps yourself.

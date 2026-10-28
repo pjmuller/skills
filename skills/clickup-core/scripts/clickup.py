@@ -279,10 +279,14 @@ def task_summary(t: dict) -> dict:
            if k in {"id", "name", "list", "status", "assignees", "url"}}
     row["parent"] = t.get("parent")
     for key in ("date_created", "date_updated", "date_closed"):
-        value = t.get(key)
-        row[key] = (datetime.fromtimestamp(int(value) / 1000, timezone.utc)
-                    .isoformat(timespec="milliseconds").replace("+00:00", "Z")) if value not in (None, "") else None
+        row[key] = iso_ms(t.get(key))
     return row
+
+
+def iso_ms(value) -> str | None:
+    """ClickUp epoch milliseconds -> ISO 8601 UTC (`…Z`)."""
+    return (datetime.fromtimestamp(int(value) / 1000, timezone.utc)
+            .isoformat(timespec="milliseconds").replace("+00:00", "Z")) if value not in (None, "") else None
 
 
 def download_attachments(t: dict, directory: str | None) -> list[dict]:
@@ -306,11 +310,11 @@ def download_attachments(t: dict, directory: str | None) -> list[dict]:
     return saved
 
 
-def download_looms(t: dict, comments: list[dict], directory: str | None) -> list[dict]:
-    """Run scripts/loom.py for every Loom share URL in the body or comments -> transcript + frames."""
+def download_looms(t: dict, thread: list[dict], directory: str | None) -> list[dict]:
+    """Run scripts/loom.py for every Loom share URL in the body or discussion -> transcript + frames."""
     import subprocess
     text = "\n".join([t.get("markdown_description") or t.get("description") or ""]
-                     + [c.get("comment_text") or "" for c in comments])
+                     + [c["text"] for root in thread for c in [root, *root.get("replies", [])]])
     base = Path(directory or f"/tmp/cu-{t['id']}")
     done = []
     for vid in dict.fromkeys(re.findall(r"loom\.com/(?:share|embed)/([0-9a-f]{32})", text)):
@@ -1009,7 +1013,8 @@ def render(comment: dict) -> str:
             return f"@{part.get('user', {}).get('username', part.get('user', {}).get('id', 'user'))}"
         if part.get("type") == "task_mention":
             return part.get("text") or f"[[{part.get('task_mention', {}).get('task_id', 'task')}]]"
-        return part.get("text", "")
+        text, link = part.get("text", ""), (part.get("attributes") or {}).get("link")
+        return f"[{text}]({link})" if link and link != text.strip() else text
     return "".join(part_text(p) for p in comment["comment"])
 
 
@@ -1423,22 +1428,51 @@ def cmd_customers(a):
 def cmd_task(a):
     t = get_task(a.id, markdown=True)
     t["content"] = get_task_content(a.id)
-    comments = fetch_comments(a.id) if a.comments or a.download_looms else []
     result = {"task": t}
-    if a.comments:
-        result["comments"] = comments
+    thread = []
+    if not a.no_comments or a.download_looms:
+        raw = fetch_comments(a.id)
+        thread = discussion(raw)
+        if not a.no_comments:
+            result["discussion"] = thread
+        if a.comments:
+            result["comments"] = raw
     if a.download_attachments:
         result["downloaded"] = download_attachments(t, a.dir)
     if a.download_looms:
-        result["looms"] = download_looms(t, comments, a.dir)
+        result["looms"] = download_looms(t, thread, a.dir)
     out(result, a.json)
 
 
+def comment_row(c: dict) -> dict:
+    return {"id": str(c["id"]), "date": iso_ms(c.get("date")),
+            "author": (c.get("user") or {}).get("username"), "text": render(c)}
+
+
+def discussion(comments: list[dict]) -> list[dict]:
+    """Every comment oldest first, threaded replies nested: who, when, text in part order with link
+    targets. Comments often hold the decisions a body never got; raw parts stay behind --comments."""
+    rows = []
+    for c in sorted(comments, key=lambda c: int(c.get("date") or 0)):
+        row, expected = comment_row(c), int(c.get("reply_count") or 0)
+        if expected:
+            replies = api("GET", f"/comment/{c['id']}/reply")["comments"]
+            row["replies"] = [comment_row(r) for r in sorted(replies, key=lambda r: int(r.get("date") or 0))]
+            if len(replies) < expected:  # never a silently partial thread
+                row["replies_missing"] = expected - len(replies)
+                print(f"warning: comment {c['id']} reports {expected} replies, API returned {len(replies)}",
+                      file=sys.stderr)
+        rows.append(row)
+    return rows
+
+
 def fetch_comments(tid):
-    comments, params = [], {}
+    """All task comments, newest first, following ClickUp's 25-per-page date cursor."""
+    comments, seen, params = [], set(), {}
     while True:
         batch = api("GET", f"/task/{tid}/comment", params=params)["comments"]
-        comments += batch
+        comments += [c for c in batch if c["id"] not in seen]
+        seen.update(c["id"] for c in batch)
         if len(batch) < 25:
             return comments
         cursor = {"start": batch[-1]["date"], "start_id": batch[-1]["id"]}
@@ -1742,7 +1776,12 @@ def main(argv=None):
         s.set_defaults(fn=globals()["cmd_" + cmd])
         if cmd != "create": s.add_argument("id")
         if cmd == "task":
-            for flag in ("comments", "download-attachments", "download-looms"):
+            thread = s.add_mutually_exclusive_group()
+            thread.add_argument("--no-comments", action="store_true",
+                                help="metadata only: skip the discussion (routing previews, bulk scans)")
+            thread.add_argument("--comments", action="store_true",
+                                help="also the raw API comment objects (the compact discussion is always included)")
+            for flag in ("download-attachments", "download-looms"):
                 s.add_argument("--" + flag, action="store_true")
             s.add_argument("--dir")
         if cmd in ("create", "update"):
