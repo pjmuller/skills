@@ -39,6 +39,7 @@ def voice(id, ts, seconds=20, **kw):
 class FakeBridge:
     def __init__(self, tmp, rows=()):
         self.tmp, self.rows, self.transcribed, self.fail, self.download_errors = tmp, list(rows), [], 0, 0
+        self.prompts = []
         self.down = False
 
     def read(self, since):  # like the bridge: the oldest READ_LIMIT at/after `since`
@@ -62,8 +63,9 @@ class FakeBridge:
             out.append({"id": i, "path": str(path), "seconds": 20})
         return out
 
-    def transcribe(self, path, hint):
+    def transcribe(self, path, hint, context):
         self.transcribed.append(Path(path).stem)
+        self.prompts.append((hint, context))
         if self.fail:
             self.fail -= 1
             raise RuntimeError("gemini 503")
@@ -437,3 +439,16 @@ def test_seed_include_finds_a_recent_note_past_the_first_page(env, monkeypatch):
     env.bridge.rows = [msg(f"t{i}", T0 - 86400 + i, "x") for i in range(7)] + [voice("v1", T0)]
     env.seed(T0 + 600, "v1")
     assert env.state()["include"] == {"v1": T0}
+
+
+def test_transcriber_gets_purpose_and_vocabulary(env):
+    vocab = env.tmp / "vocabulary.md"
+    vocab.write_text("## Products\n\n- Globex (often misheard as Glow Bex)\n")
+    data = json.loads(env.config.read_text())
+    env.config.write_text(json.dumps({**data, "vocabulary": str(vocab)}))
+    env.bridge.rows = [voice("v1", T0)]
+    env.seed(T0 - 10)
+    env.run(T0 + 400)
+    (hint, context), = env.bridge.prompts
+    assert hint.startswith("Dutch\n\n## Products") and "Glow Bex" in hint
+    assert "dispatcher thread" in context and "do not summarise" in context

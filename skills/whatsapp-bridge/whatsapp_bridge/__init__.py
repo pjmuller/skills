@@ -142,14 +142,18 @@ def download_voice_notes(chat: str, n: int = 3, ids: list[str] | None = None) ->
     return _call("voice", chat=chat, n=n, ids=ids)
 
 
-def transcribe_audio(path: str | Path, hint: str | None = None) -> str:
-    """Transcribe one audio file via transcribe-gemini; hint = language + names/vocabulary to spell exactly."""
+def transcribe_audio(path: str | Path, hint: str | None = None, context: str | None = None) -> str:
+    """Transcribe one audio file via transcribe-gemini; hint = language + names/vocabulary to spell exactly
+    (Markdown welcome); context = what the recording is for, used only to recognise words."""
     path = Path(path)
     script = str(TRANSCRIBE) if TRANSCRIBE.exists() else shutil.which("transcribe-gemini")
     if not script:
         raise RuntimeError("transcribe-gemini not found; install video-shrink-for-gemini (scripts/install)")
     prompt, out = path.with_suffix(".prompt.md"), path.with_suffix(".transcript.md")
-    prompt.write_text(VOICE_PROMPT + (f"\n## Hint (spell these exactly when heard)\n\n{hint.strip()}\n" if hint else ""))
+    prompt.write_text(VOICE_PROMPT
+                      + (f"\n## Context (only to recognise words; still transcribe verbatim)\n\n{context.strip()}\n"
+                         if context else "")
+                      + (f"\n## Hint (spell these exactly when heard)\n\n{hint.strip()}\n" if hint else ""))
     subprocess.run([script, str(path), "--prompt", str(prompt), "--out", str(out)], check=True,
                    stdout=subprocess.DEVNULL, timeout=600)
     # Drop transcribe-gemini's provenance header (written for video passes).

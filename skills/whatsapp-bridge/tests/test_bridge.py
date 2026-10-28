@@ -240,6 +240,11 @@ class VoiceTests(unittest.TestCase):
             with patch('whatsapp_bridge.subprocess.run', side_effect=fake):
                 self.assertEqual(transcribe_audio(audio, 'Flemish; Mexem'), 'Hallo PJ, Mexem.')
             self.assertIn('Flemish; Mexem', audio.with_suffix('.prompt.md').read_text())
+            self.assertNotIn('## Context', audio.with_suffix('.prompt.md').read_text())
+            with patch('whatsapp_bridge.subprocess.run', side_effect=fake):
+                transcribe_audio(audio, 'Flemish', context='A note-to-self about portfolio questions.')
+            prompt = audio.with_suffix('.prompt.md').read_text()
+            self.assertLess(prompt.index('## Context'), prompt.index('## Hint'))
         with patch('whatsapp_bridge._call') as call:
             for ids in ([], [' ']):
                 with self.assertRaises(ValueError):

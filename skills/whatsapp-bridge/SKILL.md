@@ -43,7 +43,8 @@ Expired/unlinked session → `wa login --window` again. Linux/WSL2: plain `wa lo
 `wa voice <chat> [-n 3 | --id MSGID…] [--transcribe --hint "Flemish Dutch; Mexem, beurstaks"]` downloads to
 `~/.config/whatsapp-bridge/media/` (never marks played); `--transcribe` hands each file to
 [transcribe-gemini](../video-shrink-for-gemini/SKILL.md) (~$0.02 / 5 min) with a verbatim prompt plus the hint
-(language + names/jargon to spell exactly; wrappers keep per-contact hints). Keep the original-language transcript
+(language + names/jargon to spell exactly; wrappers keep per-contact hints). Python `transcribe_audio(path, hint,
+context)` adds an optional purpose section ("what this recording is for") used only to recognise words. Keep the original-language transcript
 (translate beside it, never instead) and mark uncertain words `(?)`.
 `--id` also fetches images/documents (screenshots, PDFs) for reading; `-n` scans audio only.
 Rows synced before 2026-10 (shown `[non-text message]`) lack media keys: the worker asks the **own phone** to resend

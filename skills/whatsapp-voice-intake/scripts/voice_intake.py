@@ -40,6 +40,13 @@ OUTAGE_GRACE = 1800        # s a bridge/T3 outage may last before it notifies
 LAUNCH_HOLD = 24 * 3600    # s: a fallback thread we launched but cannot find again blocks another launch this long
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 VOICE_TEXT = re.compile(r"\[(voice note|audio) (\d+)s\]")
+# Told to the transcriber with every note (config `context` overrides): knowing the destination helps it pick
+# the right word among similar-sounding ones; the bridge prompt still demands a verbatim transcript.
+CONTEXT = ("A note-to-self dictated on the go. It usually describes a task, idea or question for software, "
+           "AI-agent or company work; a dispatcher thread will route it to the right project. Mixed languages "
+           "and English technical terms inside other-language sentences are normal: keep each word as spoken. "
+           "Use this only to recognise words: still keep hesitations (eh, ehm), repetitions and false starts; "
+           "do not summarise, reorder, clean up or turn it into a task list.")
 
 
 class Unavailable(Exception):
@@ -64,13 +71,17 @@ def load_config(path=None) -> dict:
     target = raw.get("target") or {}
     if not target.get("project") or not target.get("title"):
         raise SystemExit(f"{path}: target.project (a T3 project root) and target.title (exact thread title) are required")
+    vocabulary = raw.get("vocabulary")
+    if vocabulary and not Path(vocabulary).expanduser().is_file():
+        raise SystemExit(f"{path}: vocabulary must be an existing Markdown file (terms the transcriber should expect)")
     fallback = raw.get("fallback") or {}
     if fallback and not Path(fallback.get("brief", "")).expanduser().is_file():
         raise SystemExit(f"{path}: fallback.brief must be an existing file (the new thread's initialisation brief)")
     return {"self_number": number, "owner": raw.get("owner") or "the account owner",
             "tz": ZoneInfo(hours.get("timezone", "Europe/Brussels")), "days": {DAYS.index(d) for d in days},
             "start": clock.fromisoformat(hours.get("start", "09:00")), "end": clock.fromisoformat(hours.get("end", "18:00")),
-            "hint": raw.get("hint"), "project": str(Path(target["project"]).expanduser()), "title": target["title"],
+            "hint": raw.get("hint"), "context": raw.get("context") or CONTEXT,
+            "vocabulary": str(Path(vocabulary).expanduser()) if vocabulary else None, "project": str(Path(target["project"]).expanduser()), "title": target["title"],
             "fallback": {**fallback, "brief": str(Path(fallback["brief"]).expanduser())} if fallback else None,
             "daily_audio_minutes": float(raw.get("daily_audio_minutes", 60))}
 
@@ -157,10 +168,10 @@ class Bridge:
         except (RuntimeError, ValueError) as exc:
             raise Unavailable(f"whatsapp-bridge download: {exc}") from None
 
-    def transcribe(self, path: str, hint: str | None) -> str:
+    def transcribe(self, path: str, hint: str | None, context: str | None) -> str:
         from whatsapp_bridge import transcribe_audio
         with quiet_stderr():
-            return transcribe_audio(path, hint)
+            return transcribe_audio(path, hint, context)
 
 
 class Relay:
@@ -369,6 +380,12 @@ def read_floor(state, now) -> int:
     return int(min(marks)) - MAX_SPAN
 
 
+def transcription_hint(cfg) -> str | None:
+    """Config hint plus the vocabulary file, read per call so edits apply on the next note."""
+    parts = [cfg["hint"], Path(cfg["vocabulary"]).read_text() if cfg["vocabulary"] else None]
+    return "\n\n".join(p.strip() for p in parts if p and p.strip()) or None
+
+
 def transcribe(cfg, state, bridge, now, dry_run) -> None:
     """Download + transcribe every voice member still missing, once; paid calls are budgeted first."""
     todo = [(key, m) for key, c in state["captures"].items() if c["kind"] == "voice" and not c.get("payload")
@@ -395,7 +412,7 @@ def transcribe(cfg, state, bridge, now, dry_run) -> None:
                 state["spend"] = {day: round(spent + minutes, 2)}   # counted before the paid call
                 save_state(state)
                 try:
-                    text = bridge.transcribe(note["path"], cfg["hint"])
+                    text = bridge.transcribe(note["path"], transcription_hint(cfg), cfg["context"])
                 except Exception as exc:  # transcriber exit, timeout, missing key
                     note = {"error": f"transcription: {type(exc).__name__}"}
                     text = None
