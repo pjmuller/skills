@@ -59,9 +59,18 @@ Order ([examples](prompt-shape.md)):
 
 ## Colleague handoffs
 
-A ticket in a colleague's queue is the delivery for their work, never execution on this machine.
+**Protect colleagues' focus.** Research freely; write to their queue or notify them only when the
+user explicitly asks the agent to do so (a scoped “James, …” cue or direct instruction).
+A meeting commitment is not permission to create, append, comment or mention. “Got it, I'll do it”
+usually means no follow-up is needed, not another reminder.
 
-- A topic is not a task: ticket only an explicit request or an unambiguous committed action.
+Without that instruction, propose only the few handoffs that materially unblock work or add missing
+information. Omit reminders of already understood work; don't turn every commitment into a proposal.
+Authorized colleague work goes to their queue, never execution on this machine. A ticket write and
+a notification are separate choices: use the least interruption needed for the requested outcome;
+an append does not by itself authorize a ping. This intake rule overrides generic ticket ping defaults.
+
+- A topic is not a task, and a committed task is not automatically an agent handoff.
 - Separate speaker words from inference; uncertain names or negations never become requirements.
 - Keep sequence and phase owner: "X prepares, Y fine-tunes" means X owns the prerequisite and Y
   reviews later.

@@ -27,7 +27,8 @@ requested outcome: “research” authorizes research, not its recommended build
 
 - OWNER = the speaker unless "for/voor X". Same person as this machine's operator → spawn here
   (a standalone thread in the owning repo) or create the ticket. Another teammate → always
-  a ClickUp handoff in their queue, even for "spawn": their agent runs it on their machine.
+  a ClickUp handoff in their queue for that explicit command, even for "spawn": their agent runs it
+  on their machine. Ordinary conversation or an acknowledged commitment is not such a command.
 - The brief/ticket carries the exact quote, speaker, call link and mm:ss, plus the scope as said;
   normal permission limits still apply (no deploys, external messages or spending beyond repo rules).
 - One action per command per call; check the queue for an existing ticket first
