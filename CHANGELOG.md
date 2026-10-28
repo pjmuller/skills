@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28 — public-footprint-audit: field-level check for official records
+
+- New `public-footprint-audit/official-records.md`, linked from SKILL.md and a per-field table in the report template. Before recommending anything for a gazette, filing or register entry, the auditor records the document type (original act vs published extract vs annual accounts), the jurisdiction and filing date, the person's role, and mandatory / optional / unknown per field, citing the provision it opened. A mandatory field is real exposure, not a removal finding. An optional one is a candidate for an erasure request to the publisher (C-231/22, C-200/23), with no promised outcome. Includes a verified Belgian worked table (WVV 2:8 §2, 2:7 §5, 3:12; notarial law art. 12) and a fictional example. Why: an audit flagged a whole company-incorporation extract as "high priority, ask the notary". The notary answered "identity is mandatory, publications never change". Both were too coarse: the law requires name and domicile, not the birth details, and an erasure route exists for fields the law doesn't require.
+
 ## 2026-10-28 — warm-ups: launcher-owned settlement, independent account retries
 
 - `t3-relay launch --settle-after-run SECS` waits and settles completed, untouched first runs. Warm-ups use it with 90 seconds instead of relying on the model to call a tool: small models sometimes replied without calling settle or falsely said it was unavailable. Failed, unfinished or repurposed threads stay open; cleanup errors never trigger duplicate launches.

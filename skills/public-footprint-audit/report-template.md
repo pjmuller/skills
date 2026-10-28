@@ -8,6 +8,12 @@ Private report. Scope: [consent, identifiers, countries/languages]. Desired audi
 |---|---|---|---|---|
 | High / medium / low | [Exact source URL] | [Category, not full sensitive value] | [Concrete harm] | [Action reference] |
 
+Official records: one row per field ([preflight](official-records.md)).
+
+| Document / role | Field | Mandatory / optional / unknown + provision | Remedy |
+|---|---|---|---|
+| [Extract, filed account, register entry] | [Field category] | [Class, article, law version on filing date] | [Exposure only / erasure request to publisher / question to settle] |
+
 Priority reflects sensitivity, discoverability and cross-linking, not a numerical security score. Identity confidence and evidence state are separate from severity.
 
 ## Lockdown checklist
