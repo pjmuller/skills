@@ -415,7 +415,7 @@ class TaskDiscussionTests(unittest.TestCase):
         from io import StringIO
         from types import SimpleNamespace
         args = dict(id="t1", json=True, comments=False, no_comments=False,
-                    download_attachments=False, download_looms=False, dir=None) | flags
+                    download_attachments=False, download_looms=False, download_images=False, dir=None) | flags
         buf = StringIO()
         with redirect_stdout(buf):
             MODULE["cmd_task"](SimpleNamespace(**args))
@@ -721,3 +721,119 @@ class LinksBeforeCodeBlockTests(unittest.TestCase):
             {"insert": "SKILL.md", "attributes": {"link": "http://SKILL.md"}},
             {"insert": "hello"}, {"insert": "\n", "attributes": {"code-block": {"code-block": "plain"}}}]})
         self.guard(content)
+
+
+ATT = {"id": "a1.png", "title": "shot.png", "mimetype": "image/png", "size": 10,
+       "url": "https://t1.p.clickup-attachments.com/t1/a1/shot.png"}
+PNG_HEAD = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + (480).to_bytes(4, "big") + (240).to_bytes(4, "big")
+
+
+class CommentImageTests(unittest.TestCase):
+    """An image line that is a task attachment shows inline in a comment (native `image` part)."""
+
+    def setUp(self):
+        g = MODULE["post_comment"].__globals__
+        for name in ("api", "remote_image_size"):
+            self.addCleanup(g.__setitem__, name, g[name])
+        g["remote_image_size"] = lambda url: (480, 240)
+        self.sent, self.drop_images = [], False
+
+        def api(method, path, **kw):
+            if method == "POST":
+                self.sent.append(json.loads(kw["data"]))
+                return {"id": "c1"}
+            parts = [p for p in self.sent[-1]["comment"] if not (self.drop_images and p.get("type") == "image")]
+            return {"comments": [{"id": "c1", "comment": parts}]}
+        g["api"] = api
+
+    def test_attachment_image_becomes_sized_image_part_other_urls_stay_links(self):
+        MODULE["post_comment"]("t1", f"see\n![x]({ATT['url']})\n![y](https://x.test/a.png)", None, False,
+                               quiet=True, attachments=[ATT])
+        parts = self.sent[0]["comment"]
+        img = next(p for p in parts if p.get("type") == "image")
+        self.assertEqual((img["image"]["id"], img["image"]["url"]), ("a1.png", ATT["url"]))
+        self.assertEqual(img["attributes"]["data-natural-width"], "480")
+        self.assertIn({"text": "https://x.test/a.png", "attributes": {"link": "https://x.test/a.png"}}, parts)
+
+    def test_readback_without_the_image_fails_closed(self):
+        self.drop_images = True
+        with self.assertRaisesRegex(SystemExit, "WITHOUT its 1 inline image"):
+            MODULE["post_comment"]("t1", f"![x]({ATT['url']})", None, False, quiet=True, attachments=[ATT])
+
+    def test_render_shows_image_part_as_markdown_image(self):
+        part = MODULE["image_part"](ATT)
+        self.assertEqual(MODULE["render"]({"comment": [part]}), f"![shot.png]({ATT['url']})")
+
+    def test_image_size_reads_png_gif_and_jpeg_headers(self):
+        size = MODULE["image_size"]
+        self.assertEqual(size(PNG_HEAD), (480, 240))
+        self.assertEqual(size(b"GIF89a" + (7).to_bytes(2, "little") + (9).to_bytes(2, "little")), (7, 9))
+        jpeg = b"\xff\xd8" + b"\xff\xe0\x00\x04ab" + b"\xff\xc0\x00\x11\x08" + (90).to_bytes(2, "big") + (160).to_bytes(2, "big")
+        self.assertEqual(size(jpeg), (160, 90))
+        self.assertIsNone(size(b"not an image"))
+
+    def test_local_image_path_may_contain_spaces(self):
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        (d / "Clean Shot 1.png").write_bytes(b"png")
+        text, uploads = MODULE["collect_media"](f"![s]({d / 'Clean Shot 1.png'})")
+        self.assertEqual((text, [n for _, n in uploads]), ("![[file:Clean Shot 1.png]]", ["Clean Shot 1.png"]))
+
+
+class TaskImagesTests(unittest.TestCase):
+    """`task` lists every image with where it appears; `--download-images` fetches only those."""
+
+    def test_index_merges_body_sidebar_and_discussion_with_provenance(self):
+        body_url = "https://t1.p.clickup-attachments.com/t1/b2/shot%20(1).png"
+        cell_url = "https://t1.p.clickup-attachments.com/t1/c3/shot.png-backup.png"
+        task = {"content": json.dumps({"ops": [{"insert": {"image": body_url}}, {"insert": {"table-embed": {
+                    "cells": {"1:1": {"content": [{"insert": {"image": cell_url}}]}}}}}]}),
+                "attachments": [ATT, {**ATT, "id": "v.mp4", "title": "v.mp4", "mimetype": "video/mp4",
+                                      "url": "https://t1.p.clickup-attachments.com/t1/v/v.mp4"}]}
+        root = MODULE["comment_row"]({"id": "c1", "comment": [
+            {"text": ATT["url"], "attributes": {"link": ATT["url"]}},
+            {"text": "x", "attributes": {"link": "https://evil.test/x.png"}},
+            {"text": "bad", "attributes": {"link": "https://example.org:bad/p.png"}},
+            {"text": "bad6", "attributes": {"link": "https://[invalid/p.png"}}]})
+        reply = MODULE["comment_row"]({"id": "r1", "comment": [MODULE["image_part"]({**ATT, "url": body_url})]})
+        self.assertEqual(root["images"], [ATT["url"]])
+        rows = MODULE["task_images"](task, [root | {"replies": [reply]}])
+        self.assertEqual([(r["name"], r["sources"]) for r in rows],
+                         [("shot (1).png", ["description", "reply r1"]), ("shot.png-backup.png", ["description"]),
+                          ("shot.png", ["attachments", "comment c1"])])
+
+    def test_download_keeps_token_off_and_skips_foreign_or_non_image(self):
+        import tempfile
+        calls = []
+
+        class Resp:
+            def __init__(self, ctype): self.ok, self.status_code, self.headers = True, 200, {"Content-Type": ctype}
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def iter_content(self, n): yield PNG_HEAD
+
+        requests = MODULE["download_images"].__globals__["requests"]
+        orig = requests.get
+        self.addCleanup(setattr, requests, "get", orig)
+        def get(url, **kw):
+            calls.append(kw)
+            if "slow" in url:
+                raise requests.exceptions.Timeout()
+            return Resp("text/html" if "html" in url else "image/png")
+        requests.get = get
+        d = tempfile.mkdtemp()
+        rows = [{"name": "a/b.png", "url": ATT["url"]}, {"name": "x.png", "url": "https://evil.test/x.png"},
+                {"name": "h.png", "url": "https://t1.p.clickup-attachments.com/t1/html/h.png"},
+                {"name": "s.png", "url": "https://t1.p.clickup-attachments.com/t1/slow/s.png"},
+                {"name": "b.png", "url": "https://t1.p.clickup-attachments.com/t1/b/b.png"}]
+        from contextlib import redirect_stderr
+        from io import StringIO
+        with redirect_stderr(StringIO()):
+            out = MODULE["download_images"](rows, d, "t1")
+        self.assertEqual(Path(out[0]["path"]).read_bytes(), PNG_HEAD)
+        self.assertEqual(Path(out[0]["path"]).name, "img-01-a_b.png")
+        self.assertEqual(out[1]["skipped"], "not a ClickUp attachment image URL")
+        self.assertIn("text/html", out[2]["skipped"])
+        self.assertEqual(out[3]["skipped"], "Timeout")  # one failure never stops the rest
+        self.assertTrue(Path(out[4]["path"]).exists())
+        self.assertTrue(all("headers" not in kw and kw["allow_redirects"] is False for kw in calls))

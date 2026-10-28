@@ -310,6 +310,147 @@ def download_attachments(t: dict, directory: str | None) -> list[dict]:
     return saved
 
 
+# Images a reader sees on a task: description embeds (also table cells), the attachment sidebar and
+# every comment/reply (native image parts and links to an attachment image alike), read from the
+# structured content, never scraped from text. `task` lists them with where they appear;
+# `--download-images` fetches only those, from ClickUp's attachment host only.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+IMAGE_MAX_BYTES = 20_000_000
+
+
+def is_image(att: dict) -> bool:
+    return (att.get("mimetype") or mimetypes.guess_type(att.get("title") or "")[0] or "").startswith("image/")
+
+
+def is_attachment_image_url(url) -> bool:
+    """https on ClickUp's attachment host (no credentials/port) with an image extension."""
+    if not isinstance(url, str):
+        return False
+    try:
+        u = urlparse(url.replace(" ", "%20"))
+        return (u.scheme == "https" and u.port is None and not u.username
+                and (u.hostname or "").endswith(".clickup-attachments.com")
+                and unquote(u.path).lower().endswith(IMAGE_EXTENSIONS))
+    except ValueError:  # malformed link (bad port, broken IPv6 host): not ours
+        return False
+
+
+def image_urls(node) -> list[str]:
+    """Attachment image URLs in a description delta or comment parts: `image` embeds/parts
+    (string or {url}) and `link` attributes pointing at an attachment image, in order."""
+    found = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            url = (v.get("url") if isinstance(v, dict) else v) if k in ("image", "link") else None
+            if is_attachment_image_url(url):
+                found.append(url)
+            elif isinstance(v, (dict, list)):
+                found += image_urls(v)
+    elif isinstance(node, list):
+        for v in node:
+            found += image_urls(v)
+    return found
+
+
+def task_images(t: dict, thread: list[dict]) -> list[dict]:
+    """[{name, url, sources: ["description" | "attachments" | "comment ID" | "reply ID"]}], first seen first."""
+    found: dict[str, dict] = {}
+
+    def add(url: str, source: str, att: dict | None = None):
+        key = unquote(url.split("?")[0])
+        row = found.setdefault(key, {"name": Path(urlparse(key).path).name, "url": url, "sources": []})
+        if att:
+            row.update(name=att.get("title") or row["name"], url=_att_href(att), mimetype=att.get("mimetype"),
+                       size=att.get("size"))
+        if source not in row["sources"]:
+            row["sources"].append(source)
+
+    content = t.get("content") or "{}"
+    try:
+        delta = json.loads(content) if isinstance(content, str) else content
+    except ValueError:
+        delta = {}
+    for url in image_urls(delta):
+        add(url, "description")
+    for att in t.get("attachments", []):
+        if not att.get("is_folder") and is_image(att) and is_attachment_image_url(_att_href(att)):
+            add(_att_href(att), "attachments", att)
+    for root in thread:
+        for c in [root, *root.get("replies", [])]:
+            for url in c.get("images", []):
+                add(url, f"{'comment' if c is root else 'reply'} {c['id']}")
+    return list(found.values())
+
+
+def download_images(images: list[dict], directory: str | None, task_id: str) -> list[dict]:
+    """Fetch the listed images (ClickUp attachment host only, no token, no redirects, ≤ 20 MB, image
+    bytes only) so an agent can open them with native vision. Skips are reported, never fatal."""
+    d = Path(directory or f"/tmp/cu-{task_id}")
+    d.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for i, img in enumerate(images, 1):
+        if not is_attachment_image_url(img["url"]):
+            saved.append({**img, "skipped": "not a ClickUp attachment image URL"})
+            continue
+        try:
+            with requests.get(img["url"], timeout=60, stream=True, allow_redirects=False) as r:
+                ctype = r.headers.get("Content-Type", "")
+                if not r.ok or not ctype.startswith("image/"):
+                    saved.append({**img, "skipped": f"HTTP {r.status_code} {ctype}".strip()})
+                    continue
+                data = b""
+                for chunk in r.iter_content(1 << 16):
+                    data += chunk
+                    if len(data) > IMAGE_MAX_BYTES:
+                        break
+        except requests.RequestException as e:
+            saved.append({**img, "skipped": type(e).__name__})
+            continue
+        if len(data) > IMAGE_MAX_BYTES:
+            saved.append({**img, "skipped": f"over {IMAGE_MAX_BYTES // 1_000_000} MB"})
+            continue
+        p = d / ("img-%02d-" % i + re.sub(r"[^\w.@ +-]", "_", img["name"]))
+        p.write_bytes(data)
+        saved.append({**img, "path": str(p), "bytes": len(data)})
+    for row in saved:
+        if "skipped" in row:
+            print(f"warning: image not downloaded ({row['skipped']}): {row['url']}", file=sys.stderr)
+    return saved
+
+
+def image_size(data: bytes) -> tuple[int, int] | None:
+    """(width, height) from a PNG/GIF/JPEG header, else None."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:4] == b"GIF8" and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    i = 2 if data[:2] == b"\xff\xd8" else len(data)
+    while i + 9 <= len(data) and data[i] == 0xFF:
+        marker, length = data[i + 1], int.from_bytes(data[i + 2:i + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):  # start of frame
+            return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+        i += 2 + length
+    return None
+
+
+def remote_image_size(url: str) -> tuple[int, int] | None:
+    """Header bytes of a ClickUp attachment (no token, no redirects) -> size; None when unknown."""
+    url = url.replace(" ", "%20")
+    if not is_attachment_image_url(url):
+        return None
+    try:
+        with requests.get(url, timeout=30, stream=True, allow_redirects=False,
+                          headers={"Range": "bytes=0-262143"}) as r:
+            data = b""
+            for chunk in r.iter_content(1 << 16) if r.ok else ():
+                data += chunk
+                if len(data) >= 262144:
+                    break
+    except requests.RequestException:
+        return None
+    return image_size(data)
+
+
 def download_looms(t: dict, thread: list[dict], directory: str | None) -> list[dict]:
     """Run scripts/loom.py for every Loom share URL in the body or discussion -> transcript + frames."""
     import subprocess
@@ -653,9 +794,13 @@ def pick_file(task: dict | None, name: str) -> dict:
     return newest
 
 
+def _att_href(att: dict) -> str:
+    return att["url"].replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+
+
 def _file_link(att: dict) -> str:
     text = att["title"].replace("[", "(").replace("]", ")")
-    return f"[{text}]({att['url'].replace(' ', '%20').replace(')', '%29')})"
+    return f"[{text}]({_att_href(att)})"
 
 
 def link_attachments(text: str | None, task: dict | None) -> str | None:
@@ -698,8 +843,9 @@ def link_attachments(text: str | None, task: dict | None) -> str | None:
 # `collect_media` runs BEFORE any write (missing file / render error fails closed), rewriting each to
 # `![[file:NAME]]`; `upload_media` attaches the files, then the usual `link_attachments` pre-pass
 # resolves them against the re-read task. `create` therefore creates first, uploads, then writes the
-# body. Comments degrade images to links (ClickUp comment parts have no image op).
-_LOCAL_IMAGE = re.compile(r"`[^`\n]+`|!\[(?P<alt>[^\]\n]*)\]\((?P<path>(?!https?://)[^)\s]+)\)")
+# body. Comments show an image that is a task attachment as a native image part (`image_part`);
+# any other image URL stays a link.
+_LOCAL_IMAGE = re.compile(r"`[^`\n]+`|!\[(?P<alt>[^\]\n]*)\]\((?P<path>(?!\s*<?https?://)[^)\n]+)\)")  # paths may hold spaces
 MERMAID_DIR = Path(os.environ.get("TMPDIR", "/tmp")) / "clickup-mermaid"
 
 
@@ -736,7 +882,7 @@ def collect_media(text: str | None) -> tuple[str | None, list[tuple[Path, str]]]
     def local(m):
         if not m["path"]:
             return m[0]  # code span
-        path = Path(unquote(m["path"])).expanduser().resolve()
+        path = Path(unquote(m["path"].strip().strip("<>"))).expanduser().resolve()
         if not path.is_file():
             sys.exit(f"local image not found: {m['path']} (resolved {path}); fix the path or use an https URL")
         if m[0] != m.string.strip():  # ClickUp shows an image only as its own block, never inline/in a list
@@ -923,7 +1069,8 @@ def task_mention_part(task_id: str) -> dict:
 # (`{"list": "bullet"}`, `{"code-block": "plain"}`) — verified by readback 2026-09-07 together with
 # bold · italic · strike · code · link · header · indent · blockquote · checklists.
 # Tables use the undocumented `table-embed` part the ClickUp UI writes (plain-text cells).
-# Dividers and images have no comment part: they degrade to a rule line / a link.
+# Images that are task attachments become the UI's `image` part (`image_part`, reference.md); other
+# image URLs and dividers have no comment part: they degrade to a link / a rule line.
 
 
 def _inline_parts(text: str) -> list[dict]:
@@ -938,8 +1085,9 @@ def _inline_parts(text: str) -> list[dict]:
     return parts
 
 
-def comment_parts(text: str) -> list[dict]:
-    """Same markdown as `md_to_delta`, emitted as ClickUp structured comment parts."""
+def comment_parts(text: str, images: dict[str, dict] | None = None) -> list[dict]:
+    """Same markdown as `md_to_delta`, emitted as ClickUp structured comment parts.
+    ``images`` maps an image URL to its task attachment: those show inline, others as a link."""
     parts: list[dict] = []
     events = _md_blocks(text.replace("\r\n", "\n"))
     for i, event in enumerate(events):
@@ -958,7 +1106,8 @@ def comment_parts(text: str) -> list[dict]:
         elif kind == "divider":
             parts.append({"text": "─" * 24 + ("" if last else "\n")})
         elif kind == "image":
-            parts.append({"text": event[1], "attributes": {"link": event[1]}})
+            att = (images or {}).get(event[1])
+            parts.append(image_part(att) if att else {"text": event[1], "attributes": {"link": event[1]}})
             if not last:
                 parts.append({"text": "\n"})
     return parts or [{"text": ""}]
@@ -1015,6 +1164,9 @@ def render(comment: dict) -> str:
             return part.get("text") or f"[[{part.get('task_mention', {}).get('task_id', 'task')}]]"
         if part.get("type") == "table-embed":
             return table_markdown(part["table-embed"])
+        if part.get("type") == "image":
+            img = part.get("image") or {}
+            return f"![{img.get('title') or part.get('text') or ''}]({img.get('url', '')})"
         text, link = part.get("text", ""), (part.get("attributes") or {}).get("link")
         if not text and part.get("type"):
             return f"[{part['type']}]"  # unknown non-text part: visible, never silently empty
@@ -1066,20 +1218,30 @@ def ai_marked(parts: list[dict]) -> list[dict]:
 
 
 def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, quiet: bool = False,
-                 prefix: str | None = None, reply_to: str | None = None, ai: bool = True):
+                 prefix: str | None = None, reply_to: str | None = None, ai: bool = True,
+                 attachments: list[dict] = ()):
     """``prefix`` puts the mention at the TOP: ``<prefix> @mention\n<text>`` (e.g. "# Review").
     ``reply_to`` = thread root comment id: post as a threaded reply instead of a task comment.
-    ``ai`` = the text is agent-written: lead with ✨ (``--no-ai-label`` for a human's own words)."""
+    ``ai`` = the text is agent-written: lead with ✨ (``--no-ai-label`` for a human's own words).
+    ``attachments`` = the task's: an image line pointing at one shows inline."""
+    images = {_att_href(a): a for a in attachments if is_image(a)}
     if mention and prefix is not None:
         parts: list[dict] = ([{"text": prefix + " "}] if prefix else []) + [
             {"type": "tag", "user": {"id": mention}}]
         # Separator as its own part: comment_parts trims leading whitespace, which glued the mention
         # to the first word ("@Firstname Lastname jij").
-        parts += [{"text": "\n" if prefix else " "}] + comment_parts(text)
+        parts += [{"text": "\n" if prefix else " "}] + comment_parts(text, images)
     else:
-        parts = comment_parts(text.rstrip() + " " if mention else text)
+        parts = comment_parts(text.rstrip() + " " if mention else text, images)
         if mention:
             parts.append({"type": "tag", "user": {"id": mention}})
+    for part in parts:  # without its natural size the UI crops an image to a 300x230 tile
+        if part.get("type") == "image" and not part["attributes"].get("data-natural-width"):
+            size = remote_image_size(part["image"]["url"])
+            if size:
+                part["image"].update(width=size[0], height=size[1])
+                part["attributes"].update({"width": str(min(300, size[0])), "data-natural-width": str(size[0]),
+                                           "data-natural-height": str(size[1])})
     if ai:
         parts = ai_marked(parts)
     base =f"/comment/{reply_to}/reply" if reply_to else f"/task/{task_id}/comment"
@@ -1099,6 +1261,9 @@ def post_comment(task_id: str, text: str, mention: int | None, as_json: bool, qu
         sys.exit(f"comment posted WITHOUT a real mention: {render(posted)!r}")
     if expected_tasks - actual_tasks:
         sys.exit(f"comment posted WITHOUT a real task mention: {render(posted)!r}")
+    expected_images = sum(p.get("type") == "image" for p in parts)
+    if sum(p.get("type") == "image" for p in posted["comment"]) != expected_images:
+        sys.exit(f"comment posted WITHOUT its {expected_images} inline image(s): {render(posted)!r}; do not retry posting")
     if quiet:
         return
     out(posted if as_json else {"id": posted["id"], "text": render(posted), "mention": has_tag},
@@ -1254,12 +1419,13 @@ def chat_upload(jwt: str, channel: str, filename: str) -> dict:
                         files={"attachment": (path.name, stream, mime)})
 
 
-def chat_image_part(att: dict, width: int = 300) -> dict:
-    """Structured comment part the web app writes for an inline chat image."""
-    url = att["url"]
-    return {"type": "image", "text": att["name"],
-            "image": {"id": att["id"], "name": att["name"], "title": att.get("title", att["name"]),
-                      "type": att.get("extension", ""), "extension": mimetypes.guess_type(att["name"])[0] or "",
+def image_part(att: dict, width: int = 300) -> dict:
+    """Structured comment part the web app writes for an inline image (chat message or task comment).
+    ``att``: an upload response or a task's `attachments` row (no name/size there)."""
+    url, name = att["url"], att.get("name") or att.get("title") or att["id"]
+    return {"type": "image", "text": name,
+            "image": {"id": att["id"], "name": name, "title": att.get("title", name),
+                      "type": att.get("extension", ""), "extension": mimetypes.guess_type(name)[0] or "",
                       "thumbnail_large": att.get("thumbnail_large", url), "thumbnail_medium": att.get("thumbnail_medium", url),
                       "thumbnail_small": att.get("thumbnail_small", url), "url": url, "uploaded": True},
             "attributes": {"width": str(min(width, att.get("width") or width)), "data-id": att["id"],
@@ -1289,7 +1455,7 @@ def chat_post(ref: str, text: str, images: list[str], chrome_profile: str | None
         atts = [chat_upload(jwt, channel, f) for f in images]
         parts = comment_parts(text) + [{"text": "\n"}] if text.strip() else []
         for att in atts:
-            parts += [chat_image_part(att), {"text": "\n"}]
+            parts += [image_part(att), {"text": "\n"}]
         created = chat_post_private(jwt, channel, root, parts, [a["id"] for a in atts])
     else:
         body = {"type": "message", "content_format": "text/md", "content": text}
@@ -1466,6 +1632,9 @@ def cmd_task(a):
         thread = result["discussion"] = discussion(raw)
         if a.comments:
             result["comments"] = raw
+    images = task_images(t, thread)
+    if images:
+        result["images"] = download_images(images, a.dir, a.id) if a.download_images else images
     if a.download_attachments:
         result["downloaded"] = download_attachments(t, a.dir)
     if a.download_looms:
@@ -1474,8 +1643,10 @@ def cmd_task(a):
 
 
 def comment_row(c: dict) -> dict:
-    return {"id": str(c["id"]), "date": iso_ms(c.get("date")),
-            "author": (c.get("user") or {}).get("username"), "text": render(c)}
+    row = {"id": str(c["id"]), "date": iso_ms(c.get("date")),
+           "author": (c.get("user") or {}).get("username"), "text": render(c)}
+    images = list(dict.fromkeys(image_urls(c.get("comment") or [])))
+    return row | ({"images": images} if images else {})
 
 
 def chronological(comments: list[dict]) -> list[dict]:
@@ -1637,10 +1808,10 @@ def cmd_comment(a):
     if a.mention_first is not None and not a.mention:
         sys.exit("--mention-first needs --mention ALIAS (it is a prefix, e.g. '# Review', not the recipient)")
     refuse_literal_mention(a.text, a.mention)
-    text, _ = with_media(a.text, a.id, get_task(a.id))
+    text, current = with_media(a.text, a.id, get_task(a.id))
     post_comment(a.id, text, user_id(a.mention) if a.mention else None, a.json, prefix=a.mention_first,
                  reply_to=comment_id_of(a.reply_to) if getattr(a, "reply_to", None) else None,
-                 ai=not getattr(a, "no_ai_label", False))
+                 ai=not getattr(a, "no_ai_label", False), attachments=current.get("attachments", []))
 
 
 def cmd_comments(a):
@@ -1662,7 +1833,8 @@ def cmd_handoff(a):
     text, current = with_media(a.text, a.id, current)
     if current["status"]["status"] != status:
         api("PUT", f"/task/{a.id}", data=json.dumps({"status": status}))
-    post_comment(a.id, text, mention, False, quiet=a.json, ai=not a.no_ai_label)
+    post_comment(a.id, text, mention, False, quiet=a.json, ai=not a.no_ai_label,
+                 attachments=current.get("attachments", []))
     read_back(a.id, a.json)
 
 
@@ -1686,7 +1858,8 @@ def cmd_review(a):
     api("PUT", f"/task/{a.id}", data=json.dumps({"status": status, "content": content}))
     verify_task_content(a.id, content)
     if a.comment:
-        post_comment(a.id, text, mention, False, quiet=a.json, prefix="", ai=not a.no_ai_label)
+        post_comment(a.id, text, mention, False, quiet=a.json, prefix="", ai=not a.no_ai_label,
+                     attachments=current.get("attachments", []))
     read_back(a.id, a.json)
 
 
@@ -1827,6 +2000,8 @@ def main(argv=None):
                                 help="metadata only: skip the discussion (routing previews, bulk scans)")
             thread.add_argument("--comments", action="store_true",
                                 help="also the raw API comment objects (the compact discussion is always included)")
+            s.add_argument("--download-images", action="store_true",
+                           help="fetch the listed images (body, sidebar, comments) to --dir for viewing")
             for flag in ("download-attachments", "download-looms"):
                 s.add_argument("--" + flag, action="store_true")
             s.add_argument("--dir")

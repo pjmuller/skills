@@ -43,8 +43,16 @@ becomes a `table-embed` part in the UI's shape (opaque row/column ids, `cells` k
 Column `width` is fixed px (no auto-fit): `_column_widths` sizes columns to their longest cell,
 short columns first, within ~840 px (body) / 480 px (comment panel). Cells carry paragraph inline
 markdown; an images-only cell holds `{"insert": {"image": url}}` ops shown at column width
-(verified in a description by readback + DOM, 2026-10-23; comments unverified). Dividers/images
-have no comment part: they degrade to a rule line / plain link.
+(verified in a description by readback + DOM, 2026-10-23; comments unverified). Dividers have no
+comment part: they degrade to a rule line.
+
+Comment images (undocumented; public docs list text/tag/emoticon only): the web app's
+`{"type": "image", "image": {id, title, url, thumbnail_*}, "attributes": {width, data-id,
+data-natural-width, data-natural-height}}` part (`image_part`), referencing a task attachment.
+Public v2 `POST /task/{id}/comment` and `/comment/{id}/reply` accept and render it (readback + UI,
+2026-10-28). Without the natural size the UI crops to a 300×230 tile; task GET rows carry no size,
+so `post_comment` reads it from the image header (`remote_image_size`, attachment host only, no
+token). Only attachments of the task become image parts; any other image URL stays a link.
 
 Description list/blockquote/code-block attributes are nested objects; comment attributes stay flat.
 Before parsing a new embed, write it in the UI and read it back through the API.
@@ -93,7 +101,7 @@ unstable like the v1 seam:
    attachment JSON. The frontdoor host is region-bound (`CHAT_FRONTDOOR`, override `[chat].frontdoor`).
 3. `POST {frontdoor}/comment-service/v3/workspaces/{ws}/comments/view/{channel}` (message, `type` 8)
    or `…/comments/comment/{root}` (thread reply, `parent=root`, `type` 2): `comment_parts(text)` +
-   `chat_image_part(att)` per image, plus `attachment_ids`.
+   `image_part(att)` per image, plus `attachment_ids`.
 
 Readback is public v3 (`![name](url)` per image); a count mismatch fails the command. A thread URL
 carries the message the pane was opened from, possibly a reply: `chat_root_of` walks the last 100

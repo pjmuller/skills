@@ -117,7 +117,7 @@ Description appends use ClickUp's private content seam and verify on readback, f
 - **Images and diagrams: just write them in the Markdown**, on `create` too. `![alt](./shot.png)`
   (local path, on its own line) is uploaded and shown inline; a ```mermaid block (≤8 boxes, product words) is
   rendered locally to PNG, uploaded and shown inline. stderr prints the PNG path: open it to check
-  the layout. Comments show them as links. First new diagram layout: ask the reader for a screenshot.
+  the layout. Comments and replies show them inline too. First new diagram layout: ask the reader for a screenshot.
 - `[[file:NAME]]` links an attachment already on the task, `![[file:NAME]]` shows it inline (also in
   a table cell); `attach` prints the right form. Unknown names fail before writing. Bare attachment
   filenames are auto-linked (ClickUp would make `x.md` a dead link).
@@ -125,8 +125,11 @@ Description appends use ClickUp's private content seam and verify on readback, f
   writes refuse that. Put code blocks before links, or files in a comment.
 - Screenshots belong next to the text they explain (`![](a.png)` per spot); `attach ID a.png b.png`
   only for a plain gallery. Real screenshots beat mockups.
-- `task ID --download-attachments` → `/tmp/cu-ID` (or `--dir`); the token never goes to media hosts.
-  Open screenshots yourself: the body shows only their remote URLs.
+- `task` lists `images`: every image in the body, the attachment sidebar and comments/replies,
+  each with `sources` (`description`, `attachments`, `comment ID`, `reply ID`). A URL is not seeing
+  it: when an image could change your answer, `task ID --download-images` (→ `/tmp/cu-ID` or `--dir`;
+  ClickUp attachment host only, no token, ≤ 20 MB) and open the `path`s with your image viewer.
+  `--download-attachments` fetches every file, videos included.
   `--download-looms` runs [scripts/loom.py](scripts/loom.py): read transcript AND frames, scrub
   screen data before sharing.
 - SyncUp calls: `uv run scripts/syncup.py URL`; token only, no `clickup.toml`; exit 75 = not

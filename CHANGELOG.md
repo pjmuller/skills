@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28 — clickup-core: images inline in comments, images readable on demand
+
+- Comments, replies, `handoff` and `review --comment` show local images, mermaid diagrams and `![[file:NAME]]` inline (the web app's `image` part on a task attachment, sized from the image header) instead of a bare attachment URL. Other image URLs stay links; a readback missing an image fails. Local image paths may contain spaces (they used to post a broken `!link`). Why: a colleague's handoff showed four screenshots as plain links, by core design, not their mistake.
+- `task` now lists `images` (body, sidebar, comments, replies, with `sources`); `--download-images` fetches only those, from ClickUp's attachment host, no token, no redirects, ≤ 20 MB each, image bytes only. Why: a URL in the JSON let an agent think it had seen a screenshot; `--download-attachments` also pulled 200 MB videos.
+
 ## 2026-10-28 — clickup-core: full reply threads, paged
 
 - `task` (and `comments --thread`) page threaded replies with the same `start` + `start_id` cursor as task comments until the root's `reply_count` is reached (the reply endpoint documents no paging but honours the cursor, checked live). Roots and replies sort by date, then id. Why: a ticket's full thread is part of reading it; one unpaged call could cut a long thread.

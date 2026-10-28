@@ -35,7 +35,7 @@ class ImagePartTests(unittest.TestCase):
     def test_part_mirrors_web_app_shape(self):
         att = {"id": "abc.png", "name": "x.png", "url": "https://h/x.png", "width": 1122, "height": 1402,
                "extension": "png", "thumbnail_small": "https://h/s.png"}
-        part = MODULE["chat_image_part"](att)
+        part = MODULE["image_part"](att)
         self.assertEqual(part["type"], "image")
         self.assertEqual(part["image"]["id"], "abc.png")
         self.assertEqual(part["image"]["extension"], "image/png")
