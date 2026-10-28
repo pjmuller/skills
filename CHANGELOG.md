@@ -2,7 +2,8 @@
 
 ## 2026-10-28 — whatsapp-voice-intake: transcriber knows the purpose and your vocabulary
 
-- The transcriber now gets the note's purpose (a note-to-self a dispatcher will route; still verbatim, hesitations kept) and an optional `vocabulary` Markdown file from the wrapper (terms + how dictation mishears them), re-read per note. `whatsapp-bridge` `transcribe_audio(path, hint, context)` gains the `context` section. Why: on a synthetic Flemish clip with 10 product/model/people terms, no hint got 6 wrong ("Camp Compass", "Solveigh", "Mabox"), a one-line names hint 1, purpose + vocabulary 0.
+- WhatsApp voice transcripts (bridge prompt, every caller) now leave out filler sounds (eh, ehm), stutters, repetitions and false starts; content stays verbatim, unsummarised and in order. Why: for an agent reading the transcript they are noise.
+- The transcriber now gets the note's purpose (a note-to-self a dispatcher will route; still verbatim) and an optional `vocabulary` Markdown file from the wrapper (terms + how dictation mishears them), re-read per note. `whatsapp-bridge` `transcribe_audio(path, hint, context)` gains the `context` section. Why: on a synthetic Flemish clip with 10 product/model/people terms, no hint got 6 wrong ("Camp Compass", "Solveigh", "Mabox"), a one-line names hint 1, purpose + vocabulary 0.
 
 ## 2026-10-28 — bitwarden: Sends default to 14 days, still one view
 

@@ -14,8 +14,9 @@ MAX_CONTEXT_CHARS = 12_000
 TRANSCRIBE = Path(__file__).resolve().parents[2] / "video-shrink-for-gemini" / "scripts" / "transcribe-gemini"
 VOICE_PROMPT = """# WhatsApp voice note
 
-Transcribe this WhatsApp voice note verbatim in its spoken language; do not translate, summarise or fix
-grammar. Plain paragraphs, no speaker labels or timestamps. Keep numbers, names and hesitations.
+Transcribe this WhatsApp voice note verbatim in its spoken language; do not translate, summarise, reorder or
+fix grammar. Plain paragraphs, no speaker labels or timestamps. Keep every number and name. Leave out filler
+sounds (eh, ehm), stutters, repetitions and abandoned false starts: they are noise, not content.
 Mark uncertain words with (?) right after them and unintelligible parts as [inaudible].
 Reply with the transcript only.
 """

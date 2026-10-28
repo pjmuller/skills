@@ -31,8 +31,11 @@ download, `transcribe-gemini` ≈ $0.004/min), [t3-relay](../t3-manage-thread/re
   the capture; never a second task. A new voice note always starts its own capture.
 - **Floor**: notes before the seed (or before `now - 6 h` once caught up) are never imported; the 6 h trail
   catches history that syncs late.
-- **Transcription** once per note, verbatim, with the purpose (`CONTEXT`: a note-to-self a dispatcher will
-  route) and the wrapper's `hint` + `vocabulary` file. On a synthetic Flemish clip with 10 product/model/people
+- **Transcription** once per note. Every note's prompt = the bridge's verbatim rules (spoken language, no
+  summary or reordering; filler sounds, stutters and false starts dropped as noise) + the purpose (`CONTEXT`:
+  a note-to-self a dispatcher will route, used only to recognise words) + the wrapper's `hint` and its
+  `vocabulary` file, re-read for each note so an added term applies to the next one. Knowing the destination
+  and the speaker's vocabulary is the point: the router acts on names it must recognise. On a synthetic Flemish clip with 10 product/model/people
   terms: no hint 6 wrong, a one-line names hint 1, purpose + vocabulary with known mishearings 0. Failures retry after 5/15/60 min, then the note is delivered marked
   "transcription failed" (never silently dropped). A transcript a crash left beside the audio is reused, not
   re-bought. Daily cap `daily_audio_minutes` holds further paid calls.

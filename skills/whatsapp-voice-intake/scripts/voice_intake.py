@@ -45,8 +45,7 @@ VOICE_TEXT = re.compile(r"\[(voice note|audio) (\d+)s\]")
 CONTEXT = ("A note-to-self dictated on the go. It usually describes a task, idea or question for software, "
            "AI-agent or company work; a dispatcher thread will route it to the right project. Mixed languages "
            "and English technical terms inside other-language sentences are normal: keep each word as spoken. "
-           "Use this only to recognise words: still keep hesitations (eh, ehm), repetitions and false starts; "
-           "do not summarise, reorder, clean up or turn it into a task list.")
+           "Use this only to recognise words: do not summarise, reorder or turn it into a task list.")
 
 
 class Unavailable(Exception):
