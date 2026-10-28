@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28 — clickup-core: reading a task includes its discussion
+
+- `task ID` now returns `{"task", "discussion"}`: every comment oldest first with threaded replies nested, each `{id, date (ISO UTC), author, text}`; text keeps mentions, link targets and tables. A thread the API returns short carries `replies_missing` plus a stderr warning instead of dropping replies. Why: agents read tickets without comments and missed decisions made there (a live ticket's latest comment said only one item remained).
+- `--no-comments`: metadata only, no comment API call (routing previews, bulk scans; with `--download-looms` only the body is scanned). `--comments` still adds the raw API objects under `comments`; the two flags are mutually exclusive. Callers that passed `--comments` keep working.
+
 ## 2026-10-28 — agents-md template: deeper, not bigger
 
 - `global-template.md`: the 80/20 line now asks for a top practitioner's methods (unfamiliar ground → look up current best practice, how others solved it) on the evidence that could change the answer, and lists what they'd add beyond the ask without building it. The verify line picks evidence outside the agent's or another model's judgment that could expose a wrong result (test, real run, primary source, reconciliation). Why: in one maintainer's last 30 days of prompts, "look up best practice" was typed 31×, "real data/runs" 8× and "did you actually…?" 6×, i.e. agents went for depth only when told to. Opus analysis plus an independent Astra check; wording merged from both.

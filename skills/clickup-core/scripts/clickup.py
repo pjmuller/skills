@@ -1028,10 +1028,22 @@ def table_markdown(table: dict) -> str:
     keys = [tuple(map(int, k.split(":"))) for k in cells]
     if not keys:
         return "[table]"
+    def op_text(op):
+        ins, link = op.get("insert"), (op.get("attributes") or {}).get("link")
+        if isinstance(ins, str):
+            return f"[{ins}]({link})" if link and link != ins.strip() else ins
+        kind, val = next(iter(ins.items())) if isinstance(ins, dict) and ins else ("embed", None)
+        if kind == "user_mention":
+            return f"@{val.get('name') or val.get('id')}"
+        if kind == "task_mention":
+            return f"[[{val.get('task_id')}]]"
+        if kind == "image":
+            return f"![]({val})"
+        return f"[{kind}]"  # unknown embed: visible, never silently empty
+
     def cell(r, c):
         ops = (cells.get(f"{r}:{c}") or {}).get("content") or []
-        text = "".join(o["insert"] for o in ops if isinstance(o.get("insert"), str))
-        return " ".join(text.split()).replace("|", "\\|")
+        return " ".join("".join(map(op_text, ops)).split()).replace("|", "\\|")
     rows, cols = max(r for r, _ in keys), max(c for _, c in keys)
     lines = ["| " + " | ".join(cell(r, c) for c in range(1, cols + 1)) + " |" for r in range(1, rows + 1)]
     return "\n".join([lines[0], "|" + "---|" * cols, *lines[1:]]) + "\n"

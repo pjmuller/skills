@@ -455,6 +455,13 @@ class TaskDiscussionTests(unittest.TestCase):
         self.assertEqual(MODULE["render"]({"comment": parts}),
                          "| Item | State |\n|---|---|\n| Ship | blocked |\n\nafter")
         self.assertEqual(MODULE["render"]({"comment": [{"type": "frame"}]}), "[frame]")
+        cells = {"1:1": {"content": [{"insert": {"user_mention": {"id": 102, "name": "Sam Example"}}}]},
+                 "1:2": {"content": [{"insert": {"task_mention": {"task_id": "abc123"}}}]},
+                 "1:3": {"content": [{"insert": "Loom", "attributes": {"link": "https://www.loom.com/share/abc"}}]},
+                 "1:4": {"content": [{"insert": {"image": "https://x.test/a.png"}}, {"insert": "\n"}]}}
+        rich = [{"type": "table-embed", "table-embed": {"cells": cells}}]  # cell ops as comment_parts writes them
+        self.assertEqual(MODULE["render"]({"comment": rich}).splitlines()[0],
+                         "| @Sam Example | [[abc123]] | [Loom](https://www.loom.com/share/abc) | ![](https://x.test/a.png) |")
 
     def test_no_comments_with_looms_scans_body_only(self):
         g = MODULE["cmd_task"].__globals__
