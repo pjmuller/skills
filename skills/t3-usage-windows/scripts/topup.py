@@ -220,8 +220,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         log(f"all windows fresh, nothing to do{note}")
         return 0
 
-    # Separate starts so a failing Claude profile never re-fires the once-a-day ones.
-    batches = [(label, ids) for label, ids in (("stale", stale), ("morning", due)) if ids]
+    # Record each accepted morning launch separately: one exhausted/broken account
+    # must not cause the successful accounts to launch again on every tick.
+    batches = [("stale", stale)] if stale else []
+    batches.extend(("morning", [instance]) for instance in due)
     code = 0
     for label, ids in batches:
         command = [str(CLI), "start", "--profile", ",".join(ids)]

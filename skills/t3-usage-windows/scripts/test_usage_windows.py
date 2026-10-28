@@ -101,6 +101,32 @@ def test_topup_morning_start_fires_once_per_day(tmp_path, monkeypatch):
     assert topup.main(['run']) == 0 and len(calls) == 2  # next day
 
 
+def test_topup_failed_account_does_not_repeat_successful_morning_launches(tmp_path, monkeypatch):
+    monkeypatch.setattr(topup, 'LOG', tmp_path / 'log')
+    monkeypatch.setattr(topup, 'STATE', tmp_path / 'state.json')
+    monkeypatch.setattr(topup, 't3_up', lambda: True)
+    monkeypatch.setattr(topup, 'datetime', SimpleNamespace(
+        now=lambda tz=None: datetime(2026, 9, 12, 5, 3, tzinfo=tz)))
+    monkeypatch.setattr(topup, 'limits_rows', lambda: [
+        {'instance_id': instance, 'window': 'weekly', 'resets_in_seconds': 9000}
+        for instance in ['codex_exhausted', 'codex_ready', 'codex_other']])
+    calls = []
+
+    def launch(command, **kwargs):
+        instance = command[-1]
+        calls.append(instance)
+        return SimpleNamespace(returncode=1 if instance == 'codex_exhausted' else 0,
+                               stdout='', stderr='')
+
+    monkeypatch.setattr(topup.subprocess, 'run', launch)
+    assert topup.main(['run', '--ignore-hours']) == 1
+    assert calls == ['codex_exhausted', 'codex_ready', 'codex_other']
+    assert set(topup.load_started()) == {'codex_ready', 'codex_other'}
+    calls.clear()
+    assert topup.main(['run', '--ignore-hours']) == 1
+    assert calls == ['codex_exhausted']
+
+
 def test_start_relays_one_cheap_turn_per_profile(tmp_path):
     config = tmp_path / 'userdata/settings.json'
     config.parent.mkdir()
@@ -126,7 +152,9 @@ def test_start_relays_one_cheap_turn_per_profile(tmp_path):
     assert claude[claude.index('--model') + 1] == 'haiku'
     assert claude[claude.index('--effort') + 1] == 'low'
     assert claude[claude.index('--title') + 1] == 'Warm-up — Team'
-    assert 't3_thread_organize settle' in claude[claude.index('--') + 1]
+    prompt = claude[claude.index('--') + 1]
+    assert prompt == 'Reply only: ok.'
+    assert claude[claude.index('--settle-after-run') + 1] == '90'
     result = run('--profile', 'disabled', '--dry-run', '--json')
     assert result.returncode == 1
     assert not json.loads(result.stdout)['ok']

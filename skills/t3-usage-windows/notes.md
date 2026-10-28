@@ -10,8 +10,11 @@
   15–25 s (2026-09-09).
 - Launchd, not in-thread timers: idle-sleep and T3's session reaper kill in-memory timers
   (2026-09-05/07).
-- Warm-ups go through `t3-relay`: async, no thread id back, so `start` can't verify the turn;
-  check `status` a minute later. The project must be a registered T3 project.
+- Warm-ups use `t3-relay --settle-after-run 90`: the launcher waits and settles a completed
+  first run through MCP, without relying on the model to discover a tool. Failed, unfinished,
+  snoozed or repurposed threads stay open. Launch acceptance remains successful if cleanup
+  fails, so cleanup errors don't relaunch an account. `status` shows quota windows.
+  The project must be a registered T3 project.
 - Log: `~/.t3/userdata/logs/t3-usage-windows-topup.log`.
 - `reset` uses Codex CLI's experimental app-server methods `account/rateLimits/read` and
   `account/rateLimitResetCredit/consume` (verified 0.155.0). No public HTTP API; fail when credit

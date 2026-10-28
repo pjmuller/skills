@@ -294,3 +294,57 @@ def test_launch_follows_user_default_runtime_mode(tmp_path, monkeypatch):
     assert relay.runtime_mode() == "auto"
     (tmp_path / "settings.json").write_text('{"defaultRuntimeMode": "bogus"}')
     assert relay.runtime_mode() == "full-access"
+
+
+@pytest.mark.parametrize("status, changes, cleanup_error, should_settle", [
+    ("completed", {}, None, True),
+    ("failed", {}, None, False),
+    ("completed", {"runCount": 2}, None, False),
+    ("completed", {"activeRunId": "run:new"}, None, False),
+    ("completed", {"pendingRequestCount": 1}, None, False),
+    ("completed", {"snoozed": True}, None, False),
+    ("completed", {"archived": True}, None, False),
+    ("completed", {"settled": True}, None, False),
+    ("completed", None, None, False),  # malformed thread reply after acceptance
+    ("completed", {}, SystemExit(1), True),  # T3 rejects a raced user message
+    ("completed", {}, relay.Unknown("answer lost"), True),
+])
+def test_probe_settlement_keeps_launch_accepted(posted, monkeypatch, capsys,
+                                               status, changes, cleanup_error, should_settle):
+    state = {"runCount": 1, "status": "completed", "activeRunId": None,
+             "pendingRequestCount": 0, "settled": False, "snoozed": False, "archived": False, **(changes or {})}
+
+    def call(tool, args):
+        posted.fake.calls.append((tool, args))
+        if tool == "t3_thread_launch":
+            return {"threadId": "mcp:new"}
+        if tool == "t3_thread_wait":
+            assert 0 < args["timeoutMs"] <= 50_000
+            return {"status": status, "timedOut": False}
+        if tool == "t3_thread_read":
+            return {"thread": None if changes is None else state}
+        assert tool == "t3_thread_organize"
+        assert args == {"action": "settle", "threadId": "mcp:new"}
+        if cleanup_error:
+            raise cleanup_error
+        return {}
+
+    monkeypatch.setattr(posted.fake, "call", call)
+    posted("launch", "--project", "/r", "--title", "probe", "--model", "sol",
+           "--settle-after-run", "90", "--", "ok")
+    assert posted.code is None and posted.record["outcome"] == "ok"
+    assert any(tool == "t3_thread_organize" for tool, _ in posted.fake.calls) == should_settle
+    output = capsys.readouterr().out
+    assert output.startswith("accepted: relay ")
+    assert ("settled: mcp:new" in output) == (not cleanup_error and (should_settle or state["settled"]))
+
+
+def test_probe_settlement_timeout_does_not_cancel_or_settle(monkeypatch):
+    clock = iter([0, 0, 50, 90])
+    monkeypatch.setattr(relay.time, "monotonic", lambda: next(clock))
+    fake = FakeMcp(result={"status": "running", "timedOut": True})
+    assert relay.settle_after_run(fake, "mcp:new", 90).startswith("left open:")
+    assert fake.calls == [
+        ("t3_thread_wait", {"threadId": "mcp:new", "timeoutMs": 50_000}),
+        ("t3_thread_wait", {"threadId": "mcp:new", "timeoutMs": 40_000}),
+    ]

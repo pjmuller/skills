@@ -21,9 +21,16 @@ t3-relay check                      # T3 reachable, MCP client approved, legacy 
   routing (other providers keep the named account); `--effort` overrides house effort.
 - **Launches** run in the user's new-thread permission default (`defaultRuntimeMode`, e.g. Auto; unset →
   `full-access`) at the project root.
+- **Probe cleanup:** `launch --settle-after-run SECS` waits for a completed, untouched first run,
+  then settles it via MCP. Use only for warm-ups/probes where a completed turn is the whole task;
+  it does not judge the answer. Failed, unfinished, snoozed or repurposed threads stay open.
+  Cleanup errors leave launch acceptance successful (no duplicate retry). Lost launch responses
+  skip cleanup. Mutually exclusive with `--settle-when-done`, whose agent judges real work.
 - **Output contract** (callers parse it): exit 0 prints `accepted: relay <rid> via mcp (<threadId>)` and
   the thread/message exists (`--wait` adds `ok <threadId>`). Exit 1 = T3 refused or unreachable, nothing
-  ran, retry is safe. Exit 2 = usage. Lost answer (timeout after sending): still `accepted`; `status`
+  ran. `--settle-after-run` adds `settled: <threadId>` or `left open: <reason>: <threadId>` after
+  acceptance; cleanup failure keeps exit 0. Exit 1 means retry is safe. Exit 2 = usage.
+  Lost answer (timeout after sending): still `accepted`; `status`
   decides by the effect (thread with that title since the request / message `clientRequestId
   relay-<rid>`), absent after 10 min = `failed`. With `--wait` that case exits 3 while unresolved: don't
   retry. Records: `~/.t3/userdata/t3-relay/` (7 days).

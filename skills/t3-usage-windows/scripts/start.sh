@@ -6,7 +6,7 @@ usage() {
 Usage: t3-usage-windows start [--dry-run] [--profile ID_OR_NAME[,...]]
 
 Launches one cheap warm-up turn (Luna/Haiku, low effort) per enabled Codex and
-Claude profile via t3-relay; each warm-up thread settles itself.
+Claude profile via t3-relay; the relay settles each completed warm-up.
 
   --profile  exact instance ids first, else id/display-name substrings (comma list)
   --only     exact instance ids only ("codex", "claudeAgent", ...); unknown ids warn
@@ -118,14 +118,14 @@ warmup_project="$(git rev-parse --show-toplevel 2>/dev/null ||
   git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel 2>/dev/null ||
   { [[ "$PWD" != / ]] && pwd -P || printf '%s\n' "$HOME"; })"
 
-prompt="Reply only: ok. Then, as your last tool call, t3_thread_organize settle without threadId."
+prompt='Reply only: ok.'
 failures=0
 for provider_entry in "${providers[@]}"; do
   IFS=$'\t' read -r profile label driver <<< "$provider_entry"
   model=haiku
   [[ "$driver" == codex ]] && model=luna
   command=(t3-relay launch --project "$warmup_project" --instance "$profile" --model "$model"
-    --effort low --allow-small-model --title "Warm-up — $label" -- "$prompt")
+    --effort low --allow-small-model --settle-after-run 90 --title "Warm-up — $label" -- "$prompt")
   if ((dry_run)); then
     for arg in "${command[@]}"; do  # byte-safe shell quoting (printf %q mangles UTF-8 under LANG=C)
       [[ "$arg" =~ ^[A-Za-z0-9_./:=,-]+$ ]] && printf '%s ' "$arg" || printf "'%s' " "${arg//\'/\'\\\'\'}"
@@ -141,4 +141,4 @@ if ((failures)); then
   exit 1
 fi
 ((dry_run)) && verb="Would launch" || verb="Launched"
-printf '%s %d warm-up thread(s); each settles itself.\n' "$verb" "${#providers[@]}"
+printf '%s %d warm-up thread(s); relay settles completed turns, leaves failures open.\n' "$verb" "${#providers[@]}"

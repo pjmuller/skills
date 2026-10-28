@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28 — warm-ups: launcher-owned settlement, independent account retries
+
+- `t3-relay launch --settle-after-run SECS` waits and settles completed, untouched first runs. Warm-ups use it with 90 seconds instead of relying on the model to call a tool: small models sometimes replied without calling settle or falsely said it was unavailable. Failed, unfinished or repurposed threads stay open; cleanup errors never trigger duplicate launches.
+- Record each successful morning launch separately. One exhausted account previously failed the whole batch, relaunching the successful accounts every ten minutes.
+
 ## 2026-10-27 — bitwarden: Touch ID broker no longer mistakes a locked Mac for new fingerprints, shows progress, keeps slow Sends
 
 - Renewal (type master passwords) only when the enclave refuses **and** the enrolled-fingerprint hash differs from the one now saved at sealing; cancel, a locked Mac, a closed lid or lockout → "Touch ID did not complete", nothing released, no password window. Why: a request on PJ's locked Mac (lid closed, away) was refused instantly (`errSecInteractionNotAllowed`, AKS `e00002e2`, hash unchanged) and asked for the master passwords as if fingerprints had changed: phishing practice. Older seals gain the hash after their next good touch.

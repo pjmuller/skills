@@ -8,7 +8,8 @@
 Agents inside T3 never need this: they call the T3 MCP tools directly.
 
     t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
-                    [--allow-small-model] [--settle-when-done] [--wait SECS] -- PROMPT
+                    [--allow-small-model] [--settle-when-done | --settle-after-run SECS]
+                    [--wait SECS] -- PROMPT
     t3-relay send   --thread ID [--mode auto|queue|steer] [--wait SECS] -- MESSAGE
     t3-relay status RID   # ok <ids> | failed <why> | pending
     t3-relay check        # T3 reachable, MCP client approved
@@ -372,6 +373,38 @@ def cmd_check(base: str) -> None:
         print(f"  obsolete webhook relay host {task}: delete_scheduled_task it, settle its thread (relay.md)")
 
 
+def settle_after_run(mcp: Mcp, thread: str, seconds: int) -> str:
+    """Opt-in cleanup of a just-launched probe, never a sweep or semantic success check.
+    Launch acceptance remains successful even if cleanup fails: callers must not relaunch.
+    T3 atomically refuses outside settlement with active runs, queued input or pending requests.
+    """
+    deadline = time.monotonic() + seconds
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "left open: run did not finish within the settlement wait"
+            result = mcp.call("t3_thread_wait", {
+                "threadId": thread, "timeoutMs": max(1, int(min(50, remaining) * 1000))})
+            if not result.get("timedOut", False):
+                break
+        if result.get("status") != "completed":
+            return f"left open: run status {result.get('status', 'unknown')}"
+        state = mcp.call("t3_thread_read", {
+            "threadId": thread, "limit": 1, "maxCharsPerItem": 1, "runLimit": 1})["thread"]
+        if state.get("settled"):
+            return "settled"
+        if (state.get("runCount") != 1 or state.get("status") != "completed"
+                or state.get("activeRunId") is not None or state.get("pendingRequestCount") != 0
+                or state.get("snoozed") or state.get("archived")):
+            return "left open: thread changed or needs attention"
+        mcp.call("t3_thread_organize", {"action": "settle", "threadId": thread})
+        return "settled"
+    except (Exception, SystemExit) as exc:
+        # Even a malformed reply must not turn an accepted launch into a retry.
+        return f"left open: settlement unconfirmed ({type(exc).__name__})"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="t3-relay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -383,8 +416,11 @@ def main() -> None:
                     help="permit haiku/luna as the standalone thread's model (default: refused)")
     la.add_argument("--instance", help="provider instance id; default: t3-pick-instance MODEL")
     la.add_argument("--effort", help="reasoning effort option value")
-    la.add_argument("--settle-when-done", action="store_true",
+    settlement = la.add_mutually_exclusive_group()
+    settlement.add_argument("--settle-when-done", action="store_true",
                     help="append the completion footer: the thread settles itself after a clean delivery")
+    settlement.add_argument("--settle-after-run", type=int, metavar="SECS",
+                    help="for probes only: wait up to SECS, then settle a completed, untouched first run")
     se = sub.add_parser("send")
     se.add_argument("--thread", required=True)
     se.add_argument("--mode", default="auto", choices=["auto", "queue", "steer"])
@@ -398,6 +434,8 @@ def main() -> None:
     st.add_argument("--wait", type=float, default=0, metavar="SECS")
     sub.add_parser("check")
     a = ap.parse_args()
+    if a.cmd == "launch" and a.settle_after_run is not None and a.settle_after_run <= 0:
+        die("--settle-after-run must be positive", 2)
     if a.cmd == "launch" and not a.model and not a.instance and a.effort:
         die("--effort needs --model or --instance", 2)
     if a.cmd == "status":
@@ -444,9 +482,11 @@ def main() -> None:
     thread = result.get("threadId") or getattr(a, "thread", None) or "?"
     rec.update(outcome="ok", detail=thread)
     save(rec)
-    print(f"accepted: relay {rid} via mcp ({thread})")
+    print(f"accepted: relay {rid} via mcp ({thread})", flush=True)
     if a.wait:
         print(f"ok {thread}")
+    if a.cmd == "launch" and a.settle_after_run:
+        print(f"{settle_after_run(mcp, thread, a.settle_after_run)}: {thread}")
 
 
 if __name__ == "__main__":

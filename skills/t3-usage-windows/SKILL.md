@@ -11,10 +11,12 @@ Opening one early makes its reset come earlier; a turn inside an active window d
 `t3-usage-windows <verb>` (`--help` per verb):
 
 - `start`: one `t3-relay launch` per enabled Codex/Claude profile (Luna/Haiku, low effort,
-  `scripts/start.sh`); each warm-up thread settles itself. `--dry-run` prints the commands.
+  `scripts/start.sh`); the relay waits up to 90 seconds and settles completed, untouched first
+  runs. Failed, unfinished or repurposed threads stay open. `--dry-run` prints the commands.
 - `topup install|status|remove|run`: launchd tick every 10 min, 05:00–21:00 (`scripts/topup.py`).
   Expired session windows get `start`; accounts without a session window (Codex: weekly only) get
-  one turn per local day from 05:00. Needs T3 running; never wakes the Mac. Preview:
+  one turn per local day from 05:00. Successful morning launches are recorded per account,
+  so a failed account doesn't restart the others. Needs T3 running; never wakes the Mac. Preview:
   `topup run --dry-run [--ignore-hours]`.
 - `status`: quota windows (`t3-limits`).
 - `reset`: banked reset credits of the logged-in Codex account (`scripts/reset_credit.py`).
