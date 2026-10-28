@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28 — clickup-core: full reply threads, paged
+
+- `task` (and `comments --thread`) page threaded replies with the same `start` + `start_id` cursor as task comments until the root's `reply_count` is reached (the reply endpoint documents no paging but honours the cursor, checked live). Roots and replies sort by date, then id. Why: a ticket's full thread is part of reading it; one unpaged call could cut a long thread.
+
 ## 2026-10-28 — clickup-core: reading a task includes its discussion
 
 - `task ID` now returns `{"task", "discussion"}`: every comment oldest first with threaded replies nested, each `{id, date (ISO UTC), author, text}`; text keeps mentions, link targets and tables. A thread the API returns short carries `replies_missing` plus a stderr warning instead of dropping replies. Why: agents read tickets without comments and missed decisions made there (a live ticket's latest comment said only one item remained).

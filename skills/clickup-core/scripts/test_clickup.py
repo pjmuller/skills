@@ -386,16 +386,29 @@ class TaskDiscussionTests(unittest.TestCase):
         return {"id": str(cid), "date": str(date), "reply_count": replies, "user": {"username": user},
                 "comment": [{"text": text}], "comment_text": text}
 
+    def setUpStore(self, c1_reply_count=3):
+        c = self.comment
+        # Newest first, as ClickUp returns them. Roots span two task pages; two roots carry threads.
+        self.roots = ([c(f"n{i}", 1_700_001_000_000 - i) for i in range(24)]
+                      + [c("c1", 1_700_000_100_000, "root", replies=c1_reply_count),
+                         c("c0", 1_700_000_000_000, "see [demo]", replies=1)])
+        self.replies = {"c1": [c("r3", 1_700_000_400_000, "third"),
+                               c("r2", 1_700_000_300_000, "second", user="Sam Example"),
+                               c("r1", 1_700_000_200_000, "first")],
+                        "c0": [c("q1", 1_700_000_050_000, "answer")]}
+
     def fake_api(self, method, path, params=None, **kw):
+        if not hasattr(self, "roots"):
+            self.setUpStore()
         self.calls.append((path, dict(params or {})))
-        if path == "/comment/c1/reply":
-            return {"comments": [self.comment("r2", 1_700_000_300_000, "second", user="Sam Example"),
-                                 self.comment("r1", 1_700_000_200_000, "first")]}
-        if not params:  # page 1: 25 newest, the oldest of them repeats on page 2
-            return {"comments": [self.comment(f"n{i}", 1_700_001_000_000 - i) for i in range(24)]
-                    + [self.comment("c1", 1_700_000_100_000, "root", replies=2)]}
-        return {"comments": [self.comment("c1", 1_700_000_100_000, "root", replies=2),
-                             self.comment("c0", 1_700_000_000_000, "see [demo]")]}
+        def page(items, size, inclusive):
+            if params:  # cursor = (date, id) of the previous page's oldest item
+                i = next(i for i, x in enumerate(items) if x["id"] == params["start_id"])
+                items = items[i if inclusive else i + 1:]
+            return {"comments": items[:size]}
+        if path.startswith("/comment/"):
+            return page(self.replies[path.split("/")[2]], 2, inclusive=False)  # replies: exclusive cursor
+        return page(self.roots, 25, inclusive=True)  # task pages repeat the cursor comment
 
     def run_task(self, **flags):
         from contextlib import redirect_stdout
@@ -414,12 +427,17 @@ class TaskDiscussionTests(unittest.TestCase):
         self.assertNotIn("comments", out)
         self.assertEqual(len(thread), 26)  # both pages, the repeated cursor comment once
         self.assertEqual([c["id"] for c in thread[:2]], ["c0", "c1"])
-        self.assertEqual(thread[0], {"id": "c0", "date": "2023-11-14T22:13:20.000Z",
-                                     "author": "Alex Example", "text": "see [demo]"})
+        self.assertEqual(thread[0], {"id": "c0", "date": "2023-11-14T22:13:20.000Z", "author": "Alex Example",
+                                     "text": "see [demo]", "replies": [
+                                         {"id": "q1", "date": "2023-11-14T22:14:10.000Z",
+                                          "author": "Alex Example", "text": "answer"}]})
         self.assertEqual([(r["id"], r["author"]) for r in thread[1]["replies"]],
-                         [("r1", "Alex Example"), ("r2", "Sam Example")])
+                         [("r1", "Alex Example"), ("r2", "Sam Example"), ("r3", "Alex Example")])
+        self.assertTrue(all("replies" not in c and "replies_missing" not in c for c in thread[2:]))
         self.assertNotIn("replies_missing", thread[1])
-        self.assertEqual(self.calls[1][1], {"start": "1700000100000", "start_id": "c1"})
+        self.assertIn(("/task/t1/comment", {"start": "1700000100000", "start_id": "c1"}), self.calls)
+        self.assertEqual([p for path, p in self.calls if path == "/comment/c1/reply"],
+                         [{}, {"start": "1700000300000", "start_id": "r2"}])  # paged until 3 of 3
 
     def test_no_comments_is_metadata_only_and_never_calls_the_comment_api(self):
         self.assertEqual(self.run_task(no_comments=True), {"task": {"id": "t1", "name": "T", "content": {"ops": []}}})
@@ -431,18 +449,19 @@ class TaskDiscussionTests(unittest.TestCase):
         self.assertEqual(len(out["comments"]), 26)
         self.assertIn("discussion", out)
 
-    def test_short_reply_page_is_flagged_not_silently_dropped(self):
-        orig = self.fake_api
-        def api(method, path, params=None, **kw):
-            res = orig(method, path, params, **kw)
-            return {"comments": res["comments"][:1]} if path == "/comment/c1/reply" else res
-        MODULE["cmd_task"].__globals__["api"] = api
+    def test_unreachable_replies_are_flagged_not_silently_dropped(self):
+        self.setUpStore(c1_reply_count=4)  # ClickUp counts 4, the cursor walk can only reach 3
         from contextlib import redirect_stderr
         from io import StringIO
         with redirect_stderr(StringIO()) as err:
             root = self.run_task()["discussion"][1]
+        self.assertEqual([r["id"] for r in root["replies"]], ["r1", "r2", "r3"])
         self.assertEqual(root["replies_missing"], 1)
-        self.assertIn("reports 2 replies", err.getvalue())
+        self.assertIn("reports 4 replies", err.getvalue())
+
+    def test_same_timestamp_orders_by_id(self):
+        self.assertEqual([c["id"] for c in MODULE["chronological"](
+            [self.comment("b", 5), self.comment("a", 5), self.comment("z", 1)])], ["z", "a", "b"])
 
     def test_render_keeps_link_targets_and_mentions_in_part_order(self):
         c = {"comment": [{"type": "tag", "user": {"username": "Sam Example"}}, {"text": " see "},

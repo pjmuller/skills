@@ -1478,15 +1478,19 @@ def comment_row(c: dict) -> dict:
             "author": (c.get("user") or {}).get("username"), "text": render(c)}
 
 
+def chronological(comments: list[dict]) -> list[dict]:
+    return sorted(comments, key=lambda c: (int(c.get("date") or 0), str(c["id"])))
+
+
 def discussion(comments: list[dict]) -> list[dict]:
-    """Every comment oldest first, threaded replies nested: who, when, text in part order with link
+    """Every comment oldest first, full threads nested: who, when, text in part order with link
     targets. Comments often hold the decisions a body never got; raw parts stay behind --comments."""
     rows = []
-    for c in sorted(comments, key=lambda c: int(c.get("date") or 0)):
+    for c in chronological(comments):
         row, expected = comment_row(c), int(c.get("reply_count") or 0)
         if expected:
-            replies = api("GET", f"/comment/{c['id']}/reply")["comments"]
-            row["replies"] = [comment_row(r) for r in sorted(replies, key=lambda r: int(r.get("date") or 0))]
+            replies = fetch_replies(c["id"], expected)
+            row["replies"] = [comment_row(r) for r in chronological(replies)]
             if len(replies) < expected:  # never a silently partial thread
                 row["replies_missing"] = expected - len(replies)
                 print(f"warning: comment {c['id']} reports {expected} replies, API returned {len(replies)}",
@@ -1496,13 +1500,26 @@ def discussion(comments: list[dict]) -> list[dict]:
 
 
 def fetch_comments(tid):
-    """All task comments, newest first, following ClickUp's 25-per-page date cursor."""
+    """All task comments, newest first (pages of 25)."""
+    return comment_pages(f"/task/{tid}/comment", lambda batch, got: len(batch) < 25)
+
+
+def fetch_replies(cid, expected: int):
+    """All replies of a thread root (root excluded), newest first, until `reply_count` is reached."""
+    return comment_pages(f"/comment/{cid}/reply", lambda batch, got: len(got) >= expected)
+
+
+def comment_pages(path: str, done) -> list[dict]:
+    """Follow ClickUp's newest-first `start` + `start_id` cursor (exclusive). Documented for task
+    comments only; the reply endpoint honours it too (checked live 2026-10-28). A page with nothing
+    new ends the walk, so an ignored cursor can't loop."""
     comments, seen, params = [], set(), {}
     while True:
-        batch = api("GET", f"/task/{tid}/comment", params=params)["comments"]
-        comments += [c for c in batch if c["id"] not in seen]
-        seen.update(c["id"] for c in batch)
-        if len(batch) < 25:
+        batch = api("GET", path, params=params)["comments"]
+        new = [c for c in batch if c["id"] not in seen]
+        comments += new
+        seen.update(c["id"] for c in new)
+        if not new or done(batch, comments):
             return comments
         cursor = {"start": batch[-1]["date"], "start_id": batch[-1]["id"]}
         if cursor == params:
@@ -1633,7 +1650,7 @@ def cmd_comments(a):
         root = next((c for c in comments if str(c["id"]) == root_id), None)
         if root is None:
             sys.exit(f"comment {root_id} not found on task {a.id}")
-        comments = [root] + api("GET", f"/comment/{root_id}/reply")["comments"]
+        comments = [root] + chronological(fetch_replies(root_id, int(root.get("reply_count") or 0) or 1))
     out(comments, a.json)
 
 

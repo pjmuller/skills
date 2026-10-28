@@ -40,8 +40,9 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
 - `customers`, `--customer`: compatibility helpers for a configured list-relationship field.
 - `task` returns `{"task", "discussion"}`: every comment oldest first with threaded replies
   (author, ISO date, text with links and tables), since comments often hold the latest decision. Read it before
-  acting on the body. `--no-comments` = metadata only (routing previews, bulk scans); `--comments`
-  adds the raw API objects; `replies_missing` flags a thread the API returned short.
+  acting on the body. Both levels are paged to the end. `--no-comments` = metadata only, for a
+  deliberate routing preview or bulk scan, never when working a ticket; `--comments` adds the raw
+  API objects; `replies_missing` flags replies ClickUp counts but would not return.
 - Listing someone's work: `tasks --assignee X` pages to the end and groups by the status actually
   returned; never trust a server-side `--status` filter to drop finished work. Report the active
   queue (`[policy] active_statuses`, marked `*`) apart from backlog, skip closed, flag shared
