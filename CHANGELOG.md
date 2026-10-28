@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28 — agents-md template: deeper, not bigger
+
+- `global-template.md`: the 80/20 line now asks for a top practitioner's methods (unfamiliar ground → look up current best practice, how others solved it) on the evidence that could change the answer, and lists what they'd add beyond the ask without building it. The verify line picks evidence outside the agent's or another model's judgment that could expose a wrong result (test, real run, primary source, reconciliation). Why: in one maintainer's last 30 days of prompts, "look up best practice" was typed 31×, "real data/runs" 8× and "did you actually…?" 6×, i.e. agents went for depth only when told to. Opus analysis plus an independent Astra check; wording merged from both.
+
 ## 2026-10-28 — whatsapp-voice-intake: transcriber knows the purpose and your vocabulary
 
 - WhatsApp voice transcripts (bridge prompt, every caller) now leave out filler sounds (eh, ehm), stutters, repetitions and false starts; content stays verbatim, unsummarised and in order. Why: for an agent reading the transcript they are noise.

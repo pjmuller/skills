@@ -32,7 +32,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.
 - With skill `t3-maintenance`: a secret passed through a thread → `t3-thread-archive check` (stdin → `true`/`false`, never prints values) tells whether the archive would redact it. A miss → rule + synthetic regression test, PR to `pjmuller/skills` (its "A miss" steps). Settling redacts nothing: raw text stays in T3 until a purge.
 - Auto-mode denial or “this should be allowed” → skill `auto-mode-policy` and the private setup policy pointer. Use existing authorization; a scoped user correction authorizes its durable repair across configured profiles without another “go” or Full Access. Me switching to Full Access to clear a 🔓 counts as that correction: finish, then repair the rule unasked, worded as the broad intent (widen/merge, few north-star rules); data loss, production data, credentials, spend or private data → propose instead. No bypass through another tool; unresolved boundary → 🔓 name it once.
-- Pick the 80/20 cut and build it; list bigger options (what each adds), don't build them. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
+- Deeper, not bigger: build the 80/20 cut the way a top practitioner would: their methods (unfamiliar ground → look up current best practice, how others solved it) on the evidence that could change the answer (real data, runs, logs, primary sources). What they'd add beyond my ask → list it (what each adds), don't build it. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
 - External facts (pricing, features, versions, dates): verify on the web and cite.
 - Files for me → `~/Downloads`. Thread titles ≤5 words, no ticket IDs.
 - Charts/tables/mockups: `html_render` inline when T3 exposes it; mermaid fences render natively.
@@ -40,7 +40,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 
 ## Verify your own work
 - Frontend → browser; backend → tests covering the critical paths, not test-for-test.
-- Before a bigger task, check you can see each change's result yourself and iterate. Missing → first build minimal tooling (seed data, demo UI, renderer/diff on real cases, scheduled later check) so the result needs little human QA; flag it only when it's a chunk of work. A "can you check…" question to me is a defect.
+- Before a bigger task, pick evidence outside your own or another model's judgment that could expose a wrong result (test, real run, primary source, reconciliation); check you can see it yourself and iterate. Missing → first build minimal tooling (seed data, demo UI, renderer/diff on real cases, scheduled later check) so the result needs little human QA; flag it only when it's a chunk of work. A "can you check…" question to me is a defect.
 
 ## Docs are hints, not law
 AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-good path, not a constraint. See a better way → take it, propose a doc update. Same for my numbers/mechanisms and other models' reviews: restate the intent, pick the better mechanism, push back when I'm wrong. Not negotiable: safety limits and account/token routing.
