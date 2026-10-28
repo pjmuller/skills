@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-28 — bitwarden: Touch ID sheet names the request, no release to a gone caller, lookalike warning, prior art
+
+- macOS's Touch ID sheet now states the checked action (`release the password for H (alice)`, `list logins for H`, `create a one-view text Send in V`) instead of "approve the bw-once request shown on screen". Why: it is the one text no other app can draw, and a comparison of agent credential brokers showed the action belongs there.
+- A copy whose front end ended between the touch and the release (Ctrl-C, tool timeout) releases nothing; the session holder re-checks its expiry before delivering. Why: an independent review found the clipboard was still written although nobody would paste (Sends already had this check).
+- Hosts with an `xn--` label get a lookalike warning in the approval window and the Terminal, shown raw (decoding would hide the imitation).
+- New `bitwarden/prior-art.md`: comparable agent credential brokers and Touch ID CLIs with the version reviewed, what is worth borrowing and when to revisit (Bitwarden agent-access, official CLI biometrics, secretive, grantpin, agent-secret, briefcred…). None replaces bw-once.
+
 ## 2026-10-28 — public-footprint-audit: field-level check for official records
 
 - New `public-footprint-audit/official-records.md`, linked from SKILL.md and a per-field table in the report template. Before recommending anything for a gazette, filing or register entry, the auditor records the document type (original act vs published extract vs annual accounts), the jurisdiction and filing date, the person's role, and mandatory / optional / unknown per field, citing the provision it opened. A mandatory field is real exposure, not a removal finding. An optional one is a candidate for an erasure request to the publisher (C-231/22, C-200/23), with no promised outcome. Includes a verified Belgian worked table (WVV 2:8 §2, 2:7 §5, 3:12; notarial law art. 12) and a fictional example. Why: an audit flagged a whole company-incorporation extract as "high priority, ask the notary". The notary answered "identity is mandatory, publications never change". Both were too coarse: the law requires name and domicile, not the birth details, and an erasure route exists for fields the law doesn't require.

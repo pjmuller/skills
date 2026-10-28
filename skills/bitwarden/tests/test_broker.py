@@ -742,3 +742,23 @@ def test_no_send_once_the_front_end_is_gone(world):
     enroll(world)
     result, _ = send(world, extra_env={"BW_BROKER_TEST_CALLER_GONE": "1"})
     assert result["ok"] is False and "nothing created" in result["error"] and sent(world) == [] and world["locked"]("testa")
+
+
+def test_touch_sheet_names_the_checked_request_and_release_needs_a_live_caller(world):
+    enroll(world)
+    result, log = world["run"]("copy", host=HOST, field="password", username="alice", why="agent words")
+    touch = [line for line in log.splitlines() if line.startswith("touch: ")]
+    assert result["ok"] and touch == [f"touch: release the password for {HOST} (alice)"]
+    world["unclip"]()
+    result, _ = world["run"]("copy", host=HOST, field="password", username="alice",
+                             extra_env={"BW_BROKER_TEST_CALLER_GONE": "1"})
+    assert result == {"ok": False, "error": "The agent's command ended before the release; nothing released"}
+    assert world["clip"]() is None and all(world["locked"](name) for name in MASTER)
+
+
+def test_punycode_host_is_flagged_as_possible_lookalike(world):
+    enroll(world)
+    _, log = world["run"]("list", host="login.xn--80ak6aa92e.com")
+    assert "Lookalike?" in log and "touch: list logins for login.xn--80ak6aa92e.com (no secrets)" in log
+    _, log = world["run"]("list", host=HOST)
+    assert "Lookalike?" not in log

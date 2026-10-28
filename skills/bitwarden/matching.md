@@ -16,7 +16,8 @@ same contract (`tests/matching_cases.json`). Candidates come from an unfiltered 
 HTTP(S) and scheme-less saved URIs only. ASCII DNS / punycode; literal Unicode hosts, userinfo, backslashes,
 malformed ports and control characters fail closed. Base domain excludes IPs, local/unknown TLDs, single-label
 hosts and bare public suffixes; an explicit Host rule can match a validated local hostname/IP. A conservative
-subset of Bitwarden, not browser-autofill parity.
+subset of Bitwarden, not browser-autofill parity. A host with an `xn--` label is accepted but flagged as a
+possible lookalike in the approval window and Terminal (shown raw: decoding would hide the imitation).
 
 Examples: `google.com` → `accounts.google.com`; `example.co.uk` → `login.example.co.uk`. No match:
 `google.com.evil.com`, `evilgoogle.com`, another tenant on `github.io`/`pages.dev`/`vercel.app`; a saved Host rule

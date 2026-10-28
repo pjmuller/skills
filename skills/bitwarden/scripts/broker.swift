@@ -1436,11 +1436,25 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
                 ("Goes to", request.op != "copy" ? "the agent (metadata)" : request.to == "page"
                     ? "a page on https://\(request.host) only (one fetch within \(fillSeconds) s), not the clipboard"
                     : "clipboard, cleared after \(clipboardSeconds) s")]
+    if request.host.split(separator: ".").contains(where: { $0.hasPrefix("xn--") }) {
+        rows.append(("⚠ Lookalike?", "\(request.host) is an internationalized name (xn--): its letters can imitate "
+                     + "another site's. Approve only if you expected exactly this host."))
+    }
     if recopyAllowed(request) {
         rows.append(("Re-copies", "the same login's \(request.field) for this thread (page or clipboard), "
                      + "\(Int(recopySeconds / 60)) min, no touch (each one shown)"))
     }
     return rows
+}
+
+/// The text in macOS's own Touch ID sheet (the one part of the screen no other app can draw): the checked request
+/// (field, host, login filter; all validated in `parseRequest`), never the agent's `--why`/`--thread`.
+func touchReason(_ request: Request) -> String {
+    switch request.op {
+    case "send-text": return "create a one-view text Send in \(request.vaults.first?.name ?? "?") (see window)"
+    case "list": return "list logins for \(request.host) (no secrets)"
+    default: return "release the \(request.field) for \(request.host)" + (request.username.map { " (\($0))" } ?? "")
+    }
 }
 
 func recopyAllowed(_ request: Request) -> Bool {
@@ -1650,7 +1664,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     panel.line("Touch ID approves exactly the green box.", color: .secondaryLabelColor, size: 11)
 
     let context = LAContext()
-    context.localizedReason = "approve the bw-once request shown on screen"
+    context.localizedReason = touchReason(request)
     let gate = Gate()
     var serves: [Serve] = []
     var locks: [Int32] = []
@@ -1857,6 +1871,8 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             let phrase = item["phrase"] as? String ?? "?"
             if !choices.isEmpty { awaitPick(request, choices, panel: panel, gate: gate, base: result, phrase: phrase) }
             guard gate.commit() else { fail("Request cancelled") }  // Closed during the search: release nothing.
+            // The front end gave up (Ctrl-C, timeout) after the touch: nobody would paste, so release nothing.
+            guard !callerGone() else { fail("The agent's command ended before the release; nothing released") }
             let recopyUntil = Date().addingTimeInterval(recopySeconds)
             let delivered = try secret.map { try deliverAndOpenRecopy(request, $0) }
             let recopy = delivered?.0

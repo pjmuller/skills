@@ -317,6 +317,29 @@ def test_confirm_reads_hidden_and_discards_early_password(fake, monkeypatch, cap
     assert SECRET not in capsys.readouterr().out
 
 
+def test_confirm_flags_punycode_hosts(fake, monkeypatch, capsys):
+    monkeypatch.setattr(bw.getpass, "getpass", lambda prompt: "")
+    bw.confirm(request(host="login.xn--80ak6aa92e.com"), None)
+    assert "WARNING: login.xn--80ak6aa92e.com is an internationalized name" in capsys.readouterr().out
+    bw.confirm(request(), None)
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_session_releases_nothing_when_the_lookup_outlasts_it(fake, monkeypatch):
+    delivered = []
+    session = bw.Session(bw.Vault(), {"op": "session-start", "vault": "default", "ttl": 1, "hosts": ["admin.example.com"],
+                                      "reason": None}, deliver=delivered.append)
+
+    def slow(vault, request, payload):  # The session's deadline passes while bw is still searching.
+        session.deadline = 0
+        return {"ok": True}, SECRET
+
+    monkeypatch.setattr(bw, "operate", slow)
+    with pytest.raises(bw.Failure, match="nothing released"):
+        session.handle(request())
+    assert delivered == []
+
+
 def test_totp_generates_code_not_seed(fake):
     _, _, events = fake
     delivered = []

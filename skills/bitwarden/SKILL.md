@@ -113,7 +113,7 @@ Bitwarden's own CLI Touch ID (server flag `biometrics-sdk-ipc`, `doctor` →
 `touch_id_flag`) is still off; the broker does not need it.
 
 References: [CLI](https://bitwarden.com/help/cli/) · [Send CLI](https://bitwarden.com/help/send-cli/) ·
-[Send limits](https://bitwarden.com/help/create-send/).
+[Send limits](https://bitwarden.com/help/create-send/) · comparable tools to follow up: [prior-art.md](prior-art.md).
 
 ## Unlock refused
 

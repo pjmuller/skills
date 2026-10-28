@@ -19,7 +19,11 @@ bw-once touchid status | bw-once touchid forget
 - **bw-once will (checked)**, green, built by the broker from the validated request: field, login filter, exact
   destination host, base-domain scope, per-vault default, excluded rules, vaults searched. Touch ID approves
   exactly that; afterwards the window shows what was released. Cancel/Esc/close or 5 min (renewal panels
-  included) → nothing.
+  included) → nothing. An `xn--` (internationalized) host gets a lookalike warning row.
+- **macOS's Touch ID sheet** repeats the checked action (`release the password for H (alice)`; never `--why`), the
+  one text no other app can draw. Why: the sheet used to say only "approve the request shown on screen".
+- **Caller gone → nothing**: the agent's command ended (Ctrl-C, tool timeout) between touch and release → no
+  clipboard/page write. Why: nobody would paste it (found in the 2026-10-28 review, [prior art](prior-art.md)).
 
 ## How (all inside the compiled broker; the Python front end only forwards the request)
 

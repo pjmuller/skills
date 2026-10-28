@@ -375,6 +375,10 @@ def snapshot(request):
 def confirm(request, payload, account=None):
     print(f"\aBitwarden request for vault '{request['vault']}' ({account or 'default CLI account'}):", flush=True)
     print(json.dumps(request, ensure_ascii=True), flush=True)
+    for name in request.get("hosts") or [request.get("host") or ""]:
+        if any(label.startswith("xn--") for label in name.split(".")):
+            print(f"WARNING: {name} is an internationalized name (xn--); its letters can imitate another site's. "
+                  "Continue only if you expected exactly this host.", flush=True)
     if request["op"] in ("list", "copy", "session-start"):
         print("Vault default: " + vault_config(request["vault"]).get("default_match", "base_domain"), flush=True)
         print("Matching: Base domain (public suffix aware) unless a per-URI or configured vault default restricts it. "
@@ -812,6 +816,8 @@ class Session:
             raise Failure("Session expired")
         result, secret = operate(self.bw, request, None)
         if secret is not None:
+            if time.monotonic() >= self.deadline:  # The lookup outlasted the session: release nothing.
+                raise Failure("Session expired; nothing released")
             self.deliver(secret)
         return {"via": "session", **result}
 
