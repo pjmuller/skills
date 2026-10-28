@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-28 — bitwarden: Sends default to 14 days, still one view
+
+- `bw-once send-text|send-file` default expiry 7 → 14 days (`--days 1-31` and `--views` unchanged; explicit values are kept). `receive.md` drops its `--days 1`. Why: a colleague may get to a handed-over link days later; the one-view limit, not a short expiry, is the protection.
+- `receive.md`: "does not exist or is no longer available" before the returned `expiry` means the view was used or the Send deleted, not expiry; check the view count in the app before re-sending. Why: a 7-day Send died the same evening and expiry was suspected first.
+
 ## 2026-10-28 — clickup-core: successor ticket instead of reply ping-pong
 
 - `clickup-core` "Before creating work": a follow-up on an existing ticket either extends it (one dated body section + one ping, when it serves the ticket's current outcome) or opens a successor ticket that stands alone and links the predecessor, when the outcome is materially new or the ticket already went back and forth (cue: two or more rounds of replies or dated sections). Successors still pass the duplicate check, ownership policy and commitment gate; never one per reply. `recording-followups` points there. Why: tickets where agents on both sides each added several comments became unreadable for the humans reviewing them.

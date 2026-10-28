@@ -38,7 +38,8 @@ TTL_MAX_MINUTES = 240
 FILE_LIMIT = 50 * 1024 * 1024
 TEXT_LIMIT = 600  # Conservative UTF-8 pilot cap, below the encrypted-text limit.
 BROKER_SECONDS = 330  # The broker releases nothing once 300 s passed since its start (renewal panels included).
-SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 7, 31  # Bitwarden deletes a Send at most 31 days out
+# 14 days: the receiver gets to it within a sprint; the one-view limit, not a short expiry, is the protection.
+SEND_DAYS_DEFAULT, SEND_DAYS_MAX = 14, 31  # Bitwarden deletes a Send at most 31 days out
 ROOT = Path(__file__).resolve().parent
 # bw >= 2026 unlocks through Bitwarden's SDK and prints its raw error: a password that doesn't open the locally
 # stored account key reads "Cryptography error, The decryption operation failed" (no "Invalid master password").

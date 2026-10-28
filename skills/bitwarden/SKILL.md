@@ -86,13 +86,13 @@ Touch ID searches every enrolled vault unless `--vault` is given.
 
 ```sh
 bw-once send-text --input-file /path/to/message.txt --name 'Account details' --thread "<title>" --why "<one line>"
-bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1 --days 7
+bw-once send-file --input-file /path/to/document.pdf --name 'Document' --views 1 --days 3
 ```
 
 Text Sends go to the **Touch ID broker** when the target vault (`--vault`, else the default) is enrolled: one window
 with the phrase, name, views, expiry date and the text behind Show text, one touch ([touchid.md](touchid.md), Send). File Sends, and
 vaults without Touch ID, use the Terminal (`bw serve` cannot create file Sends). Terminal approval shows exact text (or
-file name/bytes/SHA-256), views (default 1, max 100), expiry (default 7 days, `--days 1-31`); input is frozen before
+file name/bytes/SHA-256), views (default 1, max 100), expiry (default 14 days, `--days 1-31`); input is frozen before
 review. Caps: 600 UTF-8 text bytes (no invisible/bidi characters via Touch ID), 50 MiB files (Premium). Return only
 UUID/link/expiry/deletion/views. Failure JSON carries `stage`, `retry_safe` and (Touch ID) a debug-safe `reason`
 (error code, timeout, bw's message; never values): `retry_safe: false` = a Send may exist (or the lock is

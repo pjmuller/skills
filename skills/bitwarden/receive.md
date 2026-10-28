@@ -16,13 +16,14 @@ receiver's agent *can* read its own env file.
 2. **Inside the link**: one JSON object `{"NAME": "value"}` (single-line printable values, no `'`), ≤600 bytes.
    Build it without printing, e.g. from the repo whose env holds the values:
    `umask 077; mise exec -- python3 -c 'import json,os,sys; print(json.dumps({k: os.environ[k] for k in sys.argv[1:]}))' NAME_A NAME_B > "$TMPDIR/handoff.json"`
-3. `bw-once send-text --input-file "$TMPDIR/handoff.json" --name '<what> for <who>' --views 1 --days 1 --thread … --why …`
-   (one Touch ID), then `rm -P "$TMPDIR/handoff.json"`. Credential *files* (service-account JSON): `send-file`,
+3. `bw-once send-text --input-file "$TMPDIR/handoff.json" --name '<what> for <who>' --views 1 --thread … --why …`
+   (one Touch ID; default 14 days: the one view is the protection, and the colleague may get to it days later), then `rm -P "$TMPDIR/handoff.json"`. Credential *files* (service-account JSON): `send-file`,
    received with `bw receive --output` by hand; `bw-receive` takes text bundles only.
 4. Link by **direct message** to the person (Slack/ClickUp DM), not a ticket comment: a shared link is a bearer
    token until used, and link unfurlers are unverified.
 5. Afterwards the Send is dead (views used) and deleted at expiry; delete sooner in the app (Send → Delete), whose
-   view count also shows consumption without opening the link.
+   view count also shows consumption without opening the link. "Does not exist or is no longer available" before
+   the returned `expiry` = the view was used or the Send deleted, not expiry: check that count before re-sending.
 
 ## Receiver (their agent)
 

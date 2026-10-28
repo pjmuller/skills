@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -435,6 +436,8 @@ def test_send_snapshot_stdin_and_minimal_result(fake, tmp_path, op):
     payload = json.loads((directory / "send_payload").read_text())
     assert payload["maxAccessCount"] == 1
     assert payload["expirationDate"] == payload["deletionDate"]
+    ahead = datetime.fromisoformat(payload["expirationDate"]) - datetime.now(timezone.utc)
+    assert timedelta(days=14) - timedelta(minutes=5) < ahead <= timedelta(days=14)  # Default: two weeks, one view.
     assert set(result) == {"id", "url", "expiry", "deletion", "views"}
     assert not any(value in json.dumps(result) for value in ("private-send", original.decode(), SESSION))
     assert next(event["args"] for event in events() if event["args"][0] == "send") == ["send", "--fullObject", "create"]
@@ -702,8 +705,8 @@ def test_session_refuses_other_vault_and_reports_reason(fake):
 
 def test_send_days_default_and_bounds(tmp_path):
     base = {"op": "send-text", "vault": "default", "input_file": str(tmp_path / "m.txt"), "name": "n", "views": 1}
-    assert bw.validate(base)["days"] == bw.SEND_DAYS_DEFAULT
-    assert bw.validate({**base, "days": 14})["days"] == 14
+    assert bw.validate(base)["days"] == bw.SEND_DAYS_DEFAULT == 14
+    assert bw.validate({**base, "days": 1})["days"] == 1  # An explicit shorter expiry is kept.
     for days in (0, bw.SEND_DAYS_MAX + 1, "14"):
         with pytest.raises(bw.Failure):
             bw.validate({**base, "days": days})
