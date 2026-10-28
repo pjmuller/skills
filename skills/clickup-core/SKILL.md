@@ -48,8 +48,8 @@ its tools are loaded: it posts as whoever authorised it, not the operator.
 
 ## Before creating work
 
-Bounded duplicate check, then reuse or extend; create only after it. Per list in the wrapper's
-lookup scope: `search --list L --summary --json --include-closed --updated-since <date>` plus one
+Bounded duplicate check, then reuse, extend or succeed; create only after it. Per list in the
+wrapper's lookup scope: `search --list L --summary --json --include-closed --updated-since <date>` plus one
 pass without the date (older open work), several `--search` stems/aliases (spelling, spaces and
 hyphens matter; drop `--titles-only` on no hit). Read candidates with `task ID --comments --json`;
 compare intent and outcome, not titles; finished work may have no ticket (check code/skills too).
@@ -58,7 +58,20 @@ compare intent and outcome, not titles; finished work may have no ticket (check 
 create, search the exact title (`--include-closed --updated-since <today>`) before retrying.
 
 - A ticket the user deleted or rejected stays deleted: never recreate it because a lookup now
-  comes back empty. Extend existing work only on a material change.
+  comes back empty. Follow up on existing work only on a material change, then extend it or
+  open a successor. A human must grasp a ticket in a minute; a long reply chain defeats that.
+  - **Extend** (one dated body section + one ping) when the step serves the ticket's current
+    outcome: the result it asked for, the answer to its open question, a correction.
+  - **Successor ticket** instead when the step is a materially new outcome (new deliverable, scope
+    or owner), or another section would prolong an unwieldy history (cue: two or more rounds of
+    replies or dated sections already). Its body stands alone (state now, the ask, evidence) and
+    links the predecessor (`[[id]]` or URL) as background, no copied history. Leave the
+    predecessor's status to its owner; ping there with the successor link only when someone
+    waits on it. Example: an export shipped, the tester now wants a date filter → successor; the
+    export misses a column → extend, unless that ticket already went back and forth.
+  - A successor is a new ticket: duplicate check, the wrapper's ownership policy and an explicit
+    request or committed action still apply. Never one per reply, for a progress note or unasked
+    in someone's queue.
 - Never create spaces, folders or lists. Read a task before changing it.
 - New ticket: factual body from the conversation (repro, evidence, actual vs expected), nothing
   invented; longer bodies via `--description-file`. Report the read-back URL, assignee, status and

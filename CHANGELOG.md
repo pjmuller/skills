@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28 — clickup-core: successor ticket instead of reply ping-pong
+
+- `clickup-core` "Before creating work": a follow-up on an existing ticket either extends it (one dated body section + one ping, when it serves the ticket's current outcome) or opens a successor ticket that stands alone and links the predecessor, when the outcome is materially new or the ticket already went back and forth (cue: two or more rounds of replies or dated sections). Successors still pass the duplicate check, ownership policy and commitment gate; never one per reply. `recording-followups` points there. Why: tickets where agents on both sides each added several comments became unreadable for the humans reviewing them.
+
 ## 2026-10-28 — bitwarden: Touch ID sheet names the request, no release to a gone caller, lookalike warning, prior art
 
 - macOS's Touch ID sheet now states the checked action (`release the password for H (alice)`, `list logins for H`, `create a one-view text Send in V`) instead of "approve the bw-once request shown on screen". Why: it is the one text no other app can draw, and a comparison of agent credential brokers showed the action belongs there.

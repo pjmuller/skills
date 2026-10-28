@@ -65,8 +65,9 @@ A ticket in a colleague's queue is the delivery for their work, never execution 
 - Separate speaker words from inference; uncertain names or negations never become requirements.
 - Keep sequence and phase owner: "X prepares, Y fine-tunes" means X owns the prerequisite and Y
   reviews later.
-- Check the queue first. A ticket the user deleted or rejected stays deleted; extend existing work
-  only on a material change.
+- Check the queue first. A ticket the user deleted or rejected stays deleted; existing work is
+  extended or succeeded only on a material change
+  ([clickup-core](../clickup-core/SKILL.md#before-creating-work)), never one ticket per remark.
 
 ## Light research before proposing
 
