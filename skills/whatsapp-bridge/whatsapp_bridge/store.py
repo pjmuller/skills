@@ -46,8 +46,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
             """)
             # media: serialized Message holding the download keys; kind: audio/image/video/... (added 2026-10).
+            # forwarded: WhatsApp's "Forwarded" flag, NULL for rows synced before 2026-10-28 (unknown).
             columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
-            for column in ("media BLOB", "kind TEXT"):
+            for column in ("media BLOB", "kind TEXT", "forwarded INTEGER"):
                 if column.split()[0] not in columns:
                     db.execute(f"ALTER TABLE messages ADD COLUMN {column}")
 
@@ -70,15 +71,18 @@ class Store:
             with self.db() as db:
                 db.execute("INSERT OR IGNORE INTO names VALUES (?,?)", (name.casefold(), jid))
 
-    def put(self, chat, msg_id, timestamp, sender, from_me, text, source, media=None, kind=None):
+    def put(self, chat, msg_id, timestamp, sender, from_me, text, source, media=None, kind=None, forwarded=None):
         if not msg_id or text is None:
             return
         timestamp = timestamp // 1000 if timestamp > 10**11 else timestamp
+        forwarded = None if forwarded is None else bool(forwarded)
         with self.db() as db:
-            db.execute("""INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?)
+            db.execute("""INSERT INTO messages (chat, id, timestamp, sender, from_me, text, source, media, kind, forwarded)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(chat,id) DO UPDATE SET text=excluded.text, source=excluded.source,
-                    media=COALESCE(excluded.media, media), kind=COALESCE(excluded.kind, kind)""",
-                (chat, msg_id, timestamp, sender, bool(from_me), text, source, media, kind))
+                    media=COALESCE(excluded.media, media), kind=COALESCE(excluded.kind, kind),
+                    forwarded=COALESCE(excluded.forwarded, forwarded)""",
+                (chat, msg_id, timestamp, sender, bool(from_me), text, source, media, kind, forwarded))
 
     def canonical(self, jid):
         with self.db() as db:
@@ -119,16 +123,18 @@ class Store:
                 ORDER BY target LIMIT ?""", (query.casefold(), number, limit))
             return [self.contact(row[0]) for row in rows]
 
-    def read(self, chat, n, own, media=False):
-        """Newest n messages, oldest first; media=True keeps the raw download keys (worker-only)."""
+    def read(self, chat, n, own, media=False, since=None):
+        """Newest n messages, oldest first; with unix `since`: the OLDEST n at or after it (page forward by
+        passing the last timestamp again). media=True keeps the raw download keys (worker-only)."""
         jid = self.resolve(chat, own)["jid"]
         with self.db() as db:
             aliases = [jid] + [r[0] for r in db.execute("SELECT alias FROM aliases WHERE jid=?", (jid,))]
             marks = ",".join("?" for _ in aliases)
             db.row_factory = sqlite3.Row
             # The same message can sit under its LID and its phone-number chat; prefer the copy with media keys.
-            rows = db.execute(f"""SELECT * FROM messages WHERE chat IN ({marks})
-                ORDER BY timestamp DESC, id DESC, media IS NULL""", aliases)
+            order = "DESC" if since is None else "ASC"
+            rows = db.execute(f"""SELECT * FROM messages WHERE chat IN ({marks}) AND timestamp >= ?
+                ORDER BY timestamp {order}, id {order}, media IS NULL""", [*aliases, since or 0])
             result, seen = [], set()
             for row in rows:
                 if row["id"] not in seen:
@@ -137,12 +143,14 @@ class Store:
                     if not media:
                         del message["media"]
                     message["from_me"] = bool(message["from_me"])
+                    if message["forwarded"] is not None:
+                        message["forwarded"] = bool(message["forwarded"])
                     if message["from_me"]:
                         message["sender"] = own + "@s.whatsapp.net"
                     result.append(message)
                     if len(result) == n:
                         break
-            return list(reversed(result))
+            return result if since is not None else list(reversed(result))
 
     def reserve_send(self):
         # Caller holds session flock; persist BEFORE network call, including failures.

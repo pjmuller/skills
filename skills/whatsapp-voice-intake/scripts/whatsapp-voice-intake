@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs voice_intake.py inside the whatsapp-bridge uv project (it imports the bridge's Python API).
+# Bridge: $WHATSAPP_BRIDGE_DIR, else the sibling core in this skills checkout.
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
+bridge=${WHATSAPP_BRIDGE_DIR:-$here/../../whatsapp-bridge}
+[ -f "$bridge/pyproject.toml" ] || { echo "whatsapp-bridge not found at $bridge (set WHATSAPP_BRIDGE_DIR)" >&2; exit 1; }
+exec uv run --quiet --frozen --project "$bridge" python "$here/voice_intake.py" "$@"

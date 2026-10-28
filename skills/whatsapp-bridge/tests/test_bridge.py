@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+
+import pytest
 from unittest.mock import patch
 
 from whatsapp_bridge import send_text, _call
@@ -117,6 +119,35 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual([r['id'] for r in rows], ['live', 'sent'])
             self.assertEqual(rows[0]['timestamp'], 1789721500)
             self.assertEqual(rows[1]['sender'], chat)
+
+    def test_since_floor_and_forwarded_flag_survive_resync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'history.sqlite')
+            chat = '32470123456@s.whatsapp.net'
+            store.put(chat, 'old', 100, chat, True, 'old', 'history')
+            store.put(chat, 'fw', 200, chat, True, '[voice note 9s]', 'live', b'k', 'audio', True)
+            store.put(chat, 'fw', 200, chat, True, '[voice note 9s]', 'history')  # later sync without the flag
+            rows = store.read('me', 50, '32470123456', since=150)
+            self.assertEqual([(r['id'], r['forwarded']) for r in rows], [('fw', True)])
+            self.assertIsNone(store.read('me', 50, '32470123456')[0]['forwarded'])  # unknown, not False
+            for i in range(5):
+                store.put(chat, f'p{i}', 300 + i, chat, True, 'x', 'live')
+            page = store.read('me', 2, '32470123456', since=300)   # forward page: oldest first from `since`
+            self.assertEqual([r['id'] for r in page], ['p0', 'p1'])
+            self.assertEqual([r['id'] for r in store.read('me', 2, '32470123456')], ['p3', 'p4'])
+
+    def test_forwarded_reads_context_info_of_wrapped_parts(self):
+        Message = pytest.importorskip('neonize.proto.waE2E.WAWebProtobufsE2E_pb2').Message
+        from whatsapp_bridge.worker import forwarded
+        voice = Message()
+        voice.audioMessage.PTT = True
+        self.assertFalse(forwarded(voice))
+        voice.audioMessage.contextInfo.isForwarded = True
+        self.assertTrue(forwarded(voice))
+        wrapped = Message()
+        wrapped.ephemeralMessage.message.CopyFrom(voice)
+        self.assertTrue(forwarded(wrapped))
+        self.assertFalse(forwarded(Message(conversation='plain')))
 
 class ContextTests(unittest.TestCase):
     def test_context_keeps_recent_messages_and_reports_clipping(self):

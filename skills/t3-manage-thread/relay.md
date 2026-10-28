@@ -12,8 +12,16 @@ for capacity routing, house effort and confirmed delivery.
 t3-relay launch --project /abs/repo --title "⏰ Daily digest" --model opus [--wait 120] -- "Read and execute /abs/brief.md"
 t3-relay send --thread <threadId> [--mode queue] [--wait 120] -- "New mail in the linked thread: …"
 t3-relay status <rid> [--wait 60]   # ok <threadId> | failed <why> | pending <why>
+t3-relay find --project /abs/repo --title "🧭 Ana routing" [--json]   # open root threads, exact title, pinnedAt
 t3-relay check                      # T3 reachable, MCP client approved, legacy relay hosts listed
 ```
+
+- **Retry key** (`launch`/`send --request-id KEY`, `[A-Za-z0-9_-]{1,64}`): the record is written before the
+  call. Same key again: landed → prints `accepted … (already delivered, not re-sent)` and exits 0; unconfirmed
+  → exit 3; refused/failed → sends anew (any target). Same key, different request while not failed → exit 2.
+  Pollers persist the key with their payload first, so a crash between accept and their own save is harmless.
+- **find**: `t3_thread_list` (unsettled, exact title, no parent) plus `pinnedAt`/archived from the read-only
+  projection, newest pin first. No pin API yet: schema drift fails loudly, never reads as "unpinned".
 
 - **Model**: alias, id or provider, resolved per [routing.md](routing.md#models) (account by capacity,
   house effort, small-model refusal). No `--model`: the named `--instance`'s provider default, else

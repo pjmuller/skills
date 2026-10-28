@@ -36,6 +36,15 @@ def media_keys(message):
     return None, None
 
 
+def forwarded(message):
+    """WhatsApp's "Forwarded" flag from the first part carrying a contextInfo; plain text has none (False)."""
+    message = unwrap(message)
+    for field, part in message.ListFields():
+        if field.message_type and "contextInfo" in field.message_type.fields_by_name and part.HasField("contextInfo"):
+            return part.contextInfo.isForwarded
+    return False
+
+
 def voice_candidates(store, request, own):
     """Newest-first rows that can hold the requested notes; ids pick exact messages anywhere in the chat.
 
@@ -172,7 +181,8 @@ def execute(request):
                     msg = item.message
                     store.put(conv.ID, msg.key.ID, msg.messageTimestamp,
                               own_jid if msg.key.fromMe else (msg.key.participant or msg.key.remoteJID),
-                              msg.key.fromMe, text(msg.message), "history", *media_keys(msg.message))
+                              msg.key.fromMe, text(msg.message), "history", *media_keys(msg.message),
+                              forwarded(msg.message))
             last_event[0] = time.monotonic()
         except Exception:
             errors.append("History processing failed; cached results may be incomplete")
@@ -187,7 +197,7 @@ def execute(request):
                 store.alias(chat, jid(alternative))
             store.put(chat, info.ID, info.Timestamp, jid(source.Sender),
                       source.IsFromMe, text(event.Message), "resent" if event.UnavailableRequestID else "live",
-                      *media_keys(event.Message))
+                      *media_keys(event.Message), forwarded(event.Message))
             last_event[0] = time.monotonic()
         except Exception:
             errors.append("Message processing failed")
@@ -301,7 +311,7 @@ def execute(request):
         if op == "context":
             return _bounded_context(store.resolve(request["chat"], own),
                                     store.read(request["chat"], request["n"] + 1, own), request["n"])
-        return store.read(request["chat"], request["n"], own)
+        return store.read(request["chat"], request["n"], own, since=request.get("since"))
     finally:
         client.stop()
 

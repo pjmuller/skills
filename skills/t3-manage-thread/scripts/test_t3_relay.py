@@ -348,3 +348,89 @@ def test_probe_settlement_timeout_does_not_cancel_or_settle(monkeypatch):
         ("t3_thread_wait", {"threadId": "mcp:new", "timeoutMs": 50_000}),
         ("t3_thread_wait", {"threadId": "mcp:new", "timeoutMs": 40_000}),
     ]
+
+
+def test_request_id_is_saved_before_the_call_and_never_resent(posted, monkeypatch, capsys):
+    seen = []
+    original = posted.fake.call
+
+    def call(tool, args):
+        if tool == "t3_thread_send":
+            seen.append(json.loads((relay.REQUESTS / "wa-k1.json").read_text()))
+        return original(tool, args)
+    monkeypatch.setattr(posted.fake, "call", call)
+    posted("send", "--thread", "mcp:r", "--request-id", "wa-k1", "--", "hello")
+    assert "outcome" not in seen[0] and seen[0]["fingerprint"]            # crash here = resolvable by effect
+    assert posted.fake.calls[-1][1]["clientRequestId"] == "relay-wa-k1"
+    calls = len(posted.fake.calls)
+    capsys.readouterr()
+    posted("send", "--thread", "mcp:r", "--request-id", "wa-k1", "--wait", "5", "--", "hello")
+    assert len(posted.fake.calls) == calls and posted.code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "accepted: relay wa-k1 via mcp (mcp:new) (already delivered, not re-sent)", "ok mcp:new"]
+    posted("send", "--thread", "mcp:r", "--request-id", "wa-k1", "--", "other text")
+    assert posted.code == 2 and len(posted.fake.calls) == calls
+
+
+def test_request_id_pending_waits_and_refused_resends(posted, monkeypatch):
+    posted.fake.exc = relay.Unknown("t3_thread_send: TimeoutError")
+    posted("send", "--thread", "mcp:r", "--request-id", "k2", "--", "hi")
+    monkeypatch.setattr(relay, "store", db)   # effect not visible yet, well within GIVE_UP
+    calls = len(posted.fake.calls)
+    posted("send", "--thread", "mcp:r", "--request-id", "k2", "--", "hi")
+    assert posted.code == 3 and len(posted.fake.calls) == calls        # never re-sent while unknown
+    record = relay.REQUESTS / "k2.json"
+    record.write_text(json.dumps({**json.loads(record.read_text()), "outcome": "failed", "detail": "refused"}))
+    posted.fake.exc = None
+    posted("send", "--thread", "mcp:other", "--request-id", "k2", "--", "hi")   # failed: may go elsewhere
+    assert len(posted.fake.calls) == calls + 1 and posted.record["outcome"] == "ok"
+
+
+def test_refusal_marks_request_failed(posted, monkeypatch):
+    monkeypatch.setattr(posted.fake, "call", lambda tool, args: relay.die("t3_thread_send refused: gone"))
+    monkeypatch.setattr(sys, "argv", ["t3-relay", "send", "--thread", "mcp:x", "--request-id", "k3", "--", "hi"])
+    with pytest.raises(SystemExit):
+        relay.main()
+    assert json.loads((relay.REQUESTS / "k3.json").read_text())["outcome"] == "failed"
+
+
+def test_bad_request_id_is_usage_error():
+    out = subprocess.run([str(SCRIPT), "send", "--thread", "x", "--request-id", "a b", "--", "hi"],
+                         capture_output=True, text=True)
+    assert out.returncode == 2 and "--request-id" in out.stderr
+
+
+def pins_db(rows):
+    con = sqlite3.connect(":memory:")
+    con.execute("create table orchestration_v2_projection_threads (thread_id, payload_json, archived_at, deleted_at)")
+    con.executemany("insert into orchestration_v2_projection_threads values (?,?,?,?)", rows)
+    return con
+
+
+def test_find_exact_open_roots_pinned_first(monkeypatch):
+    listed = [
+        {"threadId": "a", "title": "🧭 R", "status": "completed", "createdAt": "1", "parentThreadId": None},
+        {"threadId": "b", "title": "🧭 R", "status": "idle", "createdAt": "2", "parentThreadId": None},
+        {"threadId": "c", "title": "🧭 R old", "createdAt": "3"},                       # not exact
+        {"threadId": "d", "title": "🧭 R", "createdAt": "4", "parentThreadId": "a"},    # child
+        {"threadId": "e", "title": "🧭 R", "createdAt": "5", "settled": True},
+        {"threadId": "f", "title": "🧭 R", "createdAt": "6"},                           # archived
+    ]
+    pages = [{"threads": listed[:3], "nextCursor": 3}, {"threads": listed[3:], "nextCursor": None}]
+    fake = FakeMcp()
+    fake.call = lambda tool, args: (fake.calls.append((tool, args)), pages[len(fake.calls) - 1])[1]
+    monkeypatch.setattr(relay, "connect", lambda base: fake)
+    monkeypatch.setattr(relay, "project_id", lambda mcp, path: "p")
+    monkeypatch.setattr(relay, "store", lambda: pins_db([
+        ("a", '{"pinnedAt": "2026-10-27T12:44:00Z"}', None, None), ("b", '{"pinnedAt": null}', None, None),
+        ("f", '{"pinnedAt": "2026-10-28T00:00:00Z"}', "2026-10-28", None)]))
+    found = relay.cmd_find("http://x", "/r", "🧭 R")
+    assert [(t["threadId"], t["pinnedAt"]) for t in found] == [("a", "2026-10-27T12:44:00Z"), ("b", None)]
+    assert fake.calls[0][1]["settled"] is False and fake.calls[1][1]["cursor"] == 3
+
+
+def test_pin_state_schema_drift_is_unavailable_not_unpinned(monkeypatch):
+    monkeypatch.setattr(relay, "store", lambda: pins_db([("a", '{"title": "x"}', None, None)]))
+    with pytest.raises(SystemExit) as exc:
+        relay.pin_state(["a"])
+    assert exc.value.code == 1

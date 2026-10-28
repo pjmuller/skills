@@ -2,7 +2,7 @@
 
 Start with `conversation_context("Alice")` / `wa context Alice`: resolves the contact, syncs once, returns `{contact, messages, truncated, history_complete}`. Budgets (20 messages, 12,000 text characters, ceiling 200) are constants in `whatsapp_bridge/__init__.py`. `truncated` = budget omitted content; `text_truncated` on a message = clipped; `history_complete` is always false. Each call reconnects and waits for sync (≥8 s read, ≥30 s login): batch questions into one call.
 
-Messages (also from `read_chat`) are oldest-first dicts: `id, chat, timestamp` (Unix s), `sender, from_me, text, source` (`history`/`live`/`resent`/`sent`). No read receipts.
+Messages (also from `read_chat(chat, n, since=None)`; `since` = Unix s floor) are oldest-first dicts: `id, chat, timestamp` (Unix s), `sender, from_me, text, source` (`history`/`live`/`resent`/`sent`), `kind` (media type or null), `forwarded` (WhatsApp's flag; null = synced before 2026-10-28, unknown). No read receipts.
 
 Unclear name → `find_contacts("Alic", limit=10)` / `wa contacts Alic` (`jid`, `number` or null, ≤5 case-folded names). `resolve_contact` / `wa resolve` needs an exact, unambiguous name, number or `me`; no WhatsApp registration check. Never auto-select a fuzzy match for a send.
 

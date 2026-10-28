@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# install               link ~/.local/bin/whatsapp-voice-intake
+# install --schedule    also arm the 5-minute poll (macOS launchd agent; Linux/WSL systemd user timer)
+# install --unschedule  remove the job (link, config and state are kept)
+# install --check       link, helpers on the job PATH, bridge built, job loaded, then `whatsapp-voice-intake check`
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_dir="${HOME}/.local/bin"
+name=whatsapp-voice-intake
+label=com.t3-skills.$name
+interval=300
+state="$HOME/.local/state/$name"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+unit_dir="$HOME/.config/systemd/user"
+job_path="$install_dir:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+[[ $# == 0 || ( $# == 1 && "$1" =~ ^--(check|relink|schedule|unschedule)$ ) ]] \
+  || { echo 'Usage: install [--check|--relink|--schedule|--unschedule]' >&2; exit 2; }
+
+loaded() {
+  if [[ "$(uname -s)" == Darwin ]]; then launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1
+  else systemctl --user is-active --quiet "$label.timer" 2>/dev/null; fi
+}
+
+if [[ "${1:-}" == --check ]]; then
+  echo "source $script_dir"
+  ok=0
+  for dependency in uv t3-relay transcribe-gemini; do
+    PATH="$job_path" command -v "$dependency" >/dev/null && echo "ok      $dependency on job PATH" || { echo "FAIL    $dependency not on job PATH"; ok=1; }
+  done
+  bridge="${WHATSAPP_BRIDGE_DIR:-$script_dir/../../whatsapp-bridge}"
+  "$bridge/scripts/install" --check >/dev/null 2>&1 && echo "ok      whatsapp-bridge built ($bridge)" \
+    || { echo "FAIL    whatsapp-bridge not ready: $bridge/scripts/install"; ok=1; }
+  [[ "$(readlink -f "$install_dir/$name")" == "$script_dir/$name" ]] && echo "ok      $install_dir/$name" \
+    || { echo "FAIL    missing or stale $install_dir/$name; run $script_dir/install"; ok=1; }
+  loaded && echo "ok      job $label (every ${interval}s; hours gate in the config)" || { echo "FAIL    job $label not armed; run install --schedule"; ok=1; }
+  PATH="$job_path" "$script_dir/$name" check || ok=1
+  exit $ok
+fi
+
+if [[ "${1:-}" == --unschedule ]]; then
+  if [[ "$(uname -s)" == Darwin ]]; then
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true; rm -f "$plist"
+  else
+    systemctl --user disable --now "$label.timer" 2>/dev/null || true
+    rm -f "$unit_dir/$label.timer" "$unit_dir/$label.service"; systemctl --user daemon-reload || true
+  fi
+  echo "unscheduled $label (link, config and state kept)"; exit 0
+fi
+
+# Never silently move the command to another checkout (e.g. a project copy).
+case "$script_dir" in
+  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) project_copy=false ;;
+  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
+  *) project_copy=false ;;
+esac
+for command_name in whatsapp-voice-intake; do
+  existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
+  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
+    if [[ "${1:-}" != --relink ]]; then
+      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
+      exit 1
+    fi
+    $project_copy && echo "warning: project copy $script_dir is being made global" >&2
+  fi
+done
+mkdir -p "$install_dir"
+ln -sfn "$script_dir/$name" "$install_dir/$name"
+echo "installed $install_dir/$name"
+[[ "${1:-}" == --schedule ]] || exit 0
+
+mkdir -p "$state" && chmod 700 "$state"
+shell_bin="$(command -v zsh || command -v bash)"
+run="export PATH=\"$job_path\"; exec \"$install_dir/$name\" poll"
+if [[ "$(uname -s)" == Darwin ]]; then
+  mkdir -p "$(dirname "$plist")"
+  cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>$label</string>
+	<key>ProcessType</key><string>Background</string>
+	<key>ProgramArguments</key>
+	<array><string>$shell_bin</string><string>-lc</string><string>$run</string></array>
+	<key>StartInterval</key><integer>$interval</integer>
+	<key>StandardOutPath</key><string>$state/poll.log</string>
+	<key>StandardErrorPath</key><string>$state/poll.log</string>
+	<key>WorkingDirectory</key><string>$HOME</string>
+</dict>
+</plist>
+PLIST
+  plutil -lint "$plist" >/dev/null
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+else
+  systemctl --user show-environment >/dev/null \
+    || { echo "systemd user manager unavailable (WSL: [boot] systemd=true in /etc/wsl.conf, then wsl --shutdown)" >&2; exit 1; }
+  mkdir -p "$unit_dir"
+  printf '%s\n' "[Unit]" "Description=$name poll" "[Service]" "Type=oneshot" "WorkingDirectory=%h" \
+    "ExecStart=$shell_bin -lc '$run >> \"$state/poll.log\" 2>&1'" > "$unit_dir/$label.service"
+  printf '%s\n' "[Unit]" "Description=$name poll every ${interval}s" "[Timer]" "OnBootSec=2min" \
+    "OnUnitActiveSec=${interval}s" "[Install]" "WantedBy=timers.target" > "$unit_dir/$label.timer"
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$label.timer"
+fi
+echo "scheduled $label every ${interval}s (the poll itself skips outside the config's hours; log $state/poll.log)"

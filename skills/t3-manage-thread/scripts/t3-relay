@@ -11,7 +11,9 @@ Agents inside T3 never need this: they call the T3 MCP tools directly.
                     [--allow-small-model] [--settle-when-done | --settle-after-run SECS]
                     [--wait SECS] -- PROMPT
     t3-relay send   --thread ID [--mode auto|queue|steer] [--wait SECS] -- MESSAGE
+    (launch/send) --request-id KEY   caller's retry key: a repeat with the same key never re-sends
     t3-relay status RID   # ok <ids> | failed <why> | pending
+    t3-relay find --project PATH --title TITLE [--json]   # open root threads with that exact title + pin state
     t3-relay check        # T3 reachable, MCP client approved
 
 How: calls T3's own MCP endpoint (loopback /mcp, the tools agents use) as an approved MCP
@@ -29,6 +31,7 @@ import http.client
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -339,6 +342,30 @@ def request_status(con: sqlite3.Connection, rec: dict, at: datetime | None = Non
     return "pending", f"answer lost ({rec.get('detail', '?')}); looking for the effect"
 
 
+def fingerprint(kind: str, target: str, text: str) -> str:
+    return hashlib.sha256(json.dumps([kind, target, text]).encode()).hexdigest()
+
+
+def replay(rec: dict, digest: str, wait: float) -> None:
+    """A request id seen before: never re-send what may have landed. ok -> report it again (exit 0);
+    pending -> exit 3; failed -> return so the caller sends again. Reusing a key for a different
+    request is a caller bug (exit 2), unless the first one provably never ran."""
+    try:
+        state, detail = request_status(None if rec.get("outcome") else store(), rec)
+    except (sqlite3.Error, SystemExit) as exc:
+        state, detail = "pending", f"lookup error: {exc}"
+    if state != "failed" and rec.get("fingerprint") != digest:
+        die(f"request id {rec['rid']} was used for a different request ({state}); use a new id", 2)
+    if state == "ok":
+        print(f"accepted: relay {rec['rid']} via mcp ({detail}) (already delivered, not re-sent)")
+        if wait:
+            print(f"ok {detail}")
+        raise SystemExit(0)
+    if state == "pending":
+        print(f"pending {detail} (request {rec['rid']} not re-sent)")
+        raise SystemExit(3)
+
+
 def wait_for(rid: str, seconds: float) -> int:
     """Print the outcome; exit code 0 ok, 1 failed, 3 pending. A lookup error (store locked,
     schema drift) is never 'failed': the request may still run, so a retry could duplicate it."""
@@ -371,6 +398,44 @@ def cmd_check(base: str) -> None:
         legacy = []
     for (task,) in legacy:
         print(f"  obsolete webhook relay host {task}: delete_scheduled_task it, settle its thread (relay.md)")
+
+
+def pin_state(ids: list[str]) -> dict[str, tuple[str | None, bool]]:
+    """thread id -> (pinnedAt, archived) from the read-only projection: no T3 API exposes pins yet.
+    Missing rows or a payload without the key = schema drift: fail, never report "not pinned"."""
+    if not ids:
+        return {}
+    try:
+        rows = store().execute(
+            "select thread_id, json_type(payload_json, '$.pinnedAt'), json_extract(payload_json, '$.pinnedAt'), "
+            f"archived_at is not null or deleted_at is not null from orchestration_v2_projection_threads "
+            f"where thread_id in ({','.join('?' for _ in ids)})", ids).fetchall()
+    except sqlite3.Error as exc:
+        die(f"pin state unavailable: {exc}")
+    found = {row[0]: (row[2], bool(row[3])) for row in rows if row[1] is not None}
+    if set(found) != set(ids):
+        die("pin state unavailable: T3's thread projection changed (pinnedAt missing); update t3-relay find")
+    return found
+
+
+def cmd_find(base: str, project: str, title: str) -> list[dict]:
+    """Open (unsettled, unarchived) root threads titled exactly TITLE, pinned first (newest pin first)."""
+    mcp = connect(base)
+    args: dict = {"projectId": project_id(mcp, project), "titleContains": title, "settled": False,
+                  "includeSubagents": False, "limit": 100}
+    threads = []
+    while True:
+        page = mcp.call("t3_thread_list", args)
+        threads += [t for t in page.get("threads", [])
+                    if t.get("title") == title and not t.get("parentThreadId") and not t.get("settled")]
+        if page.get("nextCursor") is None:
+            break
+        args["cursor"] = page["nextCursor"]
+    pins = pin_state([t["threadId"] for t in threads])
+    found = [{**{k: t.get(k) for k in ("threadId", "title", "status", "createdAt", "updatedAt")},
+              "pinnedAt": pins[t["threadId"]][0]} for t in threads if not pins[t["threadId"]][1]]
+    found.sort(key=lambda t: (t["pinnedAt"] or "", t["createdAt"] or ""), reverse=True)
+    return found
 
 
 def settle_after_run(mcp: Mcp, thread: str, seconds: int) -> str:
@@ -429,11 +494,20 @@ def main() -> None:
                        help="kept for callers: the effect exists on exit 0; prints `ok <threadId>`")
     la.add_argument("prompt", nargs="+")
     se.add_argument("message", nargs="+")
+    for p in (la, se):
+        p.add_argument("--request-id", metavar="KEY",
+                       help="caller's retry key ([A-Za-z0-9_-], <=64): saved before the call; a repeat never re-sends")
     st = sub.add_parser("status")
     st.add_argument("rid")
     st.add_argument("--wait", type=float, default=0, metavar="SECS")
+    fi = sub.add_parser("find")
+    fi.add_argument("--project", required=True)
+    fi.add_argument("--title", required=True)
+    fi.add_argument("--json", action="store_true")
     sub.add_parser("check")
     a = ap.parse_args()
+    if getattr(a, "request_id", None) and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", a.request_id):
+        die("--request-id must be 1-64 of [A-Za-z0-9_-]", 2)
     if a.cmd == "launch" and a.settle_after_run is not None and a.settle_after_run <= 0:
         die("--settle-after-run must be positive", 2)
     if a.cmd == "launch" and not a.model and not a.instance and a.effort:
@@ -445,15 +519,32 @@ def main() -> None:
     if a.cmd == "check":
         cmd_check(base)
         return
-    rid = uuid.uuid4().hex[:12]
+    if a.cmd == "find":
+        found = cmd_find(base, a.project, a.title)
+        if a.json:
+            print(json.dumps(found, ensure_ascii=False))
+            return
+        for t in found:
+            print(f"{t['threadId']}\t{'pinned ' + t['pinnedAt'] if t['pinnedAt'] else 'unpinned'}\t{t['status']}\t{t['title']}")
+        return
+    rid = a.request_id or uuid.uuid4().hex[:12]
     rec = {"rid": rid, "kind": a.cmd}
+    if a.cmd == "launch":
+        text = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
+        digest = fingerprint("launch", f"{Path(a.project).expanduser().resolve()}\n{a.title}", text)
+    else:
+        text = " ".join(a.message)
+        digest = fingerprint("send", a.thread, text)
+    if a.request_id and (REQUESTS / f"{rid}.json").exists():
+        replay(json.loads((REQUESTS / f"{rid}.json").read_text()), digest, a.wait)
+    rec["fingerprint"] = digest
     if a.cmd == "launch":
         instance, model, effort = pick(launch_models(a.model, a.instance), a.instance)
         if is_small(model) and not a.allow_small_model:
             die(f"refusing standalone thread on {model}: launch a frontier model (opus/astra) that uses "
                 "small models as sub-agents, or pass --allow-small-model if orchestration is already done", 2)
         mcp = connect(base)
-        message = " ".join(a.prompt) + ("\n\n" + completion_footer() if a.settle_when_done else "")
+        message = text
         sel = {"instanceId": instance, "model": model}
         effort = a.effort or (effort if effort != "-" else None)
         if effort:
@@ -465,13 +556,18 @@ def main() -> None:
         rec.update(project_id=args["projectId"], title=a.title)
     else:
         mcp = connect(base)
-        tool, args = "t3_thread_send", {"threadId": a.thread, "message": " ".join(a.message), "mode": a.mode,
+        tool, args = "t3_thread_send", {"threadId": a.thread, "message": text, "mode": a.mode,
                                         "clientRequestId": f"relay-{rid}"}
         rec.update(thread=a.thread)
     rec["posted_at"] = stamp(now())
+    save(rec)  # before the call: a crash mid-call leaves a record `status`/a replay can resolve by effect
     started = time.monotonic()
     try:
         result = mcp.call(tool, args)
+    except SystemExit:  # T3 refused: nothing ran, so the same key may send again
+        rec.update(outcome="failed", detail="refused by T3")
+        save(rec)
+        raise
     except Unknown as exc:
         rec["detail"] = str(exc)
         save(rec)

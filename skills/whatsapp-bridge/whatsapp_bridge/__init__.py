@@ -75,11 +75,16 @@ def _login_window():
     print("Login opened in Terminal. Scan there: WhatsApp → Settings → Linked devices → Link a device.")
 
 
-def read_chat(chat: str, n: int = 20) -> list[dict]:
-    """Read up to n synced messages, oldest first; chat is a number, exact name or 'me'."""
+def read_chat(chat: str, n: int = 20, since: int | None = None) -> list[dict]:
+    """Read up to n synced messages, oldest first; chat is a number, exact name or 'me'.
+
+    Without `since` the newest n; with unix `since` the oldest n at or after it (a forward page).
+    """
     chat = _check_chat(chat)
     _check_n(n)
-    return _call("read", chat=chat, n=n)
+    if since is not None and (not isinstance(since, int) or isinstance(since, bool) or since < 0):
+        raise ValueError("since must be a unix timestamp in seconds")
+    return _call("read", chat=chat, n=n, since=since)
 
 
 def find_contacts(query: str, limit: int = 10) -> list[dict]:
