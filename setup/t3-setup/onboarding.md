@@ -27,7 +27,9 @@ sender's colleague notes, never assumptions.
   terms) go back to the human as decisions.
 - Shared secrets: one Bitwarden Send ([bitwarden receive.md](../../skills/bitwarden/receive.md)): a
   ≤600-byte JSON text bundle the receiver installs with `bw-receive` (staging file, then the lead moves
-  each value to its destination). Bigger → a file Send. Never in the ZIP, never in chat.
+  each value to its destination). Bigger → a file Send. Never in the ZIP, never in chat. Tell the recipient
+  in plain words **not to open the link** in a browser: the agent asks for the link itself (`request_secret`
+  or clipboard) when its step comes. Opening it uses the one view and invites pasting values into chat.
 - Whatever the recipient can create with their own login (subscriptions, OAuth tokens, CLI logins,
   personal API tokens) stays out of the Send: fewer shared bearers, per-person revocation.
 
@@ -59,8 +61,10 @@ First, serially: one working provider, GitHub identity, private setup repo, chec
 
 - **Only the lead** edits shared state (shell rc, `~/.t3/userdata/settings.json`, global skill links, brew
   installs); workers report the change they need.
-- **Human-touch queue**: Mac password, browser logins/2FA, consent screens, Touch ID: one at a time, each
-  announced in plain words in their language; other lanes keep running while one waits.
+- **Human-touch queue**: browser logins/2FA, consent screens, Touch ID, secret links: one at a time, each
+  announced in plain words in their language; other lanes keep running while one waits. The Mac password
+  happens once, in the kickoff ([SKILL.md](SKILL.md#fresh-machine-macos-nothing-installed)); a step that would
+  need it later gets a user-local install instead. Never hand the user a command to run.
 - **Resume**: a new session reads the checkpoint file, rechecks prerequisites, continues. Never repeat a
   one-view Send fetch, a credential issuance or an OAuth mint without checking the checkpoint first.
 
@@ -85,4 +89,9 @@ First, serially: one working provider, GitHub identity, private setup repo, chec
 - Offboarding register: every grant/credential with where to revoke it (in the sender's private notes).
 - Skills-refresh scheduled; harness memory off; T3 browser profiles for their logins.
 - Final usability check: one real task from their job, end to end.
+- Expected numbers in prompts (spec counts, timings) drift within hours; state them as "≈ on <date>" and
+  treat a mismatch as information, not failure. Upstream drift a fresh setup hits (schema dumps, missing
+  sample vars) → fix in the repo the same day, never a local-only patch on the recipient's machine.
+- Cloud MFA self-service: device names are free-form (`bitwarden-macbook`), so allow creating virtual MFA
+  devices on `mfa/*` while enabling them stays limited to the user's own ARN.
 - Feedback block back to the sender; the sender arms a follow-up until it arrives.

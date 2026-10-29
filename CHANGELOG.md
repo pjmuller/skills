@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-29 — t3-setup: lessons from the first real colleague onboarding
+
+- `SKILL.md` Fresh machine: **one sudo moment** at the start: the single Terminal paste folds in the Homebrew installer, `xcode-select --install` and every pkg-based cask; a pkg found later is installed user-locally, never a second paste; never hand a non-developer a command the agent can run. Why: the recipient was asked to run extra commands mid-setup although the intent is one password at the start, then autonomous.
+- `onboarding.md`: the human-touch queue no longer contains the Mac password; recipients are told not to open Send links (the agent asks for the link itself); expected numbers are "≈ on <date>"; upstream drift found on a fresh machine is fixed in the repo the same day; cloud MFA self-service allows free-form virtual MFA device names. Why: links were opened in a browser and values pasted into chat (view used, secrets in a transcript), a schema dump drift was patched only locally, and an IAM guardrail blocked `mfa/bitwarden-macbook`.
+- `verification.md`: one-off env overrides go after `mise exec --` (the mise env file wins over `VAR=… mise exec`); precompiled Ruby + native gems needing OpenSSL headers. Why: test commands silently ran with the dev env file's flags.
+
 ## 2026-10-29 — t3-setup: sender playbook for onboarding a colleague
 
 - New `setup/t3-setup/onboarding.md` (flow, ZIP layout, parallel lanes, human-touch queue, resume rules, checklist of what onboardings forget), `discovery.md` (person + repos → access manifest via parallel read-only clusters: own/shared/local/sender-only per credential, destinations, grants, decisions) and `verification.md` (checkpoint file in the recipient's setup repo, safe local app feedback loop, two-column acceptance matrix). `SKILL.md` links them. Why: each onboarding rebuilt a long custom prompt from scratch; the sender side (what to grant, what to send, what the recipient mints, what was proven where) had no recipe, and prepared-on-sender results were reported as if they ran on the recipient's machine.

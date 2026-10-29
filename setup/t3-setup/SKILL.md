@@ -22,10 +22,13 @@ Onboarding someone else (you are the sender: discovery, grants, secrets, package
 Any agent with a shell can start: Claude Desktop (Code tab, local session), Codex, `claude`
 in a terminal. Install only what `command -v` misses; verify each with `--version`.
 
-- Homebrew needs the user's Mac password in a real terminal, which you cannot type. Missing →
-  ask them to paste this one line in Terminal.app, then continue yourself:
-  `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
-  Afterwards put the `brew shellenv` line it prints in `~/.zprofile`.
+- **One sudo moment, at the start.** You cannot type the Mac password, so plan every step needing it
+  first and fold them into the single line the user pastes in Terminal.app: the Homebrew installer
+  (`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`),
+  then in the same line (sudo's cached for ~5 min) `xcode-select --install` and every cask whose
+  `brew info --cask <name>` lists a `pkg` artifact (e.g. `session-manager-plugin`). A pkg found later →
+  install it user-locally (`pkgutil --expand-full` into `~/.local/share/<name>`, link the binary in
+  `~/.local/bin`), never a second paste. Then put the `brew shellenv` line in `~/.zprofile`.
 - `brew install git gh jq mise`; `eval "$(mise activate zsh)"` in `~/.zshrc`;
   `mise use --global node@22 pnpm uv`.
 - Claude Code CLI: `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`
@@ -35,7 +38,8 @@ in a terminal. Install only what `command -v` misses; verify each with `--versio
 - GitHub: `gh auth login --web`. No account yet → the user creates one with their work
   email and tells PJ the username (repo invitations).
 - Non-developer: this is the only terminal line they ever paste. Explain in their language,
-  in plain words, and do the rest yourself.
+  in plain words, and do the rest yourself. Never ask them to run a command you can run; their other
+  hands-on steps are browser logins/consents, Touch ID and pasting a secret into `request_secret`.
 
 ## Detect before creating
 

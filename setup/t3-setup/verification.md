@@ -19,6 +19,9 @@ issuance, OAuth mint) record "done at <time>" so a resumed session never repeats
 Coding agents need a boot + check loop that runs in seconds and cannot touch the outside world.
 
 1. Runtime from the repo's pins (`mise install`), deps (`bundle install` / `pnpm install`), native libs via brew.
+   One-off env overrides go after `mise exec --` (`mise exec -- env RAILS_ENV=test …`): the repo's mise env
+   file wins over `VAR=… mise exec`. mise's precompiled Ruby lacks system OpenSSL headers for some native gems:
+   `bundle config set --local build.<gem> "--with-openssl-dir=$(mise where ruby)"`.
 2. Database: compose service or throwaway container (`--tmpfs` data dir) bound to loopback; schema load,
    never a production dump.
 3. Seed: the repo's demo/fake seed (fictional names, `@example.invalid`); a seed that imports from
