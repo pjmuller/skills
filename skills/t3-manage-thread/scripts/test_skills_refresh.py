@@ -572,21 +572,30 @@ def test_refresh_never_pushes_the_users_unpushed_commits(env, tmp_path):
 
 def test_removed_command_still_used_by_the_user_is_listed(env, tmp_path):
     old = env["repo"] / "skills/demo/scripts/t3-old-cmd"
-    old.write_text("#!/bin/sh\n")
-    old.chmod(0o755)
+    moved = env["repo"] / "skills/demo/scripts/t3-moved-cmd"
+    for cmd in (old, moved):
+        cmd.write_text("#!/bin/sh\n")
+        cmd.chmod(0o755)
     release(env["repo"], "v0.3.0", "3")
     assert run(env, SKILLS_REFRESH_TAG="v0.3.0").returncode == 10
     old.unlink()
+    # A merge moves a command into another installed skill: not reported as removed.
+    (env["repo"] / "skills/other/scripts").mkdir(parents=True)
+    (env["repo"] / "skills/other/SKILL.md").write_text("other\n")
+    moved.rename(env["repo"] / "skills/other/scripts/t3-moved-cmd")
+    (env["home"] / "skills/other").mkdir()
+    (env["home"] / "skills/other/SKILL.md").write_text("other\n")
     release(env["repo"], "v0.4.0", "4")
     setup = tmp_path / "setup"
     (setup / "ai/skills/mine").mkdir(parents=True)
     (setup / "ai/AGENTS.md").write_text("me\nping with `t3-old-cmd --id x`\n")
-    (setup / "ai/skills/mine/SKILL.md").write_text("calls t3-old-cmd\nt3-old-cmd-v2 is fine\n")
+    (setup / "ai/skills/mine/SKILL.md").write_text("calls t3-old-cmd\nt3-old-cmd-v2 is fine\nt3-moved-cmd too\n")
     git(setup, "init", "-q")
     git(setup, "add", "-A")
     env["env"].update(SKILLS_REFRESH_PROMPT=str(setup / "ai/AGENTS.md"))
     result = run(env)
     assert result.returncode == 10 and "removed commands: t3-old-cmd" in result.stdout
+    assert "t3-moved-cmd" not in result.stdout
     block = result.stdout.split("ACTION NEEDED:")[1]
     assert f"{(setup / 'ai/AGENTS.md').resolve()}:2" in block and "ai/skills/mine/SKILL.md:1" in block
     assert block.count("t3-old-cmd") == 2

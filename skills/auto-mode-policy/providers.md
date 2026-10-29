@@ -5,12 +5,12 @@ a Claude JSON overlay has no effect on Codex.
 
 ## Claude
 
-Use the installed `claude-auto-mode` skill's `scripts/merge.py`: public baseline + company overlays +
-personal overlay, dry run then `--apply`. Use `--home` for every configured `CLAUDE_CONFIG_DIR`,
-including nonstandard paths. Preserve existing custom rules in canonical overlays before merging.
-Inspect each home's `claude auto-mode config`. Environment facts describe trust; narrow `autoMode.allow`
-entries resolve the specific false block. Keep defaults and deny rules; don't add broad tool allows.
-[Official configuration](https://code.claude.com/docs/en/auto-mode-config).
+[claude.md](claude.md): how the classifier decides, the layers, and `scripts/merge_claude.py` (public
+baseline + company overlays + personal overlay, dry run then `--apply`). Use `--home` for every configured
+`CLAUDE_CONFIG_DIR`, including nonstandard paths. Preserve existing custom rules in canonical overlays
+before merging. Inspect each home's `claude auto-mode config`. Environment facts describe trust; narrow
+`autoMode.allow` entries resolve the specific false block. Keep defaults and deny rules; don't add broad
+tool allows. [Official configuration](https://code.claude.com/docs/en/auto-mode-config).
 
 ## Codex
 

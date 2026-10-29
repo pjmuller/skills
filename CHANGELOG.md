@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-29 — Merged: claude-auto-mode → auto-mode-policy, t3-find-thread → t3-manage-thread
+
+- **auto-mode-policy** now carries the Claude adapter: [claude.md](skills/auto-mode-policy/claude.md), `scripts/merge_claude.py`, `claude-baseline.json` (moved unchanged). One skill and one install for setting up, editing and repairing Auto-mode rules on Claude and Codex. Why: the two descriptions pointed at each other, so agents had to pick one before starting, and the policy workflow depended on the other skill's script.
+- **t3-manage-thread** now ships `t3-find-thread` and `t3-open-thread` (same names, flags and cache; [find-thread.md](skills/t3-manage-thread/find-thread.md)); its `scripts/install` links them, but keeps links into an existing old `t3-find-thread` copy (its stub forwards here, and a skills-refresh rollback still finds its own links; `--relink` switches). Both scripts share the thread-id rule from `scripts/lib/thread_ids.py`. Why: `t3-mail-link` failed without the separately installed search command, and two skills both claimed "find threads".
+- `claude-auto-mode` and `t3-find-thread` stay one more release as deprecated stubs whose scripts forward to the new location (`merge.py`, `t3-find-thread`, `t3-open-thread`), so old setup scripts, PATH links and skills-refresh keep working. The forwarders find the new skill in any scope (sibling, behind its commands on PATH, global homes); `claude-auto-mode/scripts/merge.py` falls back to a frozen copy when auto-mode-policy is not installed; the stub's `install --check` verifies the commands actually run. Move links and setup commands to the new paths; the stubs go in a later release.
+- skills-refresh: a command that moved into another installed skill is no longer reported as removed.
+
 ## 2026-10-29 — t3-manage-thread, t3-schedule, t3-find-thread, recording-followups: north stars
 
 - Each intro opens with why to use it and how to get value (lead keeps the human out of the loop; time-bound next steps get scheduled, not remembered; past threads are reusable context; no call agreement gets lost). Why: their intros were mechanics only, so agents and colleagues could not answer "what is this for" from the skill.

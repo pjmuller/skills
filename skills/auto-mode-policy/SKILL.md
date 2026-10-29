@@ -1,6 +1,6 @@
 ---
 name: auto-mode-policy
-description: "Use when the user corrects a false Auto-mode denial (\"this should be allowed\", approves the blocked call, or switches to Full Access to clear it): turn it into a scoped standing rule on every Claude/Codex profile and verify it in Auto. Also onboarding this on a colleague's machine. Editing Claude rule files directly → claude-auto-mode."
+description: "Use for Claude Code / Codex Auto-mode rules: a false denial the user corrects (\"this should be allowed\", approves the blocked call, or switches to Full Access to clear it) becomes a scoped standing rule on every profile, verified in Auto; also setting up or editing auto mode (\"set up auto mode\", \"add an allow rule\", \"auto mode keeps blocking deploys\") without exfiltration or force-push holes, and onboarding a colleague's machine."
 ---
 
 # Auto-mode policy repair
@@ -9,6 +9,9 @@ Keep routine authorized work in Auto. A correction like “this should be allowe
 authorization evidence: capture its actual scope, fix the durable rule, resume the task. Don't
 require “go”, a second confirmation or Full Access when the correction already names the
 permission. An unexplained “no” is not a blanket authorization.
+
+Setting up or editing one provider's rules without a correction (first setup, a new overlay entry):
+[Claude](claude.md), [Codex](providers.md#codex).
 
 ## A mode switch is a correction
 
@@ -40,7 +43,7 @@ account trust from a billing label or assume another person's profiles share the
 | Personal authorization, exact roots and approved destinations | Private setup repo policy files |
 | Company-wide permission | Company's private overlay, subject to its policy |
 | Always-needed scope or pointer | Shared global AGENTS.md / CLAUDE.md |
-| Provider enforcement | [Provider adapters](providers.md), generated from those sources |
+| Provider enforcement | [Provider adapters](providers.md) ([Claude](claude.md)), generated from those sources |
 
 ## Generalize to the intent
 
@@ -84,7 +87,7 @@ action through another tool to bypass the reviewer.
 
 ## Colleague setup
 
-Install this skill in their private setup repo (plus `claude-auto-mode` for Claude), link its path
+Install this skill in their private setup repo (it carries the Claude adapter too), link its path
 from their global prompt, add a private policy pointer from [the template](template.md). Use their own
 homes, account trust and data roots; preserve their permission modes. Installing this playbook grants
 no access. No shared credentials or personal paths in the public template.

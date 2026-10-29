@@ -250,8 +250,9 @@ removed_refs() { # new tag
   for n in "${managed[@]}"; do
     for f in "$STATE/last-good/$n/scripts"/*; do
       b="${f##*/}"
+      # Moved to another installed skill (a merge) is not removed.
       [[ -f "$f" && -x "$f" && "$b" != *.* && "$b" != test_* && "$b" != install &&
-         ! -e "$SKILLS/$n/scripts/$b" ]] && removed+=("$b")
+         ! -e "$SKILLS/$n/scripts/$b" ]] && ! compgen -G "$SKILLS/*/scripts/$b" >/dev/null && removed+=("$b")
     done
   done
   ((${#removed[@]})) || return 0

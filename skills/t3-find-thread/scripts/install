@@ -1,80 +1,25 @@
 #!/usr/bin/env bash
-# Put t3-find-thread + t3-open-thread on PATH. Idempotent; run once per machine.
-#
-#   scripts/install            symlink the helpers into ~/.local/bin
-#   scripts/install --check    verify deps, the T3 store and the symlinks
-#
-# Override the target dir with T3_FIND_BIN.
+# Deprecated stub: t3-manage-thread ships t3-find-thread and t3-open-thread now. Installing links nothing
+# (always succeeds, so a skills-refresh never rolls back over it); --check verifies the commands work.
 set -euo pipefail
-
 script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
-bin_dir="${T3_FIND_BIN:-$HOME/.local/bin}"
-helpers=(t3-find-thread t3-open-thread)
-
 [[ $# == 0 || ( $# == 1 && ( "$1" == --check || "$1" == --relink ) ) ]] || { echo 'Usage: install [--check|--relink]' >&2; exit 2; }
-[[ "${1:-}" != --check ]] || echo "source $script_dir"
-if [[ "${1-}" == "--check" ]]; then
-  status=0
-  for dependency in uv python3; do
-    if command -v "$dependency" >/dev/null; then
-      printf 'ok      %s (%s)\n' "$dependency" "$(command -v "$dependency")"
-    else
-      printf 'MISSING %s\n' "$dependency"
-      status=1
-    fi
-  done
-  store="${T3CODE_HOME:-$HOME/.t3}/userdata/statev2.sqlite"
-  if [[ -f "$store" ]]; then
-    printf 'ok      T3 store (%s)\n' "$store"
-  else
-    printf 'MISSING T3 store at %s\n' "$store"
-    status=1
-  fi
-  for helper in "${helpers[@]}"; do
-    if [[ "$(readlink -f "$bin_dir/$helper" 2>/dev/null)" == "$script_dir/$helper" ]]; then
-      printf 'ok      %s on PATH (%s)\n' "$helper" "$bin_dir/$helper"
-    else
-      printf 'MISSING %s is not linked from %s (run scripts/install)\n' "$helper" "$bin_dir"
-      status=1
-    fi
-  done
-  exit "$status"
+source "$script_dir/resolve.sh"
+if [[ "${1:-}" != --check ]]; then
+  echo "t3-find-thread moved into t3-manage-thread: its scripts/install links the commands" >&2
+  exit 0
 fi
-
-# Preflight every link before changing any command.
-project_copy=false
-case "$script_dir" in
-  "$HOME"/.agents/skills/*|"$HOME"/.claude/skills/*) ;;
-  */.agents/skills/*|*/.claude/skills/*) project_copy=true ;;
-esac
-warn_project=false
-[[ ! -d "$HOME/.agents/skills/t3-find-thread" ]] || warn_project=true
+echo "source $script_dir"
+status=0
 for command_name in t3-find-thread t3-open-thread; do
-  existing="$(readlink -f "$bin_dir/$command_name" 2>/dev/null || true)"
-  if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
-    warn_project=true
-    if [[ "${1:-}" != --relink ]]; then
-      echo "refusing checkout change: $existing -> $script_dir/$command_name; re-run from the checkout you want to be canonical, or pass --relink" >&2
-      exit 1
-    fi
+  if ! dir="$(manage_scripts "$command_name")"; then
+    printf 'MISSING %s: install t3-manage-thread, then its scripts/install\n' "$command_name"; status=1
+  elif ! command -v "$command_name" >/dev/null; then
+    printf 'MISSING %s not on PATH: run %s/install\n' "$command_name" "$dir"; status=1
+  elif ! "$command_name" --help >/dev/null 2>&1; then
+    printf 'MISSING %s on PATH fails: run %s/install --check\n' "$command_name" "$dir"; status=1
+  else
+    printf 'ok      %s (t3-manage-thread at %s)\n' "$command_name" "$dir"
   fi
 done
-if $project_copy && $warn_project; then
-  echo "warning: project copy $script_dir is being made global" >&2
-fi
-
-mkdir -p "$bin_dir"
-for helper in "${helpers[@]}"; do
-  chmod +x "$script_dir/$helper"
-  target="$bin_dir/$helper"
-  if [[ -e "$target" && ! -L "$target" ]]; then
-    echo "SKIP $target (exists and is not a symlink)" >&2
-    exit 1
-  fi
-  ln -sfn "$script_dir/$helper" "$target"
-  echo "LINK $target -> $script_dir/$helper"
-done
-case ":$PATH:" in
-  *":$bin_dir:"*) ;;
-  *) echo "note: $bin_dir is not on your PATH; add it to your shell profile." >&2 ;;
-esac
+exit "$status"

@@ -1,6 +1,6 @@
 ---
 name: t3-maintenance
-description: "Use for fleet-wide T3 housekeeping: a thread inventory, monthly cleanup, stuck or undelivered delegated tasks, threads that hit a usage limit, purging old threads (disk, secrets), \"would this secret be redacted?\", unsent composer drafts, preview tabs eating RAM, \"mine my prompts\". One thread → t3-manage-thread; finding one → t3-find-thread."
+description: "Use for fleet-wide T3 housekeeping: a thread inventory, monthly cleanup, stuck or undelivered delegated tasks, threads that hit a usage limit, purging old threads (disk, secrets), \"would this secret be redacted?\", unsent composer drafts, preview tabs eating RAM, \"mine my prompts\". One thread → t3-manage-thread; finding one → t3-manage-thread (t3-find-thread)."
 ---
 
 # T3 Maintenance
@@ -41,7 +41,7 @@ edit only when asked.
 
 Purge frees disk and drops secrets from T3, yet old threads stay findable: one cumulative SQLite file
 `~/.t3/backups/t3-archive.sqlite` (mode 600, `$T3_ARCHIVE`), FTS5 search for
-[t3-find-thread](../t3-find-thread/SKILL.md). Search-only: only purge's `--full-backup` restores.
+[t3-find-thread](../t3-manage-thread/find-thread.md). Search-only: only purge's `--full-backup` restores.
 
 - **Every write redacts secrets first**, deterministically (an LLM judge would see the values again).
   Rules and known misses: docstring of `scripts/t3_redact.py`. `check` runs the same `redacted()` call:

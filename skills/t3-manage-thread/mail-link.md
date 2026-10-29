@@ -44,7 +44,7 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   hint (relay it), reads the Chrome tab title for subject + account, then searches; several matches →
   candidates, exit 3: ask the user.
 - **Find the owner** (`find`, read-only): resolve, then search T3
-  ([t3-find-thread](../t3-find-thread/SKILL.md), purged threads included) for every id form of the
+  ([t3-find-thread](find-thread.md), purged threads included) for every id form of the
   thread and its messages. Ranks `owner` (watched case, else the latest claim T3 recorded, poller
   rules, so unwatched accounts work too) > `marker` > `id`; no id hit → subject search, flagged `topic`
   (weak). `history` = children that held the ids, with their `parent`: earlier work, never owners.

@@ -9,7 +9,15 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
 bin_dir="${T3_MANAGE_BIN:-$HOME/.local/bin}"
-helpers=(t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh)
+helpers=(t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh t3-find-thread t3-open-thread)
+
+# t3-find-thread/t3-open-thread moved here from the retired t3-find-thread skill. A link into an existing
+# copy of that skill stays: its stub forwards here, and a skills-refresh rollback restores its own links.
+legacy_link() { # command
+  local target
+  target="$(readlink -f "$bin_dir/$1" 2>/dev/null || true)"
+  [[ -e "$target" && "$(dirname "$target")" == */t3-find-thread/scripts ]]
+}
 
 check() {
   local status=0 dependency
@@ -61,6 +69,8 @@ check() {
     if [[ "$(command -v "$helper" 2>/dev/null || true)" == "$bin_dir/$helper" ]] &&
        [[ "$(readlink -f "$bin_dir/$helper")" == "$script_dir/$helper" ]]; then
       printf 'ok      %s on PATH\n' "$helper"
+    elif legacy_link "$helper"; then
+      printf 'ok      %s on PATH (via the old t3-find-thread copy)\n' "$helper"
     else
       printf 'MISSING %s is not linked from %s (run scripts/install)\n' "$helper" "$bin_dir"
       status=1
@@ -84,8 +94,9 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/t3-manage-thread" ]] || warn_project=true
-for command_name in t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh; do
+for command_name in t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh t3-find-thread t3-open-thread; do
   existing="$(readlink -f "$bin_dir/$command_name" 2>/dev/null || true)"
+  ! legacy_link "$command_name" || continue
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
     if [[ "${1:-}" != --relink ]]; then
@@ -114,6 +125,10 @@ for helper in "${helpers[@]}"; do
   fi
   if [[ -L "$target_path" && "$(readlink "$target_path")" == "$source_path" ]]; then
     echo "OK   $target_path -> $source_path"
+    continue
+  fi
+  if [[ "${1:-}" != --relink ]] && legacy_link "$helper"; then
+    echo "KEEP $target_path (old t3-find-thread copy, forwards here once updated; --relink switches)"
     continue
   fi
   ln -sfn "$source_path" "$target_path"

@@ -172,16 +172,16 @@ home without requiring another “go” or Full Access. Installing a template gr
 For Codex, follow its provider adapter: complete verified active default + private supplement; preserve
 sandbox/mode and check effective app-server policy. The Claude adapter follows below.
 
-Goal: agents run without permission clicks, and data protection stays as strict as before. In the setup repo:
-`pnpm dlx skills add pjmuller/skills -s claude-auto-mode -y $A` (repo-local). Write `ai/claude-auto-mode.json`
+Goal: agents run without permission clicks, and data protection stays as strict as before. In the setup repo
+(the skill above carries the Claude adapter): write `ai/claude-auto-mode.json`
 (personal overlay, `autoMode.environment` only: Organization line with name, role and companies; own GitHub owner;
 secrets manager; Host containment incl. OS/WSL; no secrets). Company overlays = `.agents/claude-auto-mode.json` in
 each company repo cloned under `~/code` (pull first). Existing `autoMode` entries in a home → move them into the
 personal overlay, then run
-`uv run .claude/skills/claude-auto-mode/scripts/merge.py <company overlays> ai/claude-auto-mode.json --apply`
+`uv run .claude/skills/auto-mode-policy/scripts/merge_claude.py <company overlays> ai/claude-auto-mode.json --apply`
 (all homes; record the command in SETUP.md, re-run when an overlay changes). T3 Settings: new threads default to
 Auto. Non-developers keep their deploy guard in the global prompt; the baseline deploy rule only fires when the
-user asks for that deploy. [Skill](../../skills/claude-auto-mode/SKILL.md).
+user asks for that deploy. [Claude adapter](../../skills/auto-mode-policy/claude.md).
 
 ## Verify live and record
 

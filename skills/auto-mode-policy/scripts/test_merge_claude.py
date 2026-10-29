@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from merge import BASELINE, combine, merged  # noqa: E402
+from merge_claude import BASELINE, combine, merged  # noqa: E402
 
 
 def test_defaults_first_dedup_and_order():
@@ -27,7 +27,7 @@ def test_apply_is_idempotent(tmp_path):
     (tmp_path / 'settings.json').write_text('{"theme": "dark"}')
     overlay = tmp_path / 'overlay.json'
     overlay.write_text(json.dumps({'autoMode': {'environment': ['Source control: GitHub owner example-org']}}))
-    run = lambda *a: subprocess.run([sys.executable, str(Path(__file__).parent / 'merge.py'), str(overlay),
+    run = lambda *a: subprocess.run([sys.executable, str(Path(__file__).parent / 'merge_claude.py'), str(overlay),
                                      '--home', str(tmp_path), *a], capture_output=True, text=True, check=True).stdout
     assert 'SET' in run('--apply')
     assert 'KEEP' in run('--apply')

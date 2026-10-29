@@ -14,8 +14,8 @@ In the user's personal setup repository:
 pnpm dlx skills add pjmuller/skills -s t3-route -a claude-code codex -y
 ```
 
-No installer here. Install/check the command skills actually needed (`t3-manage-thread`;
-`t3-find-thread` for reuse) with each skill's `scripts/install` and `--check`; verify T3
+No installer here. Install/check the command skills actually needed (`t3-manage-thread`,
+which also ships `t3-find-thread` for reuse) with each skill's `scripts/install` and `--check`; verify T3
 connectivity and helpers, not just registration. Follow the repo's existing Claude/Codex layout
 (a source owner may use its source-symlink convention); no competing copies. Enabling Gmail:
 `t3-mail-link resolve --help` must work; if `resolve` is missing, refresh through the existing

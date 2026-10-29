@@ -638,7 +638,7 @@ def thread_draft_ids(ws, ref: str | None, gmail_thread: str) -> list[str]:
 def find_thread(*argv: str):
     exe = shutil.which("t3-find-thread")
     if not exe:
-        raise SystemExit("t3-find-thread not on PATH: run skills/t3-find-thread/scripts/install")
+        raise SystemExit("t3-find-thread not on PATH: run skills/t3-manage-thread/scripts/install")
     result = subprocess.run([exe, "--json", *argv], capture_output=True, text=True, timeout=180)
     if result.returncode:
         raise SystemExit(f"t3-find-thread {argv[0]} failed: {result.stderr.strip()}")

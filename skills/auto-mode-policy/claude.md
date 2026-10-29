@@ -1,0 +1,68 @@
+# Claude adapter
+
+Goal: auto mode without clicking, without loosening what protects data. The classifier is a
+backstop against rogue or injected actions, not a QA gate.
+
+Corrections and fleet repair follow the [workflow](SKILL.md); this file is how Claude enforces it.
+
+## How auto mode decides ([docs](https://code.claude.com/docs/en/permission-modes#how-auto-mode-evaluates-actions))
+
+1. `permissions` deny/ask/allow rules resolve first. A narrow allow rule (`Bash(npm test)`) **skips the
+   classifier**; broad ones (`Bash(*)`, `Bash(python*)`) are dropped in auto mode.
+2. Reads, and edits inside the working directories, are auto-approved, except protected paths (`.claude/`, `.git`, …).
+3. Everything else goes to the classifier. `hard_deny` blocks unconditionally; a matching `soft_deny` blocks unless an
+   `autoMode.allow` exception or explicit user intent clears it. The intent has to name the action and its specifics
+   ("force-push branch X"). "Go ahead" names nothing. It clears one action, not later ones.
+4. The classifier sees user messages, commands and CLAUDE.md, **not tool output**. A rule can require "command X
+   ran", never "X succeeded".
+
+`autoMode` is read from user settings (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR/settings.json`), managed
+settings and `--settings`, never from a repo's `.claude/settings*.json` ([docs](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration)),
+hence overlays get merged into user settings.
+
+## Layers
+
+| Layer | Where | Holds |
+|---|---|---|
+| Baseline | [`claude-baseline.json`](claude-baseline.json) (this skill, public) | generic allows (deploy via the listed channel after tests + prod diff, code edits ≠ their effect, reads after an unrelated denial, vendor cleanup with export + ID file + dry run + `--max N`, worktree file ops), force-push hard deny |
+| Company overlay | `.agents/claude-auto-mode.json` in the company's main private repo | GitHub owner, cloud accounts, production deploy channels, sensitive data, company-only allows |
+| Personal overlay | your setup repo | organization/role line, personal repos, secrets manager, host |
+
+Overlays use the baseline's shape: `environment` for facts, `allow` for exceptions. Company internals stay out of
+this public repo; list vendors as external SaaS with their allowed operations, never as trusted internal services:
+
+```json
+{"autoMode": {"environment": [
+  "Source control: GitHub owner example-org (private repos).",
+  "CI/CD deploy targets (production channels): example-org/api deploys production on a push to `stable`."
+]}}
+```
+
+## Apply
+
+```sh
+uv run <this skill>/scripts/merge_claude.py <company overlays…> <personal overlay>          # dry run
+uv run <this skill>/scripts/merge_claude.py <company overlays…> <personal overlay> --apply  # all Claude homes
+CLAUDE_CONFIG_DIR=<home> claude auto-mode config | jq '.allow | length'               # verify
+```
+
+The script owns the four `autoMode` rule lists (`"$defaults"` first) and adds `permissions.deny` entries; other
+settings stay. Default homes: `~/.claude`, `~/.claude_*_home`, `$CLAUDE_CONFIG_DIR`. Hand-added or `/permissions`
+autoMode rules get overwritten: put them in your personal overlay. **Read an overlay's diff before applying: a repo
+file becomes user-level trust.**
+
+Probe in a throwaway repo with a local bare remote:
+`claude -p --permission-mode auto "run: git push --force origin main"` must be denied, and a `sed -n` read right
+after that must run.
+
+## Habits that avoid blocks
+- Bulk vendor change: export, then an ID file, then a dry run, then `--apply --max N` reading the same ID file. Ask
+  the user once, naming the system, the record kind and the max count.
+- Deploy: run the prod-vs-ship comparison (`git log origin/stable..HEAD`) right before shipping, after tests.
+- Blocked → no workaround through another tool. A user-authorized correction goes through canonical overlays,
+  an inspected diff and the fleet apply, without a second approval. Without that authorization, never loosen
+  settings to make a denied action run.
+
+## Never add
+Allows for exfiltration, credential printing or customer PII leaving the company's accounts. A `soft_deny`/`hard_deny`
+list without `"$defaults"`. A `permissions.allow` rule for deploys or deletes: it would skip the classifier's content checks.
