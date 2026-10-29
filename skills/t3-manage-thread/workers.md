@@ -55,8 +55,8 @@ t3_thread_launch {title: "📤 <3-6 words>", projectId, message: "Read and execu
 - Visible thread. Fire-and-forget only on the user's go or a routing policy: append the [completion footer](settle-thread.md#completion-footer-for-t3_thread_launch).
 - Pass `runtimeMode` deliberately (user's choice, else the operator's default): omitted, it inherits the caller's mode (possibly `full-access`), not the app's new-thread default. It can't exceed the caller's ([ceiling](permission-ceiling.md)); never broaden it to get past an approval failure.
 - `projectId` = repo owning the work (not yours → say so in the brief). Default workspace: project **root**, not your worktree.
-- **No retry key**: error or lost response → check `t3_thread_list` before relaunching.
-- Report `[title](t3-thread://v1/<threadId>)`, `threadId` verbatim incl. prefix (`t3-thread://v1/mcp:287f…`): never strip `mcp:` or URL-encode.
+- **Retry key** (T3 ≥ 0.1.4, [#16654](https://github.com/pingdotgg/t3code/pull/16654)): pass `clientRequestId`; after an error or lost response, retry with the same key: it returns the same thread instead of a second one. Older T3: check `t3_thread_list` before relaunching.
+- Report the tool's `link` verbatim (T3 ≥ 0.1.4: `<t3-thread://v2/<environmentId>/<threadId>>`, shows the current title, [#26239](https://github.com/pingdotgg/t3code/pull/26239)). Hand-built `[title](t3-thread://v1/<threadId>)` still opens: `threadId` verbatim incl. prefix (`mcp:287f…`), never strip `mcp:` or URL-encode.
 
 ## Briefs and titles
 

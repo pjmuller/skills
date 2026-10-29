@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — t3-manage-thread: T3 0.1.4 launch retry key and v2 thread links
+
+- `workers.md`, `dispatch-workers.md`: `t3_thread_launch` takes `clientRequestId` on T3 ≥ 0.1.4 ([#16654](https://github.com/pingdotgg/t3code/pull/16654)); a retry with the same key returns the same thread. Report the tool's `link` verbatim (now `<t3-thread://v2/<environmentId>/<threadId>>`, live title, [#26239](https://github.com/pingdotgg/t3code/pull/26239)); hand-built v1 links still open. Why: the docs said "no retry key", so agents checked `t3_thread_list` by hand or risked duplicate threads after a lost reply.
+
 ## 2026-10-29 — Merged: claude-auto-mode → auto-mode-policy, t3-find-thread → t3-manage-thread
 
 - **auto-mode-policy** now carries the Claude adapter: [claude.md](skills/auto-mode-policy/claude.md), `scripts/merge_claude.py`, `claude-baseline.json` (moved unchanged). One skill and one install for setting up, editing and repairing Auto-mode rules on Claude and Codex. Why: the two descriptions pointed at each other, so agents had to pick one before starting, and the policy workflow depended on the other skill's script.

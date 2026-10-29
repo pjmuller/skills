@@ -29,5 +29,6 @@ one-line "meeting adds" is not.
 ## Bookkeeping
 
 `projectId` = the primary repo; one worker per ticket. Record `item | thread-id | route | launched-at`
-in a git-ignored run file so a rerun skips dispatched items (`t3_thread_launch` has no retry key).
+in a git-ignored run file so a rerun skips dispatched items; also pass `clientRequestId` = `<run>-<item>` so a retried launch
+returns the same thread (T3 ≥ 0.1.4).
 Threads finish under the project's own auto-settle rule if it has one.
