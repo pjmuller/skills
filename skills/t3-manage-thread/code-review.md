@@ -21,7 +21,7 @@ Review makes the change correct, not bigger. Max 3 rounds: round 1 = full diff, 
 - Judge by repo conventions (nearest AGENTS.md/CLAUDE.md, neighbouring code), citing the rule, not generic best practice.
 - Finding = `file:line` + concrete failure (inputs/state → wrong output/crash) + why it matters; else not a finding.
 - Label `blocker` (intended case wrong) · `should` (bug callers will hit) · `nit` (other paths, rare cases, small perf, extra compat); ids stable across rounds (S1…).
-- Confidence ≥80%. Skip pre-existing issues, untouched lines, what linter/typecheck/CI catches when it actually ran, generic "more tests/docs", style.
+- Confidence ≥80%. Skip pre-existing issues, untouched lines, what linter/typecheck/CI catches, generic "more tests/docs", style.
 - Order: correctness/regressions → reuse/simplification → consistency. Tests reviewed as code: would they fail if the logic broke?
 - May patch clear, contained bugs; larger → finding + rationale.
 - One-line verdict: "improves code health", not perfection; "ship with minors" is valid.
@@ -33,7 +33,7 @@ Review makes the change correct, not bigger. Max 3 rounds: round 1 = full diff, 
 - "Implement this properly" → YAGNI: grep callers; unused → propose deletion.
 - Order: clarify unclear, then blocking → trivial → complex; re-verify each.
 - Disputed after two replies, or open at budget end → one line per side to the user. Then fix, re-verify, commit.
-- Report line: `Review: <model>, <N> rounds @<sha>, <verdict>; declined: S2 (why)`; a later push leaves it at that sha. An override is never "approved". It goes into the PR's Evidence ([pr-review](../pr-review/SKILL.md)).
+- Report line: `Review: <model>, <N> rounds, <verdict>; declined: S2 (why)`. An override is never "approved".
 
 ## In T3
 - Reviewer = 🏓 [`delegate_task`](workers.md#-delegate_task) (`role: "review"`, task = brief path, target `t3-pick-instance sol|opus`), one per round; revisions may use `isolation: "worktree"`.

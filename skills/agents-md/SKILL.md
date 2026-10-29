@@ -16,7 +16,6 @@ outcome; leave implementation open unless a real constraint or verification need
 | Product-owner vs developer adaptation, agent-owned Git housekeeping | [roles.md](roles.md) |
 | Handoffs: relay prompt, dev → non-technical, bug report → dev | [handoff.md](handoff.md) |
 | Independent review and reasoned pushback | [review procedure](../t3-manage-thread/code-review.md) |
-| PR description, notifying the approver, reviewing a PR | [pr-review](../pr-review/SKILL.md) |
 
 Bundled files are templates; the person's live prompt stays outside this installation (skill
 updates replace it). Where to register: [README](../../README.md#registration-scope).
