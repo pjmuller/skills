@@ -17,7 +17,10 @@ Scope: every thread holding an unsent draft, plus
 only a note or declined) whose newest mail is an unanswered message from a person, with no draft.
 Older undrafted inbox mail stays ReplyPen's triage. A green ReplyPen run is evidence, never proof.
 
-**T3 is the memory; no state files across runs.** Gmail holds mail and drafts, `rp` the runs, T3 who
+Inbound that is not Gmail (an app's ticket table) → the wrapper binds a ticket adapter instead of
+`cockpit.py`; every other step stays ([adapters](references/adapters.md)).
+
+**T3 is the memory; no state files across runs** (a ticket adapter keeps a small per-machine one). Gmail holds mail and drafts, `rp` the runs, T3 who
 handles what and what was decided (`Mail-ref` claims, case threads, each day's 🧭 report and the
 operator's replies). A run's bundle directory is that run's scratch plus correction audits. One
 machine runs a mailbox at a time.
