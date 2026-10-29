@@ -70,6 +70,27 @@ def test_keep_clones_into_excluded_repo_dir_and_reuses(media, tmp_path):
     assert other[0] == 3 and "kept" not in other[1]
 
 
+def test_keep_in_already_ignored_dir_writes_nothing_else(media, tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".git" / "info" / "exclude").write_text("/.video-intake/\n")
+    exclude_before = (repo / ".git" / "info" / "exclude").read_text()
+    rc, out, _ = run(media["video"], "--keep", cwd=repo)
+    assert rc == 0 and not (repo / ".video-intake" / ".gitignore").exists()
+    assert (repo / ".git" / "info" / "exclude").read_text() == exclude_before
+
+
+def test_unwritable_keep_dir_is_actionable_not_a_traceback(media, tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        rc, _, err = run(media["video"], "--keep", locked)
+    finally:
+        locked.chmod(0o700)
+    assert rc == 4 and "escalation" in err and "Traceback" not in err
+
+
 def test_stills_for_project_identification(media, tmp_path):
     rc, out, _ = run(media["video"], "--stills", "--keep", tmp_path / "private")
     shots = [Path(p) for p in out["stills"]]

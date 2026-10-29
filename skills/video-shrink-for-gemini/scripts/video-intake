@@ -20,9 +20,10 @@ own clone in its own repo: the router before launch, the execution thread again 
 --stills (implies --keep): up to three 960 px JPEGs at 5 s, the middle and 5 s before the end (clamped and
 deduplicated for short clips) in `<kept stem>.stills/`, so a router can tell which product is on screen without
 the video or a model call. Bare-video routing only; the execution thread still looks at frames itself.
-DIR defaults to `<git root>/.video-intake/`, added to `.git/info/exclude`; an explicit DIR inside a repo must
-already be git-ignored. Same name + same bytes → reused; else " (2)".
-Exit 2: PATH missing; 3: not a video (kind printed: route audio/image their own way).
+DIR defaults to `<git root>/.video-intake/`, made self-ignoring (a `*` .gitignore inside, never a .git/ write)
+unless already ignored; an explicit DIR inside a repo must already be git-ignored. Same name + same bytes → reused; else " (2)".
+Exit 2: PATH missing; 3: not a video (kind printed: route audio/image their own way); 4: keep folder not
+writable (sandbox): rerun the same command escalated.
 """
 from __future__ import annotations
 
@@ -104,10 +105,8 @@ def keep_dir(explicit: str | None) -> Path:
     target = Path(root) / DEFAULT_DIR
     target.mkdir(mode=0o700, exist_ok=True)
     if git(target, "check-ignore", "-q", "--no-index", str(target / "probe")) is None:
-        exclude = Path(root) / git(Path(root), "rev-parse", "--git-path", "info/exclude")
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        with exclude.open("a") as f:
-            f.write(f"\n/{DEFAULT_DIR}/\n")
+        # Self-ignoring folder: never writes .git/, which Codex's sandbox keeps read-only.
+        (target / ".gitignore").write_text("*\n")
     return target
 
 
@@ -190,9 +189,14 @@ def main() -> int:
     if clock := wallclock(name):
         facts["wallclock_start"] = clock
     if facts["kind"] == "video" and (args.keep is not None or args.stills):
-        facts["kept"] = str(keep(src, name, keep_dir(args.keep or None)))
-        if args.stills:
-            facts["stills"] = stills(Path(facts["kept"]), facts["duration_s"])
+        try:
+            facts["kept"] = str(keep(src, name, keep_dir(args.keep or None)))
+            if args.stills:
+                facts["stills"] = stills(Path(facts["kept"]), facts["duration_s"])
+        except PermissionError as e:
+            print(f"cannot write {e.filename}: rerun this same command with sandbox escalation (never a /tmp cache "
+                  "or other detour), or pass --keep DIR you may write", file=sys.stderr)
+            return 4
     if facts["kind"] == "video":
         facts["next"] = "video-shrink-for-gemini: shrink-video --preset ui|normal <kept>, prompt with project vocabulary"
     if args.json:

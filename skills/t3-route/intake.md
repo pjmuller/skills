@@ -69,6 +69,8 @@ model, whatever it is. That is T3 transport, not this skill: an older or changed
    from the routing repo: kind from the streams (video, audio, image, unknown), duration, wall-clock, and a
    clone outside T3's folder, which T3 deletes with the routing thread. Never transcribe or play the video
    here. Not a video → its own branch (audio: voice-note transcription; image: screenshot).
+   The user says it's only a paste/attachment test → stop here: confirm what arrived (reference only) and the
+   kept path; no owner question, transcription or launch.
 2. Owner from the user's text, the conversation and the catalog; a CleanShot file name proves nothing.
    Text doesn't settle it → rerun with `--stills` and view its three stills (5 s, middle, 5 s before the
    end): the product UI, domain or repo on screen usually names the owner. Still unclear → one question

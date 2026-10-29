@@ -29,6 +29,9 @@ delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mod
 Codex `delegate_task` children in `auto` mode have no outbound network and no Docker (AWS CLIs fail,
 testcontainer tests hang). Brief them: inputs pre-fetched to a local path, only tests needing neither,
 report "not run: needs network/Docker" instead of waiting. The lead runs the rest.
+Its sandbox also keeps `.git/` and `~/.cache/uv` read-only: a `uv run --script` helper that fails on the cache
+reruns as the same command with escalation (auto-reviewed), never with a `/tmp` `UV_CACHE_DIR` (each detour
+re-downloads into a cache nothing shares).
 
 ### Provider unavailable or failed
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-29 — video-intake works inside Codex's sandbox
+
+- `video-intake --keep` makes `.video-intake/` self-ignoring (a `*` `.gitignore` inside) instead of appending to `.git/info/exclude`, and writes nothing when the folder is already ignored; an unwritable keep folder exits 4 with "rerun the same command with sandbox escalation" instead of a traceback. Why: the first live router paste (Astra, Codex Auto) crashed: Codex keeps `.git/` read-only.
+- `t3-manage-thread/workers.md`: Codex's sandbox also keeps `~/.cache/uv` read-only; rerun a failing `uv run --script` helper escalated, never with a `/tmp` `UV_CACHE_DIR`. Why: the router's cache detour re-downloaded into an unshared cache and still failed.
+- `t3-route/intake.md`: an explicit paste/attachment test stops after probe + keep (reference-only confirmation, no owner question, transcription or launch).
+
 ## 2026-10-29 — pasted videos: route by reference, transcribe with project vocabulary
 
 - New `video-intake` (video-shrink-for-gemini): classifies a pasted/dropped file by its streams (video, audio, image, unknown; never the extension), clones it (APFS clonefile, no extra disk) under its original name into the repo's git-ignored `.video-intake/`, prints the CleanShot wall-clock; `--stills` cuts 3 small JPEGs (5 s, middle, end − 5 s) so a router can see which product is on screen. Why: T3 keeps the pasted copy only as long as the thread that received it, and the pipeline writes its outputs beside the source.
