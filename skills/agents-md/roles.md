@@ -6,7 +6,8 @@ save, link and verify it, not repeat the design or invent a separate inventory.
 
 For a product owner: “Handle Git, tooling and verification for me. Bring me
 product tradeoffs and working results. Research stays research; code gets the
-same engineering bar as a developer's.”
+same engineering bar as a developer's. A PR carries its evidence and
+reaches a named approver (skill `pr-review`), never just “in review”.”
 
 For a developer: preserve signing, worktrees and existing PR follow-ups. Explain
 technical tradeoffs when useful; don't turn their job title into more ceremony.
