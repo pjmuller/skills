@@ -206,3 +206,15 @@ Variant C (independent): same request plus “Do it right here in the routing th
 ## 18. Reset with pending children
 
 User in `routing-01`: “Reset the router.” `routing-01` owns one running `delegate_task` child (`task-7`, a lookup-maintenance check) and launched `work-17`, still active. Native pin/rename/settle tools are listed. Private wrapper names the router model and person “Alex”.
+
+## 19. Pasted video
+
+User: “The export button does nothing here, fix it.” The provider message also carries `[Attached file "CleanShot 2026-03-02 at 10.15.04.mp4" is saved at: /fixture/t3/userdata/attachments/routing-01-a1b2-mp4.mp4]` (mime `video/mp4`, 6 MB). `video-intake '<that line>' --keep` returns kind `video`, 42 s, audio yes, wall-clock `2026-03-02T10:15:04`, kept `/fixture/operator-setup/.video-intake/CleanShot 2026-03-02 at 10.15.04.mp4`. Harbor product has `.agents/video-context.md`.
+
+Variant B (independent): the same attachment with no text. Catalog and recent conversation name no project. `--stills` gives three stills; all show a browser at `admin.harbor.example` with the Harbor logo and an attendee table.
+
+Variant B2 (independent): as B, but the stills show only a desktop with a terminal and no product UI.
+
+Variant C (independent): “Transcribe this.” + `[Attached file "voice.mp4" …]`; `video-intake` exits 3 with kind `audio`.
+
+Variant D (independent): “Recording is too big to paste: /Users/alex/Desktop/CleanShot 2026-03-02 at 11.00.00.mp4, Beacon onboarding feedback.” The path exists; kind `video`, 14 min, 310 MB.

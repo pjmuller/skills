@@ -1,6 +1,6 @@
 ---
 name: video-shrink-for-gemini
-description: "Use for \"transcribe this video/call\", \"what happens in this recording\", a product-feedback or silent UI walkthrough, a Fathom/Loom/Leexi/SyncUp link, or shrinking a video for Gemini: ends in a verified Markdown transcript or visual narration. No Gemini → video-frames-for-vision."
+description: "Use for \"transcribe this video/call\", \"what happens in this recording\", a pasted/dropped video file, a product-feedback or silent UI walkthrough, a Fathom/Loom/Leexi/SyncUp link, or shrinking a video for Gemini: ends in a verified Markdown transcript or visual narration. No Gemini → video-frames-for-vision."
 ---
 
 # Video → Gemini
@@ -9,7 +9,7 @@ Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a paste-promp
 built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source. Helpers (`--help`
 each, which also holds their measurements): `shrink-video`, `build-prompt`, `download-fathom`,
 `download-loom`, `detect-screenshare`, `transcribe-gemini`, `extract-keyframes`, `transcribe-local`,
-`transcribe-openai`.
+`transcribe-openai`, `video-intake`.
 `scripts/install` links them; `--check` verifies deps and the key.
 
 Route: `transcribe-gemini` (Gemini API) → continuous audiovisual narrative; native `agy` only
@@ -31,6 +31,24 @@ URLs; keep stable record ids and safe app links.
   ([reference](../clickup-core/reference.md#syncup-recordings)).
 
 A vendor transcript is the speech layer; Gemini adds the screen and checks what the vendor heard.
+
+### Pasted or dropped file
+
+T3 hands the agent `[Attached file "<name>" is saved at: <path>]` (never the bytes). `video-intake '<that
+line>' --keep` classifies by content (exit 3 = audio/image/unknown, not this pipeline), clones it under its
+original name to the repo's git-ignored `.video-intake/` and prints the CleanShot wall-clock. Work on the
+clone; never write beside T3's copy. A routing thread already kept one: keep again from that path in this
+repo (a clone, no extra disk). `--stills` (3 small JPEGs at 5 s, middle, end − 5 s) is the router's
+project hint; still look at your own frames below.
+
+A skill in this repo whose **description** fits this recording owns the whole flow (e.g. a product's
+onboarding-feedback walkthrough skill): pick it like any skill, never by grepping for this core's name (most
+skills that mention it are meeting pipelines). Vocabulary for the prompt, first hit wins; record which files
+fed it:
+1. `.agents/video-context.md`: the project's spoken names and terms, language, UI-copy paths (no secrets
+   or customer data);
+2. else `AGENTS.md`, the project's glossary/business-context skill and UI copy.
+Words you could not source stay out: a guessed term makes Gemini spell it that way.
 
 ## Inspect and choose mode
 

@@ -1,0 +1,206 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Classify a pasted/dropped media file by its content and (optionally) keep a durable copy. No model call.
+
+  video-intake PATH [--name ORIGINAL] [--keep [DIR]] [--stills] [--json]
+
+PATH is usually the line T3 Code gives the agent for a pasted file: `[Attached file "<ORIGINAL>" is saved at:
+<PATH>]` (T3 0.1.5 sends only that text plus name/mime/size metadata to Claude and Codex; it never inlines
+video bytes or frames, and blocks files over 50 MiB at paste). Pass ORIGINAL with --name: T3 renames the stored
+copy, and a CleanShot name carries the recording's wall-clock start.
+
+Without --keep: read-only probe (ffprobe), safe for a routing thread. Prints kind (video | audio | image |
+unknown, from the streams, never the extension), duration, size, audio presence, wall-clock and the next step.
+--keep: clone the file (APFS clonefile, so no extra disk until edited; plain copy elsewhere) to DIR under its
+original name (chmod 600, published atomically), so shrink-video/transcribe-gemini write beside it there and
+not into T3's attachment folder (deleted with the owning thread). Every thread that works on the video keeps its
+own clone in its own repo: the router before launch, the execution thread again from the router's copy.
+--stills (implies --keep): up to three 960 px JPEGs at 5 s, the middle and 5 s before the end (clamped and
+deduplicated for short clips) in `<kept stem>.stills/`, so a router can tell which product is on screen without
+the video or a model call. Bare-video routing only; the execution thread still looks at frames itself.
+DIR defaults to `<git root>/.video-intake/`, added to `.git/info/exclude`; an explicit DIR inside a repo must
+already be git-ignored. Same name + same bytes → reused; else " (2)".
+Exit 2: PATH missing; 3: not a video (kind printed: route audio/image their own way).
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import unicodedata
+from pathlib import Path
+
+DEFAULT_DIR = ".video-intake"
+CLEANSHOT = re.compile(r"CleanShot (\d{4}-\d{2}-\d{2}) at (\d{2})\.(\d{2})\.(\d{2})")
+ATTACHED = re.compile(r'\[Attached file "(?P<name>.+?)" is saved at: (?P<path>.+?)\]\s*$')
+
+
+def t3_attachments_dir() -> Path:
+    return Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")).expanduser() / "userdata" / "attachments"
+
+
+def probe(path: Path) -> dict:
+    """ffprobe facts and a content-based kind."""
+    run = subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+                         capture_output=True, text=True)
+    if run.returncode:
+        return {"kind": "unknown", "error": (run.stderr.strip() or "ffprobe failed")[:300]}
+    data = json.loads(run.stdout or "{}")
+    fmt, streams = data.get("format", {}), data.get("streams", [])
+    # A still is a picture container (image2, png_pipe…), cover art or one frame; codec alone lies (MJPEG video).
+    image_container = (fmt.get("format_name") or "") == "image2" or (fmt.get("format_name") or "").endswith("_pipe")
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    stills = [s for s in video if image_container or s.get("nb_frames") == "1"
+              or any(s.get("disposition", {}).get(k) for k in ("attached_pic", "still_image"))]
+    moving = [s for s in video if s not in stills]
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    duration = float(fmt.get("duration") or 0)
+    if moving and duration >= 0.5:
+        kind = "video"
+    elif audio:
+        kind = "audio"
+    elif stills or moving:
+        kind = "image"
+    else:
+        kind = "unknown"
+    facts = {"kind": kind, "container": fmt.get("format_name"), "duration_s": round(duration, 1), "has_audio": bool(audio)}
+    if moving:
+        facts["resolution"] = f"{moving[0].get('width')}x{moving[0].get('height')}"
+    return facts
+
+
+def safe_name(name: str) -> str:
+    name = unicodedata.normalize("NFC", name).replace("/", "-").replace("\\", "-").replace("\0", "")
+    return name.strip().lstrip(".") or "recording"
+
+
+def wallclock(name: str) -> str | None:
+    m = CLEANSHOT.search(name)
+    return f"{m[1]}T{m[2]}:{m[3]}:{m[4]}" if m else None
+
+
+def git(cwd: Path, *args: str) -> str | None:
+    run = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
+    return run.stdout.strip() if run.returncode == 0 else None
+
+
+def keep_dir(explicit: str | None) -> Path:
+    if explicit:
+        target = Path(explicit).expanduser().resolve()
+        target.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if git(target, "rev-parse", "--show-toplevel") and git(target, "check-ignore", "-q", "--no-index", str(target / "probe")) is None:
+            sys.exit(f"{target} is inside a git repo but not ignored; add it to .git/info/exclude or pick another --keep DIR")
+        return target
+    root = git(Path.cwd(), "rev-parse", "--show-toplevel")
+    if not root:
+        sys.exit("not inside a git repo: pass --keep DIR (a private folder)")
+    target = Path(root) / DEFAULT_DIR
+    target.mkdir(mode=0o700, exist_ok=True)
+    if git(target, "check-ignore", "-q", "--no-index", str(target / "probe")) is None:
+        exclude = Path(root) / git(Path(root), "rev-parse", "--git-path", "info/exclude")
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a") as f:
+            f.write(f"\n/{DEFAULT_DIR}/\n")
+    return target
+
+
+def same_bytes(a: Path, b: Path) -> bool:
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    digest = lambda p: hashlib.file_digest(p.open("rb"), "sha256").hexdigest()  # noqa: E731
+    return digest(a) == digest(b)
+
+
+def keep(src: Path, name: str, target: Path) -> Path:
+    stem, suffix = os.path.splitext(name)
+    dst, n = target / name, 1
+    while dst.exists():
+        if same_bytes(src, dst):
+            return dst
+        n += 1
+        dst = target / f"{stem} ({n}){suffix}"
+    part = target / f".{name}.{os.getpid()}.part"  # publish atomically: a retry never sees half a file
+    try:
+        if sys.platform != "darwin" or subprocess.run(["cp", "-c", "-p", str(src), str(part)], capture_output=True).returncode:
+            shutil.copy2(src, part)
+        if part.stat().st_size != src.stat().st_size:
+            raise OSError(f"incomplete copy of {src}")
+        part.chmod(0o600)
+        while True:  # link() never replaces: a parallel keep that took this name moves us to the next one
+            try:
+                os.link(part, dst)
+                return dst
+            except FileExistsError:
+                if same_bytes(src, dst):
+                    return dst
+                n += 1
+                dst = target / f"{stem} ({n}){suffix}"
+    finally:
+        part.unlink(missing_ok=True)
+
+
+def still_times(duration: float) -> list[float]:
+    """5 s in, the middle, 5 s before the end; clamped inside the clip, at least 1 s apart."""
+    times: list[float] = []
+    for t in sorted(min(max(t, 0.5), max(duration - 0.5, 0.0)) for t in (5, duration / 2, duration - 5)):
+        if not times or t - times[-1] >= 1:
+            times.append(round(t, 1))
+    return times
+
+
+def stills(video: Path, duration: float) -> list[str]:
+    out = video.with_name(f"{video.stem}.stills")
+    out.mkdir(mode=0o700, exist_ok=True)
+    paths = []
+    for t in still_times(duration):
+        jpg = out / f"still-{int(t // 60):02d}m{t % 60:04.1f}s.jpg"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(t), "-i", str(video), "-frames:v", "1",
+                        "-vf", "scale='min(960,iw)':-2", "-q:v", "4", str(jpg)], check=True)
+        paths.append(str(jpg))
+    return paths
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("path", help='media path, or the whole `[Attached file "…" is saved at: …]` line')
+    parser.add_argument("--name", help="original file name (T3 metadata `name:`)")
+    parser.add_argument("--keep", nargs="?", const="", default=None, metavar="DIR", help="clone to DIR (default <git root>/.video-intake/)")
+    parser.add_argument("--stills", action="store_true", help="also cut 3 small stills for project identification (implies --keep)")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    raw, name = args.path.strip(), args.name
+    if m := ATTACHED.search(raw):
+        raw, name = m["path"], name or m["name"]
+    src = Path(raw).expanduser()
+    if not src.is_file():
+        print(f"not found: {src}", file=sys.stderr)
+        return 2
+    src = src.resolve()
+    name = safe_name(name or src.name)
+    facts = {"source": str(src), "original_name": name, "size_bytes": src.stat().st_size,
+             "t3_attachment": src.is_relative_to(t3_attachments_dir().resolve()), **probe(src)}
+    if clock := wallclock(name):
+        facts["wallclock_start"] = clock
+    if facts["kind"] == "video" and (args.keep is not None or args.stills):
+        facts["kept"] = str(keep(src, name, keep_dir(args.keep or None)))
+        if args.stills:
+            facts["stills"] = stills(Path(facts["kept"]), facts["duration_s"])
+    if facts["kind"] == "video":
+        facts["next"] = "video-shrink-for-gemini: shrink-video --preset ui|normal <kept>, prompt with project vocabulary"
+    if args.json:
+        print(json.dumps(facts, ensure_ascii=False, indent=2))
+    else:
+        print("\n".join(f"{k}: {v}" for k, v in facts.items()))
+    return 0 if facts["kind"] == "video" else 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())

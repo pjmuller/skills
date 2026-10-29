@@ -1,6 +1,6 @@
 ---
 name: t3-route
-description: "Use when the user's private routing wrapper is invoked, a new task lands in the designated 🧭 routing thread, or someone sets up such a router: turn a short request, link or screenshot into a correctly placed T3 thread. Execution threads keep doing their own task."
+description: "Use when the user's private routing wrapper is invoked, a new task lands in the designated 🧭 routing thread, or someone sets up such a router: turn a short request, link, screenshot or pasted video into a correctly placed T3 thread. Execution threads keep doing their own task."
 ---
 
 # T3 Route
@@ -36,7 +36,7 @@ authorizes stay available.
 
 ## Intake and placement
 
-1. Evidence per input (links, screenshots, capability gaps, continuation) → [intake.md](intake.md).
+1. Evidence per input (links, screenshots, videos, capability gaps, continuation) → [intake.md](intake.md).
    Preserve the exact task input and explicit repository, account, model, effort and lifecycle
    choices; separate instructions meant only for the routing thread.
 2. Ownership: the wrapper's catalog, then the candidate repo's entrypoint and workflow wrapper,
