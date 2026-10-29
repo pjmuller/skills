@@ -1,15 +1,16 @@
 # Reviewing a ticket another agent wrote
 
-Developer side, counterpart of [triage.md](triage.md): a reporter's coding agent (less capable,
+Developer side, counterpart of [triage.md](triage.md): a reporter's coding agent (often with
 less architecture context) filed or fixed a ticket and hands it over for review. Who reviews whom,
 review header, statuses and the verdict's language: the wrapper's `[policy]`.
 
 ## Mindset
 
 - Trust symptoms, repro steps, screenshots, recordings and domain observations as primary
-  evidence. Treat root-cause claims, proposed fixes, scope estimates, "tests passed" and the
+  evidence (note whether a screenshot shows a real or a stubbed environment). Treat root-cause claims, proposed fixes, scope estimates, "tests passed" and the
   agent's code as unverified: re-derive the cause from the code and the repo's skill docs, don't
-  anchor on its hypotheses. Its diff likely ignores house conventions.
+  anchor on its hypotheses.
+  Check its diff against house conventions; a ticket with a PR → also [pr-review](../pr-review/review.md).
 - Check the ask against the product's mission; a well-meant request can still fail it. Say so and
   propose the version that doesn't.
 - Change only what moves the needle: a wrong fix, a missed symptom, a real regression, security or

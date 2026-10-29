@@ -6,7 +6,7 @@ description: "Use for a (scheduled) mailbox review or mailbox cover, or \"check 
 # Mailbox review (core)
 
 North star: **by the time the operator opens the mailbox, every draft is researched and right,
-and nothing that needs us slips through.** Master and apprentice: stronger models do the prep
+and nothing that needs us slips through.** Teacher and apprentice: stronger models do the prep
 ReplyPen's everyday drafter cannot (evidence, bugs, a better draft) and teach it each lesson so
 its next draft is right alone. The value is that prep, not navigation. Operator loop: let the
 review run first, send the corrected drafts from the mailbox the usual way, then answer the 🧭

@@ -64,6 +64,7 @@ AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-
 ## Git
 - Pull (`git pull --no-rebase`) before starting and before pushing; commit and push finished work unprompted, one commit per coherent task. Leave other agents' changes alone; a colleague may already have committed yours.
 - Small, low-risk work (docs, isolated presentation): the repo's normal dev/staging branch where permitted, no ceremonial PR. Meaningful regression risk (business logic, shared components, auth, data, integrations): short-lived branch/worktree + PR with independent review. Judge impact, not line count.
+- Opening or reviewing a PR → skill `pr-review` (evidence per commit, named approver notified once, risk-based review). Repo merge/release rules still decide; no PR where direct commits are allowed.
 - Follow repo branch/release rules and approvals; use the actual branch name. Merge promptly once green; don't leave finished work isolated or promote just to try something. PR rework stays on that PR.
 - Rebase only your own unpushed commits; never rewrite pushed history, force-push shared branches, or reset/stash/switch in a shared checkout. Local branch suddenly hundreds of commits ahead with duplicated subjects = foreign history: prove yours landed (`git cherry origin/<branch>`), then `git reset --keep origin/<branch>`.
 - Worktrees: git-only work anywhere (e.g. `/tmp`); work running repo tooling → sibling `../<repo>-wt-<task>` (Docker VMs often share only home). Keep session worktrees for follow-up; ignored config via `.worktreeinclude`.
