@@ -10,6 +10,11 @@ next run reads it.
   rerun of the customer thread): before wrong, after right; then `brain-publish`. The go on that
   exact text is the publish go; a failed proof or materially different text returns to the operator
   with the simulated before/after.
+  Proof commands, from the brain checkout ([brain-ask](https://github.com/replypen/replypen-brain-skills/blob/main/skills/brain-ask/SKILL.md)):
+  `rp ask --replay-run <run> --brain-ref dev/<branch>` reruns the real email/chat case side-effect free
+  and diffs it with the original (`--tenant-brain-ref` for a tenant overlay, `--mirror-ref <repo>=dev/<branch>`
+  for a mirrored repo). Not replayable (e.g. an app-triggered analysis run) → the same `rp ask --simulation`
+  question on `main` and on the dev ref, compared; the wrapper names its recipe.
   Brain-dev skills live in the brain checkout (`.agents/skills/`); missing → run
   `replypen-brain-skills/install.sh` inside it. Runs commit `journal/` to the brain's `main` all
   day: edit in a worktree and let `brain-publish` reconcile.
