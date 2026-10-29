@@ -5,6 +5,11 @@ description: "Use to delegate to, launch, message, read or settle T3 Code thread
 
 # T3 Manage Thread
 
+North star: the lead keeps the human out of the loop. Fan work out (🏓 for answers you need back
+this turn, 📤 for independent tasks the user follows in the sidebar), get an opposite-model review
+before anything consequential, spread load across accounts. Every handoff drops context: brief
+like a peer, verify what comes back.
+
 T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only account routing and an outside-T3 entry.
 
 | Need | Tool |

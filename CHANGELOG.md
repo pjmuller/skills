@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — t3-manage-thread, t3-schedule, t3-find-thread, recording-followups: north stars
+
+- Each intro opens with why to use it and how to get value (lead keeps the human out of the loop; time-bound next steps get scheduled, not remembered; past threads are reusable context; no call agreement gets lost). Why: their intros were mechanics only, so agents and colleagues could not answer "what is this for" from the skill.
+
 ## 2026-10-29 — pr-review: PRs state their evidence per commit and reach a named approver
 
 - New global skill `pr-review`: a 120–200-word PR description (problem → result, behaviour bullets, Evidence block with model provenance, review rounds and every check at the commit it ran on, stubs and not-run checks named, deviations/deliberate quirks/risk), a notify step (GitHub review request plus, where the team works in a tracker, one native mention; never "in review" prose), and `review.md` for the consuming reviewer: authority first, triage evidence against the head, depth by what is touched, re-run only what adds independence, one disposition tied to the head sha. Why: on a real PR the description's checks predated the head commit, CI was absent so every check was a claim, the review provenance sat in a comment without its commit, and the ticket's "in review, needs X's approval" comment notified nobody.

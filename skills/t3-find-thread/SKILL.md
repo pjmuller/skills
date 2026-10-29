@@ -5,6 +5,10 @@ description: "Use for \"which thread did we…\", \"find the T3 thread where…\
 
 # T3 Find Thread
 
+North star: past work is reusable context. Find the thread that already researched or decided
+something and continue it, history included, instead of re-explaining or redoing it. Works from
+vague or dictated memory.
+
 `scripts/t3-find-thread` narrows over a read-only FTS5 cache of T3's `statev2.sqlite`; **you** judge.
 Never dump a whole thread into context. Flags: `--help`.
 

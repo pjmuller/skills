@@ -5,6 +5,9 @@ description: "Use when a transcribed call or meeting (Fathom, Loom, Leexi, Click
 
 # Recording → follow-up prompts
 
+North star: no agreement from a call gets lost. Every decision, promise and bug becomes a debrief
+plus a ready-to-start thread prompt, so following up is a click, not a memory exercise.
+
 Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md) or
 [leexi](../leexi/SKILL.md); this skill owns what happens after the transcript is on disk. Project
 skills (e.g. a team's Fathom wrapper) own where the note lives and its frontmatter, and link here

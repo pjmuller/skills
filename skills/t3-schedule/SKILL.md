@@ -5,6 +5,10 @@ description: "Use to start a T3 thread on a wall clock (\"every workday 07:30 ru
 
 # t3-schedule
 
+North star: a next step that needs time to pass (logs, a deploy, a reply) gets a scheduled
+follow-up instead of relying on memory. A recurring job or a one-off wake-up of this thread still
+runs on time after the Mac slept, so nobody has to say "check tomorrow".
+
 `scripts/t3-schedule` (`--help`, `add --help`); install `scripts/install`, `--check` also checks
 [t3-relay](../t3-manage-thread/relay.md).
 
