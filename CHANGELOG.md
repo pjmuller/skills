@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-29 — pr-review: PRs state their evidence per commit and reach a named approver
+
+- New global skill `pr-review`: a 120–200-word PR description (problem → result, behaviour bullets, Evidence block with model provenance, review rounds and every check at the commit it ran on, stubs and not-run checks named, deviations/deliberate quirks/risk), a notify step (GitHub review request plus, where the team works in a tracker, one native mention; never "in review" prose), and `review.md` for the consuming reviewer: authority first, triage evidence against the head, depth by what is touched, re-run only what adds independence, one disposition tied to the head sha. Why: on a real PR the description's checks predated the head commit, CI was absent so every check was a claim, the review provenance sat in a comment without its commit, and the ticket's "in review, needs X's approval" comment notified nobody.
+- `agents-md/global-template.md` Git section: one pointer line (opening or reviewing a PR → skill `pr-review`; repo rules still decide; no PR where direct commits are allowed). Why: product owners open most PRs and their agents need the format and the ping step without a per-repo copy.
+- `agents-md/roles.md` product-owner line: a PR carries its evidence and reaches a named approver. `t3-manage-thread/code-review.md`: the report line carries the reviewed sha; "skip what CI catches" only when CI ran. `clickup-core/review.md`: no "less capable"/"ignores house conventions" presumption; screenshots may show a stubbed environment. Why: review by evidence, not by the author's role.
+
 ## 2026-10-29 — clickup-core / agents-md / t3-schedule: colleague agents report back into the ticket body; the requester chases with daily follow-ups
 
 - `clickup-core` ("Report back into the ticket"), `agents-md/handoff.md` step 5, `t3-schedule` Continuation: a ticket asking someone's coding agent to run steps ends with the exact CLI line to append a dated report section to the ticket body plus one mention ping; the requesting agent arms a `--once` continuation for the next workday that verifies the report or re-arms itself (nudge after 3 empty days, ask the user after 5). Why: reports landed as long comments the requester had to find by hand, and "check tomorrow" was forgotten; body sections stay the record and the chase needs no recurring job.
