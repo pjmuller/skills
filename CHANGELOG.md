@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — agents-md global template: label several decisions D1, D2…
+
+- Asks with more than one decision label them D1, D2… and request replies like "D1: A, D2: B". Why: a bare "A" or "B" was ambiguous when one message carried two questions.
+
 ## 2026-10-28 — clickup-core: a comment link reads like a conversation; extract-keyframes accepts "Key Frames"
 
 - `clickup-core` `comments --thread <URL>` prints root + replies as readable rows (author, date, text, images, like `task`'s discussion) and marks the link's `?threadedComment=` reply `selected`; `--raw` keeps ClickUp's API objects. Why: a pasted reply link returned ~10 KB of rich-text parts and no hint which reply the sender meant.
