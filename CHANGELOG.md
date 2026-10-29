@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — t3-retro: a lean weekly retro over your own threads
+
+- New skill `t3-retro` (global, no installer) + command `t3-retro-prep` in t3-maintenance. The script reads the local store read-only, scores top-level threads on signals (correction after a done-claim, a failure the next answer never mentions, fallback then done, unasked extras, an error that recurs across threads, many interruptions), picks 8 by signal + 4 seeded random, and writes masked, capped packets (~30k tokens) plus a recurring-error table and phrases typed in ≥3 threads to `~/.local/state/t3-retro/<date>/`. One agent judges them with `lens.md` (goal, proof, who corrected whom, hidden friction, unasked work; every finding ends in a fix type: context · check · enforce · default) and writes ≤250 words with one change, after scoring last week's. Why: prompt-only mining can't see what the agent claimed or worked around, and long coaching reports went unapplied; one followed-through change beats five. Authorship reuses `t3-my-prompts`, masking `t3_redact`.
+
 ## 2026-10-29 — t3-setup: lessons from the first real colleague onboarding
 
 - `SKILL.md` Fresh machine: **one sudo moment** at the start: the single Terminal paste folds in the Homebrew installer, `xcode-select --install` and every pkg-based cask; a pkg found later is installed user-locally, never a second paste; never hand a non-developer a command the agent can run. Why: the recipient was asked to run extra commands mid-setup although the intent is one password at the start, then autonomous.

@@ -1,0 +1,401 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Evidence packets for a lean weekly retro over this machine's own T3 threads (skill `t3-retro`).
+
+Deterministic and read-only: scores every top-level thread with typed prompts in the window on
+signals (correction after a done-claim, failure the final answer never mentions, fallback then
+done, unasked extras, recurring error, many interruptions), picks the strongest plus a seeded
+random sample (silent omissions raise no signal), and writes masked, size-capped packets the
+`t3-retro` agent reads. A signal is a lead, never a verdict; the agent judges.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+import json
+import os
+from pathlib import Path
+import random
+import re
+import sys
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from t3_archive import ARCHIVE, call_line, flatten  # noqa: E402
+from t3_redact import redact  # noqa: E402
+from t3_store import DEFAULT_STORE, connect_readonly, iso, parse_time, short_id  # noqa: E402
+
+_loader = SourceFileLoader("t3_my_prompts", str(HERE / "t3-my-prompts"))
+prompts = sys.modules["t3_my_prompts"] = module_from_spec(spec_from_loader("t3_my_prompts", _loader))
+_loader.exec_module(prompts)  # reuse its authorship rules, never a copy
+
+STATE = Path(os.environ.get("T3_RETRO_STATE", Path.home() / ".local/state/t3-retro"))
+SIGNALS = 8  # threads picked by score
+SAMPLE = 4  # seeded random threads at least; they also fill unused signal slots
+PACKET_CAP = 7_000  # chars per thread packet (~2k tokens)
+TOTAL_CAP = 110_000  # chars over all packets (~30k tokens)
+RECURRING = 3  # an error signature in this many threads is friction
+SUBAGENT = "(in a sub-agent)"
+SHINGLE = 6  # words per phrase when looking for retyped instructions
+
+DONE_RE = re.compile(r"✅|\b(done|shipped|finished|complete[d]?|all (?:\w+ ){0,2}(?:built|pass(?:ing|es)?|green|fixed)|"
+                     r"implemented|deployed|merged|pushed|verified|works now)\b", re.I)
+CORRECTION_RE = re.compile(r"^\s*(no\b|nope|not\b|wrong|why\b|but\b|still\b|again\b)|"
+                           r"\b(doesn'?t work|does not work|didn'?t|did not|isn'?t|you said|i said|i asked|"
+                           r"forgot|missing|not what|still (?:broken|failing|wrong|not))\b", re.I)
+TROUBLE_RE = re.compile(r"fail|error|couldn'?t|could not|can'?t|cannot|unable|blocked|denied|not permitted|"
+                        r"workaround|worked around|instead|fallback|skipp|unverified|not (?:run|verified|tested)|"
+                        r"timed? ?out|🚫|⚠", re.I)
+FALLBACK_RE = re.compile(r"\b(instead|fallback|fell back|workaround|worked around|skipped|manually|"
+                         r"couldn'?t|could not|unable to|not (?:run|verified|tested))\b", re.I)
+EXTRA_RE = re.compile(r"\b(also (?:added|fixed|updated|cleaned|refactored|renamed|removed|improved)|"
+                      r"while (?:I was )?(?:there|at it)|bonus|additionally,? I|took the liberty|"
+                      r"unrelated (?:fix|change|cleanup))\b", re.I)
+ERROR_LINE_RE = re.compile(r"error|not found|no such|denied|not permitted|refused|timed? ?out|timeout|"
+                           r"cannot|could not|unable|fatal|panic|traceback|exception|enotfound|eperm|"
+                           r"unauthori[sz]ed|forbidden|\b40[134]\b|\b5\d\d\b", re.I)
+GENERIC_RE = re.compile(r"(error: )?exit code \d+$|traceback \(most recent call last\)|\[exit \d+\]$", re.I)
+TEST_LINE_RE = re.compile(r"assert|expected|--- FAIL|^FAIL|FAILED .*::|\bfailures?:", re.I)
+
+
+@dataclass
+class Event:
+    at: str
+    kind: str  # user | agent-msg | assistant | fail | ok | file | interrupt
+    text: str = ""
+    sig: str = ""
+
+
+@dataclass
+class Thread:
+    tid: str
+    title: str
+    project: str
+    events: list[Event] = field(default_factory=list)
+    typed: int = 0
+    children: int = 0
+    signals: Counter = field(default_factory=Counter)
+    evidence: list[str] = field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        weights = {"correction-after-done": 3, "silent-failure": 2, "fallback-then-done": 1,
+                   "unasked-extras": 1, "recurring-error": 1, "interruptions": 1}
+        caps = {"recurring-error": 1, "interruptions": 1}  # common in any big thread: presence only
+        return sum(weights[k] * min(n, caps.get(k, 3)) for k, n in self.signals.items())
+
+
+def mask(text: str) -> str:
+    return redact(text)[0]
+
+
+def clip(text: str, cap: int) -> str:
+    text = text.strip()
+    return text if len(text) <= cap else text[: cap - 12].rstrip() + f" …(+{len(text) - cap + 12}c)"
+
+
+def signature(output: str) -> str:
+    """First error-looking line of a failed command, with paths, numbers and quotes normalised."""
+    for line in reversed(output[-4000:].splitlines()):  # the cause usually sits at the tail
+        line = line.strip()
+        if not line or GENERIC_RE.match(line) or TEST_LINE_RE.search(line) or not ERROR_LINE_RE.search(line):
+            continue
+        line = re.sub(r"(?:~|/)[\w.@+-]+(?:/[\w.@+-]*)+", "<path>", line)
+        line = re.sub(r"(['\"`]).*?\1", "<q>", line)
+        line = re.sub(r"\b[0-9a-f]{7,}\b|\d+(?:\.\d+)*", "<n>", line)
+        return line[:110]
+    return ""
+
+
+def command_text(raw: object) -> str:
+    if isinstance(raw, str) and raw.startswith("{"):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    return call_line(raw)
+
+
+def load(store: Path, since: datetime, until: datetime) -> tuple[dict[str, Thread], Counter, dict]:
+    """Typed prompts via t3-my-prompts' authorship rules; agent messages and tool items from the store."""
+    lookback = since - timedelta(days=1)  # context before the window: the ask behind this week's turns
+    raw = [m for m in prompts.load_messages(store, lookback, until, None) if not m.deleted]
+    agent_threads = {m.thread_id for m in raw if prompts.agent_thread_signal(m)}
+    all_typed = [m for m in raw if m.thread_id not in agent_threads and not prompts.is_agent_message_in_manual_thread(m)]
+    typed = [m for m in all_typed if parse_time(m.created_at) >= since]
+    threads: dict[str, Thread] = {}
+    for m in typed:
+        threads.setdefault(m.thread_id, Thread(m.thread_id, m.thread_title, m.project)).typed += 1
+    for m in all_typed:
+        if m.thread_id in threads:
+            threads[m.thread_id].events.append(Event(m.created_at, "user", m.text))
+    typed_ids = {m.message_id for m in all_typed}
+    sig_threads: dict[str, set[str]] = defaultdict(set)
+    meta = {"typed_per_day": Counter(parse_time(m.created_at).astimezone().strftime("%a %d") for m in typed),
+            "tool_history_missing": 0, "child_threads": 0}
+    with connect_readonly(store) as conn:
+        roots = {r["thread_id"]: (json.loads(r["p"] or "{}").get("lineage") or {}).get("rootThreadId")
+                 for r in conn.execute("SELECT thread_id, payload_json AS p FROM orchestration_v2_projection_threads")}
+        root_of = lambda tid: roots.get(tid) or tid  # noqa: E731
+        for r in conn.execute(
+                "SELECT message_id, thread_id, role, created_at, json_extract(payload_json,'$.text') AS text "
+                "FROM orchestration_v2_projection_messages WHERE created_at >= ? AND created_at < ?",
+                (iso(lookback), iso(until))):
+            t = threads.get(r["thread_id"])
+            if not t or r["message_id"] in typed_ids:
+                continue
+            t.events.append(Event(r["created_at"], "assistant" if r["role"] == "assistant" else "agent-msg", r["text"] or ""))
+        for r in conn.execute(
+                "SELECT thread_id, type, status, updated_at, json_extract(payload_json, '$.completedAt') AS done, "
+                "CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) != 0 "
+                "THEN json_extract(payload_json, '$.output') END AS output, "
+                "CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) != 0 "
+                "THEN substr(json_extract(payload_json, '$.input'), 1, 400) END AS input "
+                "FROM orchestration_v2_projection_turn_items "
+                "WHERE updated_at >= ? AND updated_at < ? AND type IN ('command_execution','dynamic_tool','file_change',"
+                "'approval_request','user_input_request','compaction')", (iso(since), iso(until))):
+            at = r["done"] or r["updated_at"]
+            root = root_of(r["thread_id"])
+            if r["type"] in ("command_execution", "dynamic_tool"):
+                if r["output"] is None and r["input"] is None:
+                    if r["thread_id"] in threads:
+                        threads[r["thread_id"]].events.append(Event(at, "ok"))
+                    continue
+                output = r["output"] or ""
+                if output.startswith(("[", "{")):
+                    try:
+                        output = flatten(json.loads(output))
+                    except json.JSONDecodeError:
+                        pass
+                sig = signature(output)
+                if sig:
+                    sig_threads[sig].add(root)
+                target = threads.get(r["thread_id"])
+                if target:
+                    cmd = clip(command_text(r["input"] or ""), 160).replace("\n", " ")
+                    target.events.append(Event(at, "fail", cmd, sig))
+                elif root in threads and root != r["thread_id"]:
+                    threads[root].events.append(Event(at, "fail", SUBAGENT, sig))
+            elif r["thread_id"] in threads:
+                threads[r["thread_id"]].events.append(Event(at, "file" if r["type"] == "file_change" else "interrupt", r["type"]))
+        children = Counter(v for k, v in roots.items() if v and v != k)
+        for tid, t in threads.items():
+            t.children = children[tid]
+    meta["child_threads"] = sum(t.children for t in threads.values())
+    recurring = Counter({s: len(ts) for s, ts in sig_threads.items() if len(ts) >= RECURRING})
+    meta["sig_examples"] = {s: sorted(short_id(x) for x in sig_threads[s])[:3] for s in recurring}
+    for t in threads.values():
+        t.events.sort(key=lambda e: e.at)
+        if t.events and not any(e.kind in ("ok", "fail", "file") for e in t.events) and any(e.kind == "assistant" for e in t.events):
+            meta["tool_history_missing"] += 1
+    return threads, recurring, meta
+
+
+def score(t: Thread, recurring: Counter) -> None:
+    """Signals on turn-final answers: the last agent message before the next typed prompt (or the end)."""
+    answer = ""
+    pending: list[Event] = []  # failures since the last typed prompt
+    interrupts = 0
+    edited = any(e.kind == "file" for e in t.events)
+
+    def close_turn() -> None:
+        if not answer:
+            pending.clear()
+            return
+        if pending and not TROUBLE_RE.search(answer):
+            t.signals["silent-failure"] += 1
+            t.evidence.append(f"silent-failure: `{pending[0].text[:80]}` failed; the answer after it mentions no trouble")
+        if DONE_RE.search(answer) and FALLBACK_RE.search(answer):
+            t.signals["fallback-then-done"] += 1
+        if edited and EXTRA_RE.search(answer):
+            t.signals["unasked-extras"] += 1
+            t.evidence.append(f"unasked-extras: \"{clip(EXTRA_RE.search(answer).group(0), 40)}…\"")
+        pending.clear()
+
+    for e in t.events:
+        if e.kind == "user":
+            if answer and DONE_RE.search(answer[-600:]) and CORRECTION_RE.search(e.text[:300]):
+                t.signals["correction-after-done"] += 1
+                t.evidence.append(f"correction-after-done: \"{clip(e.text, 90)}\"")
+            close_turn()
+            answer = ""
+        elif e.kind == "assistant":
+            answer = e.text
+        elif e.kind == "fail" and e.sig:
+            if e.text != SUBAGENT:  # a sub-agent reports to its lead, not to the user
+                pending.append(e)
+            if e.sig in recurring:
+                t.signals["recurring-error"] += 1
+        elif e.kind == "interrupt":
+            interrupts += 1
+    close_turn()
+    if interrupts >= 3 or t.typed > 8:
+        t.signals["interruptions"] += 1
+        t.evidence.append(f"interruptions: {t.typed} typed prompts, {interrupts} approvals/questions/compactions")
+
+
+def retyped(threads: dict[str, Thread], since: datetime) -> list[tuple[str, int]]:
+    """Phrases of SHINGLE words typed in >= RECURRING threads: rules that may belong in a file."""
+    seen: dict[tuple[str, ...], set[str]] = defaultdict(set)
+    for t in threads.values():
+        for e in t.events:
+            if e.kind == "user" and parse_time(e.at) >= since:
+                words = re.findall(r"[\w'-]+", prompts.normalize(e.text).casefold())
+                for i in range(len(words) - SHINGLE + 1):
+                    seen[tuple(words[i:i + SHINGLE])].add(t.tid)
+    ranked = sorted(((k, len(v)) for k, v in seen.items() if len(v) >= RECURRING), key=lambda x: (-x[1], x[0]))
+    chosen: list[tuple[tuple[str, ...], int]] = []
+    for phrase, n in ranked:
+        if all(len(set(phrase) & set(c)) < SHINGLE - 2 for c, _ in chosen):
+            chosen.append((phrase, n))
+        if len(chosen) == 8:
+            break
+    return [(" ".join(p), n) for p, n in chosen]
+
+
+def pick(threads: dict[str, Thread], seed: str) -> list[tuple[Thread, str]]:
+    """Up to SIGNALS by score, the rest of SIGNALS + SAMPLE at random; one project gets at most half
+    while other projects still have threads left."""
+    eligible = [t for t in threads.values() if any(e.kind == "assistant" for e in t.events)]
+    total = SIGNALS + SAMPLE
+    cap = total // 2 if len({t.project for t in eligible}) > 1 else total
+    per_project: Counter = Counter()
+    chosen: list[tuple[Thread, str]] = []
+
+    def take(pool: list[Thread], why: str, limit: int, capped: bool) -> None:
+        for t in pool:
+            if len(chosen) >= limit:
+                return
+            if all(t is not c for c, _ in chosen) and (not capped or per_project[t.project] < cap):
+                chosen.append((t, why))
+                per_project[t.project] += 1
+
+    take(sorted((t for t in eligible if t.score), key=lambda t: (-t.score, t.tid)), "signal", SIGNALS, True)
+    rest = sorted(eligible, key=lambda t: t.tid)
+    random.Random(seed).shuffle(rest)
+    take(rest, "sample", total, True)  # quiet week: random threads fill the unused signal slots
+    take(rest, "sample", total, False)  # one project left: the cap no longer buys diversity
+    return chosen
+
+
+def packet(t: Thread, why: str) -> str:
+    """Opening ask, every typed turn with the answer it reacted to, failures, final answer."""
+    head = (f"### {short_id(t.tid)} · {t.title} · {t.project}\n"
+            f"Picked by: {why}" + (f" ({', '.join(f'{k}×{n}' for k, n in t.signals.items())})" if t.signals else "")
+            + f" · typed prompts {t.typed} · tool calls ok {sum(e.kind == 'ok' for e in t.events)}, "
+            f"failed {sum(e.kind == 'fail' for e in t.events)} · file changes {sum(e.kind == 'file' for e in t.events)}"
+            + (f" · sub-agents {t.children}" if t.children else "") + "\n")
+    lines = [head] + [f"- lead: {x}" for x in t.evidence[:4]]
+    first = next((e for e in t.events if e.kind in ("user", "agent-msg")), None)
+    if first:
+        lines.append(f"\n**Opening ({'typed' if first.kind == 'user' else 'agent-written brief'})**: {clip(first.text, 1500)}")
+    answer, fails = "", []
+    for e in t.events:
+        if e.kind == "assistant":
+            answer = e.text
+        elif e.kind == "fail":
+            fails.append(e)
+        elif e.kind == "user" and e is not first:
+            if fails:
+                lines.append("- failed: " + "; ".join(f"`{f.text[:90]}`" + (f" → {f.sig}" if f.sig else "") for f in fails[:3])
+                             + (f" (+{len(fails) - 3})" if len(fails) > 3 else ""))
+                fails = []
+            if answer:
+                lines.append(f"- agent: {clip(answer[-500:] if len(answer) > 500 else answer, 500)}")
+            lines.append(f"- **user**: {clip(e.text, 400)}")
+            answer = ""
+    if fails:
+        lines.append("- failed: " + "; ".join(f"`{f.text[:90]}`" + (f" → {f.sig}" if f.sig else "") for f in fails[:3]))
+    if answer:
+        lines.append(f"\n**Final answer**: {clip(answer, 1200)}")
+    text = "\n".join(lines)
+    if len(text) > PACKET_CAP:  # keep the opening and the end: intent and claim
+        text = text[: PACKET_CAP // 2] + "\n…(middle cut, read the thread for it)…\n" + text[-PACKET_CAP // 2:]
+    return mask(text) + "\n"
+
+
+def archive_gap(since: datetime, until: datetime, live: set[str]) -> int:
+    if not ARCHIVE.exists():
+        return 0
+    import sqlite3
+    try:
+        db = sqlite3.connect(f"file:{ARCHIVE}?mode=ro", uri=True)
+        rows = db.execute("SELECT thread_id FROM threads WHERE subagent = 0 AND last_msg_at >= ? AND last_msg_at < ?",
+                          (iso(since), iso(until))).fetchall()
+        db.close()
+    except sqlite3.Error:
+        return 0
+    return sum(1 for (tid,) in rows if tid not in live)
+
+
+def previous_report(out: Path) -> Path | None:
+    reports = sorted(p for p in STATE.glob("*/report.md") if p.parent != out)
+    return reports[-1] if reports else None
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--days", type=float, default=7)
+    ap.add_argument("--until", help="ISO date/time (default: now)")
+    ap.add_argument("--store", type=Path, default=DEFAULT_STORE)
+    ap.add_argument("--out", type=Path, help=f"output dir (default: {STATE}/<date>)")
+    args = ap.parse_args(argv)
+    until = parse_time(args.until) if args.until else datetime.now(UTC)
+    since = until - timedelta(days=args.days)
+    out = args.out or STATE / until.astimezone().strftime("%Y-%m-%d")
+    out.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(out, 0o700)
+
+    threads, recurring, meta = load(args.store, since, until)
+    for t in threads.values():
+        score(t, recurring)
+    chosen = pick(threads, iso(until)[:10])
+    prev = previous_report(out)
+    gap = archive_gap(since, until, set(threads))
+
+    days = " · ".join(f"{d} {n}" for d, n in sorted(meta["typed_per_day"].items(), key=lambda x: x[0][-2:]))
+    cover = [
+        f"# t3-retro evidence · {iso(since)[:10]} → {iso(until)[:10]}",
+        "",
+        "## Coverage",
+        f"- Threads with your typed prompts: {len(threads)}; packets below: {len(chosen)} "
+        f"({sum(w == 'signal' for _, w in chosen)} by signal, {sum(w == 'sample' for _, w in chosen)} random).",
+        f"- Typed prompts per day: {days or 'none'}. A working day far below its neighbours = check the export before reading meaning into it.",
+        f"- Threads with answers but no tool history: {meta['tool_history_missing']} (can't judge their verification)."
+        + (f" Purged threads in the window, not read: {gap}." if gap else ""),
+        f"- Previous report: {prev or 'none (first run)'}",
+        "",
+        f"## Recurring errors (same error in ≥{RECURRING} threads, sub-agents counted under their thread)",
+    ]
+    cover += [f"- {n} threads · `{mask(s)}` · e.g. {', '.join(meta['sig_examples'][s])}" for s, n in recurring.most_common(6)] or ["- none"]
+    cover += ["", f"## Retyped phrases (same {SHINGLE} words in ≥{RECURRING} threads; a rule that may belong in a file)"]
+    cover += [f"- {n} threads · \"{mask(p)}\"" for p, n in retyped(threads, since)] or ["- none"]
+    cover += ["", "## Threads", ""]
+    body, used = [], 0
+    for t, why in chosen:
+        p = packet(t, why)
+        if used + len(p) > TOTAL_CAP:
+            body.append(f"### {short_id(t.tid)} · omitted: total size cap reached\n")
+            continue
+        body.append(p)
+        used += len(p)
+    path = out / "packets.md"
+    path.write_text("\n".join(cover) + "\n" + "\n".join(body))
+    os.chmod(path, 0o600)
+    selection = {"window": [iso(since), iso(until)],
+                 "threads": [{"id": t.tid, "short": short_id(t.tid), "why": why, "signals": dict(t.signals)} for t, why in chosen]}
+    (out / "selection.json").write_text(json.dumps(selection, indent=1, ensure_ascii=False))
+    print(f"{path}\n{len(chosen)} threads ({len(threads)} eligible), {len(recurring)} recurring errors, {used // 4:,} tokens approx")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
