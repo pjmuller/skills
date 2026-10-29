@@ -14,6 +14,8 @@ Never install `t3-setup`. Work autonomously (computer use allowed); stop only fo
 logins/2FA you cannot complete. Preserve unrelated work; report deviations.
 Machine already has t3-manage-thread and only needs the release-gated updater →
 [skills-refresh onboarding](../../docs/onboarding/skills-refresh.md) instead.
+Onboarding someone else (you are the sender: discovery, grants, secrets, package) →
+[onboarding.md](onboarding.md).
 
 ## Fresh machine (macOS, nothing installed)
 

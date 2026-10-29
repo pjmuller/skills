@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — t3-setup: sender playbook for onboarding a colleague
+
+- New `setup/t3-setup/onboarding.md` (flow, ZIP layout, parallel lanes, human-touch queue, resume rules, checklist of what onboardings forget), `discovery.md` (person + repos → access manifest via parallel read-only clusters: own/shared/local/sender-only per credential, destinations, grants, decisions) and `verification.md` (checkpoint file in the recipient's setup repo, safe local app feedback loop, two-column acceptance matrix). `SKILL.md` links them. Why: each onboarding rebuilt a long custom prompt from scratch; the sender side (what to grant, what to send, what the recipient mints, what was proven where) had no recipe, and prepared-on-sender results were reported as if they ran on the recipient's machine.
+
 ## 2026-10-29 — t3-manage-thread: T3 0.1.4 launch retry key and v2 thread links
 
 - `workers.md`, `dispatch-workers.md`: `t3_thread_launch` takes `clientRequestId` on T3 ≥ 0.1.4 ([#16654](https://github.com/pingdotgg/t3code/pull/16654)); a retry with the same key returns the same thread. Report the tool's `link` verbatim (now `<t3-thread://v2/<environmentId>/<threadId>>`, live title, [#26239](https://github.com/pingdotgg/t3code/pull/26239)); hand-built v1 links still open. Why: the docs said "no retry key", so agents checked `t3_thread_list` by hand or risked duplicate threads after a lost reply.
