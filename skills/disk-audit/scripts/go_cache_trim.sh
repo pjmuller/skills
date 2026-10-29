@@ -5,10 +5,12 @@
 # in the last hour are never touched, and a missing output is a cache miss, so running builds
 # survive (unlike `go clean -cache`). Deletes are batched and paced to spare fseventsd.
 # Also fits golangci-lint's cache (a fork of Go's cache, same layout and mtime refresh).
-# Usage: go_cache_trim.sh [CAP_GB] [GOCACHE_DIR...]   defaults: 30, $(go env GOCACHE)
+# 12G: a busy agent fleet's measured 6-hour working set is ~9G once GOFLAGS=-trimpath lets worktrees
+# share entries.
+# Usage: go_cache_trim.sh [CAP_GB] [GOCACHE_DIR...]   defaults: 12, $(go env GOCACHE)
 set -uo pipefail
 
-cap_gb=${1:-30}
+cap_gb=${1:-12}
 [ $# -gt 0 ] && shift
 dirs=("$@")
 [ ${#dirs[@]} -gt 0 ] || dirs=("$(go env GOCACHE)")
@@ -29,3 +31,8 @@ for dir in "${dirs[@]}"; do
   rm -f "$victims"
   printf '%s  %s  %sG -> %sG (cap %sG, %s files)\n' "$(date '+%F %H:%M')" "$dir" "$before" "$after" "$cap_gb" "$count"
 done
+
+# Killed `go build/test/run` (agent timeouts) leave their $TMPDIR/go-build* work dir behind until
+# reboot, ~10/day at up to 1G each. Go never reuses one, so a day-old dir is garbage.
+gone=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'go-build*' -type d -mtime +0 -print -exec rm -rf {} + 2>/dev/null | wc -l)
+[ "$gone" -eq 0 ] || printf '%s  removed %s stale go-build work dirs\n' "$(date '+%F %H:%M')" "$gone"

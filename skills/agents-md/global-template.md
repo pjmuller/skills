@@ -81,7 +81,7 @@ Pushed a shared skill core that projects carry as a committed copy → refresh e
 ## Tooling: one tool per job
 - Python `uv` only · Node `pnpm` only (`pnpm dlx`, no npx) · Ruby `bundler` · versions `mise` · Docker `colima` · installs `brew`, runtimes/pnpm `mise use --global`.
 - Env vars: `mise.toml` `[env]` → `~/.config/mise-env/<org>/<repo>.env` (`redact = true`, chmod 600); never a repo `.env`, `source .env` or direnv. Not loaded → `mise exec -- <cmd>`.
-- Go: after edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing.
+- Go: after edits `go build ./... && go vet ./... && golangci-lint run`, fix before finishing. Keep the shared Go/uv caches: a per-task `GOCACHE`/`UV_CACHE_DIR` in `/tmp` shares nothing (~1 GB each).
 - Throwaway Docker DB: `--tmpfs /var/lib/postgresql/data` (or remove with `docker rm -fv`); a bare `rm -f`, even of a `--rm` container, strands the image's anonymous volume.
 - Cloud CLIs (use directly): {cli + profile → which company/project}.
 - Browser/native-app work → read `~/.agents/skills/t3-manage-thread/browser.md` first ({T3 browser profile per account}; {computer-use tool}).

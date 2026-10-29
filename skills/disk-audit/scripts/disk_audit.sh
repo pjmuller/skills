@@ -198,8 +198,8 @@ suggest "$NM_TOTAL" 5 \
   "Operator judgment: delete node_modules of dormant repos, 'pnpm i' restores them"
 suggest "$(bytes "$HOME_DIR/Downloads")" 3 "open ~/Downloads" "Operator judgment: old downloads"
 suggest "$COLIMA_BYTES" 20 \
-  "docker image prune -a -f && docker builder prune -a -f && colima ssh -- sudo fstrim -av" \
-  "unused images/build cache are regenerated; trim returns freed VM blocks to macOS; volumes/containers stay"
+  "docker image prune -a -f && docker builder prune -a -f && colima ssh -- sudo fstrim -v /var/lib/docker" \
+  "unused images/build cache are regenerated; trim returns freed VM blocks to macOS (the VM's own weekly fstrim skips the docker disk); volumes/containers stay"
 if have docker && docker info >/dev/null 2>&1; then
   SUGGESTIONS+=("$(printf '%9s  %s\n             %s' "see above" \
     "docker system df -v" \
