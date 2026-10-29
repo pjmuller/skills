@@ -38,6 +38,8 @@ lives in one config file ([config.md](config.md)); new machine (macOS or WSL): [
   `visual-pending`; a later poll spawns with the ranges, video and plan paths in the brief (narrate
   those ranges) or "no screen share" (video deleted again). Failure or > 45 min → "visual coverage
   not assessed", never "no share". Files: `calls/<key>/media/{job,visual}.json`, `visual.log`.
+  Local videos (download + shrunk copies) are deleted 1 day after the call's final status (`MEDIA_KEEP`);
+  transcripts, plans and narrations stay, and the source keeps the recording.
 - Spawn = `t3-relay launch --wait 120` ([relay.md](../t3-manage-thread/relay.md)): confirmed →
   `spawned`; accepted but unconfirmed → `relay-pending`, re-checked via `t3-relay status` next poll
   (landed → `spawned`, failed → respawned; never resent while pending). Max 6 per poll, newest

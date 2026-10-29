@@ -50,6 +50,8 @@ RELAY_WAIT = 120                       # seconds a spawn waits for t3-relay to c
 PENDING_ALERT = timedelta(hours=1)     # an unconfirmed spawn older than this is reported
 VISUAL_TIMEOUT = timedelta(minutes=45)  # download + detect-screenshare per call; later -> "not assessed"
 MAX_VISUAL_JOBS = 3                     # concurrent background video checks (bandwidth, disk)
+MEDIA_KEEP = timedelta(days=1)          # local video copies go this long after the call's final status
+VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv")
 # Seconds; the job kills each step's process group at its limit, so 30 + 10 min < VISUAL_TIMEOUT frees the slot
 # for real. A ~50 min Fathom HLS download took ~11 min.
 DOWNLOAD_TIMEOUT, DETECT_TIMEOUT = 30 * 60, 10 * 60
@@ -599,6 +601,23 @@ def is_final(entry):
     return bool(entry) and entry.get("status", "").startswith(FINAL)
 
 
+def prune_media(state, now):
+    """Delete local videos (download + shrunk copies) MEDIA_KEEP after the call went final: the follow-up thread
+    has narrated them by then, and the source keeps the recording. Transcripts, plans and narrations stay."""
+    removed = 0
+    for d in (STATE_DIR / "calls").glob("*-*") if (STATE_DIR / "calls").exists() else []:
+        source, _, id = d.name.partition("-")
+        entry = state["calls"].get(f"{source}:{id}")
+        if not is_final(entry) or now - (parse_ts(entry.get("at")) or now) < MEDIA_KEEP:
+            continue
+        for video in [*d.glob("*"), *d.glob("media/*")]:
+            if video.suffix in VIDEO_SUFFIXES and video.is_file():
+                video.unlink()
+                removed += 1
+    if removed:
+        print(f"pruned {removed} local video file(s) older than {MEDIA_KEEP.days}d past their call's final status")
+
+
 def unfinished_keys(state):
     """Calls whose transcript was written (qualified) but never reached a final status: over-cap or failed spawns."""
     keys = []
@@ -803,6 +822,7 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
     state["last_poll"] = now.isoformat()
     state["last_errors"] = errors
     save_state(state)
+    prune_media(state, now)
     return 1 if errors else 0
 
 

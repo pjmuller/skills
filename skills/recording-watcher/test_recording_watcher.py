@@ -216,6 +216,15 @@ def test_poll_holds_call_until_video_check_lands(cfg, tmp_path, monkeypatch):
     assert len(briefs) == 1 and "24:16-49:53" in briefs[0] and "source.screenshare.json" in briefs[0]
     transcript = (tmp_path / "state" / "calls" / "fathom-v" / "transcript.md").read_text()
     assert "- Screen share: 1 range(s), 26 min: 24:16-49:53" in transcript
+    media = tmp_path / "state" / "calls" / "fathom-v" / "media"
+    media.mkdir(exist_ok=True)
+    for name in ("source.mp4", "source.gemini.crop.mp4", "source.screenshare.json"):
+        (media / name).write_text("x")
+    run(tmp_path, monkeypatch, cfg, [src], spawner, now=NOW + timedelta(hours=20), visual=lambda *a: verdict["v"])
+    assert (media / "source.mp4").exists()            # kept for the follow-up thread
+    run(tmp_path, monkeypatch, cfg, [src], spawner, now=NOW + timedelta(hours=25), visual=lambda *a: verdict["v"])
+    assert sorted(p.name for p in media.iterdir()) == ["source.screenshare.json"]
+    assert (media.parent / "transcript.md").exists() and len(briefs) == 1
 
 
 def test_idempotent_cap_watermark_and_skip_evidence(cfg, tmp_path, monkeypatch):
