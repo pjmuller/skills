@@ -8,7 +8,7 @@ Return **one copy-pasteable ```md block**, nothing around it:
 2. What to open first: exact file/skill path(s); knowledge lives there, the prompt only points.
 3. Steps/commands, env values inline.
 4. Expected outcome: what "works" looks like.
-5. Verification handshake: receiver runs the checks, pastes back one bullet summary, worked/failed, tangible (versions, URLs, counts).
+5. Verification handshake: receiver runs the checks and reports one bullet summary, worked/failed, tangible (versions, URLs, counts), where the request lives: a ticket → a dated section appended to its body by their agent, not a comment thread (clickup-core "Report back into the ticket"); the sender arms a follow-up until it arrives.
 
 Decisions and key insights in (2)/(3), so nobody re-derives them. Bullets, no filler. Name the receiver's harness/model if given.
 

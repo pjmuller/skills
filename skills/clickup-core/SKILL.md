@@ -105,6 +105,12 @@ Defaults; the wrapper may override. Every write costs a human's attention.
   Ideation or progress stays silent.
 - Reader acts through a coding agent: one ```md block in English addressed to their agent.
   Reporter → developer: symptoms, data, intended outcome. Patterns: skill `agents-md` → `handoff.md`.
+  **Report back into the ticket**: the block ends with the exact CLI line to append a dated
+  `## <date> — report from <name>'s agent` body section (`update <id> --append-description-file`) plus one
+  `--mention <requester>` "report in the description" comment (no ClickUp CLI there → the human pastes it as a
+  comment). The requesting agent then arms a T3 follow-up
+  (skill `t3-schedule`, `--once <next workday> --resume-thread <own id>`): report found → verify and act;
+  missing → re-arm for the next workday (after 3 empty days one nudge comment to the assignee, after 5 ask the user).
 - Before escalating to a developer: [triage.md](triage.md). Reviewing a ticket another agent
   wrote: [review.md](review.md).
 

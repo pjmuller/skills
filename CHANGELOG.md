@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29 — clickup-core / agents-md / t3-schedule: colleague agents report back into the ticket body; the requester chases with daily follow-ups
+
+- `clickup-core` ("Report back into the ticket"), `agents-md/handoff.md` step 5, `t3-schedule` Continuation: a ticket asking someone's coding agent to run steps ends with the exact CLI line to append a dated report section to the ticket body plus one mention ping; the requesting agent arms a `--once` continuation for the next workday that verifies the report or re-arms itself (nudge after 3 empty days, ask the user after 5). Why: reports landed as long comments the requester had to find by hand, and "check tomorrow" was forgotten; body sections stay the record and the chase needs no recurring job.
+
 ## 2026-10-29 — agents-md global template: label several decisions D1, D2…
 
 - Asks with more than one decision label them D1, D2… and request replies like "D1: A, D2: B". Why: a bare "A" or "B" was ambiguous when one message carried two questions.

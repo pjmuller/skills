@@ -30,7 +30,8 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this (finished j
   thread ("Scheduled follow-up (<date>), as agreed earlier in this thread: …"); settled threads
   wake. Inside T3 pass **your own id** (`t3_thread_list` → `currentThreadId`); a launchd job
   cannot resolve "self". Arm one whenever the next step needs time to pass (logs, cache expiry,
-  deploy soak, a reply). Keep data the prompt needs outside `/tmp`. `pending-resumes` lists them;
+  deploy soak, a reply). Waiting on someone's reply: one `--once` per workday whose prompt re-arms the next
+  one until the reply is there (a temporary chase needs no recurring job). Keep data the prompt needs outside `/tmp`. `pending-resumes` lists them;
   `t3-purge-threads` spares their threads.
 - **One-shot** (`--once YYYY-MM-DD`): machine-local, retried until 23:00 that day, then retired
   (`list`: `fired <date>` / `expired (never fired)`).
