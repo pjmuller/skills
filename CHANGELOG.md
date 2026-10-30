@@ -2,7 +2,7 @@
 
 ## 2026-10-30 — global template: decision asks without the callout box
 
-- `agents-md/global-template.md`: a decision is now the bold `👀 D1 · question` line plus its reply line and folded detail, no `[!IMPORTANT]` box. Why: the box label on every ask read as too much; the 👀 marker and bold question already make it easy to spot.
+- `agents-md/global-template.md`: a decision is now the bold `👀 D1 · question` line plus its reply line and folded detail, no `[!IMPORTANT]` box; ⭐ after the letter marks the agent's pick. Why: the box label on every ask read as too much; the 👀 marker and bold question already make it easy to spot.
 
 ## 2026-10-30 — t3-setup: `unsetopt EQUALS` in `~/.zshenv`
 
