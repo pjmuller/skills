@@ -40,7 +40,8 @@ task, decisions, commits and next step from the export alone.
 
 ## Opening
 
-- In T3 chat: `t3-open-thread <id> --link` → `[title](t3-thread://v1/<threadId>)`.
+- In T3 chat: `t3-open-thread <id> --link` → `[title](t3-thread://v1/<threadId>)`. Older settled
+  target → dead chip, add the plain-text fallback ([settled targets](workers.md#-t3_thread_launch)).
 - Desktop app: `t3-open-thread <id>` (only when the user asks).
 - HTML reports: `t3code://threads/<env>/<url-encoded threadId>`; `t3-open-thread <id> --dry-run`
   prints it.
