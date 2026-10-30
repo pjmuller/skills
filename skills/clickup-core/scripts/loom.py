@@ -14,8 +14,9 @@ Writes DIR (default /tmp/loom-<id>/):
     video.mp4        kept for re-sampling; safe to delete
 
 Loom exposes its transcript through the public GraphQL endpoint (no auth for shared videos).
-Fallback when Loom has none: 16 kHz wav + `parakeet-mlx` (uv tool, same ASR as the podcast
-pipeline) if installed, otherwise the transcript is marked missing and frames still ship.
+Fallback when Loom has none: `transcribe-local` (video-shrink-for-gemini; whisper-large-v3-turbo,
+Dutch-safe, auto-detects the language) if installed, otherwise the transcript is marked missing and
+frames still ship.
 ffmpeg: system binary if on PATH, else the static one bundled in the imageio-ffmpeg wheel (~30 MB,
 plain PyPI, so this also runs on Claude cloud VMs with no apt). The digest (what is said + what is
 on screen) is written by the agent after reading transcript.md and the frames; this script
@@ -87,16 +88,14 @@ def fetch_transcript(vid: str) -> tuple[list[dict], str | None]:
 
 
 def local_asr(video: Path, out: Path) -> list[dict]:
-    """Fallback: parakeet-mlx on a 16 kHz mono wav. Empty list when the tool is absent."""
-    exe = shutil.which("parakeet-mlx")
-    if not exe:
+    """Fallback: transcribe-local (whisper-large-v3-turbo; parakeet-v3 was rejected on Dutch).
+    Empty list when the tool or its ffmpeg is absent."""
+    exe = shutil.which("transcribe-local")
+    if not exe or not shutil.which("ffmpeg"):
         return []
-    wav = out / "audio-16k.wav"
-    subprocess.run([ffmpeg(), "-v", "error", "-y", "-i", str(video), "-ac", "1", "-ar", "16000", str(wav)], check=True)
-    subprocess.run([exe, "--output-dir", str(out), "--output-format", "json", "--output-name", "asr", str(wav)],
-                   check=True)
-    data = json.loads((out / "asr.json").read_text())
-    return [{"ts": s["start"], "value": s["text"].strip()} for s in data.get("sentences", []) if s.get("text")]
+    subprocess.run([exe, "--out", str(out), str(video)], check=True, stdout=sys.stderr)  # stdout = our JSON
+    data = json.loads((out / f"{video.stem}.whisper.json").read_text())
+    return [{"ts": s["start"], "value": s["text"].strip()} for s in data.get("segments", []) if s.get("text", "").strip()]
 
 
 def download_video(vid: str, out: Path) -> tuple[Path, dict]:
@@ -141,7 +140,7 @@ def process(vid: str, out: Path, every: int, width: int) -> dict:
     phrases, lang = fetch_transcript(vid)
     source = "loom"
     if not phrases:
-        phrases, source = local_asr(video, out), "parakeet-mlx"
+        phrases, source = local_asr(video, out), "transcribe-local"
     if not phrases:
         source = "missing"
     lines = [f"# {meta.get('title') or vid}", "",
