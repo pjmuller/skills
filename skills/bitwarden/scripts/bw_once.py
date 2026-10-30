@@ -710,12 +710,12 @@ def recopy_socket(host_name, field, thread):
 
 def via_recopy(request, thread, vaults, to="clipboard"):
     """The same thread re-copying the login the broker released minutes ago: no new touch. None → normal flow."""
-    if request["op"] != "copy" or request["field"] == "totp" or not thread or not (request.get("id") or request.get("username")):
+    if request["op"] != "copy" or request.get("with_totp") or not thread or not (request.get("id") or request.get("username")):
         return None
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(10)
     try:
-        client.connect(str(recopy_socket(host(request["host"]), request["field"], thread)))
+        client.connect(str(recopy_socket(host(request["host"]), "password" if request["field"] == "totp" else request["field"], thread)))
     except OSError:
         client.close()
         return None
@@ -727,7 +727,29 @@ def via_recopy(request, thread, vaults, to="clipboard"):
             answer = json.loads(read_line(client))
         except (OSError, ValueError):
             return None
-    return answer if answer.get("ok") else None
+    return answer if answer.get("ok") or (request["field"] == "totp" and not answer.get("miss")) else None
+
+
+def end_recopies(host_name, thread):
+    """Revoke future deliveries for this exact host/thread; never read any held value."""
+    host_name = host(host_name)
+    ended = 0
+    for field in ("password", "username"):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(10)
+            try:
+                client.connect(str(recopy_socket(host_name, field, thread)))
+            except OSError:
+                continue  # Already expired/ended is success.
+            try:
+                client.sendall(json.dumps({"op": "end", "host": host_name, "thread": thread}).encode() + b"\n")
+                answer = json.loads(read_line(client))
+            except (OSError, ValueError):
+                raise Failure("Could not confirm login buffer cleanup; retry done") from None
+            if not answer.get("ended"):
+                raise Failure("Login buffer did not confirm cleanup")
+            ended += 1
+    return {"ok": True, "ended": ended}
 
 
 FILL_SELECTORS = {"password": "input[type=password]", "username": "input[autocomplete~=username], input[type=email]",
@@ -1107,7 +1129,11 @@ def main():
     copy.add_argument("--field", required=True, choices=("username", "password", "totp"))
     copy.add_argument("--to", choices=("clipboard", "page"), default="clipboard",
                       help="page: one fetch by the https://<host> page via the returned fill_js (Touch ID broker only)")
+    copy.add_argument("--with-totp", action="store_true", help="approve password plus up to two TOTP deliveries within 5 min (Touch ID only)")
     copy.add_argument("--selector", help="CSS selector of the field fill_js fills (default per --field)")
+    done = commands.add_parser("done", help="end held password/TOTP access for an exact host and thread")
+    done.add_argument("--host", required=True)
+    done.add_argument("--thread", required=True)
     chosen = commands.add_parser("pick", help="after a copy listed several logins: name the one to release")
     chosen.add_argument("--token", required=True)
     chosen.add_argument("--id", required=True)
@@ -1147,6 +1173,9 @@ def main():
             return
         if args["op"] == "clear":
             print(json.dumps(clear_clipboard()))
+            return
+        if args["op"] == "done":
+            print(json.dumps(end_recopies(args["host"], args["thread"])))
             return
         if args["op"] == "pick":
             result = with_fill_js(submit_pick(args["token"], args["id"]), args["selector"])
@@ -1191,12 +1220,18 @@ def main():
             claim = {"thread": args.pop("thread"), "why": args.pop("why")}
             to, selector = args.pop("to", "clipboard"), args.pop("selector", None)
             vaults = broker_vaults(explicit_vault)
-            result = None if to == "page" else via_session(args)  # Session and Terminal flows deliver to the clipboard.
-            result = result or via_recopy(args, claim["thread"], vaults, to)
+            with_totp = args.pop("with_totp", False)
+            if with_totp and (args.get("field") != "password" or not claim["thread"]
+                              or not (args.get("username") or args.get("id"))):
+                raise Failure("--with-totp needs password, --thread and an exact --username or --id")
+            result = None if to == "page" or with_totp else via_session(args)  # Session and Terminal flows deliver to the clipboard.
+            result = result or (None if with_totp else via_recopy(args, claim["thread"], vaults, to))
             if not result and broker_enrolled(vaults):
                 # One Touch ID panel, every enrolled vault searched (or just --vault); no Terminal.
                 fields = {key: args[key] for key in ("op", "host", "field", "username", "id") if args.get(key)}
-                result = broker({**fields, **claim, **({"to": to} if args["op"] == "copy" else {}), "vaults": vaults})
+                result = broker({**fields, **claim, **({"with_totp": True} if with_totp else {}), **({"to": to} if args["op"] == "copy" else {}), "vaults": vaults})
+            if not result and with_totp:
+                raise Failure("--with-totp needs the Touch ID broker; no Terminal/session fallback")
             if not result and to == "page":
                 raise Failure("--to page needs the Touch ID broker (bw-once touchid enroll)")
             result = with_fill_js(result or launch(args), selector)

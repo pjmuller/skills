@@ -916,3 +916,33 @@ def test_interrupted_terminal_wait_flags_a_possible_send(fake, monkeypatch, tmp_
     with pytest.raises(bw.Failure) as caught:
         bw.launch(send_request(tmp_path) if op == "send-text" else request())
     assert caught.value.details == {"stage": "unknown", "retry_safe": safe}
+
+
+@macos_only
+def test_bundle_front_requires_broker_and_never_reuses_one_field_consent(front, monkeypatch, capsys):
+    run, launched = front
+    monkeypatch.setattr(bw, 'via_session', lambda *_: pytest.fail('bundle used session holder'))
+    monkeypatch.setattr(bw, 'via_recopy', lambda *_: pytest.fail('bundle reused password-only consent'))
+    sent = run('copy', '--host', 'admin.example.com', '--username', 'alice', '--field', 'password',
+               '--thread', 'Sign-in', '--with-totp')
+    assert sent['with_totp'] is True and sent['field'] == 'password' and not launched
+    run('copy', '--host', 'admin.example.com', '--username', 'alice', '--field', 'password',
+        '--thread', 'Sign-in', '--with-totp', enrolled=False)
+    assert not launched and 'no Terminal/session fallback' in capsys.readouterr().out
+
+
+@macos_only
+@pytest.mark.parametrize('extra', [[], ['--thread', 'Sign-in', '--field', 'totp']])
+def test_bundle_front_rejects_incomplete_consent(front, capsys, extra):
+    run, launched = front
+    run('copy', '--host', 'admin.example.com', '--username', 'alice', '--field', 'password', '--with-totp', *extra)
+    assert not launched and '--with-totp needs' in capsys.readouterr().out
+
+
+@macos_only
+def test_standalone_totp_requests_fresh_approval_after_buffer_miss(front, monkeypatch):
+    run, launched = front
+    monkeypatch.setattr(bw, 'via_session', lambda *_: None)
+    monkeypatch.setattr(bw, 'via_recopy', lambda *_: None)
+    sent = run('copy', '--host', 'admin.example.com', '--username', 'alice', '--field', 'totp', '--thread', 'Sign-in')
+    assert sent['field'] == 'totp' and not sent.get('with_totp') and not launched

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-30 — Bitwarden: one approval for a bounded login
+
+- `copy --field password --with-totp` explicitly approves password plus two TOTP deliveries for one host/account/thread within five minutes. Vaults lock before delivery; the broker keeps only expiring codes, cross-checked against Bitwarden, never a retained seed. `done --host H --thread T` ends held access early. Ambiguous accounts require narrowing; single-field consent stays single-field.
+- Browser login guidance tries click/paste before asking for panel focus: T3's `visible:false` counts viewers, not keyboard focus. Removed the misleading port-9 CSP probe; use actual delivery results, preserve site CSP, clear clipboard on failure.
+
 ## 2026-10-30 — recordings: check who said it, lightest follow-up
 
 - `recording-followups`: north star "preserve who meant what; choose the lightest follow-up that fulfils their intent". `spoken-cues.md` adds a destination table (reminder / T3 thread / ClickUp / nothing), a "remind me / put this on my list" cue, and "Who said it": vendor speaker labels can be wrong, so a label that decides an owner or authorization is checked on the video first; inconclusive holds only that item. A colleague's reminder never becomes a ticket for lack of a route. Why: an operator's spoken "remind me" request was credited by the recording vendor to a colleague's tile and became a ticket assigned to that colleague; frames showed the operator speaking, and two more labels in the same call were wrong.

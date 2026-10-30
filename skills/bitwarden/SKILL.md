@@ -1,10 +1,11 @@
 ---
 name: bitwarden
-description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\"), share a secret/file through a one-view Bitwarden Send, or hand API keys to a colleague's agent and install a received Send link into their env (`bw-receive`, no account needed). One approved field per Touch ID or Terminal unlock; never a vault session."
+description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\"), share a secret/file through a one-view Bitwarden Send, or hand API keys to a colleague's agent and install a received Send link into their env (`bw-receive`, no account needed). One approved field, or an explicit password/TOTP login bundle, per Touch ID; never a vault session."
 ---
 
-`bw-once` releases **one field** (username, password or generated TOTP) of one URI-matched login, or creates a
-text/file Send, after the human approves exactly that request. Approval paths, best first: **Touch ID broker**
+`bw-once` releases **one field** (username, password or generated TOTP), an explicitly approved **login bundle**, or creates a
+text/file Send, after the human approves exactly that request. A bundle covers one exact host/account: password now,
+up to two TOTP deliveries within five minutes, vaults locked, only expiring codes retained. Approval paths, best first: **Touch ID broker**
 (one native window, one touch: [touchid.md](touchid.md)), a time-boxed **session holder** the human unlocks once
 ([session.md](session.md)), else a fresh human Terminal unlock per request.
 
@@ -31,26 +32,33 @@ Once enrolled (`bw-once touchid enroll` opens a native window; the human types e
 
 1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), host verified;
    `preview_act type` the username (not secret; works in a background tab).
-2. **Pick the delivery before asking for a touch**: `preview_evaluate` in the tab:
-   `(async () => { let blocked = false; document.addEventListener('securitypolicyviolation', () => { blocked = true; }); await fetch('http://127.0.0.1:9/', {mode: 'no-cors'}).catch(() => {}); await new Promise(r => setTimeout(r, 100)); return {page_fill: !blocked}; })()`
-   `page_fill: true` → `--to page` (any tab, hidden too). `false` (CSP blocks loopback: GitHub, Sentry) → clipboard,
-   which T3 pastes only into the tab the human is viewing: `preview_status` `visible: false` → first ask the human
-   to open this thread's browser panel and keep it in front, else the touch is wasted.
+2. Prefer `--to page`; use clipboard when this site's CSP is already known to block loopback. An actual failed
+   `fill_js` fetch means switch delivery as below. A failed port-9 fetch cannot prove page delivery works.
+   `preview_status` `visible: false` counts viewer connections, not keyboard focus;
+   it is not a reason to ask the human to open a panel. Try the focused paste below first.
 3. `bw-once touchid status`: `update_touch: true` = bw-once was updated, one extra touch in a window with their
    phrase first; `keychain_prompt: true` = one-time macOS Mac-password prompt (any button). Say so with step 4.
 4. Tell the human what the green box will say, then run in the background (waits up to 5 min):
-   `bw-once copy --host H --username U --field password --to page --thread "<title>" --why "<one line>"`.
+   `bw-once copy --host H --username U --field password --with-totp --to page --thread "<title>" --why "<one line>"`.
+   The box and Touch ID sheet explicitly include TOTP if configured. Omit `--with-totp` for password-only consent.
+   Bundle needs `--username` or `--id` and exactly one match; narrow `--vault` if needed.
    Know the account → always `--username`, no `list` first (costs a touch, shows every login on the host).
    Title = your thread's `title` from `t3_thread_list` (first row, `currentThreadId`).
-5. Account unknown: same `copy` without `--username`. Answer has `pick`? Vaults are already locked: choose from
+5. Account unknown: `copy` without `--username` or `--with-totp`. Answer has `pick`? Vaults are already locked: choose from
    `pick.candidates` and run `bw-once pick --token <pick.token> --id <id>` within 60 s (no second touch).
    `list --host H [--username U]` only when you need metadata without a copy.
 6. **Page**: `preview_evaluate` the answer's `fill_js` as is within 60 s → `{ok, length}`; submit. `--selector`
-   overrides the field. `ok: false` → same `copy` with `--to clipboard` (re-copy, no touch).
+   overrides the field. `ok: false` → same `copy` with `--to clipboard` **without `--with-totp`** (re-copy, no touch).
    **Clipboard**: `preview_act click` the field **again** (the window took focus), `preview_act press Meta+V`, check
-   `value.length` only, `bw-once clear`, submit; one call at a time.
-7. Same password again within 15 min (Google asks twice, gcloud OAuth right after): same `copy` with the same
-   `--thread` and `--username`/`--id` → `recopy: true`, no touch.
+   `value.length` only, `bw-once clear` even on failure, submit only after successful verification; one call at a time.
+   An actual failed paste → ask the human once to focus this thread's browser panel, re-copy and retry.
+7. Bundle result `totp: ready` → when the code form appears, same `copy --field totp` with the same host,
+   `--thread` and `--username`/`--id`, **without `--with-totp`**. Returns `touch:false`, `valid_for_seconds`; paste
+   promptly. Two deliveries maximum (including page-to-clipboard fallback), five minutes, no renewed expiry.
+   `absent` → no stored TOTP; `unsupported`/`unavailable` → standalone `copy --field totp` needs its own approval.
+   Same password again within 15 min: `copy --field password` without `--with-totp`, same scope → no touch.
+8. Login succeeded or abandoned: `bw-once done --host H --thread "<title>"`, plus `bw-once clear`. `done` ends
+   future password/TOTP deliveries; it cannot retract an already delivered field or pending page-fill URL.
 
 Afterwards: the site's logout in the same tab ([session.md](session.md#browser-context-for-agent-logins)).
 

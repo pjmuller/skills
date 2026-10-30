@@ -40,8 +40,10 @@ bw-once touchid status | bw-once touchid forget
   agent's choice. The agent can only choose among matches the human approved. The broker writes the clipboard
   itself; a detached copy holding only an owner token clears it after 30 s unless something newer was copied.
 - **`--to page`**: a detached copy serves the value once on `127.0.0.1` (random port + path, 60 s) to `Origin:
-  https://<host>` only; `fill_js` fetches it into the field. Why: T3 drops Cmd+V into a tab the human isn't viewing
-  (it guards the clipboard), so a 2026-10-25 paste landed nothing. Exposure: any same-user process that learns
+  https://<host>` only; `fill_js` fetches it into the field. Clipboard paste can fail without keyboard focus;
+  a 2026-10-25 paste landed nothing. T3's `visible:false` counts viewers, not focus: click, paste, verify length,
+  clear, and ask for panel focus only if that fails. Site CSP may block page fetch; never weaken it.
+  Exposure: any same-user process that learns
   the URL and fakes the header could fetch it, like the clipboard, for one fetch.
 - **Updates**: macOS binds a legacy item to the cdhash of the ad-hoc build that created it, so rebuilds used to
   meet Mac-password dialogs whose default "Allow" brought them back every request. Now each build keeps its own
@@ -55,7 +57,22 @@ bw-once touchid status | bw-once touchid forget
   15 min (vaults locked) on a private socket keyed by host + field + thread; the same thread naming the same login
   (`--id`/`--username`) gets it again, each time in a small focus-free phrase window. Why: Google asks twice and a
   gcloud OAuth right after asks again. Cost: for 15 min any same-user process knowing the thread title can
-  re-fill the clipboard with that password (shown each time; the green box says so). TOTP is never re-copied.
+  re-fill the clipboard with that password (shown each time; the green box says so). Standalone TOTP is never re-copied; explicit login bundles are bounded separately below.
+- **Login bundle (`copy --field password --with-totp`)**: needs a thread plus exact username/item and a unique
+  match. Both approval surfaces name password **and TOTP if configured**. Before locking, `prepareTOTP` computes
+  only five minutes of codes and cross-checks the current interval against Bitwarden; after locking, `TOTPCodes`
+  retains the expiring table, never the seed. Bare base32 and `otpauth://totp` with SHA1/256/512, 6–8 digits and
+  15–120 s periods are supported ([RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)); other formats/discrepancies
+  report `unsupported`, no held codes. Missing seeds report `absent`; ready tables report `ready`; a failed buffer bind reports `unavailable`.
+  Bitwarden TOTP errors report `unsupported` while still releasing the approved password. An absent, expired or
+  exhausted table falls through to fresh Touch ID for a standalone code; it never extends the old approval.
+  The same password socket checks exact host, account, vault and thread for `copy --field totp`; at most two
+  deliveries within five minutes (monotonic timer, never extended). Near rollover it waits for the next valid
+  interval. `valid_for_seconds` is the remaining interval, not a guarantee the site will accept a late paste.
+  `done --host H --thread T` ends the buffer early; expiry/replacement also drops it. Already delivered values
+  retain their normal clipboard/page expiry. Swift does not guarantee physical memory zeroing.
+  Tradeoff: same-user code knowing that scope can request both factors during this window; no claim of malware
+  containment. Unknown/ambiguous accounts use the existing single-field flow, not multiple stored code tables.
 - **Send** (text only: `bw serve` refuses file Sends): the broker validates name, views 1–100, days 1–31 and the
   text (≤600 UTF-8 bytes; no control, format/bidi/zero-width, private-use characters, so the window shows what is
   sent), and fixes the expiry date before any window; a renewal re-runs with that same frozen request. The window

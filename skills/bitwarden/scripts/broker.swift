@@ -181,6 +181,7 @@ struct Request {
     let vaults: [Vault]
     var host = "", field = "", username: String? = nil, id: String? = nil, to = "clipboard"
     var thread: String? = nil, why: String? = nil
+    var withTOTP = false
     // send-text: frozen here, before any window, so a renewal re-run shows and creates the very same Send.
     var sendName = "", sendText = "", views = 0, days = 0, until = ""
 }
@@ -286,6 +287,16 @@ func parseRequest(_ data: Data) throws -> Request {
                 throw Failure(message: "Use an exact item UUID")
             }
             request.id = value
+        }
+    }
+    if let flag = json["with_totp"] {
+        guard let flag = flag as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else {
+            throw Failure(message: "with_totp must be boolean")
+        }
+        request.withTOTP = flag.boolValue
+        guard !request.withTOTP || (op == "copy" && request.field == "password" && request.thread != nil
+                                    && (request.username != nil || request.id != nil)) else {
+            throw Failure(message: "--with-totp needs password, --thread and an exact --username or --id")
         }
     }
     return request
@@ -973,6 +984,94 @@ func matches(_ item: [String: Any], host: String, defaultMatch: String = "base_d
     matchScope(item, host: host, defaultMatch: defaultMatch) != nil
 }
 
+// MARK: - Bounded second factor: keep expiring codes, never a seed or unlocked vault.
+
+let totpSeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(testEnv["BW_BROKER_TEST_TOTP_SECONDS"] ?? "300")!
+    #else
+    return 300
+    #endif
+}()
+
+final class TOTPCodes {
+    var codes: [UInt64: String]
+    let period: Int
+    let expires: Double  // Monotonic: changing the wall clock cannot extend consent.
+    var remaining = 2
+    init(codes: [UInt64: String], period: Int) {
+        self.codes = codes; self.period = period
+        expires = ProcessInfo.processInfo.systemUptime + min(totpSeconds, recopySeconds)
+    }
+    func clear() { codes.removeAll(); remaining = 0 }
+    var active: Bool { remaining > 0 && ProcessInfo.processInfo.systemUptime < expires }
+    func current() -> (String, Int)? {
+        guard active else { clear(); return nil }
+        let now = Date().timeIntervalSince1970
+        guard now >= 0 else { return nil }
+        let step = UInt64(now / Double(period))
+        guard let code = codes[step] else { return nil }
+        return (code, Int(Double(step + 1) * Double(period) - now))
+    }
+}
+
+/// Strictly supported RFC 6238 forms. Unsupported values never appear in error text.
+/// Cross-check against Bitwarden before retaining the bounded table; a discrepancy fails closed.
+func prepareTOTP(_ raw: String?, serve: Serve, id: String) throws -> (String, TOTPCodes?) {
+    guard let raw, !raw.isEmpty else { return ("absent", nil) }
+    var seed = raw, algorithm = "SHA1", digits = 6, period = 30
+    if raw.lowercased().hasPrefix("otpauth://") {
+        guard let url = URLComponents(string: raw), url.host?.lowercased() == "totp",
+              let queries = url.queryItems else { return ("unsupported", nil) }
+        var values: [String: String] = [:]
+        for query in queries {
+            let key = query.name.lowercased()
+            guard values[key] == nil, let value = query.value else { return ("unsupported", nil) }
+            values[key] = value
+        }
+        guard let secret = values["secret"], let d = Int(values["digits"] ?? "6"),
+              let p = Int(values["period"] ?? "30"), (6...8).contains(d), (15...120).contains(p),
+              values["counter"] == nil else { return ("unsupported", nil) }
+        seed = secret; digits = d; period = p; algorithm = (values["algorithm"] ?? "SHA1").uppercased()
+    }
+    guard ["SHA1", "SHA256", "SHA512"].contains(algorithm), seed.utf8.count <= 1024 else { return ("unsupported", nil) }
+    let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".utf8)
+    var bytes: [UInt8] = [], buffer: UInt32 = 0, bits = 0, padding = false
+    for char in seed.uppercased().utf8 {
+        if [9, 10, 13, 32].contains(char) { continue } // Human-formatted base32; Bitwarden cross-check still required.
+        if char == 61 { padding = true; continue }
+        guard !padding, let index = alphabet.firstIndex(of: char) else { return ("unsupported", nil) }
+        buffer = (buffer << 5) | UInt32(index); bits += 5
+        if bits >= 8 { bits -= 8; bytes.append(UInt8((buffer >> bits) & 255)) }
+    }
+    guard !bytes.isEmpty, bits < 5, buffer & ((1 << bits) - 1) == 0 else { return ("unsupported", nil) }
+    let key = SymmetricKey(data: Data(bytes))
+    let now = Date().timeIntervalSince1970
+    guard now > Double(period) else { return ("unsupported", nil) }
+    let first = UInt64(now / Double(period))
+    let last = UInt64((now + min(totpSeconds, recopySeconds)) / Double(period))
+    var codes: [UInt64: String] = [:]
+    for step in (first - 1)...last {
+        var counter = step.bigEndian
+        let message = withUnsafeBytes(of: &counter) { Data($0) }
+        let digest: [UInt8]
+        switch algorithm {
+        case "SHA256": digest = Array(HMAC<SHA256>.authenticationCode(for: message, using: key))
+        case "SHA512": digest = Array(HMAC<SHA512>.authenticationCode(for: message, using: key))
+        default: digest = Array(HMAC<Insecure.SHA1>.authenticationCode(for: message, using: key))
+        }
+        let offset = Int(digest.last! & 15)
+        let number = digest[offset..<offset + 4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) } & 0x7fffffff
+        codes[step] = String(format: "%0*u", digits, number % UInt32(pow(10.0, Double(digits))))
+    }
+    guard let expected = try? serve.totp(id) else { return ("unsupported", nil) }
+    let checkedStep = UInt64(Date().timeIntervalSince1970 / Double(period))
+    guard [checkedStep - 1, checkedStep, checkedStep + 1].contains(where: { codes[$0] == expected }) else {
+        return ("unsupported", nil)
+    }
+    return ("ready", TOTPCodes(codes: codes, period: period))
+}
+
 // MARK: - Clipboard (written here: no other binary ever receives a released secret)
 
 let ownerType = NSPasteboard.PasteboardType("org.bw-once.owner")
@@ -1021,7 +1120,7 @@ func copyToClipboard(_ secret: String) throws {
 
 /// The value goes to a detached copy of this binary that serves it once over loopback, only to a page whose Origin is
 /// exactly https://<host> and only at an unguessable path; the agent's `preview_evaluate` fetches it straight into
-/// the field and returns its length. The clipboard path needs a focused tab: T3 drops Cmd+V into a hidden one.
+/// the field and returns its length. Clipboard paste needs keyboard focus; viewer counts cannot prove focus.
 func deliverToPage(_ secret: String, host: String) throws -> [String: Any] {
     let token = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
     // Own session (like the clipboard clear timer): outlives this process and the agent tool's process group.
@@ -1440,6 +1539,10 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
         rows.append(("⚠ Lookalike?", "\(request.host) is an internationalized name (xn--): its letters can imitate "
                      + "another site's. Approve only if you expected exactly this host."))
     }
+    if request.withTOTP {
+        rows.append(("Then TOTP", "if this login has one: at most 2 code deliveries for this host/account/thread, "
+                     + "5 min, no touch; only expiring codes retained, never the seed"))
+    }
     if recopyAllowed(request) {
         rows.append(("Re-copies", "the same login's \(request.field) for this thread (page or clipboard), "
                      + "\(Int(recopySeconds / 60)) min, no touch (each one shown)"))
@@ -1453,7 +1556,7 @@ func touchReason(_ request: Request) -> String {
     switch request.op {
     case "send-text": return "create a one-view text Send in \(request.vaults.first?.name ?? "?") (see window)"
     case "list": return "list logins for \(request.host) (no secrets)"
-    default: return "release the \(request.field) for \(request.host)" + (request.username.map { " (\($0))" } ?? "")
+    default: return "release the \(request.withTOTP ? "password and TOTP codes (if configured)" : request.field) for \(request.host)" + (request.username.map { " (\($0))" } ?? "")
     }
 }
 
@@ -1508,7 +1611,7 @@ func ownsPath(_ socket: RecopySocket) -> Bool {
 /// when the agent names the same login (`--id` or `--username`), each time in a small window that takes no
 /// focus. A newer copy for the same key replaces this holder. Vaults stay locked throughout. Never returns.
 func holdForRecopies(_ socket: RecopySocket, _ request: Request, _ meta: [String: Any], _ secret: String, phrase: String,
-                     until deadline: Date) -> Never {
+                     until deadline: Date, totp: TOTPCodes? = nil) -> Never {
     var value: String? = secret
     let (server, path) = (socket.fd, socket.path)
     let until = DateFormatter.localizedString(from: deadline, dateStyle: .none, timeStyle: .short)
@@ -1516,43 +1619,66 @@ func holdForRecopies(_ socket: RecopySocket, _ request: Request, _ meta: [String
     var shown = Date.distantPast
     let key = recopyKey(host: request.host, field: request.field, thread: request.thread ?? "")
     while Date() < deadline {
+        if totp?.active == false { totp?.clear() }
         guard ownsPath(socket) else { break }  // Replaced or removed.
         var poller = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
         guard poll(&poller, 1, Int32(min(500, max(1, deadline.timeIntervalSinceNow * 1000)))) > 0 else { continue }
         let client = accept(server, nil, nil)
         guard client >= 0 else { continue }
         let ask = readRequestLine(client, until: deadline) ?? [:]
+        let scoped = (ask["host"] as? String)?.lowercased() == request.host && ask["thread"] as? String == request.thread
+        if scoped, ask["op"] as? String == "end", Date() < deadline {
+            value = nil; totp?.clear()
+            withRecopyLock(key) { if ownsPath(socket) { unlink(path) } }
+            reply(client, ["ok": true, "ended": true]); break
+        }
+        let field = ask["field"] as? String ?? ""
+        let isTOTP = field == "totp" && request.withTOTP
         let id = (ask["id"] as? String)?.lowercased(), user = (ask["username"] as? String)?.lowercased()
-        guard (ask["host"] as? String)?.lowercased() == request.host, ask["field"] as? String == request.field,
-              ask["thread"] as? String == request.thread, id != nil || user != nil,
+        guard scoped, (field == request.field || isTOTP), id != nil || user != nil,
               id == nil || id == meta["id"] as? String, user == nil || user == username?.lowercased(),
               (ask["vaults"] as? [String])?.contains(meta["vault"] as? String ?? "") == true, let secret = value else {
             reply(client, ["ok": false, "miss": true])
             continue
         }
+        var released = secret
+        var validity: [String: Any] = [:]
         let to = ask["to"] as? String == "page" ? "page" : "clipboard"
         let delivered: Result<[String: Any], Error>? = withRecopyLock(key) {
             guard Date() < deadline, ownsPath(socket) else { return nil }
-            return Result { try deliver(secret, request, to: to) }
+            if isTOTP {
+                if let (_, seconds) = totp?.current(), seconds <= 3 {
+                    Thread.sleep(forTimeInterval: Double(seconds + 1))
+                }
+                guard Date() < deadline, ownsPath(socket) else { return nil }
+                guard let (code, seconds) = totp?.current(), seconds > 0 else { return nil }
+                released = code; validity["valid_for_seconds"] = seconds
+            }
+            return Result { try deliver(released, request, to: to) }
         }
         guard case .success(let destination) = delivered else {
             reply(client, delivered == nil ? ["ok": false, "miss": true] : ["ok": false, "error": "Delivery failed"])
             continue
         }
-        reply(client, ["ok": true, "copied": request.field, "recopy": true, "touch": false,
-                       "recopy_until": ISO8601DateFormatter().string(from: deadline)].merging(meta) { $1 }.merging(destination) { $1 })
+        if isTOTP { totp?.remaining -= 1; if totp?.active == false { totp?.clear() } }
+        reply(client, ["ok": true, "copied": field, "recopy": true, "touch": false,
+                       "recopy_until": ISO8601DateFormatter().string(from: deadline)].merging(meta) { $1 }
+                        .merging(destination) { $1 }.merging(validity) { $1 })
         shown = Date()
+        let permission = isTOTP ? "TOTP approval: at most 5 min, \(totp?.remaining ?? 0) deliveries left."
+            : "You approved this login with Touch ID; re-copies end \(until)."
         onMain {
             let notice = Panel(title: "bw-once · re-copy (no touch)")
             notice.line("Your bw-once phrase:", color: .secondaryLabelColor, size: 11)
             notice.line(phrase, size: 18, mono: true)
-            notice.line((to == "page" ? "Sent " : "Copied ") + "\(request.field) of \(name) (\(username ?? "no username"), \(meta["vault"] as? String ?? "?")) "
-                        + "again (\(to == "page" ? "to the https://\(request.host) page" : "clipboard")) for thread \(request.thread ?? "?"). You approved this login with Touch ID; re-copies end \(until).")
+            notice.line((to == "page" ? "Sent " : "Copied ") + "\(field) of \(name) (\(username ?? "no username"), \(meta["vault"] as? String ?? "?")) "
+                        + "again (\(to == "page" ? "to the https://\(request.host) page" : "clipboard")) for thread \(request.thread ?? "?"). \(permission)")
             notice.show(activate: false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { notice.window.close() }
         }
     }
     value = nil
+    totp?.clear()
     close(server)
     withRecopyLock(key) { if ownsPath(socket) { unlink(path) } }
     Thread.sleep(forTimeInterval: max(0, 4.5 + shown.timeIntervalSinceNow))  // Let a last notice finish.
@@ -1818,6 +1944,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             var result: [String: Any] = ["ok": true, "searched": vaults.map(\.name).filter { name in !unavailable.contains { $0["vault"] == name } },
                                          "unavailable": unavailable]
             var secret: String?
+            var totp: TOTPCodes?
             if request.op == "list" {
                 result["items"] = candidates.filter { entry in
                     request.username == nil
@@ -1828,6 +1955,9 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     let login = entry.1["login"] as? [String: Any]
                     return (request.id == nil || (entry.1["id"] as? String)?.lowercased() == request.id)
                         && (request.username == nil || ((login?["username"] as? String) ?? "").lowercased() == request.username)
+                }
+                if request.withTOTP && picked.count != 1 {
+                    throw Failure(message: "Login bundle needs exactly one matching account; narrow --vault/--username/--id")
                 }
                 if picked.count > 1 && request.field != "totp" {  // A TOTP code would go stale during the pick.
                     // Several logins and no --username/--id: keep only these logins' field, lock everything,
@@ -1856,6 +1986,11 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     guard let value = secret, !value.isEmpty, !value.contains("\0") else {
                         throw Failure(message: "Requested field is missing")
                     }
+                    if request.withTOTP {
+                        let prepared = try prepareTOTP(login?["totp"] as? String, serve: chosen.2,
+                                                       id: (chosen.1["id"] as? String ?? "").lowercased())
+                        result["totp"] = prepared.0; totp = prepared.1
+                    }
                     result.merge(metadata(chosen)) { $1 }
                     result["copied"] = request.field
                 }
@@ -1876,6 +2011,9 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             let recopyUntil = Date().addingTimeInterval(recopySeconds)
             let delivered = try secret.map { try deliverAndOpenRecopy(request, $0) }
             let recopy = delivered?.0
+            if request.withTOTP && recopy == nil && result["totp"] as? String == "ready" {
+                totp?.clear(); result["totp"] = "unavailable"
+            }
             result.merge(delivered?.1 ?? [:]) { $1 }
             let kept = recopy == nil ? nil : secret
             if recopy != nil { result["recopy_until"] = ISO8601DateFormatter().string(from: recopyUntil) }
@@ -1894,7 +2032,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     ["ok", "copied", "clear_after_seconds", "fill_url", "fill_expires_in", "recopy_until", "searched", "unavailable"]
                         .forEach { meta[$0] = nil }
                     DispatchQueue.global().async {
-                        holdForRecopies(recopy, request, meta, kept, phrase: phrase, until: recopyUntil)
+                        holdForRecopies(recopy, request, meta, kept, phrase: phrase, until: recopyUntil, totp: totp)
                     }
                 }
             }

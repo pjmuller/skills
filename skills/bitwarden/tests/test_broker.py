@@ -73,7 +73,20 @@ while True:
         if cfg.get("slow_sync"): import time; time.sleep(cfg["slow_sync"])  # The whole vault over a poor link.
     elif state["locked"]: code, reply = 400, {"success": False, "message": "Vault is locked."}
     elif path == "/list/object/items": reply["data"] = {"object": "list", "data": cfg["items"]}
-    elif path.startswith("/object/totp/"): reply["data"] = {"object": "string", "data": "123456"}
+    elif path.startswith("/object/totp/"):
+        value = "123456"
+        if cfg.get("real_totp"):
+            import base64, hashlib, hmac, struct, time, urllib.parse
+            seed = next(i["login"]["totp"] for i in cfg["items"] if i["id"] == path.rsplit("/", 1)[-1])
+            opts = urllib.parse.parse_qs(urllib.parse.urlparse(seed).query) if seed.startswith("otpauth://") else {}
+            key = opts.get("secret", [seed])[0]
+            period = int(opts.get("period", ["30"])[0]); digits = int(opts.get("digits", ["6"])[0])
+            digest = hmac.new(base64.b32decode("".join(key.upper().split())), struct.pack(">Q", int(time.time()) // period),
+                              getattr(hashlib, opts.get("algorithm", ["sha1"])[0].lower())).digest()
+            offset = digest[-1] & 15
+            value = str((int.from_bytes(digest[offset:offset+4], "big") & 0x7fffffff) % 10**digits).zfill(digits)
+        reply["data"] = {"object": "string", "data": value}
+        if cfg.get("fail_totp"): code, reply = 403, {"success": False, "message": "Premium status is required"}
     elif path == "/object/send" and method == "POST":
         with (root / "sends").open("a") as stream: stream.write(json.dumps(data) + "\n")
         if cfg.get("slow_send"): import time; time.sleep(cfg["slow_send"])  # A slow server: bw answers late.
@@ -762,3 +775,199 @@ def test_punycode_host_is_flagged_as_possible_lookalike(world):
     assert "Lookalike?" in log and "touch: list logins for login.xn--80ak6aa92e.com (no secrets)" in log
     _, log = world["run"]("list", host=HOST)
     assert "Lookalike?" not in log
+
+
+TOTP_SEED = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"  # RFC test key, never a real credential.
+
+
+def bundle_setup(world, monkeypatch, seed=TOTP_SEED, real=True):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    item = login(ID_A, SECRET_A, "alice")
+    item["login"]["totp"] = seed
+    world["configure"]("testa", items=[item], real_totp=real)
+
+
+def bundle_start(world, **env):
+    return world["start"]("copy", host=HOST, field="password", username="alice", thread="Sign-in", with_totp=True,
+                          extra_env={"BW_BROKER_TEST_RECOPY_SECONDS": "30", **env})
+
+
+def finish_bundle(world, child):
+    result = bw_once.end_recopies(HOST, "Sign-in")
+    assert result["ok"]
+    assert child.wait(10) == 0
+    assert not list(world["sockets"].glob("*.sock"))
+    return child.stderr.read().decode()
+
+
+def expected_totp(timestamp, algorithm="sha1", digits=6, period=30):
+    import hashlib, hmac, struct
+    # RFC 6238 reference calculation using the original bytes, independent of the Swift parser.
+    digest = hmac.new(b"12345678901234567890", struct.pack(">Q", int(timestamp) // period),
+                      getattr(hashlib, algorithm)).digest()
+    start = digest[-1] & 15
+    return str((int.from_bytes(digest[start:start+4], "big") & 0x7fffffff) % 10**digits).zfill(digits)
+
+
+@pytest.mark.parametrize("algorithm,digits,period", [("sha1", 6, 30), ("sha256", 8, 60), ("sha512", 7, 15)])
+def test_bundle_codes_match_reference_and_never_unlock_again(world, monkeypatch, algorithm, digits, period):
+    import time
+    seed = TOTP_SEED if algorithm == "sha1" else (
+        f"otpauth://totp/Example?secret={TOTP_SEED}&algorithm={algorithm.upper()}&digits={digits}&period={period}")
+    bundle_setup(world, monkeypatch, seed)
+    child, answer = bundle_start(world)
+    try:
+        assert answer["totp"] == "ready" and world["clip"]() == SECRET_A
+        events = {name: world["events"](name) for name in MASTER}
+        codes = []
+        for _ in range(2):
+            before = time.time()
+            result = recopy({"username": "alice", "field": "totp"}, "Sign-in")
+            after = time.time()
+            assert result["ok"] and not result["touch"] and result["copied"] == "totp"
+            code = world["clip"](); codes.append(code)
+            assert code in {expected_totp(t, algorithm, digits, period) for t in range(int(before), int(after)+1)}
+            assert 0 < result["valid_for_seconds"] <= period
+            assert code not in json.dumps(result)
+        exhausted = recopy({"id": ID_A, "field": "totp"}, "Sign-in")
+        assert exhausted is None  # Main now asks for fresh Touch ID consent.
+        assert events == {name: world["events"](name) for name in MASTER}
+        assert all(world["locked"](name) for name in MASTER)
+        assert recopy({"id": ID_A}, "Sign-in")["ok"]  # TOTP limit doesn't end the password buffer.
+    finally:
+        panel = finish_bundle(world, child)
+    assert panel.count("touch:") == 1 and "password and TOTP" in panel and "at most 2" in panel
+    for secret in (TOTP_SEED, seed, SECRET_A, *codes):
+        assert secret not in panel and secret not in json.dumps(answer)
+        for file in (world["store"].parent / "home").rglob("*"):
+            if file.is_file(): assert secret.encode() not in file.read_bytes()
+    for name in MASTER:
+        assert TOTP_SEED not in json.dumps(world["events"](name))
+    assert recopy({"id": ID_A, "field": "totp"}, "Sign-in") is None
+
+
+@pytest.mark.parametrize("seed,real,state", [(None, False, "absent"), ("", False, "absent"),
+    ("steam://EXAMPLE", False, "unsupported"), (TOTP_SEED, False, "unsupported"),
+    (f"otpauth://hotp/Example?secret={TOTP_SEED}&counter=0", False, "unsupported"),
+    (f"otpauth://totp/Example?secret={TOTP_SEED}&period=0", False, "unsupported")])
+def test_bundle_absent_and_unsupported_never_hold_codes(world, monkeypatch, seed, real, state):
+    bundle_setup(world, monkeypatch, seed, real)
+    child, answer = bundle_start(world)
+    try:
+        assert answer["ok"] and answer["totp"] == state and world["clip"]() == SECRET_A
+        result = recopy({"id": ID_A, "field": "totp"}, "Sign-in")
+        assert result is None and world["clip"]() == SECRET_A
+    finally:
+        finish_bundle(world, child)
+
+
+def test_bundle_scope_expiry_and_explicit_cleanup(world, monkeypatch):
+    import time
+    bundle_setup(world, monkeypatch)
+    child, answer = bundle_start(world, BW_BROKER_TEST_TOTP_SECONDS="1")
+    try:
+        assert answer["totp"] == "ready"
+        world["unclip"]()
+        for values, thread, vaults in [({"host": "sibling.example.com"}, "Sign-in", ("testa",)),
+                                       ({"host": "evil.test"}, "Sign-in", ("testa",)),
+                                       ({}, "Other", ("testa",)), ({"id": ID_B}, "Sign-in", ("testa",)),
+                                       ({"username": "bob"}, "Sign-in", ("testa",)),
+                                       ({}, "Sign-in", ("testb",))]:
+            assert recopy({"field": "totp", "id": ID_A, **values}, thread, vaults) is None
+        assert bw_once.end_recopies(HOST, "Other")["ended"] == 0
+        assert bw_once.end_recopies("sibling.example.com", "Sign-in")["ended"] == 0
+        time.sleep(1.1)
+        assert recopy({"field": "totp", "id": ID_A}, "Sign-in") is None
+        assert world["clip"]() is None
+        assert recopy({"id": ID_A}, "Sign-in")["ok"]
+    finally:
+        finish_bundle(world, child)
+    assert bw_once.end_recopies(HOST, "Sign-in")["ended"] == 0
+
+
+@pytest.mark.parametrize("kind", ["cancel", "caller", "lock", "ambiguous"])
+def test_bundle_withholds_everything_on_failure(world, monkeypatch, kind):
+    bundle_setup(world, monkeypatch)
+    env = {"BW_BROKER_TEST_CANCEL_AFTER_SEARCH": "1"} if kind == "cancel" else (
+          {"BW_BROKER_TEST_CALLER_GONE": "1"} if kind == "caller" else {})
+    if kind == "lock": world["configure"]("testa", fail_lock=True)
+    if kind == "ambiguous": world["configure"]("testb", items=[login(ID_B, SECRET_B, "alice")])
+    result, panel = world["run"]("copy", host=HOST, field="password", username="alice", thread="Sign-in",
+                                  with_totp=True, extra_env=env)
+    assert not result["ok"] and world["clip"]() is None
+    assert not list(world["sockets"].glob("*.sock"))
+    assert TOTP_SEED not in panel and TOTP_SEED not in json.dumps(result)
+
+
+@pytest.mark.parametrize("fields", [{"field": "totp"}, {"thread": None}, {"username": None}, {"with_totp": "true"}])
+def test_bundle_requires_explicit_narrow_consent(world, fields):
+    request = {"host": HOST, "field": "password", "username": "alice", "thread": "Sign-in", "with_totp": True, **fields}
+    result, panel = world["run"]("copy", **request)
+    assert not result["ok"] and "touch:" not in panel
+
+
+def test_bundle_selects_current_interval_later_and_pins_page_origin(world, monkeypatch):
+    import time
+    seed = f"otpauth://totp/Example?secret={TOTP_SEED}&period=15"
+    bundle_setup(world, monkeypatch, seed)
+    child, answer = bundle_start(world)
+    try:
+        first = recopy({"id": ID_A, "field": "totp"}, "Sign-in")
+        assert first['ok']
+        old_code = world['clip']()
+        # Let the actual clock cross a period: proves the buffer isn't just the initial code.
+        time.sleep(15 - time.time() % 15 + 0.1)
+        start = time.time()
+        result = bw_once.via_recopy({"op": "copy", "host": HOST, "id": ID_A, "field": "totp"},
+                                    'Sign-in', [{"name": "testa"}], 'page')
+        assert result['ok'] and result['copied'] == 'totp'
+        url = result['fill_url']
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(urllib.request.Request(url, headers={'Origin': 'https://sibling.example.com'}))
+        assert error.value.code == 403
+        with urllib.request.urlopen(urllib.request.Request(url, headers={'Origin': f'https://{HOST}'})) as response:
+            code = response.read().decode()
+        assert code == expected_totp(start, period=15) and code != old_code
+        assert world['clip']() == old_code  # Page delivery never writes clipboard.
+        assert TOTP_SEED not in json.dumps(result) and code not in json.dumps(result)
+        assert all(world['locked'](name) for name in MASTER)
+    finally:
+        finish_bundle(world, child)
+
+
+
+def test_bundle_totp_error_still_releases_approved_password(world, monkeypatch):
+    bundle_setup(world, monkeypatch)
+    world['configure']('testa', fail_totp=True)
+    child, answer = bundle_start(world)
+    try:
+        assert answer['ok'] and answer['totp'] == 'unsupported' and world['clip']() == SECRET_A
+        assert all(world['locked'](name) for name in MASTER)
+        assert recopy({'field': 'totp', 'id': ID_A}, 'Sign-in') is None
+    finally:
+        finish_bundle(world, child)
+
+
+def test_bundle_spaced_base32_matches_bitwarden(world, monkeypatch):
+    bundle_setup(world, monkeypatch, ' '.join(TOTP_SEED[i:i+4] for i in range(0, len(TOTP_SEED), 4)))
+    child, answer = bundle_start(world)
+    try:
+        assert answer['ok'] and answer['totp'] == 'ready'
+        assert recopy({'field': 'totp', 'id': ID_A}, 'Sign-in')['ok']
+    finally:
+        finish_bundle(world, child)
+
+
+def test_bundle_cannot_report_ready_without_socket(world, monkeypatch):
+    bundle_setup(world, monkeypatch)
+    # A directory at the socket path defeats unlink/bind without test-only production hooks.
+    path = bw_once.recopy_socket(HOST, 'password', 'Sign-in')
+    path.mkdir()
+    try:
+        result, panel = world['run']('copy', host=HOST, field='password', username='alice', thread='Sign-in',
+                                     with_totp=True, extra_env={'BW_BROKER_TEST_RECOPY_SECONDS': '30'})
+        assert result['ok'] and result['totp'] == 'unavailable' and 'recopy_until' not in result
+        assert world['clip']() == SECRET_A
+    finally:
+        path.rmdir()
