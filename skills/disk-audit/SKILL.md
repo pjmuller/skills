@@ -7,6 +7,8 @@ description: "Use when the Mac's disk is filling up (\"what's eating my disk\", 
 
 The **script** measures, you interpret and dig into anomalies. Never guess sizes: run it.
 `scripts/install [--check]` links the scripts onto `~/.local/bin`.
+Visual overview for the user: [GrandPerspective](https://grandperspectiv.sourceforge.net/) (GPL treemap, `brew install --cask grandperspective`);
+like `du` it counts APFS clones in full, so read uv/pnpm/node_modules blocks with the agent notes below.
 
 - `disk_audit.sh`: read-only snapshot (one `du` pass over `$HOME`); ends with SUGGESTED CLEANUPS, printed, never run.
   Thresholds and the suggestion list sit at its bottom: add new offenders there.
