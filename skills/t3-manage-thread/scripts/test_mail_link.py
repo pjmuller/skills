@@ -255,6 +255,31 @@ def test_scan_events_canary_on_schema_change(t3db, tmp_path):
         ml.scan_events(0)
 
 
+def test_scan_events_reads_items_without_output(t3db, tmp_path):
+    """T3 ≥ 0.1.3 drops `output` when a command printed nothing: such a row (here a failed script quoting
+    the marker in its input) holds no claim, and the scan moves past it to the next real claim."""
+    import sqlite3
+    quoted = t3db("aaaaaaaa-0000-0000-0000-000000000001", "gws gmail-draft --body 'Mail-ref: gmail:x'", "", status="failed")
+    db = sqlite3.connect(tmp_path / "userdata/statev2.sqlite")
+    db.execute("UPDATE orchestration_v2_projection_turn_items SET payload_json = json_remove(payload_json, '$.output') "
+               "WHERE rowid = ?", (quoted,))
+    db.commit()
+    db.close()
+    claim = t3db("dddddddd-0000-0000-0000-000000000004", "gws gmail-draft", f"Mail-ref: gmail:{GMAIL} a@x")
+    events, cursor = ml.scan_events(0)
+    assert [(e["row"], e["owner"]) for e in events] == [(claim, "dddddddd-0000-0000-0000-000000000004")] and cursor == claim
+
+
+def test_triage_env_passes_the_user_settings_setup_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in ml.triage_env()  # no settings: the CLI's own login
+    (tmp_path / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "tok-file"}}))
+    assert ml.triage_env()["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-file"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-env")
+    assert ml.triage_env()["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-env"  # the caller's env wins
+
+
 def test_apply_event_claims_hands_off_and_releases(t3db, monkeypatch, capsys):
     from types import SimpleNamespace as NS
     api_error = type("ApiError", (Exception,), {"__init__": lambda self, status: setattr(self, "status", status)})

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-30 — t3-mail-link: claim scan and triage work again
+
+- `scan_events` reads command items without an `output` key as empty output (T3 omits it when a command printed nothing); only a missing `input` still trips the schema canary. Why: one failed command quoting `Mail-ref: gmail:` in its input stopped every poll for 3 days (cursor stuck, 12 claims unapplied, exit 1).
+- Triage passes the `CLAUDE_CODE_OAUTH_TOKEN` setup-token from user `settings.json` `env` to `claude -p`, and a failure reason now carries the CLI's last line. Why: `--setting-sources project` (kept: no user hooks or CLAUDE.md in the triage prompt) skipped that token, so the CLI fell back to an expired /login credential and every mail woke its owner.
+
 ## 2026-10-29 — video-intake works inside Codex's sandbox
 
 - `video-intake --keep` makes `.video-intake/` self-ignoring (a `*` `.gitignore` inside) instead of appending to `.git/info/exclude`, and writes nothing when the folder is already ignored; an unwritable keep folder exits 4 with "rerun the same command with sandbox escalation" instead of a traceback. Why: the first live router paste (Astra, Codex Auto) crashed: Codex keeps `.git/` read-only.

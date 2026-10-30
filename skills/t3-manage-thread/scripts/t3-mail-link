@@ -39,7 +39,8 @@ LAUNCHD_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/Library/pnp
 METADATA = ["From", "Subject", "Date", "Message-ID"]
 WATCH_DAYS = 60  # a case with no claim or wake for this long stops being watched
 TRIAGE_CMD = ["claude", "-p", "--model", "haiku", "--tools", "", "--setting-sources", "project",
-              "--strict-mcp-config", "--no-session-persistence"]  # project sources: no user hooks; auth still works
+              "--strict-mcp-config", "--no-session-persistence"]  # project sources: no user hooks or CLAUDE.md
+TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"  # a `claude setup-token` kept in user settings.json `env`
 TRIAGE_TIMEOUT = 120
 RELAY_WAIT = 120                      # seconds a ping waits for t3-relay to confirm delivery
 PENDING_ALERT = 30 * 60               # an unconfirmed ping older than this is reported
@@ -500,8 +501,8 @@ def scan_events(cursor: int | None) -> tuple[list[dict], int]:
     stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     for rowid, thread_id, status, payload in rows:
         item = json.loads(payload)
-        if "input" not in item or ("output" not in item and status not in OPEN_STATUSES):
-            raise sqlite3.DatabaseError(f"T3 command item {rowid} has no input/output: schema changed?")
+        if "input" not in item:  # T3 omits `output` when a command printed nothing (T3 ≥ 0.1.3), never `input`
+            raise sqlite3.DatabaseError(f"T3 command item {rowid} has no input: schema changed?")
         if status in OPEN_STATUSES:
             if CLAIM_COMMAND.search(item.get("input") or "") and item.get("updatedAt", "") > stale:
                 hold = min(hold, rowid - 1)
@@ -748,15 +749,32 @@ def when(stamp: str) -> datetime:
     return moment if moment.tzinfo else moment.astimezone()
 
 
+def triage_env() -> dict[str, str]:
+    """Project sources skip user settings.json, so a setup-token kept in its `env` block would be lost and the
+    CLI would fall back to the /login keychain credential (which expires): pass that one token through."""
+    env = dict(os.environ)
+    if not env.get(TOKEN_ENV):
+        home = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        try:
+            token = (json.loads((home / "settings.json").read_text()).get("env") or {}).get(TOKEN_ENV)
+        except (OSError, ValueError, AttributeError):
+            token = None
+        if isinstance(token, str) and token:
+            env[TOKEN_ENV] = token
+    return env
+
+
 def triage(subject: str, texts: list[str]) -> tuple[bool, str]:
     """Small-model gate before a wake; any failure wakes (fail open)."""
     try:
         result = subprocess.run([*TRIAGE_CMD, "--system-prompt", TRIAGE_SYSTEM], input=triage_prompt(subject, texts),
-                                capture_output=True, text=True, timeout=TRIAGE_TIMEOUT, cwd=Path.home())
+                                capture_output=True, text=True, timeout=TRIAGE_TIMEOUT, cwd=Path.home(),
+                                env=triage_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         return True, f"triage unavailable ({type(exc).__name__})"
     if result.returncode:
-        return True, f"triage unavailable (exit {result.returncode})"
+        said = (result.stderr.strip() or result.stdout.strip()).splitlines()
+        return True, f"triage unavailable (exit {result.returncode}{': ' + said[-1][:100] if said else ''})"
     return parse_verdict(result.stdout)
 
 

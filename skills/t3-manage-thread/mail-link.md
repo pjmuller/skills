@@ -52,7 +52,7 @@ t3-mail-link list [--thread-ids] · poll [--dry-run] · draft snapshot|unchanged
   to draft, send or claim. Mailbox review continuation: [continuity](../mailbox-review-core/references/continuity.md).
 - **Triage** (`poll_case`): own/`SENT` mail → seen, no wake. Auto-replies (RFC 3834 headers,
   out-of-office subjects) → skipped without a model. The rest → Haiku via `claude -p` (no tools, no
-  user hooks): wake for anything that may need a reply, decision or record; skip thanks, acks,
+  user hooks or CLAUDE.md; a setup-token in user `settings.json` `env` is passed through): wake for anything that may need a reply, decision or record; skip thanks, acks,
   courtesy, content-free FYI. Unsure or triage failure → wake. Skipped mail is saved as `…-skipped.md`.
 - **Wake**: save the full text, `t3-relay send --wait 120`, mark seen once it landed (failed → next
   run resends; accepted but unconfirmed → next run checks `t3-relay status`, never resends).
