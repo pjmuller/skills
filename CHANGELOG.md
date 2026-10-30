@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-30 — global template: settle unasked once done at 80/20
+
+- `agents-md/global-template.md`: the auto-settle line now also covers a reply that closes the thread's last open item; the thread stays open only while 80/20 work is undone or a new finding, risk or decision needs the user. Why: one week of T3 threads held 174 "settle" messages typed only to close finished threads.
+
 ## 2026-10-30 — t3-mail-link: claim scan and triage work again
 
 - `scan_events` reads command items without an `output` key as empty output (T3 omits it when a command printed nothing); only a missing `input` still trips the schema canary. Why: one failed command quoting `Mail-ref: gmail:` in its input stopped every poll for 3 days (cursor stuck, 12 claims unapplied, exit 1).
