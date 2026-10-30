@@ -112,7 +112,7 @@ to `message` only when the outcome is bounded and clear, delivery is independent
 the full path is already authorized and no user review/dialogue is needed. Review/dialogue
 means a concrete outstanding user decision or requested discussion; task class, a completed
 agent review, a readable result, simplicity or a confidence percentage do not decide it.
-Known outstanding approval prevents arming; project gates stay in force and unmet gates prevent
+Judge the user's whole outcome (a playbook's full loop), not a slice the router narrowed: a step left for the user to do or approve is outstanding approval. Known outstanding approval prevents arming; project gates stay in force and unmet gates prevent
 settling; result verification belongs to execution. Routing threads and tasks needing user
 review/dialogue stay open; 🏓 workers are `delegate_task` children with nothing to settle.
 Wrappers may tailor defaults, never explicit keep-open instructions or authorization/safety
