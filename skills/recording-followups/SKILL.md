@@ -46,8 +46,9 @@ digest. Before each write, verify:
 
 - **Participants** from vendor speaker identities or attendance, **purpose** from the content.
   Titles, weekdays and time slots are hints, never eligibility; an unidentified speaker blocks it.
-- **Content**: health, customer or personal data, money, HR or private remarks → ask first, or
-  leave them out of a digest.
+- **Content**: health, patient or customer data, personal pay, HR or private remarks → ask first,
+  or leave them out of a digest. Business figures (pricing, revenue, performance) are fine unless the
+  wrapper says otherwise.
 - **Audience**: everyone with repository access attended or is meant to read it; else ask.
 
 Any doubt → ask before writing: Git history outlives a deletion. No backfill unless asked; never
