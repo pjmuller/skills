@@ -415,11 +415,13 @@ def render_transcript(cfg, call, visual):
              f"- Owner election: {election_line(call)}",
              "- Speakers: " + ", ".join(f"{n} {w / total:.0%}" for n, (w, _) in sorted(words.items(), key=lambda kv: -kv[1][0])),
              f"- Screen share: {visual_line(visual)}",
-             f"- Raw {call.source} ASR, not verified against audio/video.", "", "## Transcript", ""]
+             f"- Raw {call.source} ASR, not verified against audio/video. Speaker labels are the vendor's and can be "
+             "wrong (a voice credited to another tile, two speakers in one turn); aliases rename a label, they do "
+             "not verify it.", "", "## Transcript", ""]
     prev = None
     for ts, name, text, _ in call.segments:
         if name == prev:
-            lines[-2] += " " + text
+            lines[-2] += f" [{ts}] {text}"  # keep segment starts: a speaker check needs the sentence's time range
             continue
         lines += [f"**[{ts}] {name}:** {text}", ""]
         prev = name
@@ -437,8 +439,11 @@ def visual_media(call, visual, transcript_path):
         return "Audio-only recording: work from the transcript."
     meet = status == "done" and visual.get("method") == "meet-layout"
     if meet and not visual.get("ranges"):
+        video = visual.get("video")
+        where = (f"the video stays at {video} for {MEDIA_KEEP.days} day" if video else f"re-download it per {skill}")
         return ("No screen share in the video (detect-screenshare checked one frame per second): work from the "
-                "transcript; the video is not needed.")
+                f"transcript. It still shows who spoke: {where}; check a speaker label that decides an owner or "
+                f"an authorization with speaker-frames ({SKILL_DIR.parent}/video-frames-for-vision/SKILL.md).")
     if meet:
         return (f"Screen shared at {visual_line(visual).split(': ', 1)[1]} (detect-screenshare). Video and ranges are "
                 f"ready: {visual['video']} and {visual['plan']}. Get a visual narration of those ranges first per "
@@ -545,8 +550,8 @@ def run_bounded(cmd, timeout, env=None):
 
 
 def visual_job(args):
-    """Background: download the call's video, run detect-screenshare, write media/visual.json. A video without
-    shares is deleted again (the brief says the transcript suffices); failures are recorded, never 'no share'."""
+    """Background: download the call's video, run detect-screenshare, write media/visual.json. The video stays
+    (no share still shows who spoke) until prune_media; failures are recorded, never 'no share'."""
     media = media_dir(args.key)
     job = read_json(media / "job.json") or {}
     result = {"status": "failed"}
@@ -566,9 +571,6 @@ def visual_job(args):
         result = {"status": "done", "method": out["method"], "ranges": out["ranges"],
                   "share_seconds": out.get("share_seconds", 0), "duration": out.get("duration"),
                   "video": str(video), "plan": str(plan)}
-        if out["method"] == "meet-layout" and not out["ranges"]:
-            video.unlink()
-            result["video"] = None
     except subprocess.TimeoutExpired as exc:
         result["reason"] = f"{exc.cmd[0]} timed out after {int(exc.timeout // 60)} min"
     except subprocess.CalledProcessError as exc:
@@ -603,7 +605,8 @@ def is_final(entry):
 
 def prune_media(state, now):
     """Delete local videos (download + shrunk copies) MEDIA_KEEP after the call went final: the follow-up thread
-    has narrated them by then, and the source keeps the recording. Transcripts, plans and narrations stay."""
+    has used them by then, and the source keeps the recording (re-download for a later check). Transcripts,
+    plans and narrations stay."""
     removed = 0
     for d in (STATE_DIR / "calls").glob("*-*") if (STATE_DIR / "calls").exists() else []:
         source, _, id = d.name.partition("-")

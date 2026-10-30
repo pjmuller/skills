@@ -6,7 +6,8 @@ integration before asking for a share link. No browser or cookies.
 
 - `--transcript-only`: raw API JSON, segment timings and `transcript.md`; works for an accessible
   call without a share URL. Keep Fathom's speaker labels and wording; label interpretations
-  separately (Fathom can misattribute speakers).
+  separately (Fathom can misattribute speakers; check one that decides an owner with
+  [speaker-frames](../video-frames-for-vision/SKILL.md#who-said-it-speaker-frames)).
 - Media (`--timings` adds the timing reference): the helper matches the call via
   `GET /external/v1/meetings` and passes its **existing** `share_url` to yt-dlp. A `/share/TOKEN`
   URL needs no API unless `--timings`. `--resolve-only` checks resolution only.

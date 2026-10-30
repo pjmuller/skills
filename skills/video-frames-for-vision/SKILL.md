@@ -1,6 +1,6 @@
 ---
 name: video-frames-for-vision
-description: "Use when a model without video input (Codex, Claude Code) must know what was on screen during a recording: Gemini is unavailable, on Windows with Codex, or opaque on-screen IDs must be checked against source frames. Picks the few frames that matter plus an annotation prompt."
+description: "Use when a model without video input (Codex, Claude Code) must know what was on screen during a recording: Gemini is unavailable, on Windows with Codex, or opaque on-screen IDs must be checked against source frames; or to check who really said a transcript line (speaker-frames). Picks the few frames that matter plus an annotation prompt."
 ---
 
 # Video frames for vision-only models
@@ -11,10 +11,21 @@ description: "Use when a model without video input (Codex, Claude Code) must kno
 the frames next to the transcript. This skill never listens: speech comes from a vendor transcript
 ([leexi](../leexi/SKILL.md), Fathom) or ASR. Continuous audiovisual narrative with Gemini instead:
 [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md). Codex/WSL install and per-meeting
-steps: [codex-recipe.md](codex-recipe.md). `scripts/install` links the command (`--check`: ffmpeg,
+steps: [codex-recipe.md](codex-recipe.md). `scripts/install` links the commands (`--check`: ffmpeg,
 ffprobe, uv).
 
 Exhaustive pass: `--max-frames 120 --views-per-page 2`. Tuning: `--no-crop --features`.
+
+## Who said it: `speaker-frames`
+
+Vendor speaker labels can be wrong: a colleague's tile picks up your voice, or one segment holds two
+speakers. When a label decides an owner or an authorization, `speaker-frames VIDEO --start T --end T`
+(`--help`) cuts frames inside that segment plus 1 s before and after, a captioned `sheet.jpg` and a
+`manifest.md` with provenance and the reading rules (dominant tile = highlighted border + audio bars;
+confirmed / contradicted / mixed / inconclusive). Look at the sheet yourself; the tool never names a
+speaker or edits a transcript. Measured on 5 segments of one Meet standup: 3 labels contradicted,
+1 confirmed, 1 mixed (two speakers); one 0.5 s sample showed bars on two tiles: two frames can mislead.
+Needs speaker tiles on screen: audio-only, or tiles hidden by a full-screen share → inconclusive.
 
 ## Design intent (mechanism and thresholds: `scripts/select-frames` docstrings)
 

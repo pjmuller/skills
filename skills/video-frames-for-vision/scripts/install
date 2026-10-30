@@ -9,7 +9,7 @@ if [[ "${1:-}" == "--check" ]]; then
     command -v "$dependency" >/dev/null || { echo "missing $dependency; install this prerequisite with your package manager, then rerun scripts/install --check" >&2; exit 1; }
     echo "ok      $dependency ($(command -v "$dependency"))"
   done
-  for helper in select-frames; do
+  for helper in select-frames speaker-frames; do
     [[ "$(readlink -f "$install_dir/$helper")" == "$script_dir/$helper" ]] || { echo "missing or stale $helper; run $script_dir/install" >&2; exit 1; }
     echo "ok      $helper"
   done
@@ -23,7 +23,7 @@ case "$script_dir" in
 esac
 warn_project=false
 [[ ! -d "$HOME/.agents/skills/video-frames-for-vision" ]] || warn_project=true
-for command_name in select-frames; do
+for command_name in select-frames speaker-frames; do
   existing="$(readlink -f "$install_dir/$command_name" 2>/dev/null || true)"
   if [[ -n "$existing" && -e "$existing" && "$(dirname "$existing")" != "$script_dir" ]]; then
     warn_project=true
@@ -38,7 +38,7 @@ if $project_copy && $warn_project; then
 fi
 
 mkdir -p "$install_dir"
-for helper in select-frames; do
+for helper in select-frames speaker-frames; do
   ln -sfn "$script_dir/$helper" "$install_dir/$helper"
   echo "installed $install_dir/$helper"
 done

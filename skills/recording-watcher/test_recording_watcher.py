@@ -97,7 +97,7 @@ def test_routing(cfg):
     assert rw.speaker_name(cfg, "Alpha Office") == "Ben Example" and rw.speaker_name(cfg, None) == "Unknown"
 
 
-NO_SHARE = {"status": "done", "method": "meet-layout", "ranges": [], "share_seconds": 0, "video": None}
+NO_SHARE = {"status": "done", "method": "meet-layout", "ranges": [], "share_seconds": 0, "video": "/m/source.mp4"}
 SHARED = {"status": "done", "method": "meet-layout", "ranges": [{"start": 1456.0, "end": 2993.0}], "share_seconds": 1537,
           "video": "/m/source.mp4", "plan": "/m/source.screenshare.json"}
 
@@ -107,13 +107,24 @@ def test_visual_verdicts_in_brief(tmp_path, monkeypatch):
     c, t = call(), tmp_path / "t.md"
     shared = rw.visual_media(c, SHARED, t)
     assert "24:16-49:53" in rw.visual_line(SHARED) and "/m/source.screenshare.json" in shared and "narration" in shared
-    assert "No screen share" in rw.visual_media(c, NO_SHARE, t) and "video is not needed" in rw.visual_media(c, NO_SHARE, t)
+    no_share = rw.visual_media(c, NO_SHARE, t)
+    assert "No screen share" in no_share and "/m/source.mp4" in no_share and "speaker-frames" in no_share
+    assert "not needed" not in no_share                                  # no share still shows who spoke
+    assert "re-download it per" in rw.visual_media(c, {**NO_SHARE, "video": None}, t)   # pruned or older entry
     for v in ({"status": "failed", "reason": "download-fathom exit 1"}, {"status": "timeout", "reason": "still running"},
               {"status": "done", "method": "full-fallback", "ranges": [{"start": 0, "end": 60}], "video": "/m/v.mp4"}):
         text = rw.visual_media(c, v, t)
         assert text.startswith("Visual coverage not assessed") and "Do not assume there was no screen share" in text
     assert "/m/v.mp4" in rw.visual_media(c, v, t)                       # already downloaded: no second download
     assert rw.visual_line({"status": "audio-only"}).startswith("no video")
+
+
+def test_transcript_warns_on_labels_and_keeps_merged_segment_times(cfg):
+    c = call(segments=[("00:14:43", "Ana", "first.", ANA), ("00:14:48", "Ana", "second.", ANA),
+                       ("00:14:53", "Cleo", "third.", CLEO)])
+    text = rw.render_transcript(cfg, c, NO_SHARE)
+    assert "Speaker labels are the vendor's and can be wrong" in text
+    assert "**[00:14:43] Ana:** first. [00:14:48] second.\n" in text and "**[00:14:53] Cleo:** third." in text
 
 
 def test_visual_check_starts_one_bounded_job(cfg, tmp_path, monkeypatch):
@@ -133,7 +144,7 @@ def test_visual_check_starts_one_bounded_job(cfg, tmp_path, monkeypatch):
     assert rw.visual_check(cfg, audio, NOW) == {"status": "audio-only"}
 
 
-def test_visual_job_downloads_detects_and_drops_unshared_video(tmp_path, monkeypatch):
+def test_visual_job_downloads_detects_and_keeps_video(tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "STATE_DIR", tmp_path)
     monkeypatch.setattr(rw, "load_config", lambda: Namespace(sources={"fathom": {"env_file": None}}))
     monkeypatch.setattr(rw, "load_env", lambda path, keys: {k: "secret" for k in keys})
@@ -152,7 +163,8 @@ def test_visual_job_downloads_detects_and_drops_unshared_video(tmp_path, monkeyp
     monkeypatch.setattr(rw, "run_bounded", fake_run)
     assert rw.visual_job(Namespace(key="fathom:7")) == 0
     seen = json.loads((media / "visual.json").read_text())
-    assert seen["status"] == "done" and seen["video"] is None and not (media / "source.mp4").exists()
+    assert seen["status"] == "done" and seen["ranges"] == [] and seen["video"] == str(media / "source.mp4")
+    assert (media / "source.mp4").exists()            # no share: kept for a speaker check until prune_media
     ranges.append({"start": 10.0, "end": 70.0})
     assert rw.visual_job(Namespace(key="fathom:7")) == 0 and (media / "source.mp4").exists()
 

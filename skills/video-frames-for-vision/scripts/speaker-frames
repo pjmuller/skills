@@ -1,0 +1,230 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow>=10"]
+# ///
+"""Cut the frames that show who was speaking during one transcript segment. No model call, no audio.
+
+  speaker-frames VIDEO --start 14:48 --end 14:53 [--inside 4] [--offset SECONDS] [--out DIR]
+
+For a meeting recording with visible participant tiles (Google Meet gallery or speaker strip): --inside frames
+spread evenly over [start, end] at (i + 0.5) / n of the span, plus one context frame 1 s before and 1 s after
+(they expose a turn boundary the vendor put in the wrong place). Writes full-resolution JPEGs, a captioned
+sheet.jpg (look at this first) and manifest.md / manifest.json with provenance and the reading rules. The
+agent looks at the images and records a verdict; this tool never names a speaker and never edits a transcript.
+
+--start/--end: transcript times (hh:mm:ss, mm:ss or seconds). Vendors stamp whole seconds and give no end:
+use the next segment's start and treat it as an estimate. --offset: where transcript time 0 sits inside
+VIDEO (a clip that starts at 14:30 of the call: --offset -870). Ambiguous result: rerun on the disputed
+sub-interval with --inside 8, then stop.
+
+Measured 2026-10-30 on 5 segments of one 25-min, 4-tile Meet standup (checked against 0.5 s sampling): the
+vendor label was contradicted 3 times (one speaker's voice labelled as a colleague's tile), confirmed once, mixed once
+(two speakers in one segment). In a 5 s turn, one 0.5 s sample showed audio bars on two tiles: two frames can mislead.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+CONTEXT = 1.0      # seconds outside the segment for the before/after frames
+MIN_GAP = 0.5      # inside frames closer than this repeat the same indicator state
+MAX_INSIDE = 12
+MAX_WIDTH = 1920
+TOOL = "speaker-frames"  # manifest marker: only a directory carrying it is ever cleaned up
+EDGE = 0.05        # a seek to the exact end of a video returns no frame   # keep tile names and the speaking icon legible; only shrink larger recordings
+
+READING = """\
+## How to read (Google Meet; other apps: find their equivalent cue first)
+
+- **Dominant** tile = highlighted border **and** the audio-bars icon in its corner. Bars alone = that
+  microphone carries some sound (overlap, echo, a laugh); a border with three dots (•••) = the last
+  speaker, now quiet (the border lingers through pauses). Only dominant frames count below; note the rest.
+- Not evidence: a pinned, spotlighted or larger tile, faces or moving lips, who was speaking before.
+- The tile name is an account or device, not necessarily the person (a company-named tile, a shared
+  room laptop): map it through the roster or speaker aliases.
+- Verdict for the vendor label, from the **inside** frames (before/after only show the turn boundary):
+  - **confirmed**: the labelled person is dominant in every inside frame that has a dominant tile (≥ 2);
+  - **contradicted**: one other person is dominant in every such frame (≥ 2), the labelled one in none;
+  - **mixed**: dominance changes person (likely two turns in one vendor segment): attribute only the part
+    you can place in time, never the whole segment;
+  - **inconclusive**: fewer than 2 dominant frames, a shared-device tile, tiles hidden by a screen share,
+    or anything else that leaves doubt. Once: rerun on the disputed sub-interval with --inside 8.
+- Record the verdict, the frames it rests on and the vendor label in the debrief or a separate verified
+  excerpt. Never edit the vendor transcript. The words stay vendor ASR; this checks the speaker only.
+"""
+
+
+def seconds(text: str) -> float:
+    """hh:mm:ss[.f], mm:ss[.f] or plain seconds."""
+    try:
+        parts = [float(p) for p in text.strip().split(":")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a time: {text!r} (use hh:mm:ss, mm:ss or seconds)") from None
+    if len(parts) > 3 or any(p < 0 for p in parts):
+        raise argparse.ArgumentTypeError(f"not a time: {text!r}")
+    total = 0.0
+    for p in parts:
+        total = total * 60 + p
+    return total
+
+
+def clock(t: float) -> str:
+    whole = int(t)
+    return f"{whole // 3600:02d}:{whole % 3600 // 60:02d}:{whole % 60:02d}.{int(round((t - whole) * 10)) % 10}"
+
+
+def plan(start: float, end: float, inside: int, offset: float, duration: float) -> list[dict]:
+    """Deterministic sample times: context before, n inside, context after; all clamped to the video."""
+    if end <= start:
+        raise ValueError(f"--end ({end:g}) must be after --start ({start:g})")
+    if offset + start >= duration:
+        raise ValueError(f"start {clock(start)} is at {offset + start:.1f} s in a {duration:.1f} s video: wrong --offset or video?")
+    if offset + end <= 0:
+        raise ValueError(f"segment ends before the video starts ({offset + end:.1f} s): wrong --offset?")
+    lo, hi = covered(start, end, offset, duration)
+    if hi <= lo:
+        raise ValueError(f"segment {clock(start)}-{clock(end)} has no frame in a {duration:.1f} s video: wrong --offset or video?")
+    span = hi - lo  # sample only what the video covers: clamping would repeat one frame as several observations
+    n = max(1, min(inside, MAX_INSIDE, int(span / MIN_GAP)))
+    rows = [("before", start - CONTEXT)] + [("inside", lo + span * (i + 0.5) / n) for i in range(n)] + [("after", end + CONTEXT)]
+    frames = []
+    for role, t in rows:
+        if role != "inside" and not -offset <= t <= duration - EDGE - offset:
+            continue  # context outside the recording: drop it rather than duplicate an edge frame
+        frames.append({"role": role, "time": round(t, 2), "video_time": round(offset + t, 2)})
+    return frames
+
+
+def covered(start: float, end: float, offset: float, duration: float) -> tuple[float, float]:
+    """The part of [start, end] (transcript time) that the video holds."""
+    return max(start, -offset), min(end, duration - EDGE - offset)
+
+
+def probe(video: Path) -> dict:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "stream=width,height:format=duration", "-of", "json", str(video)],
+                         check=True, capture_output=True, text=True).stdout
+    data = json.loads(out)
+    stream = (data.get("streams") or [{}])[0]
+    if not stream.get("width"):
+        raise SystemExit(f"{video}: no video stream (audio-only recordings cannot show a speaker)")
+    return {"width": int(stream["width"]), "height": int(stream["height"]),
+            "duration": float((data.get("format") or {}).get("duration") or 0)}
+
+
+def refuse_tracked(out: Path, names: list[str]) -> None:
+    """Meeting frames are private: every file we write must be ignored when the folder sits in a git repo."""
+    probe_dir = out if out.exists() else next(p for p in out.parents if p.exists())
+    if subprocess.run(["git", "rev-parse", "--git-dir"], cwd=probe_dir, capture_output=True).returncode:
+        return
+    paths = [str(out / n) for n in names]
+    ignored = subprocess.run(["git", "check-ignore", "--", *paths], cwd=probe_dir, capture_output=True, text=True).stdout
+    if len(ignored.splitlines()) < len(paths):  # check-ignore prints one line per ignored path
+        raise SystemExit(f"{out} is inside a git repository and not ignored: pick a private --out")
+
+
+def clear_previous(out: Path) -> None:
+    """A rerun replaces only what an earlier run wrote (listed in its manifest); never someone else's files."""
+    if not out.exists() or not any(out.iterdir()):
+        return
+    try:
+        old = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = None
+    if not isinstance(old, dict) or old.get("tool") != TOOL:
+        raise SystemExit(f"{out} is not empty and holds no speaker-frames manifest: pick a new or empty --out")
+    for name in [f.get("file", "") for f in old.get("frames", [])] + ["sheet.jpg"]:
+        if name and Path(name).name == name:
+            (out / name).unlink(missing_ok=True)
+
+
+def grab(video: Path, t: float, dest: Path) -> None:
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.3f}", "-i", str(video),
+                    "-frames:v", "1", "-vf", f"scale='min({MAX_WIDTH},iw)':-2", "-q:v", "2", str(dest)], check=True)
+    if not dest.exists():
+        raise SystemExit(f"ffmpeg wrote no frame at {t:.2f} s of {video}")
+
+
+def sheet(frames: list[dict], out: Path) -> None:
+    from PIL import Image, ImageDraw, ImageFont  # only needed here; keeps plan() importable without pillow
+
+    width = 960
+    tiles = []
+    for f in frames:
+        im = Image.open(out / f["file"]).convert("RGB")
+        im = im.resize((width, round(im.height * width / im.width)))
+        bar = 26
+        canvas = Image.new("RGB", (width, im.height + bar), "black")
+        canvas.paste(im, (0, bar))
+        ImageDraw.Draw(canvas).text((8, 4), f"#{f['n']} {f['role']}  transcript {clock(f['time'])}  "
+                                            f"video {f['video_time']:.1f}s", fill="yellow", font=ImageFont.load_default(18))
+        tiles.append(canvas)
+    cols = 2
+    h = max(t.height for t in tiles)
+    grid = Image.new("RGB", (cols * width, h * ((len(tiles) + cols - 1) // cols)), "black")
+    for i, t in enumerate(tiles):
+        grid.paste(t, ((i % cols) * width, (i // cols) * h))
+    grid.save(out / "sheet.jpg", quality=88)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("video", type=Path, help="the original recording (not a shrunk Gemini copy)")
+    ap.add_argument("--start", type=seconds, required=True, help="segment start, transcript time")
+    ap.add_argument("--end", type=seconds, required=True, help="segment end (next segment's start = estimate)")
+    ap.add_argument("--inside", type=int, default=4, help=f"frames inside the segment (1-{MAX_INSIDE}, ≥{MIN_GAP} s apart)")
+    ap.add_argument("--offset", type=float, default=0.0, help="video time of transcript 0:00, seconds (may be negative)")
+    ap.add_argument("--out", type=Path, help="private output dir (default: <video>.speaker/<start>-<end>/)")
+    a = ap.parse_args()
+    if a.inside < 1:
+        ap.error("--inside must be at least 1")
+
+    video = a.video.expanduser().resolve()
+    info = probe(video)
+    try:
+        frames = plan(a.start, a.end, a.inside, a.offset, info["duration"])
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    tag = f"{clock(a.start)}-{clock(a.end)}".replace(":", "").replace(".", "_")
+    out = (a.out or video.with_name(video.name + ".speaker") / tag).expanduser().resolve()
+    for n, f in enumerate(frames, 1):
+        f["n"] = n
+        f["file"] = f"{n:02d}-{f['role']}-{clock(f['time']).replace(':', '')}.jpg"
+    refuse_tracked(out, [f["file"] for f in frames] + ["sheet.jpg", "manifest.json", "manifest.md"])
+    clear_previous(out)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for f in frames:
+        grab(video, f["video_time"], out / f["file"])
+    sheet(frames, out)
+
+    stat = video.stat()
+    lo, hi = covered(a.start, a.end, a.offset, info["duration"])
+    partial = lo > a.start or hi < a.end
+    manifest = {"tool": TOOL, "video": str(video), "bytes": stat.st_size, "mtime": int(stat.st_mtime), **info,
+                "offset": a.offset, "start": a.start, "end": a.end, "covered": [round(lo, 2), round(hi, 2)],
+                "frames": frames}
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    lines = [f"# Speaker frames {clock(a.start)} – {clock(a.end)}", "",
+             f"- Video: `{video}` ({stat.st_size} bytes, {info['width']}x{info['height']}, {info['duration']:.1f} s)",
+             f"- Transcript time → video time: {a.offset:+g} s. Segment end is an estimate when taken from the "
+             "next segment's start.",
+             *([f"- **Partial coverage**: the video holds only {clock(lo)}–{clock(hi)} of this segment; judge that part only."]
+               if partial else []),
+             f"- Sheet: [sheet.jpg](sheet.jpg) (captioned; open single frames to zoom)", "",
+             "| # | role | transcript | video s | frame |", "|---|---|---|---|---|"]
+    lines += [f"| {f['n']} | {f['role']} | {clock(f['time'])} | {f['video_time']:.2f} | [{f['file']}]({f['file']}) |"
+              for f in frames]
+    lines += ["", READING, "## Verdict (fill in, copy to the debrief)", "",
+              "- Vendor label: ", "- Per inside frame (tile with cue): ", "- Verdict: confirmed | contradicted | mixed | inconclusive",
+              "- Why: ", ""]
+    (out / "manifest.md").write_text("\n".join(lines), encoding="utf-8")
+    inside = sum(f["role"] == "inside" for f in frames)
+    print(f"{len(frames)} frames ({inside} inside) → {out}/sheet.jpg; read {out}/manifest.md")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

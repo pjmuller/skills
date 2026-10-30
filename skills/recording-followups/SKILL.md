@@ -5,8 +5,10 @@ description: "Use when a transcribed call or meeting (Fathom, Loom, Leexi, Click
 
 # Recording → follow-up prompts
 
-North star: no agreement from a call gets lost. Every decision, promise and bug becomes a debrief
-plus a ready-to-start thread prompt, so following up is a click, not a memory exercise.
+North star: **preserve who meant what; choose the lightest follow-up that fulfils their intent.**
+Nothing agreed gets lost (the debrief records it), but only what needs action gets an object: a
+reminder, a thread, a ticket, or nothing ([destinations](spoken-cues.md#destination-lightest-that-fulfils-the-intent)).
+Don't turn every sentence into work.
 
 Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md) or
 [leexi](../leexi/SKILL.md); this skill owns what happens after the transcript is on disk. Project
@@ -94,6 +96,8 @@ an append does not by itself authorize a ping. This intake rule overrides generi
 
 - A topic is not a task, and a committed task is not automatically an agent handoff.
 - Separate speaker words from inference; uncertain names or negations never become requirements.
+- **Who said it** decides ownership and authorization, and vendor speaker labels can be wrong
+  ([check](spoken-cues.md#who-said-it)).
 - Keep sequence and phase owner: "X prepares, Y fine-tunes" means X owns the prerequisite and Y
   reviews later.
 - Check the queue first. A ticket the user deleted or rejected stays deleted; existing work is

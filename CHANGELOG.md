@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-30 — recordings: check who said it, lightest follow-up
+
+- `recording-followups`: north star "preserve who meant what; choose the lightest follow-up that fulfils their intent". `spoken-cues.md` adds a destination table (reminder / T3 thread / ClickUp / nothing), a "remind me / put this on my list" cue, and "Who said it": vendor speaker labels can be wrong, so a label that decides an owner or authorization is checked on the video first; inconclusive holds only that item. A colleague's reminder never becomes a ticket for lack of a route. Why: an operator's spoken "remind me" request was credited by the recording vendor to a colleague's tile and became a ticket assigned to that colleague; frames showed the operator speaking, and two more labels in the same call were wrong.
+- New `speaker-frames` (video-frames-for-vision): bounded frames inside one transcript segment plus 1 s before/after, a captioned sheet and a manifest with provenance and reading rules (dominant tile = border + audio bars; confirmed / contradicted / mixed / inconclusive). Never names a speaker or edits a transcript. `scripts/install` links it.
+- `recording-watcher`: transcripts warn that speaker labels are the vendor's; merged paragraphs keep each segment's `[hh:mm:ss]`; a no-share video is kept until the 1-day prune instead of deleted at once, and the brief points at it for speaker checks (the old text said the video was not needed). The default brief no longer sends every colleague action to ClickUp.
+
 ## 2026-10-30 — global template: decision asks without the callout box
 
 - `agents-md/global-template.md`: a decision is now the bold `👀 D1 · question` line plus its reply line and folded detail, no `[!IMPORTANT]` box; ⭐ after the letter marks the agent's pick. Why: the box label on every ask read as too much; the 👀 marker and bold question already make it easy to spot.
