@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-30 — t3-setup: `unsetopt EQUALS` in `~/.zshenv`
+
+- Fresh-machine step. Why: zsh expands `=word` to a command path, so an agent's separator `echo =====` errors and the rest of its command chain is silently skipped; t3-retro found it in 92 of 232 threads in one week on a stock macOS zsh.
+
 ## 2026-10-30 — global template: decisions as callouts, asked last
 
 - `agents-md/global-template.md`: each decision is a `[!IMPORTANT]` callout (`[!WARNING]` if irreversible or money) with the question and a one-line reply gist; the folded detail sits under it, and asks come after the wrap-up. Why: a one-line question between other paragraphs was hard to spot, and the reader skims only the last lines.

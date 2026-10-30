@@ -31,6 +31,9 @@ in a terminal. Install only what `command -v` misses; verify each with `--versio
   `~/.local/bin`), never a second paste. Then put the `brew shellenv` line in `~/.zprofile`.
 - `brew install git gh jq mise`; `eval "$(mise activate zsh)"` in `~/.zshrc`;
   `mise use --global node@22 pnpm uv`.
+- `unsetopt EQUALS` in `~/.zshenv` (every zsh reads it, agent shells too): with it on, an agent's
+  `echo =====` fails as "==== not found" and zsh drops the rest of the command chain (~40% of one
+  heavy user's threads in a week, found by t3-retro).
 - Claude Code CLI: `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`
   (browser; the user logs in).
 - T3 Code: `brew install --cask t3-code`, open it once, wait for
