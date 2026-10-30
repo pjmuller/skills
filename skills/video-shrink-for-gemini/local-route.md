@@ -41,6 +41,8 @@ runner for whisper-large-v3-turbo. Verify with `scripts/install --check` and a 3
   names. `parakeet-mlx` + `parakeet-tdt-0.6b-v2` ≈2× faster for word-timestamp clip cutting.
   `parakeet-tdt-0.6b-v3` on Dutch: 26–36%, many deletions, rejected. `parakeet-unified-en-0.6b`
   (Handy's default) needs transcribe.cpp, lags words 210 ms, fails silently past 120 s chunks.
+  Handy cannot share this CLI's model (GGUF/GGML vs MLX); on 5 English dictations (2026-10-30)
+  turbo and Handy's Parakeet disagreed on 5.9% of words, Parakeet right on compound names.
   Qwen3-ASR, Granite, Canary give no usable word timestamps.
 - `transcribe-openai` second opinion (2026-09-25, Flemish standup, aligned per Leexi paragraph, 20-word
   hint: 5 min in 5 s, ≈$0.03): fixed every product name Leexi got wrong, still missed a rare device

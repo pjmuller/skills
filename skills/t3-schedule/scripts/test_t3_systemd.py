@@ -32,6 +32,7 @@ def test_calendar_dates_and_weekdays():
     weekdays = spec()
     weekdays["days"] = [1, 2, 3, 4, 5]
     assert "OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 08:51:00" in mod.timer_body(weekdays).decode()
+    assert "OnCalendar=*-*-03 08:51:00" in mod.timer_body(spec(monthday=3)).decode()
     once = mod.timer_body(spec(once="2026-10-03")).decode()
     assert "OnCalendar=2026-10-03 08:51:00" in once
     assert "Persistent=true" in once and "AccuracySec=1s" in once

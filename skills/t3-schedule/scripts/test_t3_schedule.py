@@ -32,6 +32,20 @@ def test_weekday_plist(tmp_path, monkeypatch):
     assert daily["StartCalendarInterval"] == {"Hour": 7, "Minute": 30}
 
 
+def test_monthly_plist_due_and_validation(tmp_path):
+    from datetime import datetime
+    body = plistlib.loads(mod.plist_body("x", 9, 0, None, tmp_path / "x.sh", monthday=3))
+    assert body["StartCalendarInterval"] == {"Day": 3, "Hour": 9, "Minute": 0}
+    spec = {"at": "09:00", "days": None, "monthday": 3}
+    assert mod.describe_when(spec) == "monthly 3"
+    assert mod.due_now(spec, datetime(2026, 11, 3, 10, 0), None)
+    assert not mod.due_now(spec, datetime(2026, 11, 4, 10, 0), None)
+    prompt = tmp_path / "p.md"
+    prompt.write_text("x")
+    assert "monthday" in mod.repo_spec_problem({"at": "09:00", "monthday": 31}, prompt)
+    assert "exclusive" in mod.repo_spec_problem({"at": "09:00", "monthday": 3, "days": [1]}, prompt)
+
+
 def test_parse_days_and_describe():
     ns = type("A", (), {"weekdays": False, "days": "Mon,thu"})
     assert mod.parse_days(ns) == [1, 4]

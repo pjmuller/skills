@@ -39,7 +39,7 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this (finished j
   `t3-purge-threads` spares their threads.
 - **One-shot** (`--once YYYY-MM-DD`): machine-local, retried until 23:00 that day, then retired
   (`list`: `fired <date>` / `expired (never fired)`).
-- **Recurring** (`--weekdays`, `--days mon,thu`, default daily): definition versioned in the repo,
+- **Recurring** (`--weekdays`, `--days mon,thu`, `--monthly 3` = day 1-28, default daily): definition versioned in the repo,
   each machine opts in with `adopt`; pause/resume, one or many machines → [repo-jobs.md](repo-jobs.md).
 
 ## Launch options

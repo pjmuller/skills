@@ -49,7 +49,7 @@ WEEKDAYS = [1, 2, 3, 4, 5]
 SCHEDULES_DIR = ".agents/schedules"    # versioned job definitions inside the project repo
 # Portable job fields committed to the repo (→ default when unset); name = file stem, project = the
 # repo. Profile (an account label) and everything else stay in the machine-local pointer.
-REPO_KEYS = {"at": None, "days": None, "title": None, "model": None, "thinking": None,
+REPO_KEYS = {"at": None, "days": None, "monthday": None, "title": None, "model": None, "thinking": None,
              "allow_small_model": False, "settle_when_done": False, "notify": True, "wait_max": DEFAULT_WAIT_MAX,
              "machines": "one", "adopted_by": None, "paused": False, "pause_until": None,
              "pre_command": None}  # [] = nobody (skips)
@@ -133,6 +133,11 @@ def repo_spec_problem(repo: object, prompt: Path) -> str | None:
         if days is not None and not (isinstance(days, list) and days and all(
                 type(d) is int and 0 <= d <= 6 for d in days) and len(set(days)) == len(days)):
             raise SystemExit(f"days must be null or a list of launchd weekdays 0-6 (0=Sun), got {days!r}")
+        monthday = repo.get("monthday")
+        if monthday is not None and not (type(monthday) is int and 1 <= monthday <= 28):
+            raise SystemExit(f"monthday must be null or 1-28 (every month has it), got {monthday!r}")
+        if monthday is not None and days is not None:
+            raise SystemExit("monthday and days are exclusive")
         if repo.get("model") is not None:
             if not isinstance(repo["model"], str):
                 raise SystemExit(f"model must be a string, got {repo['model']!r}")
@@ -238,7 +243,7 @@ def write_repo_job(project: Path, name: str, spec: dict, prompt: str) -> Path:
     src, prompt_file = repo_files(project, name)
     src.parent.mkdir(parents=True, exist_ok=True)
     fields = {k: default if spec.get(k) is None else spec[k] for k, default in REPO_KEYS.items()
-              if k != "pre_command" or spec.get(k)}  # optional: absent in jobs that never set it
+              if k not in ("pre_command", "monthday") or spec.get(k)}  # optional: absent in jobs that never set it
     src.write_text(json.dumps(fields, indent=2, ensure_ascii=False) + "\n")
     prompt_file.write_text(prompt)
     return src
@@ -382,7 +387,8 @@ def git_state(spec: dict) -> str | None:
 def artefacts(spec: dict) -> tuple[str, bytes]:
     p = paths(spec["name"])
     hour, minute = parse_at(spec["at"])
-    body = timer_body(spec) if systemd() else plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once"))
+    body = timer_body(spec) if systemd() else plist_body(spec["name"], hour, minute, spec["days"], p["sh"], spec.get("once"),
+                                                             spec.get("monthday"))
     return runner_script(spec, p), body
 
 
@@ -451,6 +457,8 @@ def describe_days(days: list[int] | None) -> str:
 
 def describe_when(spec: dict) -> str:
     once = spec.get("once")
+    if spec.get("monthday"):
+        return f"monthly {spec['monthday']}"
     if not once:
         return describe_days(spec["days"])
     return f"once {once} ({DAY_NAMES[(date.fromisoformat(once).weekday() + 1) % 7]})"
@@ -488,10 +496,13 @@ def valid_name(name: str) -> str:
 
 
 # --- artefacts -----------------------------------------------------------------
-def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Path, once: str | None = None) -> bytes:
+def plist_body(name: str, hour: int, minute: int, days: list[int] | None, sh: Path, once: str | None = None,
+               monthday: int | None = None) -> bytes:
     if once:
         day = date.fromisoformat(once)
         interval: object = {"Month": day.month, "Day": day.day, "Hour": hour, "Minute": minute}
+    elif monthday:
+        interval = {"Day": monthday, "Hour": hour, "Minute": minute}
     elif days is None:
         interval = {"Hour": hour, "Minute": minute}
     else:
@@ -720,6 +731,8 @@ TimeoutStartSec=infinity
 def timer_body(spec: dict) -> bytes:
     if spec.get("once"):
         calendar = f"{spec['once']} {spec['at']}:00"
+    elif spec.get("monthday"):
+        calendar = f"*-*-{spec['monthday']:02d} {spec['at']}:00"
     else:
         days = spec.get("days")
         prefix = ",".join(DAY_NAMES[d].title() for d in days) + " " if days else ""
@@ -933,7 +946,12 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise SystemExit(f"{name} already exists; `t3-schedule remove {name}` or add --force to replace")
     hour, minute = parse_at(args.at)
     once = parse_once(args.once, hour, minute, datetime.now()) if args.once else None
-    days = None if once else parse_days(args)
+    monthday = getattr(args, "monthly", None)
+    days = None if once or monthday else parse_days(args)
+    if monthday is not None and not 1 <= monthday <= 28:
+        raise SystemExit("--monthly expects a day 1-28 (every month has it)")
+    if monthday and args.resume_thread:
+        raise SystemExit("--monthly is a recurring repo job: drop --resume-thread (re-arm a --once instead)")
     if args.profile and not args.model:
         raise SystemExit("--profile needs --model (the account is picked per model ecosystem)")
     if problem := small_model_problem(args.model, args.allow_small_model):
@@ -970,6 +988,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         "title": args.title or f"⏰ {name} {{date}}",
         "at": f"{hour:02d}:{minute:02d}",
         "days": days,
+        "monthday": monthday,
         "once": once,
         "wait_max": args.wait_max,
         "resume_thread": resume,
@@ -1251,6 +1270,8 @@ def due_now(spec: dict, now: datetime, last: str | None) -> bool:
         return False
     days = spec.get("days")
     if days is not None and (now.weekday() + 1) % 7 not in days:  # launchd: 0=Sun
+        return False
+    if spec.get("monthday") and now.day != spec["monthday"]:
         return False
     slot, end = window(spec["at"], now, bool(spec.get("once")))
     return slot <= now <= end
@@ -1588,6 +1609,7 @@ def build_parser() -> argparse.ArgumentParser:
     when = add.add_mutually_exclusive_group()
     when.add_argument("--weekdays", action="store_true", help="Mon-Fri")
     when.add_argument("--days", help="comma list mon,tue,... (default: every day)")
+    when.add_argument("--monthly", type=int, metavar="DAY", help="day of month 1-28")
     when.add_argument("--once", metavar="YYYY-MM-DD", help="fire once on this date, then the catch-up poller retires the job")
     add.add_argument("--project", help="repo path the new thread runs in (not needed with --resume-thread)")
     add.add_argument("--resume-thread", metavar="THREAD_ID", help="continuation: send the prompt as a turn to this thread "
