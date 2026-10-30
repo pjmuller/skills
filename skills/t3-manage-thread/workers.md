@@ -4,7 +4,7 @@ Verified T3 0.1.0 (2026-10).
 
 ## Which one
 
-- **🏓 child** (`delegate_task`): ping-pong inside **this task** (opinion, scoped research, sub-step, opposite-model review); any provider, this checkout. Unclear → 🏓, except in a routing thread: its task is dispatch, so new work → 📤 ([router boundary](../t3-route/SKILL.md#router-boundary-new-thread-by-default)).
+- **🏓 child** (`delegate_task`): ping-pong inside **this task** (opinion, scoped research, sub-step, opposite-model review); any provider, this checkout. Unclear → 🏓, except in a routing thread: it never runs 🏓 children, new work → 📤 ([router boundary](../t3-route/SKILL.md#router-boundary-new-thread-by-default)).
 - **📤 standalone** (`t3_thread_launch`): independent topic, another repo's work, user said "separate / own thread / hand off", or a **selected** recording/meeting follow-up; runs its own 🏓 children. Test: result lands, does this thread's answer change? No → 📤. Distinct outcome → own standalone, even same repo.
 - Independent opinion: fresh `delegate_task` with original problem, constraints, evidence, minus the lead's reasoning; don't switch the lead's model for it (only user request or authorized recovery). Several models on one task = one lead + 🏓 children, never peers the user must combine.
 

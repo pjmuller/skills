@@ -61,8 +61,9 @@ grant it.
   nothing left for the user to continue here. Typical: which thread owns X, a translation, a
   one-line fact, a routing correction ([corrections](corrections.md)), or a chore the wrapper
   explicitly lists. A short answer that took real investigation doesn't qualify.
-- **Everything else, or in doubt** → `t3_thread_launch` one execution owner, or continue the
-  existing owner. Never a `delegate_task` whose result returns to the router: T3's "another
+- **Everything else, or in doubt** → `t3_thread_launch` one execution owner, or `t3_thread_send`
+  to the existing owner. These are the router's only worker tools: **never `delegate_task`**,
+  `create_threads` or a native sub-agent (`Agent`, `spawn_agent`) for a task. T3's "another
   provider's model → `delegate_task`" rule applies inside the lead, not here.
 - **Several models on one task** (dual-model research, independent opinions) → one launched
   lead runs the `delegate_task` opinions and reconciles them. Worker instructions ("get a second
