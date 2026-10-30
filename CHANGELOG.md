@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-30 — global template: decision asks without the callout box
+
+- `agents-md/global-template.md`: a decision is now the bold `👀 D1 · question` line plus its reply line and folded detail, no `[!IMPORTANT]` box. Why: the box label on every ask read as too much; the 👀 marker and bold question already make it easy to spot.
+
 ## 2026-10-30 — t3-setup: `unsetopt EQUALS` in `~/.zshenv`
 
 - Fresh-machine step. Why: zsh expands `=word` to a command path, so an agent's separator `echo =====` errors and the rest of its command chain is silently skipped; t3-retro found it in 92 of 232 threads in one week on a stock macOS zsh.
