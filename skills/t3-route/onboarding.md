@@ -98,7 +98,7 @@ another person's account was tested from this machine. Isolated forward-evaluati
 [cases and screenshot](tests/cases.md) without live tools; judge decisions, not wording.
 
 Daily use (tell the user in the readiness report): paste tasks/links/images in the routing
-thread; correct misrouting there; when it drifts or gets long, say "reset the router" for a
-fresh one ([playbook](../t3-manage-thread/routing-reset.md)). Core
+thread; correct misrouting there; when it gets long or drifts it saves its lessons and suggests
+a reset: say "reset the router" for a fresh one ([playbook](../t3-manage-thread/routing-reset.md)). Core
 updates replace only the core: diff the sibling wrapper before/after to verify policy
 preservation and recheck its core links.

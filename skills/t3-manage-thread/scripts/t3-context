@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""CLI: how full is this thread's context window (read-only).
+
+Stdlib only and run by plain python3, not `uv run --script`: routers call it every turn,
+and Codex's sandbox can't open the uv cache (exit 2 before the script starts).
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from t3_context import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,7 +18,7 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 | 📤 independent topic, other repo, selected recording follow-up | `t3_thread_launch` ([workers.md](workers.md#-t3_thread_launch)) |
 | Model + account with capacity | `t3-pick-instance MODEL` → `<instanceId> <modelId> <effort>` ([routing.md](routing.md)) |
 | Message a thread | `t3_thread_send` (`mode` auto/queue/steer; `clientRequestId` for retries); target in a broader permission mode (Auto → Full Access) → [permission-ceiling.md](permission-ceiling.md) |
-| Read / find threads | `t3_thread_read` · `t3_thread_list` (`currentThreadId` = your own id) · `t3_thread_search`; vague memory, a short id or a purged thread → `t3-find-thread` · open/link one → `t3-open-thread` ([find-thread.md](find-thread.md)) |
+| Read / find threads | `t3_thread_read` · `t3_thread_list` (`currentThreadId` = your own id) · `t3_thread_search`; vague memory, a short id or a purged thread → `t3-find-thread` · open/link one → `t3-open-thread` ([find-thread.md](find-thread.md)) · own context use → `t3-context` |
 | Rename · switch model | `t3_thread_update {action:"rename"}` · `t3_thread_configure` (model/account only, never permission mode) |
 | Settle yourself / another thread | `t3_thread_organize {action:"settle"}` ([settle-thread.md](settle-thread.md)) |
 | Script outside T3 starts/messages a thread | `t3-relay launch\|send` ([relay.md](relay.md)) |

@@ -233,3 +233,5 @@ Each variant independent, in `routing-01`. The harness also injects T3's rules: 
 ## 21. Drift
 
 `routing-01` compacted once today. Since then Alex corrected two placements ("that should have been its own thread"). Router owns no children. Next message: a new Beacon ticket link.
+
+Variant B (independent): no corrections; turn-start `t3-context` prints `context 61% (157k/258k, checkpoint 155k) · compactions 1 · checkpoint`. Next message: a translation request. Variant C: same, but status `noticed`.

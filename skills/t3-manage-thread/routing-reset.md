@@ -1,12 +1,16 @@
 # Replace a routing thread
 
 Only on the user's reset/replacement request; compaction alone isn't one, nor is a request to improve
-this playbook. The router *suggests* one on drift signals ([t3-route](../t3-route/SKILL.md#report-and-learn)).
+this playbook. The router *suggests* one at its `t3-context` checkpoint or on drift
+([t3-route](../t3-route/SKILL.md#report-and-learn)) and runs step 1 then, even without a reset.
 
-1. **Lessons**: review the conversation once for explicit corrections and verified routing mistakes.
-   Read existing rules first; update the owning private lookup/playbook (generic mechanics → shared
+1. **Lessons**: from stored history, not memory (compaction drops detail): `t3_thread_read` the user
+   messages since the last lessons commit (its message names `<thread short id> through position <n>`;
+   none for this thread → from its start),
+   for explicit corrections and verified routing mistakes. Read existing rules first; update the owning private lookup/playbook (generic mechanics → shared
    skills), merging duplicates and removing superseded rules; no transcripts or private details.
-   Follow [t3-route corrections](../t3-route/corrections.md); commit/push and verify before handing over.
+   Follow [t3-route corrections](../t3-route/corrections.md); commit/push (message ends `routing lessons:
+   <thread short id> through position <n>`, also when nothing changed: `--allow-empty`) and verify before handing over.
 2. **Owned work**: inventory delegated task IDs, approvals, queued deliveries and monitors; finish or
    reconcile them here (their delivery stays attached to this thread; a successor doesn't inherit
    ownership). Independent execution threads continue: don't replay their briefs or poll them unasked.

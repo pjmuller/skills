@@ -146,8 +146,14 @@ chosen account, reason), never a guessed association. Routing failures stay visi
 [corrections.md](corrections.md). Requested router reset → review lessons once, then the
 [replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.
 
-**Suggest a reset** (one line ending the reply; never perform it unasked) when the router drifts:
-a second boundary or routing correction since the last compaction, task results or children
-owned here by mistake, or the user re-explaining context the router should already hold. Length
-or compaction alone isn't a signal, and a reset can't fix a conflicting rule: fix that first.
-Wording: `Router drifting: say "reset the router" for a fresh one; pending work is reconciled first.`
+**Length check.** Start each routing turn with `t3-context` (read-only, batched with intake
+reads): this thread's context use against a checkpoint before auto-compaction. `checkpoint` (once
+per compaction cycle) → run the [lessons pass](../t3-manage-thread/routing-reset.md) now,
+whatever the user decides, then end the reply with the reset line. `noticed` (already suggested
+this cycle) or `unknown` → nothing.
+
+**Suggest a reset** (one line ending the reply; never perform it unasked) at that checkpoint or
+when the router drifts: a second boundary or routing correction since the last compaction, task
+results or children owned here by mistake, or the user re-explaining context the router should
+already hold. A reset can't fix a conflicting rule: fix that first. Wording: `Router getting
+long: say "reset the router" for a fresh one; lessons are saved, pending work reconciled first.`
