@@ -6,7 +6,7 @@
 
 ## 2026-10-30 — global template: decisions as callouts, asked last
 
-- `agents-md/global-template.md`: each decision is a `[!IMPORTANT]` callout (`[!WARNING]` if irreversible or money) with the question and a one-line reply gist; the folded detail sits under it, and asks come after the wrap-up. Why: a one-line question between other paragraphs was hard to spot, and the reader skims only the last lines.
+- `agents-md/global-template.md`: each decision is an `[!IMPORTANT]` callout (always this type; risk stated in words) with `👀 D1 · question`, a blank line, and a one-line reply gist; the folded detail sits under it, and asks come after the wrap-up. Why: a one-line question between other paragraphs was hard to spot, and the reader skims only the last lines.
 
 ## 2026-10-30 — global template: settle unasked once done at 80/20
 
