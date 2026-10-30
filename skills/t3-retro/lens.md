@@ -22,7 +22,8 @@ later trouble usually follows from it.
    iterations reach the goal without the user. Find where the loop ran through a human instead
    (lead `broken-loop`), in coding and non-coding work alike:
    - The user looked for the agent: a screenshot of a page the agent could open, pasted logs, "still
-     broken", a test run on their phone.
+     broken", facts an API returns (an email, company data, search volumes), a check on their phone
+     where a simulator, browser device emulation or a connected phone would do.
    - The user acted for the agent: logged in, clicked a confirm link, forwarded a mail, exported a
      file, typed a password a password manager holds.
    - The agent was blind: the local app wouldn't start, so the change shipped unseen; a dead token or
@@ -41,7 +42,7 @@ later trouble usually follows from it.
 | Said done, wasn't | **check** | a test, seed data, a done-checklist the agent fills in, a Stop hook |
 | Did a never-do, skipped an always-do | **enforce** | a hook or permission rule (a prompt line can't guarantee it) |
 | Right, but too slow, costly or interrupt-heavy | **default** | model/effort default, install a missing tool, a sandbox allowance |
-| The user looked, clicked or pasted for the agent | **default** or **check** | give it eyes and hands: a browser tool, a stored login, seed data, a dev server that starts |
+| The user looked, clicked or pasted for the agent | **default** or **check** | give it eyes and hands: a browser tool, a stored login, a data API, a simulator, seed data, a dev server that starts |
 
 ## Rules
 
