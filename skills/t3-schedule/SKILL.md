@@ -9,6 +9,11 @@ North star: a next step that needs time to pass (logs, a deploy, a reply) gets a
 follow-up instead of relying on memory. A recurring job or a one-off wake-up of this thread still
 runs on time after the Mac slept, so nobody has to say "check tomorrow".
 
+A scheduled check should auto-settle only when current evidence confirms the whole thread's
+objective is satisfied, with no action, unresolved issue or user decision remaining. Missing evidence
+or a mere acknowledgement is not completion; explicit keep-open wins. Put this conditional
+permission in continuation prompts, and stop only follow-ups whose purpose has been fulfilled.
+
 `scripts/t3-schedule` (`--help`, `add --help`); install `scripts/install`, `--check` also checks
 [t3-relay](../t3-manage-thread/relay.md).
 
