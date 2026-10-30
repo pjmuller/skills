@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""CLI: T3 project id for a repo path (read-only), for `t3_thread_launch` / `t3_thread_search`.
+
+`t3_project_list` returns every project with full repository metadata (~35k tokens for
+150 projects): a router paid that twice a day just to find one id. This reads T3's
+store directly and prints one line. Stdlib only and plain python3, like t3-context.
+"""
+import argparse
+import os
+import sqlite3
+import sys
+from pathlib import Path
+from urllib.parse import quote
+
+STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "statev2.sqlite"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="t3-project-id", description=__doc__.splitlines()[0])
+    parser.add_argument("paths", nargs="*", default=["."], help="repo path(s); a subdirectory resolves to its project")
+    parser.add_argument("--store", type=Path, default=STORE)
+    args = parser.parse_args(argv)
+    uri = f"file:{quote(str(args.store), safe='/')}?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=10) as db:
+        roots = dict(db.execute("SELECT workspace_root, project_id || char(9) || title FROM projection_projects"
+                                " WHERE deleted_at IS NULL ORDER BY created_at"))
+    missing = 0
+    for raw in args.paths:
+        path = Path(raw).expanduser().resolve()
+        hit = next((roots[str(p)] for p in (path, *path.parents) if str(p) in roots), None)
+        if hit:
+            print(f"{hit}\t{path}")
+        else:
+            missing += 1
+            print(f"no T3 project for {path}: t3_project_create it (or t3_project_list if T3 moved its store)",
+                  file=sys.stderr)
+    return 1 if missing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

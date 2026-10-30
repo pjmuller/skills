@@ -1,9 +1,12 @@
 """How full is a thread's context window? Read-only over T3's store (`statev2.sqlite`).
 
 A model can't sense its own context length; T3 records it per provider thread
-(`contextUsage`, refreshed each turn) and logs every auto-compaction as a turn item.
-Long-lived threads (a router) run this at each turn start: past the checkpoint
-they persist lessons and suggest a fresh thread before compaction drops detail.
+(`contextUsage`, refreshed each turn) and logs every auto-compaction and user message
+as a turn item. Long-lived threads (a router) run this at each turn start:
+- `lessons` (past the token checkpoint, once per compaction cycle): persist lessons
+  silently. Compaction alone is no reason to bother the user: it frees room well and
+  routing rules are re-read afterwards.
+- `reset` (once per thread, after RESET_AFTER_MESSAGES user messages): suggest a fresh thread.
 """
 from __future__ import annotations
 
@@ -17,12 +20,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 STORE = Path(os.environ.get("T3CODE_HOME", Path.home() / ".t3")) / "userdata" / "statev2.sqlite"
-# Checkpoint before auto-compaction (observed at 82-93% on Codex): 60% leaves room for a
-# 15-point turn plus the lessons pass. The absolute cap keeps 1M-token windows from
-# growing unboundedly long before anyone notices; it's an operating margin, not a
-# proven quality cliff.
+# Lessons checkpoint before auto-compaction (Codex compacts at 88-95%): 60% leaves room
+# for a 15-point turn plus the lessons pass; the cap covers 1M-token windows.
 CHECKPOINT_SHARE = 0.60
 CHECKPOINT_CAP = 160_000
+# Reset nudge: a user-chosen freshness interval, not a measured quality cliff. Routers
+# ran 70 messages over 4 compactions (2026-10) without rising corrections, and each
+# compaction left only 33-66k tokens.
+RESET_AFTER_MESSAGES = 50
 # One notice per compaction cycle; /tmp is writable from Codex's sandbox and a reboot
 # only costs one repeated notice.
 NOTICE_DIR = Path(os.environ.get("T3_CONTEXT_STATE", "/tmp/t3-context"))
@@ -41,15 +46,15 @@ def read_usage(store: Path, thread_id: str) -> dict | None:
         ).fetchone()
         if not row or not row[0] or not row[1]:
             return None
-        compactions = db.execute(
-            "SELECT count(*) FROM orchestration_v2_projection_turn_items"
-            " WHERE thread_id = ? AND type = 'compaction'",
+        compactions, messages = db.execute(
+            "SELECT count(*) FILTER (WHERE type = 'compaction'), count(*) FILTER (WHERE type = 'user_message')"
+            " FROM orchestration_v2_projection_turn_items WHERE thread_id = ?",
             (thread_id,),
-        ).fetchone()[0]
+        ).fetchone()
     used, window, observed = row
     checkpoint = min(int(window * CHECKPOINT_SHARE), CHECKPOINT_CAP)
-    return {"used": used, "max": window, "pct": round(100 * used / window),
-            "checkpoint": checkpoint, "compactions": compactions, "observedAt": observed}
+    return {"used": used, "max": window, "pct": round(100 * used / window), "checkpoint": checkpoint,
+            "compactions": compactions, "messages": messages, "observedAt": observed}
 
 
 def pinned_router(store: Path) -> str | None:
@@ -66,14 +71,25 @@ def pinned_router(store: Path) -> str | None:
     return row[0] if row else None
 
 
-def first_notice(thread_id: str, compactions: int) -> bool:
-    """True once per thread per compaction cycle; records the notice."""
+def classify(thread_id: str, usage: dict) -> str:
+    """`reset` once per thread, `lessons` once per compaction cycle, else `ok`; records notices."""
     marker = NOTICE_DIR / hashlib.sha1(thread_id.encode()).hexdigest()[:16]
-    if marker.exists() and marker.read_text().strip() == str(compactions):
-        return False
+    try:
+        seen = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    if not isinstance(seen, dict):  # pre-2026-10-30 marker: the compaction count of the last notice
+        seen = {"lessons": seen}
+    if usage["messages"] >= RESET_AFTER_MESSAGES and not seen.get("reset"):
+        status = seen["reset"] = "reset"
+        seen["lessons"] = usage["compactions"]  # the reset playbook runs the lessons pass first
+    elif usage["used"] >= usage["checkpoint"] and seen.get("lessons") != usage["compactions"]:
+        status, seen["lessons"] = "lessons", usage["compactions"]
+    else:
+        return "ok"
     NOTICE_DIR.mkdir(parents=True, exist_ok=True)
-    marker.write_text(str(compactions))
-    return True
+    marker.write_text(json.dumps(seen))
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -96,17 +112,15 @@ def main(argv: list[str] | None = None) -> int:
     if usage is None:
         print(json.dumps({"status": "unknown", "reason": reason}) if args.json else f"context unknown: {reason}")
         return 0
-    if usage["used"] < usage["checkpoint"]:
-        usage["status"] = "ok"
-    else:
-        usage["status"] = "checkpoint" if first_notice(args.thread_id, usage["compactions"]) else "noticed"
+    usage["status"] = classify(args.thread_id, usage)
     if args.json:
         print(json.dumps(usage))
         return 0
     line = (f"{args.thread_id[:24]} context {usage['pct']}% ({usage['used'] // 1000}k/{usage['max'] // 1000}k,"
-            f" checkpoint {usage['checkpoint'] // 1000}k) · compactions {usage['compactions']} · {usage['status']}")
-    if usage["status"] == "checkpoint":
-        line += " → persist lessons now, then suggest a fresh thread (once this cycle)"
+            f" lessons at {usage['checkpoint'] // 1000}k) · messages {usage['messages']}/{RESET_AFTER_MESSAGES}"
+            f" · compactions {usage['compactions']} · {usage['status']}")
+    line += {"lessons": " → persist lessons now, silently (no reset line)",
+             "reset": " → persist lessons, then suggest a fresh thread (once)"}.get(usage["status"], "")
     print(line)
     return 0
 

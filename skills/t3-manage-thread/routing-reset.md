@@ -1,8 +1,9 @@
 # Replace a routing thread
 
 Only on the user's reset/replacement request; compaction alone isn't one, nor is a request to improve
-this playbook. The router *suggests* one at its `t3-context` checkpoint or on drift
-([t3-route](../t3-route/SKILL.md#report-and-learn)) and runs step 1 then, even without a reset.
+this playbook. The router *suggests* one at `t3-context` status `reset` (50 user messages) or on
+drift ([t3-route](../t3-route/SKILL.md#report-and-learn)) and runs step 1 then, even without a
+reset; at status `lessons` it runs step 1 silently.
 
 1. **Lessons**: from stored history, not memory (compaction drops detail): `t3_thread_read` the user
    messages since the last lessons commit (its message names `<thread short id> through position <n>`;
@@ -18,7 +19,7 @@ this playbook. The router *suggests* one at its `t3-context` checkpoint or on dr
    runtime mode. Title `🧭 <person> routing` with the wrapper's name (`t3-mail-link` keys on 🧭 so
    routers never own mail cases). Brief only the user's designation verbatim ("<person> designates
    this thread as their router: each new task here is their request for a new T3 thread"), the
-   wrapper and its reading list, the predecessor ID and necessary unresolved routing context. The successor initializes itself (no setup routing, backlog,
+   wrapper and its reading list, the predecessor ID and necessary unresolved routing context. The successor reads that list once, in batches under its tool-output cap (Codex ≈10k tokens), and initializes itself (no setup routing, backlog,
    historical launches or monitoring of old workers), confirms readiness and waits.
 4. **Verify**: read the successor (launch acceptance is not readiness), then
    `t3_thread_organize {action:"pin",threadId:"<new id>"}`; rename if needed with

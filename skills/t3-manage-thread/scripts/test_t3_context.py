@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import t3_context
 
 
-def make_store(path: Path, used: int, window: int, compactions: int = 0) -> Path:
+def make_store(path: Path, used: int, window: int, compactions: int = 0, messages: int = 0) -> Path:
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE orchestration_v2_projection_provider_threads (thread_id, updated_at, payload_json)")
     db.execute("CREATE TABLE orchestration_v2_projection_turn_items (thread_id, type)")
@@ -19,8 +19,8 @@ def make_store(path: Path, used: int, window: int, compactions: int = 0) -> Path
     ])
     db.execute("INSERT INTO orchestration_v2_projection_provider_threads VALUES ('t1', '2026-10-30T10:00', ?)",
                (json.dumps({"contextUsage": {"usedTokens": used, "maxTokens": window}}),))
-    db.executemany("INSERT INTO orchestration_v2_projection_turn_items VALUES ('t1', 'compaction')",
-                   [()] * compactions)
+    db.executemany("INSERT INTO orchestration_v2_projection_turn_items VALUES ('t1', ?)",
+                   [("compaction",)] * compactions + [("user_message",)] * messages)
     db.commit()
     db.close()
     return path
@@ -37,19 +37,40 @@ def test_below_checkpoint_is_ok(tmp_path, capsys, monkeypatch):
     assert (out["status"], out["pct"], out["checkpoint"]) == ("ok", 39, 155_040)
 
 
-def test_checkpoint_fires_once_per_compaction_cycle(tmp_path, capsys, monkeypatch):
+def test_lessons_fire_once_per_compaction_cycle(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(t3_context, "NOTICE_DIR", tmp_path / "state")
     store = make_store(tmp_path / "s.db", 160_000, 258_400)
-    assert run(capsys, store)["status"] == "checkpoint"
-    assert run(capsys, store)["status"] == "noticed"
+    assert run(capsys, store)["status"] == "lessons"
+    assert run(capsys, store)["status"] == "ok"
     after = make_store(tmp_path / "s2.db", 170_000, 258_400, compactions=1)
-    assert run(capsys, after)["status"] == "checkpoint"
+    assert run(capsys, after)["status"] == "lessons"
+
+
+def test_reset_once_after_message_threshold_even_with_room(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(t3_context, "NOTICE_DIR", tmp_path / "state")
+    n = t3_context.RESET_AFTER_MESSAGES
+    assert run(capsys, make_store(tmp_path / "a.db", 60_000, 258_400, messages=n - 1))["status"] == "ok"
+    store = make_store(tmp_path / "b.db", 60_000, 258_400, compactions=3, messages=n)
+    assert run(capsys, store)["status"] == "reset"
+    assert run(capsys, store)["status"] == "ok"
+    # the reset covered this cycle's lessons; the next compaction cycle gets its own pass
+    later = make_store(tmp_path / "c.db", 170_000, 258_400, compactions=4, messages=n + 9)
+    assert run(capsys, later)["status"] == "lessons"
+
+
+def test_legacy_marker_counts_as_lessons_notice(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(t3_context, "NOTICE_DIR", tmp_path / "state")
+    store = make_store(tmp_path / "s.db", 160_000, 258_400, compactions=2)
+    assert run(capsys, store)["status"] == "lessons"
+    marker = next((tmp_path / "state").iterdir())
+    marker.write_text("2")
+    assert run(capsys, store)["status"] == "ok"
 
 
 def test_large_window_uses_absolute_cap(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(t3_context, "NOTICE_DIR", tmp_path / "state")
     out = run(capsys, make_store(tmp_path / "s.db", 170_000, 1_000_000))
-    assert (out["status"], out["checkpoint"]) == ("checkpoint", 160_000)
+    assert (out["status"], out["checkpoint"]) == ("lessons", 160_000)
 
 
 def test_unknown_thread_is_unknown_not_zero(tmp_path, capsys):

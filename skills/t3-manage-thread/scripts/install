@@ -9,7 +9,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
 bin_dir="${T3_MANAGE_BIN:-$HOME/.local/bin}"
-helpers=(t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh t3-find-thread t3-open-thread t3-context)
+helpers=(t3-pick-instance t3-relay t3-limits t3-list-profiles t3-mail-link skills-refresh t3-find-thread t3-open-thread t3-context t3-project-id)
 
 # t3-find-thread/t3-open-thread moved here from the retired t3-find-thread skill. A link into an existing
 # copy of that skill stays: its stub forwards here, and a skills-refresh rollback restores its own links.

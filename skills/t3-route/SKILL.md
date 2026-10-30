@@ -147,13 +147,21 @@ chosen account, reason), never a guessed association. Routing failures stay visi
 [replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.
 
 **Length check.** Start each routing turn with `t3-context` (read-only, batched with intake
-reads): this thread's context use against a checkpoint before auto-compaction. `checkpoint` (once
-per compaction cycle) → run the [lessons pass](../t3-manage-thread/routing-reset.md) now,
-whatever the user decides, then end the reply with the reset line. `noticed` (already suggested
-this cycle) or `unknown` → nothing.
+reads): context use and user-message count. `lessons` (past the token checkpoint, once per
+compaction cycle) → run the [lessons pass](../t3-manage-thread/routing-reset.md) silently; no reset
+line, since auto-compaction frees room and rules are re-read afterwards. `reset` (once, at 50 user
+messages) → lessons pass, then the reset line. `ok` or `unknown` → nothing.
 
-**Suggest a reset** (one line ending the reply; never perform it unasked) at that checkpoint or
-when the router drifts: a second boundary or routing correction since the last compaction, task
-results or children owned here by mistake, or the user re-explaining context the router should
-already hold. A reset can't fix a conflicting rule: fix that first. Wording: `Router getting
+**Context budget.** Project ids: `t3-project-id <repo path>`, never `t3_project_list` (~35k
+tokens). Keep each read under the harness's tool-output cap (Codex ≈10k tokens; a truncated read
+hides rules and invites re-reads): batch files by size, ownership from an entrypoint's head or a
+grep, `t3_thread_search` with a small `limit`, `t3_thread_read` with `limit`/`maxCharsPerItem`.
+Don't re-read files already loaded this compaction cycle unless they changed, or print tool
+declarations (~8k) to call a T3 tool you already know.
+
+**Suggest a reset** (one line ending the reply; never perform it unasked) on `reset` or demonstrated
+drift: two verified routing/boundary mistakes within the last 10 requests, the second after the
+first one's cause was fixed; or task results/children owned here by mistake. Changed preferences,
+infrastructure faults and an unfixed conflicting rule don't count: a reset can't fix a rule, so fix
+it first. Wording: `Router getting
 long: say "reset the router" for a fresh one; lessons are saved, pending work reconciled first.`
