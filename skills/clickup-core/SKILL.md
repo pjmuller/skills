@@ -111,6 +111,8 @@ Defaults; the wrapper may override. Every write costs a human's attention.
   comment). The requesting agent then arms a T3 follow-up
   (skill `t3-schedule`, `--once <next workday> --resume-thread <own id>`): report found → verify and act;
   missing → re-arm for the next workday (after 3 empty days one nudge comment to the assignee, after 5 ask the user).
+- **Another ticket = a native chip**: `[[task-id]]` (or its app.clickup.com URL), never a bare id
+  (`zie 869fey9dw` stays dead text). Same for people: `@alias`, never a typed name.
 - Before escalating to a developer: [triage.md](triage.md). Reviewing a ticket another agent
   wrote: [review.md](review.md).
 
