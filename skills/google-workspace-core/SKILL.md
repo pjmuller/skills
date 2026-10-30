@@ -49,7 +49,7 @@ Open when needed:
 - Dropping to `*-batch` / `api` (pagination, Calendar); Slides, Docs, Sheets, Drive API gotchas → [rest](references/rest.md)
 - Writing or editing a draft (HTML twin, From, `--attach`, signatures, draft vs send), what an access check proves → [drafts](references/drafts.md)
 - Gmail link that names no account; the user's mailbox inventory → [accounts](references/accounts.md)
-- Finding old mail (`gmail-search` → `gmail-export` → grep), query cheat sheet → [gmail-search](references/gmail-search.md)
+- Finding a recipient or old mail, query cheat sheet → [gmail-search](references/gmail-search.md)
 - Credential errors, 403, first machine, token lifetime → [troubleshooting](references/troubleshooting.md)
 - Google My Maps (no content API) → [mymaps](references/mymaps.md)
 

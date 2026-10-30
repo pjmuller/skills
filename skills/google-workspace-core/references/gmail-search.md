@@ -12,6 +12,18 @@ through untouched.
 4. **Clean up**: the export is a private-mail copy. After answering, ask whether it may go; on yes
    `rm -rf` it. Never delete silently, never leave it unasked.
 
+## Finding a recipient
+
+Resolve an incomplete name/address from relevant correspondence in the intended mailbox before
+asking the user or guessing an address. `gmail-search` returns From/To/subject: search the person
+or organization, then narrow by domain or topic to distinguish namesakes. Read a promising
+`gmail-get`/`gmail-thread` only when headers leave the role or address ambiguous; no bulk export
+is needed just to find a recipient. Exclude drafts when checking prior correspondence so your own
+unverified draft does not become evidence. Prefer the address matching the requested role and
+recent relevant exchange, not merely the newest name match. An official contact page can fill a
+gap; ask only when the remaining ambiguity would change the recipient. Preserve an explicitly
+chosen recipient unless conflicting evidence needs clarification.
+
 ## Gmail query cheat sheet
 
 Verified live against the API (2026-09).
