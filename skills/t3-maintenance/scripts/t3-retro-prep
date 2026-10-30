@@ -7,7 +7,7 @@
 
 Deterministic and read-only: scores every top-level thread with typed prompts in the window on
 signals (correction after a done-claim, failure the final answer never mentions, fallback then
-done, unasked extras, recurring error, many interruptions), picks the strongest plus a seeded
+done, unasked extras, recurring error, many interruptions, broken feedback loop), picks the strongest plus a seeded
 random sample (silent omissions raise no signal), and writes masked, size-capped packets the
 `t3-retro` agent reads. A signal is a lead, never a verdict; the agent judges.
 """
@@ -64,14 +64,31 @@ ERROR_LINE_RE = re.compile(r"error|not found|no such|denied|not permitted|refuse
                            r"unauthori[sz]ed|forbidden|\b40[134]\b|\b5\d\d\b", re.I)
 GENERIC_RE = re.compile(r"(error: )?exit code \d+$|traceback \(most recent call last\)|\[exit \d+\]$", re.I)
 TEST_LINE_RE = re.compile(r"assert|expected|--- FAIL|^FAIL|FAILED .*::|\bfailures?:", re.I)
+# Broken feedback loop: the human looks, clicks or pastes for the agent. Lead only; the agent tells a
+# relay apart from a judgment call, a permission or a physical login.
+LOOK = (r"(?:check|test|try|verify|run|open|look at|reload|refresh|log ?in|sign in|click|paste|share|upload|"
+        r"send me|screenshot|restart|re-?run)")
+ASK_RE = re.compile(rf"\b(?:(?:can|could|would) you (?:please )?{LOOK}|please {LOOK}|let me know (?:if|whether|what|how it)|"
+                    r"(?:tell|show) me what you see|you(?:'ll| will)? need to "
+                    r"(?:log ?in|sign in|click|run|open|export|download|upload|paste))\b", re.I)
+BLIND_RE = re.compile(r"\b(?:I|we) (?:can'?t|cannot|couldn'?t|could not|was unable to|am unable to|have no (?:way|access) to) "
+                      r"(?:see|access|reach|open|log ?in|sign in|reproduce|run|start|verify|test|view|load|render)\b|"
+                      r"\bnot (?:verified|tested|checked) (?:live|visually|in (?:the |a )?browser|end.to.end|locally|on prod)", re.I)
+RELAY_RE = re.compile(r"\bi (?:just |also )?(?:tested|tried|clicked|logged in|signed in|reloaded|refreshed|restarted)\b|"
+                      r"\b(?:i|we) (?:still )?(?:get|got|see|saw) (?:an? |the |this |that )?(?:error|blank|empty|white|50\d|40\d)|"
+                      r"\bstill (?:shows|says|gives|returns|displays|throws|crashes|fails|broken)|"
+                      r"\b(?:does ?n[o']?t|does not|won'?t|still not) (?:load|work|show|open|render|appear)|"
+                      r"\bhere(?:'s| is| are) (?:the )?(?:output|error|log|logs|result|response|trace)\b", re.I)
+RELAY_SPAN = 300  # a relay leads its message; deep in a long dictation the same words are discussion
 
 
 @dataclass
 class Event:
     at: str
-    kind: str  # user | agent-msg | assistant | fail | ok | file | interrupt
+    kind: str  # user | agent-msg | assistant | fail | ok | handoff | file | interrupt
     text: str = ""
     sig: str = ""
+    attachments: int = 0
 
 
 @dataclass
@@ -87,7 +104,7 @@ class Thread:
 
     @property
     def score(self) -> float:
-        weights = {"correction-after-done": 3, "silent-failure": 2, "fallback-then-done": 1,
+        weights = {"correction-after-done": 3, "silent-failure": 2, "broken-loop": 2, "fallback-then-done": 1,
                    "unasked-extras": 1, "recurring-error": 1, "interruptions": 1}
         caps = {"recurring-error": 1, "interruptions": 1}  # common in any big thread: presence only
         return sum(weights[k] * min(n, caps.get(k, 3)) for k, n in self.signals.items())
@@ -134,9 +151,6 @@ def load(store: Path, since: datetime, until: datetime) -> tuple[dict[str, Threa
     threads: dict[str, Thread] = {}
     for m in typed:
         threads.setdefault(m.thread_id, Thread(m.thread_id, m.thread_title, m.project)).typed += 1
-    for m in all_typed:
-        if m.thread_id in threads:
-            threads[m.thread_id].events.append(Event(m.created_at, "user", m.text))
     typed_ids = {m.message_id for m in all_typed}
     sig_threads: dict[str, set[str]] = defaultdict(set)
     meta = {"typed_per_day": Counter(parse_time(m.created_at).astimezone().strftime("%a %d") for m in typed),
@@ -145,6 +159,13 @@ def load(store: Path, since: datetime, until: datetime) -> tuple[dict[str, Threa
         roots = {r["thread_id"]: (json.loads(r["p"] or "{}").get("lineage") or {}).get("rootThreadId")
                  for r in conn.execute("SELECT thread_id, payload_json AS p FROM orchestration_v2_projection_threads")}
         root_of = lambda tid: roots.get(tid) or tid  # noqa: E731
+        attached = {r["message_id"]: r["n"] for r in conn.execute(
+            "SELECT message_id, json_array_length(json_extract(payload_json, '$.attachments')) AS n "
+            "FROM orchestration_v2_projection_messages WHERE role = 'user' AND created_at >= ? AND created_at < ? AND n > 0",
+            (iso(lookback), iso(until)))}
+        for m in all_typed:
+            if m.thread_id in threads:
+                threads[m.thread_id].events.append(Event(m.created_at, "user", m.text, attachments=attached.get(m.message_id, 0)))
         for r in conn.execute(
                 "SELECT message_id, thread_id, role, created_at, json_extract(payload_json,'$.text') AS text "
                 "FROM orchestration_v2_projection_messages WHERE created_at >= ? AND created_at < ?",
@@ -155,6 +176,7 @@ def load(store: Path, since: datetime, until: datetime) -> tuple[dict[str, Threa
             t.events.append(Event(r["created_at"], "assistant" if r["role"] == "assistant" else "agent-msg", r["text"] or ""))
         for r in conn.execute(
                 "SELECT thread_id, type, status, updated_at, json_extract(payload_json, '$.completedAt') AS done, "
+                "json_extract(payload_json, '$.toolName') AS tool, "
                 "CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) != 0 "
                 "THEN json_extract(payload_json, '$.output') END AS output, "
                 "CASE WHEN status = 'failed' OR COALESCE(json_extract(payload_json, '$.exitCode'), 0) != 0 "
@@ -164,6 +186,8 @@ def load(store: Path, since: datetime, until: datetime) -> tuple[dict[str, Threa
                 "'approval_request','user_input_request','compaction')", (iso(since), iso(until))):
             at = r["done"] or r["updated_at"]
             root = root_of(r["thread_id"])
+            if r["thread_id"] in threads and re.search(r"thread_launch|thread_send|create_threads", r["tool"] or ""):
+                threads[r["thread_id"]].events.append(Event(at, "handoff"))  # called, even if it failed
             if r["type"] in ("command_execution", "dynamic_tool"):
                 if r["output"] is None and r["input"] is None:
                     if r["thread_id"] in threads:
@@ -203,10 +227,17 @@ def score(t: Thread, recurring: Counter) -> None:
     """Signals on turn-final answers: the last agent message before the next typed prompt (or the end)."""
     answer = ""
     pending: list[Event] = []  # failures since the last typed prompt
+    relay = ""  # an observation the last typed prompt carried in
+    handoff = False  # this turn launched a new thread: the prompt was a new task (a router), not a relay
     interrupts = 0
     edited = any(e.kind == "file" for e in t.events)
 
     def close_turn() -> None:
+        nonlocal relay, handoff
+        if relay and not handoff:
+            t.signals["broken-loop"] += 1
+            t.evidence.append(f"broken-loop: you relayed {relay}")
+        relay, handoff = "", False
         if not answer:
             pending.clear()
             return
@@ -215,18 +246,26 @@ def score(t: Thread, recurring: Counter) -> None:
             t.evidence.append(f"silent-failure: `{pending[0].text[:80]}` failed; the answer after it mentions no trouble")
         if DONE_RE.search(answer) and FALLBACK_RE.search(answer):
             t.signals["fallback-then-done"] += 1
+        loop = ASK_RE.search(answer) or BLIND_RE.search(answer)
+        if loop:
+            t.signals["broken-loop"] += 1
+            t.evidence.append(f"broken-loop: agent \"…{clip(' '.join(answer[max(0, loop.start() - 60):loop.end() + 40].split()), 110)}\"")
         if edited and EXTRA_RE.search(answer):
             t.signals["unasked-extras"] += 1
             t.evidence.append(f"unasked-extras: \"{clip(EXTRA_RE.search(answer).group(0), 40)}…\"")
         pending.clear()
 
+    opening = next((e for e in t.events if e.kind in ("user", "agent-msg")), None)  # typed or an agent's brief
     for e in t.events:
         if e.kind == "user":
             if answer and DONE_RE.search(answer[-600:]) and CORRECTION_RE.search(e.text[:300]):
                 t.signals["correction-after-done"] += 1
                 t.evidence.append(f"correction-after-done: \"{clip(e.text, 90)}\"")
+            carried = relayed(e) if e is not opening and answer else ""  # the opening is the task itself
             close_turn()
-            answer = ""
+            answer, relay = "", carried
+        elif e.kind == "handoff":
+            handoff = True
         elif e.kind == "assistant":
             answer = e.text
         elif e.kind == "fail" and e.sig:
@@ -240,6 +279,20 @@ def score(t: Thread, recurring: Counter) -> None:
     if interrupts >= 3 or t.typed > 8:
         t.signals["interruptions"] += 1
         t.evidence.append(f"interruptions: {t.typed} typed prompts, {interrupts} approvals/questions/compactions")
+
+
+def relayed(e: Event) -> str:
+    """What a mid-thread prompt carried in for the agent: attachments, pasted tool output, or a report."""
+    if e.attachments:
+        words = " ".join(re.sub(r"!?\[[^\]]*\]\([^)]*\)", "", e.text).split())  # drop the image links
+        return f"{e.attachments} attachment(s)" + (f": \"{clip(words, 80)}\"" if words else "")
+    lines = e.text.splitlines()  # dictation has no line breaks; pasted output has several error lines
+    if len(lines) >= 5 and sum(bool(ERROR_LINE_RE.search(x)) for x in lines) >= 2:
+        return "pasted output"
+    said = RELAY_RE.search(e.text[:RELAY_SPAN])
+    if not said or re.search(r"\bif\b[^.?!]{0,20}$", e.text[:said.start()], re.I):  # "if that doesn't work" plans
+        return ""
+    return f"\"…{clip(' '.join(e.text[max(0, said.start() - 50):said.end() + 30].split()), 90)}\""
 
 
 def retyped(threads: dict[str, Thread], since: datetime) -> list[tuple[str, int]]:
@@ -310,7 +363,7 @@ def packet(t: Thread, why: str) -> str:
                 fails = []
             if answer:
                 lines.append(f"- agent: {clip(answer[-500:] if len(answer) > 500 else answer, 500)}")
-            lines.append(f"- **user**: {clip(e.text, 400)}")
+            lines.append(f"- **user**: {clip(e.text, 400)}" + (f" [+{e.attachments} attachment(s)]" if e.attachments else ""))
             answer = ""
     if fails:
         lines.append("- failed: " + "; ".join(f"`{f.text[:90]}`" + (f" → {f.sig}" if f.sig else "") for f in fails[:3]))

@@ -8,7 +8,8 @@ description: "Use for a weekly retro on how you work with your agents: \"t3 retr
 Why: you are the bottleneck, not the agents. Once a week, look at what actually happened in your
 threads (what you asked, what the agent claimed, what broke, what you had to correct) and change
 **one** thing: a line in a file, a check, a hook or a default. One change that happens beats five
-that don't. The retro must remove more work than it creates.
+that don't. The retro must remove more work than it creates. North star: agents that close their
+own feedback loop; every look, click or paste you do for them is a candidate change.
 
 Method (sources in [lens.md](lens.md)): Anthropic's study of ~400k Claude Code sessions rates how
 precise the goal was, what the user asked to verify and who corrected whom; Claude Code's best

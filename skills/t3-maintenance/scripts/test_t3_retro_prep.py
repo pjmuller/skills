@@ -122,6 +122,41 @@ def test_quiet_week_fills_slots_across_projects(tmp_path: Path) -> None:
     assert sum(1 for t in picked if t in {"t20", "t21", "t22", "t23"}) == 4
 
 
+def test_broken_loop(tmp_path: Path) -> None:
+    """The human looks or clicks for the agent; a router's new task with a screenshot is not a relay."""
+    s = Store(tmp_path / "statev2.sqlite")
+    s.thread("ask", "Ask")
+    s.message("ask", "user", "Fix the login page.", 60)
+    s.message("ask", "assistant", "Fixed. Please refresh the tab and tell me what you see.", 50)
+    s.thread("relay", "Relay", project="q")
+    s.message("relay", "user", "Restyle the header.", 60, attachments=["a0"])  # the opening is the task
+    s.message("relay", "assistant", "Done ✅", 50)
+    s.message("relay", "user", "The header still shows the old logo", 40, attachments=["a1"])
+    s.message("relay", "assistant", "Swapped the logo.", 30)
+    s.thread("router", "Router")
+    s.message("router", "user", "Route this bug.", 60)
+    s.message("router", "assistant", "Launched.", 55)
+    s.message("router", "user", "New task: this page is broken.", 50, attachments=["a2"])
+    s.item("router", "dynamic_tool", {"toolName": "t3-code.t3_thread_launch"}, 49)
+    s.message("router", "assistant", "Launched.", 48)
+    s.message("router", "user", "Another task, see screenshot.", 45, attachments=["a3"])
+    s.item("router", "dynamic_tool", {"toolName": "t3-code.t3_thread_launch", "exitCode": 1}, 44, status="failed")
+    s.message("router", "assistant", "Launch failed; retrying.", 43)
+    s.message("router", "user", "If that doesn't work, use the old API.", 40)
+    s.message("router", "assistant", "Noted.", 38)
+    s.thread("brief", "Agent brief", project="r")  # opened by an agent: the first typed reply can be a relay
+    s.message("brief", "user", "Read and execute /tmp/brief.md", 60, by="agent", sender="x")
+    s.message("brief", "assistant", "Done ✅", 50)
+    s.message("brief", "user", "It still shows the old logo", 40, attachments=["a4"])
+    s.message("brief", "assistant", "Swapped.", 30)
+    packets, picked = prep(s.close(), tmp_path)
+    assert picked["brief"]["signals"].get("broken-loop") == 1
+    assert picked["ask"]["signals"].get("broken-loop") == 1
+    assert picked["relay"]["signals"].get("broken-loop") == 1
+    assert "you relayed 1 attachment(s)" in packets and "[+1 attachment(s)]" in packets
+    assert "broken-loop" not in picked["router"]["signals"]
+
+
 def test_lookback_keeps_human_authorship(tmp_path: Path) -> None:
     s = Store(tmp_path / "statev2.sqlite")
     s.thread("old", "Old ask")

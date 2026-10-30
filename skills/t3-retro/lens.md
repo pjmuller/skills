@@ -4,7 +4,7 @@ Read each thread as **intent → execution → claim → what the user did next*
 thing that went wrong in each thread before you name categories ([error analysis](https://hamel.dev/blog/posts/evals-faq/why-is-error-analysis-so-important-in-llm-evals-and-how-is-it-performed.html)):
 later trouble usually follows from it.
 
-## Five questions per thread
+## Six questions per thread
 
 1. **Goal.** Did the first message say the outcome and when it counts as done? Or did the agent
    have to guess scope, and the user correct it later? ([precision of direction](https://www.anthropic.com/research/claude-code-expertise))
@@ -18,6 +18,20 @@ later trouble usually follows from it.
    binary, auth, a service that isn't running). Each is a setup fix the user can't see otherwise.
 5. **Unasked work.** "I also added/fixed…": useful initiative, or scope growth the user then had
    to review? Say which.
+6. **Loop.** North star: the agent closes its own loop (act → observe → fix → verify), so a few
+   iterations reach the goal without the user. Find where the loop ran through a human instead
+   (lead `broken-loop`), in coding and non-coding work alike:
+   - The user looked for the agent: a screenshot of a page the agent could open, pasted logs, "still
+     broken", a test run on their phone.
+   - The user acted for the agent: logged in, clicked a confirm link, forwarded a mail, exported a
+     file, typed a password a password manager holds.
+   - The agent was blind: the local app wouldn't start, so the change shipped unseen; a dead token or
+     missing access hid the data; "please refresh and tell me what you see".
+
+   Not a break: a judgment only the user can make (scope, taste, money, sending in their name),
+   a permission they grant, a truly physical step (eID, phone 2FA, a microphone). The same physical
+   step every week is still a candidate for a stored session. A tool existing is no proof it
+   worked then: check whether the agent tried it and what failed before blaming the agent.
 
 ## Every finding ends in one fix type ([Claude Code best practices](https://code.claude.com/docs/en/best-practices))
 
@@ -27,6 +41,7 @@ later trouble usually follows from it.
 | Said done, wasn't | **check** | a test, seed data, a done-checklist the agent fills in, a Stop hook |
 | Did a never-do, skipped an always-do | **enforce** | a hook or permission rule (a prompt line can't guarantee it) |
 | Right, but too slow, costly or interrupt-heavy | **default** | model/effort default, install a missing tool, a sandbox allowance |
+| The user looked, clicked or pasted for the agent | **default** or **check** | give it eyes and hands: a browser tool, a stored login, seed data, a dev server that starts |
 
 ## Rules
 
