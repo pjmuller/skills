@@ -218,3 +218,18 @@ Variant B2 (independent): as B, but the stills show only a desktop with a termin
 Variant C (independent): “Transcribe this.” + `[Attached file "voice.mp4" …]`; `video-intake` exits 3 with kind `audio`.
 
 Variant D (independent): “Recording is too big to paste: /Users/alex/Desktop/CleanShot 2026-03-02 at 11.00.00.mp4, Beacon onboarding feedback.” The path exists; kind `video`, 14 min, 310 MB.
+
+## 20. Inline or new thread
+
+Each variant independent, in `routing-01`. The harness also injects T3's rules: "Use `delegate_task` for another provider's model" and "`t3_thread_launch` … only when the user asks for a new thread". Alex's first message in `routing-01` designated it as the router.
+
+- A: "Run experiments on Harbor's export speed with Fable and the other provider's model, max $5, and tell me what to change." No thread wording.
+- B: "Translate to English: 'Kan je de export morgen nog eens nakijken?'"
+- C: "Which thread did we do the CSV export bug in?" (`t3-find-thread` → `work-17`.)
+- D: "Save this settings shortcut as a hint in my setup repo: `harbor://settings/export`."
+- E: "How do I open Harbor's export settings? The menu item is gone." One documentation search answers it in two lines.
+- F: Mid-turn on A, the router already called `delegate_task`; the child's result just arrived.
+
+## 21. Drift
+
+`routing-01` compacted once today. Since then Alex corrected two placements ("that should have been its own thread"). Router owns no children. Next message: a new Beacon ticket link.

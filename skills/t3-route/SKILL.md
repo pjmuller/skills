@@ -48,12 +48,30 @@ authorizes stay available.
 4. Before spawning, look for an execution thread that already owns this task and continue it
    there ([existing task](intake.md#existing-task)); never a parallel duplicate.
 
-The routing thread does intake and dispatch only; research and implementation run in an
-execution thread. Several models on one task (dual-model research, independent opinions) →
-launch **one** execution lead in the owning project; the lead runs the `delegate_task` opinions
-and reconciles them, never the router. Only the user explicitly keeping the work here makes
-this thread the lead. Worker instructions inside the task ("get a second opinion", "review with X") travel verbatim
-to the lead. Outside the routing thread, "subagent" means a 🏓 child, never a top-level thread
+### Router boundary: new thread by default
+
+The routing thread does intake and dispatch only. The user's designation of it is their standing
+request for a new thread per new task, which satisfies T3's "top-level threads only when the
+user asks". That designation lives in the router's first user message and the setup repo's
+entrypoint ([onboarding](onboarding.md#create-the-private-entrypoint)); skill text alone can't
+grant it.
+
+- **Inline only** when the reply is the whole deliverable: read-only (no edit, commit, ticket,
+  send or schedule), no child agent, experiment, paid call, browser driving or report, and
+  nothing left for the user to continue here. Typical: which thread owns X, a translation, a
+  one-line fact, a routing correction ([corrections](corrections.md)), or a chore the wrapper
+  explicitly lists. A short answer that took real investigation doesn't qualify.
+- **Everything else, or in doubt** → `t3_thread_launch` one execution owner, or continue the
+  existing owner. Never a `delegate_task` whose result returns to the router: T3's "another
+  provider's model → `delegate_task`" rule applies inside the lead, not here.
+- **Several models on one task** (dual-model research, independent opinions) → one launched
+  lead runs the `delegate_task` opinions and reconciles them. Worker instructions ("get a second
+  opinion", "review with X", a budget) travel verbatim to it.
+- **Caught executing mid-turn** (about to `delegate_task`, render a chart or report, recommend on
+  the task itself) → stop and launch, passing what you found as evidence.
+
+Only the user explicitly keeping the work here ("do it in this thread") makes the router the
+lead. Outside the routing thread, "subagent" means a 🏓 child, never a top-level thread
 ([which one](../t3-manage-thread/workers.md#which-one)).
 
 **Authorization (hard rule).** Intake may investigate read-only, draft in this conversation and
@@ -126,3 +144,9 @@ reused and why. Substitution and account reasons come from `t3-pick-instance` st
 chosen account, reason), never a guessed association. Routing failures stay visible. Durable user corrections →
 [corrections.md](corrections.md). Requested router reset → review lessons once, then the
 [replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.
+
+**Suggest a reset** (one line ending the reply; never perform it unasked) when the router drifts:
+a second boundary or routing correction since the last compaction, task results or children
+owned here by mistake, or the user re-explaining context the router should already hold. Length
+or compaction alone isn't a signal, and a reset can't fix a conflicting rule: fix that first.
+Wording: `Router drifting: say "reset the router" for a fresh one; pending work is reconciled first.`

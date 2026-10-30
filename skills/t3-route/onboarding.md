@@ -53,8 +53,10 @@ A committed sibling skill outside `t3-route` with:
 - for recurring short requests, a private trigger lookup (below).
 
 Reuse existing owning references; link global rules instead of duplicating them. Add a narrow
-setup-repo entrypoint note: "In the designated routing thread, invoke `<private-wrapper>`; an
-execution brief must not re-route its same task (see `t3-route`)." The designation is a
+setup-repo entrypoint note: "In the designated routing thread, invoke `<private-wrapper>`; each
+new task there is my request for a new T3 thread. An execution brief must not re-route its same
+task (see `t3-route`)." Put it where the router's harness loads it without a read (Codex:
+`AGENTS.md`; Claude: `CLAUDE.md`): it is the user's standing ask that T3's new-thread rule needs. The designation is a
 dedicated thread titled with a leading 🧭 (e.g. "🧭 Routing"; `t3-mail-link` keeps 🧭 threads
 from owning mail cases): record its title + exact T3 ID privately via helpers/native tools,
 never invented or inferred from cwd. An onboarding request may create that thread; it does not
@@ -95,6 +97,8 @@ its owning private reference and read it back. Report readiness and specific gap
 another person's account was tested from this machine. Isolated forward-evaluation: neutral
 [cases and screenshot](tests/cases.md) without live tools; judge decisions, not wording.
 
-Daily use: paste tasks/links/images in the routing thread; correct misrouting there. Core
+Daily use (tell the user in the readiness report): paste tasks/links/images in the routing
+thread; correct misrouting there; when it drifts or gets long, say "reset the router" for a
+fresh one ([playbook](../t3-manage-thread/routing-reset.md)). Core
 updates replace only the core: diff the sibling wrapper before/after to verify policy
 preservation and recheck its core links.

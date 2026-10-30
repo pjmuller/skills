@@ -1,7 +1,7 @@
 # Replace a routing thread
 
 Only on the user's reset/replacement request; compaction alone isn't one, nor is a request to improve
-this playbook.
+this playbook. The router *suggests* one on drift signals ([t3-route](../t3-route/SKILL.md#report-and-learn)).
 
 1. **Lessons**: review the conversation once for explicit corrections and verified routing mistakes.
    Read existing rules first; update the owning private lookup/playbook (generic mechanics → shared
@@ -12,8 +12,9 @@ this playbook.
    ownership). Independent execution threads continue: don't replay their briefs or poll them unasked.
 3. **Launch once** (`t3_thread_launch`): the wrapper's project, explicit workspace, model/effort and
    runtime mode. Title `🧭 <person> routing` with the wrapper's name (`t3-mail-link` keys on 🧭 so
-   routers never own mail cases). Brief only the wrapper and its reading list, the predecessor ID and
-   necessary unresolved routing context. The successor initializes itself (no setup routing, backlog,
+   routers never own mail cases). Brief only the user's designation verbatim ("<person> designates
+   this thread as their router: each new task here is their request for a new T3 thread"), the
+   wrapper and its reading list, the predecessor ID and necessary unresolved routing context. The successor initializes itself (no setup routing, backlog,
    historical launches or monitoring of old workers), confirms readiness and waits.
 4. **Verify**: read the successor (launch acceptance is not readiness), then
    `t3_thread_organize {action:"pin",threadId:"<new id>"}`; rename if needed with
