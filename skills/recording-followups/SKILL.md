@@ -35,6 +35,24 @@ for the prompt step. Automatic per-call entry: [recording-watcher](../recording-
    "Read and execute <absolute path>"`. Files stay after launch (a worker may still read them);
    thread ids and links go in the debrief or a manifest so a retry cannot launch twice.
 
+## Repository retention (off by default)
+
+Transcripts, media and debriefs stay private (the watcher's state dir, the vendor, a git-ignored
+`.local/`, `~/Downloads`). Meeting content goes into a repository only when that repository's own
+wrapper opts in for a named meeting class, or the user asks for one specific call. The opt-in names
+what is committed: a **digest** (date, source link, decisions, actions + owners, open questions; no
+small talk or recap) by default, the **full transcript** only as a separate opt-in, linked from the
+digest. Before each write, verify:
+
+- **Participants** from vendor speaker identities or attendance, **purpose** from the content.
+  Titles, weekdays and time slots are hints, never eligibility; an unidentified speaker blocks it.
+- **Content**: health, customer or personal data, money, HR or private remarks → ask first, or
+  leave them out of a digest.
+- **Audience**: everyone with repository access attended or is meant to read it; else ask.
+
+Any doubt → ask before writing: Git history outlives a deletion. No backfill unless asked; never
+paste meeting content into agent entrypoints or prompts (link the file).
+
 ## Prompt shape (each one stands alone)
 
 Two readers: first the user, who was in the call and reads this an hour later, then the worker.
