@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-30 — global template: decisions as callouts, asked last
+
+- `agents-md/global-template.md`: each decision is a `[!IMPORTANT]` callout (`[!WARNING]` if irreversible or money) with the question and a one-line reply gist; the folded detail sits under it, and asks come after the wrap-up. Why: a one-line question between other paragraphs was hard to spot, and the reader skims only the last lines.
+
 ## 2026-10-30 — global template: settle unasked once done at 80/20
 
 - `agents-md/global-template.md`: the auto-settle line now also covers a reply that closes the thread's last open item; the thread stays open only while 80/20 work is undone or a new finding, risk or decision needs the user. Why: one week of T3 threads held 174 "settle" messages typed only to close finished threads.
