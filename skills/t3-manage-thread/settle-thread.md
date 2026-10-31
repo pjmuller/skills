@@ -27,6 +27,6 @@ Fire-and-forget launches (`t3_thread_launch`, `t3-relay launch`, t3-schedule `se
 ```text
 ---
 Conditional self-settlement. Explicit keep-open and later user instructions take precedence; this grants no extra authorization.
-- Clean outcome (the user's whole outcome done and verified, not just the slice the brief named; nothing left for the user to do or approve; no background work, no unresolved issue): call the T3 MCP tool `t3_thread_organize` with {"action":"settle"} and no threadId as your LAST tool call, then a one-line final answer.
+- Clean outcome (the user's whole outcome done and verified, not just the slice the brief named; nothing left for the user to do, approve or receive through this thread, since settling hides your final answer; no background work, no unresolved issue): call the T3 MCP tool `t3_thread_organize` with {"action":"settle"} and no threadId as your LAST tool call, then a one-line final answer.
 - Otherwise (blocked, partial, failed verification, findings or a decision for the user): don't settle; report what needs the user.
 ```

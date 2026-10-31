@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-31 — settling: a reply that is the deliverable keeps the thread open
+
+- North star in `agents-md/global-template.md` (T3 bullet), `t3-route` Lifecycle and the `t3-manage-thread` completion footer: settling hides the thread, so stay open when the final message is itself what the user asked for (a link, answer, value); verified work that lives elsewhere (pushed, deployed, handed off) still settles unasked. Why: a thread verified phone-access links for the user's evening, then self-settled in the same turn as the answer carrying them; the user would not have seen the links. Wording reconciled from independent Opus and Astra proposals.
+
 ## 2026-10-30 — Bitwarden: one approval for a bounded login
 
 - `copy --field password --with-totp` explicitly approves password plus two TOTP deliveries for one host/account/thread within five minutes. Vaults lock before delivery; the broker keeps only expiring codes, cross-checked against Bitwarden, never a retained seed. `done --host H --thread T` ends held access early. Ambiguous accounts require narrowing; single-field consent stays single-field.

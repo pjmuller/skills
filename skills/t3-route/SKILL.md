@@ -108,7 +108,8 @@ falls back only to the wrapper's named alternative for that capability.
 
 Decide per standalone launch. Append the
 [completion footer](../t3-manage-thread/settle-thread.md#completion-footer-for-t3_thread_launch)
-to `message` only when the outcome is bounded and clear, delivery is independently verifiable,
+to `message` only when the outcome is bounded and clear, delivery is independently verifiable and lands
+outside the thread (not only in the final reply: settling hides it),
 the full path is already authorized and no user review/dialogue is needed. Review/dialogue
 means a concrete outstanding user decision or requested discussion; task class, a completed
 agent review, a readable result, simplicity or a confidence percentage do not decide it.
