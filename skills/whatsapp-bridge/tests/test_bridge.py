@@ -181,6 +181,10 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(len(store.find('alice', 10)), 2)
             self.assertEqual(len(store.find('alice', 1)), 1)
             self.assertEqual(store.resolve('Alice', '32470123458')['number'], '+32470123456')
+            group = '120363421529066560@g.us'
+            self.assertEqual(store.resolve(group, '32470123458'), {'jid': group, 'number': None, 'names': []})
+            with self.assertRaises(ValueError):
+                store.resolve('x@g.us', '32470123458')
             self.assertEqual(store.find('+32470123456', 10)[0]['jid'], pn)
             self.assertEqual(store.find('%', 10), [])
             self.assertEqual(store.find('net', 10), [])

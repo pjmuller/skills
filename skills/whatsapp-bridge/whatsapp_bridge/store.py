@@ -103,7 +103,7 @@ class Store:
             jid = own + "@s.whatsapp.net"
         else:
             try:
-                jid = normalize_number(chat) + "@s.whatsapp.net"
+                jid = chat if chat.endswith("@g.us") and normalize_target(chat) else normalize_number(chat) + "@s.whatsapp.net"
             except ValueError:
                 with self.db() as db:
                     matches = {self.canonical(row[0]) for row in db.execute(

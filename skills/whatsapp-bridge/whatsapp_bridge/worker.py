@@ -300,6 +300,12 @@ def execute(request):
                 store.alias(contact_jid, jid(pn))
             for name in (contact.Info.FullName, contact.Info.FirstName, contact.Info.PushName):
                 store.name(name, contact_jid)
+        # Group subjects: history sync names only some groups, so a group would be unreadable by name.
+        try:
+            for group in client.get_joined_groups():
+                store.name(group.GroupName.Name, jid(group.JID))
+        except Exception:
+            pass  # Best effort: reads still work by verbatim group JID.
         if op == "login":
             return "+" + own
         if op == "find":

@@ -54,7 +54,8 @@ them (peer protocol message, `scripts/neonize-peer-request.patch`; nothing reach
 ## History limits
 
 Only locally synced history: empty ≠ empty chat; deletions/edits/disappearing messages not mirrored. Name matching
-is exact (case-folded), rejects ambiguity; use international numbers when needed. Rendering: `[voice note 43s]`,
+is exact (case-folded), rejects ambiguity; use international numbers when needed. Groups: subjects of joined groups
+are synced as names (`wa contacts <subject>`); read/voice also take a verbatim `…@g.us` JID. Rendering: `[voice note 43s]`,
 `[audio 43s]`, `[non-text message]` (media without caption), `[contact] Name: +number` (several joined by ` | `).
 
 ## Neonize pin
