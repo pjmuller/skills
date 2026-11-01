@@ -234,7 +234,9 @@ def connect(base: str) -> Mcp:
         die(f"T3 MCP unreachable on {base}: {type(exc).__name__} {getattr(exc, 'code', '')}".rstrip())
 
 
-def project_id(mcp: Mcp, path: str) -> str:
+def project_id(mcp: Mcp, path: str, create: bool = False) -> str:
+    """`create` (launch): an existing folder T3 does not know yet becomes a project, so a scheduled job in
+    a fresh checkout (a tool's own install clone) launches instead of failing every day."""
     root = str(Path(path).expanduser().resolve())
     args: dict = {}
     while True:  # paginated (20 per page by default)
@@ -243,8 +245,16 @@ def project_id(mcp: Mcp, path: str) -> str:
             if p.get("workspaceRoot") == root and not p.get("deletedAt"):
                 return p["id"]
         if page.get("nextCursor") is None:
-            die(f"no T3 project for {root}; add it in T3 first")
+            break
         args = {"cursor": page["nextCursor"]}
+    if not (create and Path(root).is_dir()):
+        die(f"no T3 project for {root}; add it in T3 first")
+    made = mcp.call("t3_project_create", {"title": Path(root).name, "workspaceRoot": root})
+    pid = made.get("projectId") or made.get("id") or (made.get("project") or {}).get("id")
+    if not pid:
+        die(f"t3_project_create for {root} returned no project id: {str(made)[:200]}")
+    print(f"created T3 project {Path(root).name} for {root}", file=sys.stderr)
+    return pid
 
 
 def completion_footer() -> str:
@@ -550,7 +560,7 @@ def main() -> None:
         if effort:
             key = "reasoningEffort" if model.startswith("gpt-") else "effort"
             sel["options"] = [{"id": key, "value": effort}]
-        tool, args = "t3_thread_launch", {"projectId": project_id(mcp, a.project), "title": a.title,
+        tool, args = "t3_thread_launch", {"projectId": project_id(mcp, a.project, create=True), "title": a.title,
                                           "message": message, "modelSelection": sel,
                                           "workspaceStrategy": {"type": "root"}, "runtimeMode": runtime_mode()}
         rec.update(project_id=args["projectId"], title=a.title)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-01 — t3-relay: a launch into a folder T3 does not know creates its project
+
+- `t3-relay launch` (and so every t3-schedule job) registers an existing folder as a T3 project instead of failing with "no T3 project … add it in T3 first"; `find` and missing folders still fail. Why: the ReplyPen brain kit's daily `brain-kit-refresh` job runs in its install clone (`~/.replypen-brain-skills`), which no colleague ever opened in T3, so its thread would fail every day.
+
 ## 2026-10-31 — settling: a reply that is the deliverable keeps the thread open
 
 - North star in `agents-md/global-template.md` (T3 bullet), `t3-route` Lifecycle and the `t3-manage-thread` completion footer: settling hides the thread, so stay open when the final message is itself what the user asked for (a link, answer, value); verified work that lives elsewhere (pushed, deployed, handed off) still settles unasked. Why: a thread verified phone-access links for the user's evening, then self-settled in the same turn as the answer carrying them; the user would not have seen the links. Wording reconciled from independent Opus and Astra proposals.

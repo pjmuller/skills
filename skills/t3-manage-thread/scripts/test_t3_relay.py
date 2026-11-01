@@ -48,7 +48,7 @@ def posted(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "HOME", tmp_path)
     monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
     monkeypatch.setattr(relay, "connect", lambda base: fake)
-    monkeypatch.setattr(relay, "project_id", lambda mcp, path: "proj-1")
+    monkeypatch.setattr(relay, "project_id", lambda mcp, path, create=False: "proj-1")
     monkeypatch.setattr(relay, "pick", lambda models, instance=None: ("codex_a", "gpt-6.1-sol", "high"))
 
     def run(*argv):
@@ -287,6 +287,23 @@ def test_project_lookup_follows_pagination():
         relay.project_id(Paged(), "/elsewhere")
 
 
+def test_launch_creates_the_project_for_a_known_folder(tmp_path):
+    """A scheduled job in a fresh checkout (a kit's install clone) failed daily: "no T3 project"."""
+    made = []
+    class Empty:
+        def call(self, tool, args):
+            if tool == "t3_project_create":
+                made.append(args)
+                return {"id": "new", "workspaceRoot": args["workspaceRoot"]}
+            return {"projects": [], "nextCursor": None}
+    with pytest.raises(SystemExit):  # find/lookups never create
+        relay.project_id(Empty(), str(tmp_path))
+    with pytest.raises(SystemExit):  # nor for a folder that does not exist
+        relay.project_id(Empty(), str(tmp_path / "gone"), create=True)
+    assert relay.project_id(Empty(), str(tmp_path), create=True) == "new"
+    assert made == [{"title": tmp_path.name, "workspaceRoot": str(tmp_path.resolve())}]
+
+
 def test_launch_follows_user_default_runtime_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(relay, "HOME", tmp_path)
     assert relay.runtime_mode() == "full-access"
@@ -420,7 +437,7 @@ def test_find_exact_open_roots_pinned_first(monkeypatch):
     fake = FakeMcp()
     fake.call = lambda tool, args: (fake.calls.append((tool, args)), pages[len(fake.calls) - 1])[1]
     monkeypatch.setattr(relay, "connect", lambda base: fake)
-    monkeypatch.setattr(relay, "project_id", lambda mcp, path: "p")
+    monkeypatch.setattr(relay, "project_id", lambda mcp, path, create=False: "p")
     monkeypatch.setattr(relay, "store", lambda: pins_db([
         ("a", '{"pinnedAt": "2026-10-27T12:44:00Z"}', None, None), ("b", '{"pinnedAt": null}', None, None),
         ("f", '{"pinnedAt": "2026-10-28T00:00:00Z"}', "2026-10-28", None)]))
