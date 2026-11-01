@@ -377,6 +377,8 @@ def git_state(spec: dict) -> str | None:
     git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True)
     if git("rev-parse", "--git-dir").returncode:
         return "not in git"
+    if git("check-ignore", "-q", "--", spec["source"]).returncode == 0:
+        return None  # gitignored on purpose: a machine-local job in a tool's install clone (brain-kit-refresh)
     if git("ls-files", "--error-unmatch", "--", *files).returncode:
         return f"untracked (commit {SCHEDULES_DIR}/{spec['name']}.*)"
     if git("status", "--porcelain", "--", *files).stdout.strip():

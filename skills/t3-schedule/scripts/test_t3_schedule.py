@@ -475,6 +475,9 @@ def test_list_flags_git_state(tmp_path, monkeypatch):
     assert mod.job_flag(mod.load_spec(p["spec"])) == "not in git"
     git("init", "-q")
     assert mod.job_flag(mod.load_spec(p["spec"])).startswith("untracked")
+    (repo / ".git" / "info" / "exclude").write_text(f"/{mod.SCHEDULES_DIR}/\n")
+    assert mod.job_flag(mod.load_spec(p["spec"])) is None  # ignored on purpose: machine-local, not a warning
+    (repo / ".git" / "info" / "exclude").write_text("")
     git("add", ".")
     git("commit", "-qm", "job")
     assert mod.job_flag(mod.load_spec(p["spec"])) is None

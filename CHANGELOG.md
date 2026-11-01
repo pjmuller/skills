@@ -3,6 +3,7 @@
 ## 2026-11-01 — t3-relay: a launch into a folder T3 does not know creates its project
 
 - `t3-relay launch` (and so every t3-schedule job) registers an existing folder as a T3 project instead of failing with "no T3 project … add it in T3 first"; `find` and missing folders still fail. Why: the ReplyPen brain kit's daily `brain-kit-refresh` job runs in its install clone (`~/.replypen-brain-skills`), which no colleague ever opened in T3, so its thread would fail every day.
+- `t3-schedule list` no longer flags a gitignored job definition as "untracked (commit …)": ignored = deliberately machine-local (that kit job's definition lives in the install clone, where a commit would detach it from its release tag).
 
 ## 2026-10-31 — settling: a reply that is the deliverable keeps the thread open
 
