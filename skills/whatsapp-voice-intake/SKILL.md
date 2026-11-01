@@ -15,7 +15,8 @@ download, `transcribe-gemini` ≈ $0.004/min), [t3-relay](../t3-manage-thread/re
 ## Run (`whatsapp-voice-intake --help`)
 
 - `poll [--dry-run] [--force-hours]`: one pass; launchd/systemd runs it every 5 min, silent outside the
-  configured hours. Missed or offline notes are picked up by the next in-hours poll.
+  configured hours
+  (optional `sparse` days: once per interval). Missed or offline notes are picked up by the next due poll.
 - `seed [--include MSG_ID…] [--force]`: start from now, **no backlog**; `--include` adds exact older voice
   notes (verified in the self chat, printed with local time). A poll without state seeds itself from now.
 - `status` (exit 1 on problems) · `check` (config, paired account, target thread, health).

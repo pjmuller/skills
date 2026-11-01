@@ -21,6 +21,7 @@ installed skill; a wrapper repo may own it and link it there. `whatsapp-voice-in
 | `self_number` | The paired account's number. Every poll checks the self chat's sender against it and refuses on mismatch. Required. |
 | `owner` | Name used in the delivered message ("Ana dictated this"). |
 | `hours` | Poll window, local time; defaults shown. Outside it the job exits without reading. |
+| `sparse` | Optional `{"days": ["sat", "sun"], "every_minutes": 500}`: outside `hours`, on these days poll once `every_minutes` have passed since the last poll (any time of day). Other off-hours stay silent. |
 | `hint` | Transcription hint: languages and how they mix. |
 | `vocabulary` | Optional Markdown file of terms to spell exactly, best with how dictation mishears them (`Globex ≈ "Glow Bex"`). Mine it from the words you actually use (e.g. your router thread messages); re-read per note. |
 | `context` | Optional override of the purpose line the transcriber gets (default `CONTEXT` in the script: a note-to-self for a dispatcher, still verbatim). |

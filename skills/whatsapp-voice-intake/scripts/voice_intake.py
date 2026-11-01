@@ -67,6 +67,10 @@ def load_config(path=None) -> dict:
     days = hours.get("days", list(DAYS[:5]))
     if not days or not set(days) <= set(DAYS):
         raise SystemExit(f"{path}: hours.days must be a list of {DAYS}")
+    sparse = raw.get("sparse") or {}
+    if sparse and (not sparse.get("days") or not set(sparse["days"]) <= set(DAYS)
+                   or not isinstance(sparse.get("every_minutes"), (int, float)) or sparse["every_minutes"] < 5):
+        raise SystemExit(f"{path}: sparse needs days (a list of {DAYS}) and every_minutes >= 5")
     target = raw.get("target") or {}
     if not target.get("project") or not target.get("title"):
         raise SystemExit(f"{path}: target.project (a T3 project root) and target.title (exact thread title) are required")
@@ -79,6 +83,7 @@ def load_config(path=None) -> dict:
     return {"self_number": number, "owner": raw.get("owner") or "the account owner",
             "tz": ZoneInfo(hours.get("timezone", "Europe/Brussels")), "days": {DAYS.index(d) for d in days},
             "start": clock.fromisoformat(hours.get("start", "09:00")), "end": clock.fromisoformat(hours.get("end", "18:00")),
+            "sparse": {"days": {DAYS.index(d) for d in sparse["days"]}, "every": sparse["every_minutes"] * 60} if sparse else None,
             "hint": raw.get("hint"), "context": raw.get("context") or CONTEXT,
             "vocabulary": str(Path(vocabulary).expanduser()) if vocabulary else None, "project": str(Path(target["project"]).expanduser()), "title": target["title"],
             "fallback": {**fallback, "brief": str(Path(fallback["brief"]).expanduser())} if fallback else None,
@@ -88,6 +93,14 @@ def load_config(path=None) -> dict:
 def in_hours(cfg, now: float) -> bool:
     local = datetime.fromtimestamp(now, cfg["tz"])
     return local.weekday() in cfg["days"] and cfg["start"] <= local.time() < cfg["end"]
+
+
+def due(cfg, state, now: float) -> bool:
+    """In hours: every run. Outside them on a `sparse` day: once `every` has passed since the last poll."""
+    if in_hours(cfg, now):
+        return True
+    sparse, last = cfg["sparse"], (state or {}).get("last_poll", 0)
+    return bool(sparse) and datetime.fromtimestamp(now, cfg["tz"]).weekday() in sparse["days"] and now - last >= sparse["every"]
 
 
 def load_state() -> dict | None:
@@ -591,9 +604,9 @@ def locked(fn):
 @locked
 def cmd_poll(args, bridge=None, relay=None, now=None) -> int:
     cfg, now = load_config(), now or time.time()
-    if not args.force_hours and not in_hours(cfg, now):
-        return 0
     state = load_state()
+    if not args.force_hours and not due(cfg, state, now):
+        return 0
     if state is None:
         state = new_state(now, {})
         if not args.dry_run:
@@ -658,7 +671,8 @@ def cmd_status(args) -> int:
 def cmd_check(args, bridge=None, relay=None) -> int:
     cfg = load_config()
     print(f"ok      config {CONFIG}: self chat of {cfg['self_number']}, hours {[DAYS[d] for d in sorted(cfg['days'])]} "
-          f"{cfg['start']:%H:%M}-{cfg['end']:%H:%M} {cfg['tz'].key}")
+          f"{cfg['start']:%H:%M}-{cfg['end']:%H:%M} {cfg['tz'].key}"
+          + (f"; {[DAYS[d] for d in sorted(cfg['sparse']['days'])]} every {cfg['sparse']['every'] // 60:g} min" if cfg["sparse"] else ""))
     ok = 0
     try:
         own = (bridge or Bridge()).own_number()

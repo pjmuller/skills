@@ -171,6 +171,22 @@ def test_outside_hours_does_nothing(env):
     assert env.state()["captures"] == {}
 
 
+@pytest.mark.parametrize("last,local,ran", [
+    ("2026-10-30T17:55:00", "2026-10-30T23:00:00", False),   # Friday evening: not a sparse day
+    ("2026-10-30T17:55:00", "2026-10-31T02:14:59", False),   # Saturday, 1 s short of 500 min
+    ("2026-10-30T17:55:00", "2026-10-31T02:15:00", True),    # Saturday, exactly 500 min
+    ("2026-10-31T19:00:00", "2026-11-01T03:20:00", True),    # Sunday, across the night
+    ("2026-11-01T22:00:00", "2026-11-02T06:20:00", False),   # Monday before hours: not a sparse day
+    ("2026-11-01T22:00:00", "2026-11-02T08:00:00", True)])   # Monday in hours: every run again
+def test_sparse_days_poll_once_per_interval(env, last, local, ran):
+    cfg = json.loads(env.config.read_text())
+    env.config.write_text(json.dumps({**cfg, "hours": {"start": "08:00"}, "sparse": {"days": ["sat", "sun"], "every_minutes": 500}}))
+    env.seed(at(last) - 60)
+    env.run(at(last))
+    env.run(at(local), force_hours=False)
+    assert (env.state()["last_poll"] == at(local)) is ran
+
+
 # ---------- end to end with fakes ----------
 
 def test_seeded_note_is_transcribed_once_delivered_once(env):
