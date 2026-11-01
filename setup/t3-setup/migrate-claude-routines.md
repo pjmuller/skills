@@ -18,7 +18,7 @@ Claude Desktop's **local** routines are plain files; read them, re-create each a
 | `enabled: false` / "Paused" | skip, or add and note it as paused |
 | prompt body | `--prompt-file` pointing at the SKILL.md body (drop the frontmatter) |
 
-Add `--settle-when-done` to every job: unattended runs must not pile up in the sidebar. Verify each with `t3-schedule show NAME`; run the first one via `t3-schedule run-now NAME` and read its log.
+Add `--settle-when-done` to every job: clean unattended runs then settle themselves instead of piling up in the sidebar; a run whose answer is itself the deliverable stays open. Verify each with `t3-schedule show NAME`; run the first one via `t3-schedule run-now NAME` and read its log.
 
 ## Disable the originals
 Only after the t3 job spawned successfully. Either pause them in Claude Desktop → Routines, or, with Claude Desktop **quit**, set `"enabled": false` on the entry in `scheduled-tasks.json` (back the file up first; never delete entries). Leave `SKILL.md` files in place.

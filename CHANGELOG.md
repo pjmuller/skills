@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-01 — release probe settles via the launcher, not the model
+
+- `scripts/release` (and the relay.md probe example) launch with `--settle-after-run` instead of `--settle-when-done`. Why: since the 2026-10-31 rule "a reply that is the deliverable keeps the thread open", a `Reply "ok"` probe correctly refuses to self-settle, so every release left a Haiku thread in the user's inbox. Warm-ups switched on 2026-10-28; the release probe was missed. The footer stays as is: real scheduled answers must not be hidden.
+- t3-setup smoke job: the setup agent settles the smoke thread after inspecting it; migrate-claude-routines no longer promises that `--settle-when-done` always settles.
+
 ## 2026-11-01 — t3-relay: a launch into a folder T3 does not know creates its project
 
 - `t3-relay launch` (and so every t3-schedule job) registers an existing folder as a T3 project instead of failing with "no T3 project … add it in T3 first"; `find` and missing folders still fail. Why: the ReplyPen brain kit's daily `brain-kit-refresh` job runs in its install clone (`~/.replypen-brain-skills`), which no colleague ever opened in T3, so its thread would fail every day.

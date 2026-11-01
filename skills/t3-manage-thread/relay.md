@@ -59,5 +59,5 @@ Internals (OAuth routes, read-only `statev2.sqlite` lookups for `status`) live o
 - **Not `t3 auth session issue`**: its sessions have no runtime ceiling, so MCP treats them as
   `approval-required` and refuses `full-access` launches. The OAuth approval sets the ceiling.
 
-Probe: `t3-relay launch --model haiku --allow-small-model --effort low --settle-when-done --wait 60
+Probe: `t3-relay launch --model haiku --allow-small-model --effort low --settle-after-run 60 --wait 60
 --project <repo> --title "relay probe" -- 'Reply "ok".'`

@@ -199,9 +199,9 @@ user asks for that deploy. [Claude adapter](../../skills/auto-mode-policy/claude
   Codex included. `t3-limits`. `t3-relay check`
   ([relay.md](../../skills/t3-manage-thread/relay.md); launchd jobs and pollers need it).
 - Native scheduler smoke job (free name, e.g. `t3-setup-smoke`, suffix if taken; `--at` = now + 2 min):
-  `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> --settle-when-done -- "Reply with the word ok"`,
-  then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered and
-  settled. Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
+  `t3-schedule add --name t3-setup-smoke --at <HH:MM> --project <setup-repo> --profile <healthy-profile> -- "Reply with the word ok"`,
+  then `t3-schedule run-now t3-setup-smoke`; inspect log and thread until it answered, then
+  settle that thread yourself (a reply-only probe never self-settles: its answer is the deliverable). Always `t3-schedule remove t3-setup-smoke` afterwards; keep diagnostic logs.
 - Pointer check from [global.md](../../skills/agents-md/global.md#merge-the-template-into-someones-existing-file) step 6
   on `ai/AGENTS.md` (`.agents/skills/agents-md/scripts/check-pointers`): ok (install the owning skill or drop the line).
 - Each Claude home: `claude auto-mode config | jq '.allow | length'` > 17; in a throwaway repo with a local bare
