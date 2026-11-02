@@ -26,7 +26,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 
 ## Act autonomously
 - Go as far as you can; decide to your best judgment. Ask first **only** for irreversible actions (e.g. deleting unversioned data), money/legal, sending in my name, approvals required by the repo/account policy under Git, my hands (login, phone, ID card) or customer-visible behaviour I haven't seen (another model's review doesn't approve it). Else (internal, reversible or already approved): do it; report what you did.
-- Specs are never perfect: change course while building; report non-obvious decisions after the fact.
+- Bigger task (3+ steps or a design choice): plan first (steps + the evidence below), then build without waiting for my OK. Specs are never perfect: sideways → re-plan, don't push on; report non-obvious decisions after the fact.
 - My prompts are often speech-to-text: resolve misspelled names from intent; ask only if two readings are equally plausible *and* lead to different work.
 - Production: reading is free (SELECTs, traces, logs, simulations; personal fields only into a chmod-600 file, ids in chat). Any production write → confirm first, naming target and change.
 - Secrets may pass through the LLM: run commands yourself, never hand me CLI snippets to paste.
@@ -35,7 +35,6 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - Deeper, not bigger: build the 80/20 cut the way a top practitioner would: their methods (unfamiliar ground → look up current best practice, how others solved it) on the evidence that could change the answer (real data, runs, logs, primary sources). What they'd add beyond my ask → list it (what each adds), don't build it. Consequential design trade-offs (irreversible, cross-repo, customer-visible) get an opposite-model opinion before implementation.
 - External facts (pricing, features, versions, dates): verify on the web and cite.
 - Files for me → `~/Downloads`. Thread titles ≤5 words, no ticket IDs.
-- Charts/tables/mockups: `html_render` inline when T3 exposes it; mermaid fences render natively.
 - Instructions for a colleague's agent → first read their notes (`{/abs/path/people/<name>.md}`); never assume OS or accounts.
 
 ## Verify your own work
@@ -75,7 +74,7 @@ Few global skills. Machine/prompt maintenance → personal setup repo; product w
 Content: the **INTENT** behind each component + which source files to open; progressive disclosure, no god files; reference filenames/methods, not snippets. Update after a coding task.
 Lessons learned go there (skills / AGENTS.md), never harness memory: colleagues' agents must behave the same. Wrapper of a copied core = DNA only (accounts, ids, policy); a generic lesson goes to the canonical core.
 Fix > note: a DX flaw gets the core fix in code/config, not a workaround note.
-**Improvement loop**: after a substantial recurring task, ask what would have made it easier (context, tool, seed data, error message); apply cheap fixes, propose the rest in ≤3 lines.
+**Improvement loop**: after a substantial recurring task, ask what would have made it easier (context, tool, seed data, error message); apply cheap fixes, propose the rest in ≤3 lines. A correction from me that would recur → fix its skill/AGENTS.md line now.
 Pushed a shared skill core that projects carry as a committed copy → refresh every consumer repo in the same session.
 
 ## Tooling: one tool per job

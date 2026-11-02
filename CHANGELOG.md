@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02 — global template: plan first, then act; recurring corrections fix their line now
+
+- `agents-md/global-template.md` Act autonomously: a bigger task (3+ steps or a design choice) gets a plan first (steps + the evidence from Verify), then is built without waiting for approval; going sideways → re-plan instead of pushing on. Why: plan-first from a widely shared community CLAUDE.md, adapted so it doesn't become an approval gate that breaks autonomy.
+- Improvement loop: a user correction that would recur → fix its skill/AGENTS.md line in the same session. Why: the template said where lessons go, but only big recurring tasks triggered writing one; corrections waited for a weekly retro.
+- Removed the Charts/tables line: T3 now injects its own chart/`html_render` guidance, so it duplicated harness instructions.
+
 ## 2026-11-02 — reading shared links: login walls fail honestly, X posts, router web-link branch
 
 - `capture_url` rejects a login wall ("Log in or sign up…" on a short page) instead of saving it as a complete capture, and skips the paid fallback for it (a scraper can't log in either). Why: a `share.google` → X link came back `status ok` with only X's sign-up page, so the router's read silently missed the post.
