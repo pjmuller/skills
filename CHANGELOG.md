@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-02 — global template: a repo file is reported by its checkout path, never a Downloads copy
+
+- `agents-md/global-template.md` Local files: a repo file → its stable-checkout path, else its GitHub URL; never a duplicate in `~/Downloads`. Why: a brief asked for "a user-facing copy in Downloads" of a committed guide; a later thread then linked the user only to the copy, which goes stale and hides the shared one.
+
 ## 2026-11-02 — global template: store files by who reuses them; call know-how to its owning skill
 
 - `agents-md/global-template.md`: "Files for me → `~/Downloads`" becomes "Store by who reuses it, and when": reusable know-how → its owning repo, linked from the skill/index a future agent opens, as safe conclusions (no personal data, secrets, raw transcripts); `~/Downloads` = short-lived personal deliverables, never the only copy of anything needed longer. Why: the universal Downloads line stranded a reusable vendor how-to (a PMS SQL check from a screen share) where no teammate or agent would find it.
