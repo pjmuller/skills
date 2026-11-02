@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-02 — second opinions and 🏓 waits: no interim findings in chat
+
+- `agents-md/global-template.md` (second planning opinion) and `t3-manage-thread/workers.md` (`delegate_task`): the lead's own draft goes to a file, and a turn that ends waiting on a child ends on one 🏓 status line, no findings. Why: the user reads only the last message; a full interim conclusion before the reconciled one doubled the scroll for nothing (the draft only needs to exist before the other view lands, which a file proves).
+
 ## 2026-11-01 — release probe settles via the launcher, not the model
 
 - `scripts/release` (and the relay.md probe example) launch with `--settle-after-run` instead of `--settle-when-done`. Why: since the 2026-10-31 rule "a reply that is the deliverable keeps the thread open", a `Reply "ok"` probe correctly refuses to self-settle, so every release left a Haiku thread in the user's inbox. Warm-ups switched on 2026-10-28; the release probe was missed. The footer stays as is: real scheduled answers must not be hidden.

@@ -15,7 +15,8 @@ read instance model effort <<< "$(t3-pick-instance sol)"     # e.g. codex_work g
 delegate_task {task: "Read and execute /abs/brief.md", title: "<3-6 words>", mode: "async",
   role: "review", clientRequestId: "<stable per round>",
   target: {providerInstanceId: instance, model: model, options: {reasoningEffort|effort: effort}}}
-→ end your turn. The completion wakes you (batched); read it with task_status.
+→ end your turn on one status line (`🏓 <model> <task> running`), no interim findings: the user
+  reads only the merged result. The completion wakes you (batched); read it with task_status.
 ```
 
 - **No sidebar row** (`relationshipToParent: "subagent"`); questions/approvals show as **Input / Approval on the parent row**. Answer questions via `t3_pending_request_*` (`threadId` = `childThreadId`); only the user approves (leave `runtimeMode` unset).
