@@ -50,7 +50,8 @@ Transcripts, media and debriefs stay private (the watcher's state dir, the vendo
 wrapper opts in for a named meeting class, or the user asks for one specific call. The opt-in names
 what is committed: a **digest** (date, source link, decisions, actions + owners, open questions; no
 small talk or recap) by default, the **full transcript** only as a separate opt-in, linked from the
-digest. Before each write, verify:
+digest. Know-how learned in a call (a vendor's how-to, an API fact) is not meeting content: it goes to
+the owning repo's skill as a sanitized procedure citing the call id, with no opt-in. Before each write, verify:
 
 - **Participants** from vendor speaker identities or attendance, **purpose** from the content.
   Titles, weekdays and time slots are hints, never eligibility; an unidentified speaker blocks it.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-02 — global template: store files by who reuses them; call know-how to its owning skill
+
+- `agents-md/global-template.md`: "Files for me → `~/Downloads`" becomes "Store by who reuses it, and when": reusable know-how → its owning repo, linked from the skill/index a future agent opens, as safe conclusions (no personal data, secrets, raw transcripts); `~/Downloads` = short-lived personal deliverables, never the only copy of anything needed longer. Why: the universal Downloads line stranded a reusable vendor how-to (a PMS SQL check from a screen share) where no teammate or agent would find it.
+- `recording-followups` Repository retention: know-how learned in a call (vendor how-to, API fact) is not meeting content; it goes to the owning skill as a sanitized procedure citing the call id, no meeting opt-in needed. Transcript/digest gates unchanged.
+
 ## 2026-11-02 — recording-watcher: one thread per meeting recorded by two sources
 
 - `poll` skips a qualifying call as `skipped:duplicate` (+ `duplicate_of`, overlap evidence, transcript kept) when ≥ 20% / ≥ 40 of its distinct 4-word sequences appear in another source's recording starting ≤ 1 h apart. Survivors are picked largest first (pinned-workspace source +10%), only survivors absorb others, the survivor's brief links the duplicate's transcript, and the duplicate waits until the survivor is spawned. A late arrival > 10% longer than the spawned recording still gets its own thread. Why: a Fathom bot and Leexi captured one call and spawned two threads in one poll. Replay of 3 weeks (84 calls): 1 match, the real duplicate (35% vs ≤ 8% for any other pair); metadata starts differ by minutes (Leexi stamps the scheduled start) and concurrent distinct meetings are common, so time alone never matches.
