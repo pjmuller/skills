@@ -10,6 +10,12 @@ Nothing agreed gets lost (the debrief records it), but only what needs action ge
 reminder, a thread, a ticket, or nothing ([destinations](spoken-cues.md#destination-lightest-that-fulfils-the-intent)).
 Don't turn every sentence into work.
 
+**Share the action across company boundaries, not the whole meeting.** When a follow-up goes to
+another company's people, tickets, notifications or agent threads, share only the relevant intent
+and context. You may say it came from a meeting at another company; omit the recording link and
+transcript unless the user explicitly asks to share them. Keep full source references in the
+originating company's private debrief. This also applies to source lines in handoff prompts.
+
 Speech layer comes from [video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md) or
 [leexi](../leexi/SKILL.md); this skill owns what happens after the transcript is on disk. Project
 skills (e.g. a team's Fathom wrapper) own where the note lives and its frontmatter, and link here
@@ -54,7 +60,8 @@ digest. Before each write, verify:
 - **Audience**: everyone with repository access attended or is meant to read it; else ask.
 
 Any doubt → ask before writing: Git history outlives a deletion. No backfill unless asked; never
-paste meeting content into agent entrypoints or prompts (link the file).
+paste whole transcripts into agent entrypoints or prompts. Link the file within the same company;
+across companies, put only the needed facts inline under the audience rule above.
 
 ## Prompt shape (each one stands alone)
 
@@ -74,12 +81,14 @@ Order ([examples](prompt-shape.md)):
    - **verified** identifiers only (run/ticket ids, URLs from the API or source frames: a Gemini
      pass invents small screen text);
    - the **verified transcript** (`*.transcript.md`, provenance header) when one exists, stating
-     the worker works from it and never re-runs the video pass; raw ASR + media path only when none;
+     the worker works from it and never re-runs the video pass; raw ASR + media path only when none.
+     Same-company briefs only: across companies, put the needed facts inline under the audience rule;
    - target behaviour only where next steps are not enough; how to verify (tests, live run, browser);
    - authorized implementation ships (commit, push, promote when the repo deploys); research
      delivers findings and open decisions, no implementation;
    - house rules the thread needs (opposite-model review over 100 loc, no per-project code paths);
-   - source (call link, mm:ss, transcript path, ASR caveat) on one line.
+   - source (call link, mm:ss, transcript path, ASR caveat) on one line, subject to the
+     cross-company audience rule above.
 
 ## Colleague handoffs
 

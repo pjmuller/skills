@@ -61,7 +61,8 @@ missing route is no reason to file a ticket instead: list it in the debrief.
   operator → spawn here (a standalone thread in the owning repo), schedule the reminder, or create the
   ticket. Another teammate's spawn or ticket command → a ClickUp handoff in their queue: their agent
   runs it on their machine. Ordinary conversation or an acknowledged commitment is not such a command.
-- The brief/ticket carries the exact quote, speaker, call link and mm:ss, plus the scope as said;
+- The brief/ticket carries the exact quote, speaker, call link and mm:ss, plus the scope as said,
+  subject to the [cross-company audience rule](SKILL.md): share only relevant context across companies;
   normal permission limits still apply (no deploys, external messages or spending beyond repo rules).
 - One action per command per call; check the queue for an existing ticket first
   ([handoff rules](SKILL.md#colleague-handoffs)).
