@@ -765,9 +765,25 @@ def test_pick_answer_gets_fill_js_with_the_selector():
 
 
 def test_fill_js_fetches_into_the_field_and_returns_only_the_length():
-    script = bw.fill_js("http://127.0.0.1:5/tok", "#pass'word")
-    assert '"http://127.0.0.1:5/tok"' in script and '"#pass\'word"' in script
+    script = bw.fill_js("http://127.0.0.1:5/tok", "#pass'word", 1_700_000_000_000, "login.example.com")
+    assert '"http://127.0.0.1:5/tok"' in script and '"#pass\'word"' in script and '"https://login.example.com"' in script
     assert "length: field.value.length" in script and "return value" not in script and "{ok: true, length" in script
+
+
+def test_fill_js_names_each_failure_and_checks_origin_and_expiry_before_the_one_fetch():
+    """Behaviour verified in headless Chromium 156 (2026-11-02); here only the contract agents read."""
+    script = bw.fill_js("http://127.0.0.1:5/tok", "input", 1_700_000_000_000, None)
+    for error in ("wrong_origin", "no_field", "expired", "csp", "blocked", "field_changed"):
+        assert f"fail('{error}'" in script
+    assert script.index("Date.now() > 1700000000000") < script.index("await fetch") and "const url = \"" in script
+    assert "origin = null" in script  # Unknown host: the server's Origin check still applies.
+
+
+def test_fill_deadline_is_conservative_and_uses_the_answer_host(monkeypatch):
+    monkeypatch.setattr(bw.time, "time", lambda: 1000.0)
+    script = bw.with_fill_js({"copied": "password", "fill_url": "http://127.0.0.1:5/t", "fill_expires_in": 60,
+                              "host": "a.example.com"}, None, "example.com")["fill_js"]
+    assert "Date.now() > 1057000" in script and '"https://a.example.com"' in script
 
 
 @macos_only

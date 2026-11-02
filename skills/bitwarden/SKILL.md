@@ -30,28 +30,35 @@ up to two TOTP deliveries within five minutes, vaults locked, only expiring code
 
 Once enrolled (`bw-once touchid enroll` opens a native window; the human types each master password once):
 
-1. Own tab on the login page (T3: `incognito` unless your login rules name a profile), host verified;
-   `preview_act type` the username (not secret; works in a background tab).
-2. Prefer `--to page`; use clipboard when this site's CSP is already known to block loopback. An actual failed
-   `fill_js` fetch means switch delivery as below. A failed port-9 fetch cannot prove page delivery works.
-   `preview_status` `visible: false` counts viewer connections, not keyboard focus;
-   it is not a reason to ask the human to open a panel. Try the focused paste below first.
+1. **Page ready before any copy**: own tab on the login page (T3: `incognito` unless your login rules name a
+   profile). `--host` = the tab's `location.host` (page fill is pinned to that exact origin). Dismiss cookie/consent
+   banners first (a click can reload the page and wipe filled fields), reach the step that shows the field (two-step
+   logins: username first), `preview_act type` the username (not secret; works in a background tab).
+2. Prefer `--to page`; clipboard once this site returned `csp` or `blocked`. Don't probe loopback yourself: `fill_js`
+   names its failure.
 3. `bw-once touchid status`: `update_touch: true` = bw-once was updated, one extra touch in a window with their
    phrase first; `keychain_prompt: true` = one-time macOS Mac-password prompt (any button). Say so with step 4.
-4. Tell the human what the green box will say, then run in the background (waits up to 5 min):
+4. Tell the human what the green box will say, then run (waits up to 5 min) so you act the moment it returns:
+   foreground with a ≥6 min tool timeout where allowed (Claude Code `timeout: 600000`), else in the background:
    `bw-once copy --host H --username U --field password --with-totp --to page --thread "<title>" --why "<one line>"`.
    The box and Touch ID sheet explicitly include TOTP if configured. Omit `--with-totp` for password-only consent.
    Bundle needs `--username` or `--id` and exactly one match; narrow `--vault` if needed.
    Know the account → always `--username`, no `list` first (costs a touch, shows every login on the host).
    Title = your thread's `title` from `t3_thread_list` (first row, `currentThreadId`).
-5. Account unknown: `copy` without `--username` or `--with-totp`. Answer has `pick`? Vaults are already locked: choose from
-   `pick.candidates` and run `bw-once pick --token <pick.token> --id <id>` within 60 s (no second touch).
+5. Account unknown: `copy` without `--username` or `--with-totp`; type the answer's `username`, then fill at once.
+   Answer has `pick`? Vaults are already locked: choose from `pick.candidates` and run
+   `bw-once pick --token <pick.token> --id <id>` within 60 s (no second touch).
    `list --host H [--username U]` only when you need metadata without a copy.
-6. **Page**: `preview_evaluate` the answer's `fill_js` as is within 60 s → `{ok, length}`; submit. `--selector`
-   overrides the field. `ok: false` → same `copy` with `--to clipboard` **without `--with-totp`** (re-copy, no touch).
+6. **Page**: `preview_evaluate` the answer's `fill_js` verbatim, right away (60 s from release) → `{ok, length}`;
+   submit. It is a single-use loopback URL, not the secret: read the answer as printed, no redaction or parsing.
+   `--selector` overrides the field. `ok: false` carries `error` and `next`: `expired` → re-copy `--to page`;
+   `csp`, `blocked`, `field_changed` → re-copy `--to clipboard`; `no_field` → fix the page, rerun the same
+   `fill_js`; `wrong_origin` → copy for the tab's host. Re-copy = same host, `--username`/`--id`, `--thread`,
+   **without `--with-totp`**: no touch for 15 min. Page reloaded after a fill → fields are empty: re-copy.
    **Clipboard**: `preview_act click` the field **again** (the window took focus), `preview_act press Meta+V`, check
    `value.length` only, `bw-once clear` even on failure, submit only after successful verification; one call at a time.
-   An actual failed paste → ask the human once to focus this thread's browser panel, re-copy and retry.
+   `preview_status` `visible: false` counts viewers, not focus: paste first. An actual failed paste → ask the human
+   once to focus this thread's browser panel, re-copy and retry.
 7. Bundle result `totp: ready` → when the code form appears, same `copy --field totp` with the same host,
    `--thread` and `--username`/`--id`, **without `--with-totp`**. Returns `touch:false`, `valid_for_seconds`; paste
    promptly. Two deliveries maximum (including page-to-clipboard fallback), five minutes, no renewed expiry.

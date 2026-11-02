@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-02 — Bitwarden page fill: named failures, page ready first
+
+- `fill_js` returns `error` + `next` per cause: `expired` (re-copy `--to page`), `csp` / `blocked` / `field_changed` (re-copy `--to clipboard`), `no_field` (fix the page, rerun), `wrong_origin` (copy for the tab's host). Origin and deadline are checked in-page before the single fetch, CSP via `securitypolicyviolation`; verified in headless Chromium 156. Why: a real login got "fetch blocked (page CSP?) or expired" and the agent could not pick between re-copy and clipboard; the broker's refusals carry no CORS header, so every server-side refusal looked like a block.
+- Touch ID recipe: page ready before any copy (`--host` = the tab's host, consent banners dismissed first since they can reload and wipe fields, username typed), run `copy` in the foreground with a ≥6 min timeout where possible, `fill_js` is a single-use URL to pass verbatim (no redaction/parsing). The 60 s fill window stays (reasoning in `touchid.md`); no broker rebuild.
+
 ## 2026-11-02 — second opinions and 🏓 waits: no interim findings in chat
 
 - `agents-md/global-template.md` (second planning opinion) and `t3-manage-thread/workers.md` (`delegate_task`): the lead's own draft goes to a file, and a turn that ends waiting on a child ends on one 🏓 status line, no findings. Why: the user reads only the last message; a full interim conclusion before the reconciled one doubled the scroll for nothing (the draft only needs to exist before the other view lands, which a file proves).

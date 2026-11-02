@@ -45,6 +45,12 @@ bw-once touchid status | bw-once touchid forget
   clear, and ask for panel focus only if that fails. Site CSP may block page fetch; never weaken it.
   Exposure: any same-user process that learns
   the URL and fakes the header could fetch it, like the clipboard, for one fetch.
+  **Failures are named** (`fill_js` in `bw_once.py`): the server's refusals carry no CORS header, so expired, used
+  and wrong-origin fetches all look like a block to the page. Hence origin and deadline are checked in-page before
+  the one fetch, CSP via `securitypolicyviolation`; the rest (Chromium ≥142's local-network permission, an
+  already-run `fill_js`) is `blocked`. Why: on 2026-11-02 one "blocked or expired" error cost two re-copies.
+  **60 s stays**: it starts at release (not at the touch), a late agent now gets `expired` and a no-touch re-copy,
+  and a longer window would keep the URL live longer for a broker rebuild (`update_touch` for everyone).
 - **Updates**: macOS binds a legacy item to the cdhash of the ad-hoc build that created it, so rebuilds used to
   meet Mac-password dialogs whose default "Allow" brought them back every request. Now each build keeps its own
   item: the installer keeps the replaced build as `bw-broker.prev` (identical builds aren't replaced; builds are

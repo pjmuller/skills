@@ -756,21 +756,49 @@ FILL_SELECTORS = {"password": "input[type=password]", "username": "input[autocom
                   "totp": "input[autocomplete=one-time-code]"}
 
 
-def fill_js(url, selector):
-    """For `preview_evaluate` in the login tab: fetch the one-time value straight into the field; returns its length only."""
-    return ("(async () => { const field = document.querySelector(%s); if (!field) return {ok: false, error: 'no field'};"
-            " const answer = await fetch(%s, {cache: 'no-store', credentials: 'omit'}).catch(() => null);"
-            " if (!answer || !answer.ok) return {ok: false, error: 'fetch blocked (page CSP?) or expired'};"
+def fill_js(url, selector, deadline_ms, host=None):
+    """For `preview_evaluate` in the login tab: fetch the one-time value straight into the field; returns its length only.
+
+    Each failure is named with its next step, because the fixes differ (2026-11-02: one "blocked or expired" error cost
+    two re-copies). Expiry and origin are checked before the fetch: the server's refusals carry no CORS header, so to the
+    page an expired, used or wrong-origin fetch looks like a block. A CSP block fires `securitypolicyviolation`.
+    """
+    recopy = "re-copy (same --host, --username/--id, --thread; no touch within 15 min)"
+    return ("(async () => { const url = %s, origin = %s, field = document.querySelector(%s),"
+            " fail = (error, next) => ({ok: false, error, next});"
+            " if (origin && location.origin !== origin) return fail('wrong_origin', 'tab is on ' + location.origin"
+            " + ', the fill is pinned to ' + origin + ': copy with --host ' + location.host + ' if that is the real login host');"
+            " if (!field) return fail('no_field', 'page not ready (consent banner, two-step login) or wrong --selector;"
+            " this fill_js stays valid until it expires: rerun it once the field shows');"
+            " if (Date.now() > %d) return fail('expired', '%s --to page, then run its fill_js at once');"
+            " let csp = false; const seen = event => { if (event.disposition === 'enforce'"
+            " && event.blockedURI.startsWith(new URL(url).origin)) csp = true; };"
+            " window.addEventListener('securitypolicyviolation', seen);"
+            " const answer = await fetch(url, {cache: 'no-store', credentials: 'omit'}).catch(() => null);"
+            " if (!answer || !answer.ok) await new Promise(done => setTimeout(done, 200));"
+            " window.removeEventListener('securitypolicyviolation', seen);"
+            " if (csp) return fail('csp', 'this site blocks loopback fetches: %s --to clipboard');"
+            " if (!answer || !answer.ok) return fail('blocked', 'the browser refused loopback (e.g. a local-network permission)"
+            " or this fill_js already ran: %s --to clipboard');"
             " const value = await answer.text(); field.focus();"
             " Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, value);"
             " field.dispatchEvent(new Event('input', {bubbles: true})); field.dispatchEvent(new Event('change', {bubbles: true}));"
-            " return {ok: true, length: field.value.length}; })()") % (json.dumps(selector), json.dumps(url))
+            " if (field.value.length !== value.length) return fail('field_changed', 'a page script kept ' + field.value.length"
+            " + ' of ' + value.length + ' characters: do not submit; %s --to clipboard');"
+            " return {ok: true, length: field.value.length}; })()") % (
+        json.dumps(url), json.dumps(host and f"https://{host}"), json.dumps(selector), deadline_ms, recopy, recopy, recopy, recopy)
 
 
-def with_fill_js(result, selector=None):
-    """A page delivery's one-time URL → the `preview_evaluate` snippet (copy and pick answers alike)."""
+def with_fill_js(result, selector=None, host=None):
+    """A page delivery's one-time URL → the `preview_evaluate` snippet (copy and pick answers alike).
+
+    `fill_js` is not the secret: a one-fetch loopback URL pinned to the host's origin, dead within `fill_expires_in`.
+    Agents read the answer as printed and pass `fill_js` verbatim; no redaction or reparsing.
+    """
     if result.get("fill_url"):
-        result["fill_js"] = fill_js(result.pop("fill_url"), selector or FILL_SELECTORS[result.get("copied", "password")])
+        deadline_ms = int((time.time() + result.get("fill_expires_in", 60) - 3) * 1000)  # The server's clock started first.
+        result["fill_js"] = fill_js(result.pop("fill_url"), selector or FILL_SELECTORS[result.get("copied", "password")],
+                                    deadline_ms, result.get("host") or host)
     return result
 
 
@@ -1234,7 +1262,7 @@ def main():
                 raise Failure("--with-totp needs the Touch ID broker; no Terminal/session fallback")
             if not result and to == "page":
                 raise Failure("--to page needs the Touch ID broker (bw-once touchid enroll)")
-            result = with_fill_js(result or launch(args), selector)
+            result = with_fill_js(result or launch(args), selector, args["host"])
         elif args["op"] == "send-text":
             claim = {"thread": args.pop("thread"), "why": args.pop("why")}
             vaults = broker_vaults(args["vault"])
