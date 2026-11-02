@@ -134,22 +134,22 @@ def mixed_copy(video: Path, tmp: Path) -> Path:
 
 
 def blank_webcam_frames(clip: Path) -> int:
-    """Black out every 1 fps frame of a desktop clip that looks like a webcam (detect-screenshare's camera test):
-    a gallery flashed between the detector's samples never reaches the upload. Returns frames blanked."""
+    """Black out every 1 fps frame of a desktop clip that the desktop rule does not call a screen (webcams, dimmed
+    webcams, uncertain): a gallery flashed between the detector's samples never reaches the upload. Returns frames blanked."""
     import numpy as np
 
     w, h = DETECT.W, DETECT.H
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-vf", f"scale={w}:{h}", "-f", "rawvideo",
                           "-pix_fmt", "rgb24", "pipe:"], check=True, capture_output=True).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, h, w, 3)
-    bad = [k for k, f in enumerate(frames) if DETECT.camera_share(f) >= DETECT.CAMERA_MAX]
+    bad = [k for k, f in enumerate(frames) if not DETECT.screen_frame(f)]
     if bad:
         enable = "+".join(f"between(n,{k},{k})" for k in bad)
         fixed = clip.with_name(clip.stem + ".checked.mp4")
         ffmpeg("-i", str(clip), "-vf", f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{enable}'", "-c:v", "libx264",
                "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(fixed))
         fixed.replace(clip)
-        print(f"{clip.name}: blanked {len(bad)} webcam frame(s)", file=sys.stderr)
+        print(f"{clip.name}: blanked {len(bad)} non-screen frame(s)", file=sys.stderr)
     return len(bad)
 
 

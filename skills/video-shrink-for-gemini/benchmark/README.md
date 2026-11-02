@@ -65,4 +65,6 @@ set (14 cuts): P 0.97 / R 0.83, all of the loss in the isolated near-black termi
   R 0.91, no webcam second sent; Meet sets unchanged (it never runs there); pure screen recordings 96–99% of
   seconds get frames. Unvalidated: a remote share inside a desktop recording with big webcam tiles beside it
   (whole-frame camera texture ≥ 25% → audio only, a safe miss); fixture `meet-share.jpg` scores 0.15 (passes).
-  A photo- or video-heavy screen reads as camera: audio only.
+  A photo- or video-heavy screen reads as camera: audio only. Heavy compression flattens webcam texture
+  (a gallery re-saved as a low-quality JPEG: 0.46 → 0.24, under the 0.25 bar): run detection on the original,
+  never on an `extreme` shrink; CleanShot faces stay 0.42 even in the crf-24 `ui` shrink.

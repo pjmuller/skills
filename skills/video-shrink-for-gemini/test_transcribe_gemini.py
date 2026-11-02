@@ -68,12 +68,17 @@ def test_full_video_gets_one_mixed_track(tmp_path):
 
 
 @needs_ffmpeg
-def test_desktop_clips_never_carry_a_webcam_flash(tmp_path):
-    """A gallery shown for 0.2 s between two detector samples is blacked out before upload (Sol S1)."""
+@pytest.mark.parametrize("dim", [1.0, 0.2])
+def test_desktop_clips_never_carry_a_webcam_flash(tmp_path, dim):
+    """A gallery (also dimmed, as under a share picker) inside a range, e.g. between two detector samples, is blacked
+    out before upload (Sol S1)."""
     fixtures = HERE / "fixtures" / "screenshare"
+    gallery = tmp_path / "gallery.jpg"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(fixtures / "meet-gallery.jpg"), "-vf",
+                    f"colorchannelmixer=rr={dim}:gg={dim}:bb={dim}", "-pix_fmt", "yuvj420p", "-q:v", "1", str(gallery)], check=True)
     listing = tmp_path / "l.txt"
-    listing.write_text(f"file '{fixtures / 'meet-share.jpg'}'\nduration 5.4\nfile '{fixtures / 'meet-gallery.jpg'}'\n"
-                       f"duration 0.6\nfile '{fixtures / 'meet-share.jpg'}'\nduration 4\nfile '{fixtures / 'meet-share.jpg'}'\n")
+    listing.write_text(f"file '{fixtures / 'meet-share.jpg'}'\nduration 5.4\nfile '{gallery}'\n"
+                       f"duration 1.2\nfile '{fixtures / 'meet-share.jpg'}'\nduration 4\nfile '{fixtures / 'meet-share.jpg'}'\n")
     video = tmp_path / "flash.mp4"
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vf",
                     "fps=10,format=yuv420p", "-c:v", "libx264", str(video)], check=True)
@@ -82,5 +87,6 @@ def test_desktop_clips_never_carry_a_webcam_flash(tmp_path):
                           "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:"], check=True, capture_output=True).stdout
     import numpy as np
     frames = np.frombuffer(raw, np.uint8).reshape(-1, 180, 320, 3)
-    assert len(frames) == 8 and max(tg.DETECT.camera_share(f) for f in frames) < tg.DETECT.CAMERA_MAX
-    assert sum(int(f.max()) < 20 for f in frames) == 1  # exactly the flash frame went black
+    black = [int(f.max()) < 20 for f in frames]
+    assert len(frames) == 8 and 1 <= sum(black) <= 2  # the 1.2 s flash, nothing else, went black
+    assert all(tg.DETECT.screen_frame(f) for f, b in zip(frames, black) if not b)

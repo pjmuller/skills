@@ -57,6 +57,7 @@ MIN_RUN = 10               # seconds of share frames that open a share
 GAP, LAYOUT_GAP = 20, 120  # merge gaps up to GAP s always, up to LAYOUT_GAP s while the share layout stays
 PAD = 2                    # seconds added on both sides (transitions, sampling)
 CAMERA_MAX, CAMERA_SURE = 0.25, 0.35  # desktop rule: camera-texture share below = screen, above SURE = webcam
+PAGE_FLAT, PAGE_TEXT = 0.6, 0.005     # desktop rule: flat pixels (UI) and strong edges (text) a screen needs
 DESKTOP_MIN_RUN = 5        # seconds; shorter app switches (a glance at the inbox) stay audio only
 
 
@@ -133,7 +134,7 @@ def features(stream) -> dict:
             still = float((tile == prev[inner]).mean()) if prev is not None else 0.0
         prev, prev_raw = luma, raw
         r, g, b = (rgb[inner][..., c] for c in range(3))
-        step = np.abs(np.diff(luma, axis=1))  # whole frame, for the desktop rule (camera_share: same test)
+        step = np.abs(np.diff(luma, axis=1))  # whole frame, for the desktop rule (screen_frame: same test)
         values = (margin, x, float(cols[x]), float(1 - cols[int(W * 0.03):max(int(W * 0.03) + 1, x - 1)].mean()),
                   float(1 - cols[x + 2:int(W * 0.98)].mean()), film, stack, (x0, y0, x, y1),
                   float((np.diff(tile, axis=1) == 0).mean()) if tile.shape[1] > 1 else 0.0,
@@ -233,19 +234,20 @@ def share_box(f: dict, flags: list[bool], start: float, end: float, step: float)
     return [round(x, 3), round(y, 3), round(right - x, 3), round(bottom - y, 3)]
 
 
-def camera_share(rgb) -> float:
-    """Share of pixels with camera texture (luma steps 1-12 to the right neighbour) in a W x H rgb frame."""
+def screen_frame(rgb) -> bool:
+    """The desktop rule on one W x H rgb frame (transcribe-gemini checks every uploaded frame with it)."""
     import numpy as np
 
     rgb = rgb.astype(np.int32)
     luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
     step = np.abs(np.diff(luma, axis=1))
-    return float(((step >= 1) & (step <= 12)).mean())
+    return bool(((step >= 1) & (step <= 12)).mean() < CAMERA_MAX and (step == 0).mean() >= PAGE_FLAT
+                and (step > 20).mean() >= PAGE_TEXT)
 
 
 def desktop(f: dict) -> tuple[list[bool], list[bool]]:
     """Per frame, unsmoothed: (screen, uncertain). Webcams and dimmed webcams fail on camera texture alone."""
-    screen = (f["camera"] < CAMERA_MAX) & (f["page_flat"] >= 0.6) & (f["page_text"] >= 0.005)
+    screen = (f["camera"] < CAMERA_MAX) & (f["page_flat"] >= PAGE_FLAT) & (f["page_text"] >= PAGE_TEXT)
     uncertain = ~screen & (f["camera"] < CAMERA_SURE)
     return screen.tolist(), uncertain.tolist()
 
