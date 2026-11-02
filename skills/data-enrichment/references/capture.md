@@ -4,7 +4,8 @@ One public URL → Markdown via hosted providers, no browser: **free Jina first,
 `olostep.web.scrape` call through treg** (needs `TREG_TOKEN`). Fallback triggers: empty/thin,
 challenge or cookie-consent shells, origin HTTP errors, provider warnings or truncation.
 
-- **Spend guards**: no retries, no second paid provider. Jina 429 stops without spending. Fallback
+- **Spend guards**: no retries, no second paid provider. Jina 429 or a login wall stops without
+  spending (a scraper can't log in: use the site's public API or a signed-in browser). Fallback
   refuses when the catalog price is unknown, not per-call, or over $0.01. A UUID idempotency key is
   saved in `capture.json` before paid work: recover a lost paid answer with
   `treg.py call olostep.web.scrape --idempotency-key <key>` and the same request. Charges on rejected
@@ -20,3 +21,15 @@ challenge or cookie-consent shells, origin HTTP errors, provider warnings or tru
   fetch the URL. Batch callers own robots, site scope, discovery and backoff (`Retry-After` is saved);
   keep anonymous Jina traffic ≤20/min (in-process calls space Jina starts by 3 s).
 - **Exit**: 0 complete or cached, 1 failed, 2 bad URL or refused output directory.
+
+## Sites a capture can't read
+
+- **Redirectors** (`share.google`, `t.co`, `lnkd.in`, URL shorteners): resolve first,
+  `curl -sL -o /dev/null -w '%{url_effective}' URL`, then capture the destination.
+- **X/Twitter post** (scrapers get a login wall, or the post text without its images): free public
+  JSON, no account,
+  `curl -s 'https://cdn.syndication.twimg.com/tweet-result?id=<status id>&token=0'` (`token` must be
+  present, any value; unofficial, checked 2026-11-02). `.text` is the post,
+  `.mediaDetails[].media_url_https` the images: posts sharing a prompt or thread often carry the
+  text only in the image, so download it (`?name=orig`) and read it. Long-form X articles and
+  threads beyond the first post → signed-in browser.

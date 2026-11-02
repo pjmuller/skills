@@ -28,6 +28,7 @@ import treg
 FALLBACK = "olostep.web.scrape"
 SCRAPE_OPTIONS = {"formats": ["markdown", "html"], "max_age": 0, "links_on_page": {}}
 MAX_COST = 0.01
+LOGIN_WALL = "login wall; paid fallback skipped (a scraper cannot log in)"
 _next_jina = 0.0
 
 
@@ -142,6 +143,9 @@ def rejection(page):
     challenge = r"just a moment|verif(?:y|ying) you are human|enable javascript and cookies|checking your browser|access denied|attention required"
     if len(text) < 1500 and re.search(challenge, page["title"] + " " + text[:600], re.I):
         return "challenge shell"
+    login = r"log in or sign up|sign up or log in|(?:log|sign) in to (?:continue|view|see)"
+    if len(text) < 1500 and re.search(login, page["title"] + " " + text[:600], re.I):
+        return LOGIN_WALL
     # A cookie policy is substantive; a consent screen is mostly controls and instructions.
     lines = [line for line in page["markdown"].splitlines() if line.strip()]
     consent = (r"accept all|reject all|manage (?:cookies|preferences)|cookie settings|alle cookies|"
@@ -212,6 +216,9 @@ def capture(url, out):
             page = normalized_page(raw, provider, url)
             attempt["origin_status"] = page["origin_status"]
             reason = rejection(page)
+            if reason == LOGIN_WALL:
+                attempt["error"] = reason
+                break
             if reason:
                 raise ValueError(reason)
             record.update(page, provider=provider, status="ok")

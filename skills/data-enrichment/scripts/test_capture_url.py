@@ -80,6 +80,16 @@ def test_challenge_falls_back_and_fresh_captures_have_fresh_keys(monkeypatch, tm
     assert len([path for path, _ in sent if path.startswith("/call/")]) == 2
 
 
+def test_login_wall_fails_without_spending(monkeypatch, tmp_path):
+    # Shape of a Jina capture of an X post: a login wall plus sidebar, reported as HTTP 200.
+    jina(monkeypatch, "## Log in or sign up for X\n\nSee what’s happening and join the conversation\n\n"
+         "[Log in with username or email](https://x.com/i/flow/login)\n\n## Relevant people\n\n" + BODY)
+    sent = paid(monkeypatch)
+    record = c.capture(URL, tmp_path / "out")
+    assert record["status"] == "failed" and record["attempts"][-1]["error"] == c.LOGIN_WALL
+    assert sent == [] and not (tmp_path / "out/page.md").exists()
+
+
 def test_rate_limit_stops_without_spending(monkeypatch, tmp_path):
     monkeypatch.setenv("TREG_TOKEN", "test-token")
     monkeypatch.setattr(c, "jina_request", lambda url: (429, {"Retry-After": "45"}, b"rate limited"))

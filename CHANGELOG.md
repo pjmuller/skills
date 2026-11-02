@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02 — reading shared links: login walls fail honestly, X posts, router web-link branch
+
+- `capture_url` rejects a login wall ("Log in or sign up…" on a short page) instead of saving it as a complete capture, and skips the paid fallback for it (a scraper can't log in either). Why: a `share.google` → X link came back `status ok` with only X's sign-up page, so the router's read silently missed the post.
+- `capture.md` "Sites a capture can't read": resolve redirectors (`share.google`, `t.co`) with curl first; X posts via the public syndication JSON (`token` param required, any value) plus the attached images, where shared prompts often live (Jina sometimes returns the post text but never its images).
+- `t3-route` intake gets a **Public web link** branch: read before routing, fall back to data-enrichment capture, save what was read and pass paths + working method under Evidence so the execution thread doesn't repeat a failed read; page-claimed attribution stays a claim.
+
 ## 2026-11-02 — video: webcam frames never uploaded; desktop recordings; both audio tracks
 
 - `transcribe-gemini --ranges` cuts each range into its own local clip; before, it uploaded the whole silent video and only told Gemini which offsets to read, so webcam frames reached Google's File API. New `--dry-run DIR` writes exactly the audio + clips it would send. Why: PJ's requirement that faces-only stretches stay audio only (a KA daily recorded with CleanShot).

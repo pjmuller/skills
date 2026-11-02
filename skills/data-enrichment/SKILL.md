@@ -12,7 +12,7 @@ balance when a token is set). Offline tests: `uv run --with pytest pytest skills
 | Need | Command | Read first |
 | --- | --- | --- |
 | Address → coordinates | `uv run scripts/geocode.py 'ADDRESS' [--provider geopunt]` | [geocoding.md](references/geocoding.md): **Mapbox results are never stored** |
-| Public page/PDF → Markdown | `uv run scripts/capture_url.py URL --out DIR` (Python: `capture(url, out)`) | [capture.md](references/capture.md): cache, paid fallback, exit codes |
+| Public page/PDF → Markdown | `uv run scripts/capture_url.py URL --out DIR` (Python: `capture(url, out)`) | [capture.md](references/capture.md): cache, paid fallback, exit codes, X posts and redirectors |
 | Any third-party API job | `uv run scripts/treg.py search\|get\|call\|balance` | this page |
 
 Paid paths need `TREG_TOKEN` in the repo's mise env file (`~/.config/mise-env/<org>/<repo>.env`),

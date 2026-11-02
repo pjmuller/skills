@@ -49,6 +49,20 @@ heuristics; source metadata may establish ownership, never authorization.
   Never `t3-mail-link claim` just to resolve; a launched case thread owns its mail once it
   drafts, or via `claim --for <its id>`.
 
+## Public web link
+
+A bare article, post or doc link: read it before routing, since its content usually decides owner
+and intent. Plain fetch first. Error, login wall, or a 200 that isn't about the link →
+[data-enrichment capture](../data-enrichment/references/capture.md) (free first, capped paid
+fallback; its last section covers redirectors such as `share.google`/`t.co` and X posts, whose
+text often sits only in an image). Still unreadable → name the exact blocker and route on the
+user's words; never guess the page.
+
+The worker must not repeat a failed read: save what you read (capture dir, downloaded images)
+under a durable path outside T3's attachment folder and put under **Evidence** the resolved URL,
+the method that worked and those paths; image text is agent transcription. Author or attribution
+the page claims is the page's claim, not a verified fact.
+
 ## Screenshot or short text
 
 Preserve the image/path and exact user text. Mark extracted text as agent transcription; never
