@@ -59,6 +59,8 @@ MACHINE_ENV = Path.home() / ".config/transcribe-gemini/env"
 _loader = SourceFileLoader("detect_screenshare", str(Path(__file__).resolve().with_name("detect-screenshare")))
 DETECT = module_from_spec(spec_from_loader("detect_screenshare", _loader))
 _loader.exec_module(DETECT)
+# A 14-min walk answers in 2-3 min; one request hung 25 min with no reply (2026-11-02): fail instead of waiting forever.
+HTTP = types.HttpOptions(timeout=15 * 60 * 1000)  # ms
 UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
 # USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
 # 3.7/3.8 Flash list price doubles on 2027-01-01.
@@ -82,10 +84,11 @@ def client_and_backend() -> tuple[genai.Client, str]:
     key = os.environ.get("VIDEO_GEMINI_API_KEY") or machine_key() or os.environ.get("GEMINI_API_KEY")
     if key:
         # vertexai=False: GOOGLE_GENAI_USE_VERTEXAI=true in the env would otherwise silently route to Vertex.
-        return genai.Client(api_key=key, vertexai=False), "developer-api"
+        return genai.Client(api_key=key, vertexai=False, http_options=HTTP), "developer-api"
     if os.environ.get("GOOGLE_CLOUD_PROJECT"):
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-        return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location), f"vertex/{location}"
+        return (genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=location, http_options=HTTP),
+                f"vertex/{location}")
     sys.exit(f"no Gemini key: write VIDEO_GEMINI_API_KEY=... to {MACHINE_ENV} (chmod 600), or set GEMINI_API_KEY / "
              "GOOGLE_CLOUD_PROJECT + credentials (Vertex)")
 

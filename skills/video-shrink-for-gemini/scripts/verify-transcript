@@ -1,0 +1,246 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow>=10.1"]
+# ///
+"""Lint a feedback-walkthrough transcript and cut 0.5 s frame grids for the claims a verifier must check. No model call.
+
+  verify-transcript TRANSCRIPT.md SOURCE [--offset S] [--window 3] [--step 0.5] [--at T|T1-T2 ...] [--crop W:H:X:Y]
+
+Lint: timestamps going backwards inside the screen or speech section (a typo such as [00:11:06] among 01:xx
+lines), feedback items without a URL or timestamp, timestamps past the end of SOURCE.
+Grids: one labelled contact sheet per window of ±--window s at --step s, cut from the ORIGINAL (not the
+.gemini.mp4), into <stem>.transcript.frames/verify/ with an index.md pairing each grid with the lines it checks.
+Windows: every feedback item, every unnarrated line, every speech line where someone says something vanished,
+was not saved or is strange/wrong/a bug, every screen line about a removal, reset, error, empty state or flicker.
+--at adds windows by hand (seconds or [hh:]mm:ss); --crop zooms all grids on one region (ffmpeg crop syntax).
+The verifying agent reads each grid against its claim and fixes the transcript; Gemini's own pass samples ~1 fps
+and fills gaps with plausible actions. Measured 2026-11-02 on a 14-min walk (onboarding-feedback round 8): the
+grids show a sub-second form reset (both unsaved instructions gone between 685.0 and 685.5 s, no click) that the
+1 fps pass narrated as "clicked Add again".
+"""
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+# "[00:11:24]", "[cut? 00:11:24]" or "`00:11:24`" (Gemini drops the brackets now and then); wall clocks stay bare.
+STAMP = re.compile(r"\[(?:cut\?\s*)?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\.\d+)?\]|`(?:(\d{1,2}):)?(\d{1,2}):(\d{2})`")
+BARE = re.compile(r"\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b")  # "Timestamp: `00:11:26`" in item blocks
+URL = re.compile(r"https?://\S+|\b[\w-]+(?:\.[\w-]+)+/\S*|(?<![\w.])/[a-z][\w\-/]*(?:\?\S*)?")
+# Gemini writes items as "### 3. Title", "3. `00:03:25` — url — …" or "- `[00:03:25]` (16:38) · url · title".
+ITEM = re.compile(r"^(?:#{2,4}\s*)?\**\s*(\d+)[.)]\s*(.*)|^[-*]\s+([`*]*\[?\d{1,2}:\d{2}.*)")
+JITTER = 15  # seconds a line may step back: Gemini interleaves speech and sub-steps; a typo jumps minutes
+# Speech (SPEECH_CUE) and screen lines (SCREEN_CUE) that usually describe a state change the 1 fps pass may have
+# missed (English + Dutch).
+SPEECH_CUE = re.compile(
+    r"vanish|disappear|\bgone\b|\blost\b|not (?:been )?(?:saved|persisted|stored)|nothing (?:was |is )?(?:saved|persisted)|"
+    r"n[o']t persist|didn'?t (?:save|work|stick)|doesn'?t (?:save|work)|cannot (?:save|persist)|strange|weird|\bodd\b|"
+    r"\bbug\b|broken|wrong|error|\bempty\b|missing|flicker|blink|\breset\b|reload|verdwenen|\bweg\b|raar|vreemd|"
+    r"\bfout\b|kapot|niet (?:opgeslagen|bewaard)|\bleeg\b", re.I)
+SCREEN_CUE = re.compile(r"again|empty|disappear|vanish|\bgone\b|reset|reload|refresh|remov|delet|clear|flicker|brief|"
+                        r"error|validation|untick|uncheck|toggled|not visible|not seen", re.I)
+
+
+def seconds(m: re.Match) -> int:
+    h, mi, s = m.groups()[:3] if m.group(2) else m.groups()[-3:]
+    return int(h or 0) * 3600 + int(mi) * 60 + int(s)
+
+
+def parse_time(text: str) -> float:
+    parts = [float(p) for p in text.split(":")]
+    return sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
+
+
+def hms(t: float) -> str:
+    return f"{int(t) // 3600:02d}:{int(t) % 3600 // 60:02d}:{int(t) % 60:02d}"
+
+
+def clock(t: float) -> str:
+    return f"{int(t) // 60:02d}:{t % 60:04.1f}"
+
+
+def sections(text: str) -> list[tuple[str, int, list[str]]]:
+    """(heading, first line number, lines) per `#`/`##` heading; `###` headings (items, groups) stay inside."""
+    out, name, start, body = [], "", 1, []
+    for n, line in enumerate(text.splitlines(), 1):
+        if re.match(r"^#{1,2} ", line):
+            out.append((name, start, body))
+            name, start, body = line.lstrip("# ").strip().lower(), n, []
+        else:
+            body.append(line)
+    out.append((name, start, body))
+    return out
+
+
+def lint_and_windows(text: str, duration: float, offset: float, window: float) -> tuple[list[str], list[tuple[float, float, str]]]:
+    issues, wins = [], []
+
+    def add(t: float, why: str) -> None:
+        if offset + t > duration:
+            issues.append(f"{why}: [{clock(t)}] is past the end of the recording ({duration:.0f} s)")
+            return
+        wins.append((max(0.0, t - window), min(duration - offset, t + window), why))
+
+    for name, start, body in sections(text):
+        # Gemini names and splits the timeline freely ("Screen", "Speech", "Screen and speech", "Walkthrough").
+        if not any(k in name for k in ("feedback", "unnarrated", "key frame", "verification")):
+            seen: list[tuple[int, int]] = []  # (seconds, line) of every stamped line so far
+            for i, line in enumerate(body):
+                m, n = STAMP.search(line), start + i + 1
+                t = seconds(m) if m else None
+                if t is None or offset + t > duration:  # no stamp, or a clock on screen ("`16:33:49`")
+                    # A step's detail lines ("**Screen:** Trait removed") carry the step's time.
+                    if seen and (SPEECH_CUE.search(line) or SCREEN_CUE.search(line)):
+                        add(seen[-1][0], f"line {n}: {line.strip()[:160]}")
+                    continue
+                if seen and t < seen[-1][0] - JITTER:
+                    (p, pn), before = seen[-1], seen[-2][0] if len(seen) > 1 else 0
+                    if before <= t + JITTER:  # the previous line jumped ahead and this one is back on track
+                        issues.append(f"line {pn}: [{hms(p)}] jumps ahead between [{hms(before)}] and [{hms(t)}]: "
+                                      "timestamp typo?")
+                        seen[-1] = (before, pn)
+                    else:
+                        issues.append(f"line {n}: [{hms(t)}] comes after [{hms(p)}] (line {pn}): wrong order")
+                seen.append((t, n))
+                if SPEECH_CUE.search(line) or SCREEN_CUE.search(line):
+                    add(t, f"line {n}: {line.strip()[:160]}")
+        unnarrated = "unnarrated" in name
+        if "feedback" not in name and not unnarrated:
+            continue
+        items: list[list[str]] = []
+        for i, line in enumerate(body):
+            if line.lstrip().startswith("#") and "unnarrated" in line.lower():
+                unnarrated = True
+            elif unnarrated:
+                if m := STAMP.search(line):
+                    add(seconds(m), f"unnarrated line {start + i + 1}: {line.strip()[:160]}")
+            elif not line.startswith((" ", "\t")) and ITEM.match(line):
+                items.append([line])
+            elif items:
+                items[-1].append(line)
+        for block in items:
+            head = ITEM.match(block[0])
+            joined = "\n".join(block)
+            title = f"item {head[1]}: {head[2].strip('* ')[:100]}" if head[1] else f"item {head[3][:100]}"
+            if not URL.search(joined):
+                issues.append(f"{title}: no URL or path")
+            if stamp := STAMP.search(joined) or BARE.search(joined):
+                add(seconds(stamp), title)
+            else:
+                issues.append(f"{title}: no timestamp")
+    return issues, wins
+
+
+def merge(wins: list[tuple[float, float, str]], longest: float) -> list[tuple[float, float, list[str]]]:
+    """Overlapping windows become one span, cut into grids of at most `longest` seconds so cells stay legible;
+    each claim is listed on every grid its own window overlaps."""
+    spans: list[list] = []
+    for a, b, why in sorted(wins):
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = max(b, spans[-1][1])
+            spans[-1][2].append((a, b, why))
+        else:
+            spans.append([a, b, [(a, b, why)]])
+    grids = []
+    for lo, hi, claims in spans:
+        n = max(1, math.ceil((hi - lo) / longest - 1e-9))
+        for k in range(n):
+            ga, gb = lo + (hi - lo) * k / n, lo + (hi - lo) * (k + 1) / n
+            grids.append((ga, gb, [why for a, b, why in claims if a <= gb and b >= ga]))
+    return grids
+
+
+def grid(source: Path, offset: float, a: float, b: float, step: float, width: int, crop: str, dst: Path) -> int:
+    # One accurate seek per cell (not an fps filter, which picks frames up to a frame interval off its label).
+    times = [a + i * step for i in range(int((b - a) / step + 1e-9) + 1)]
+    vf = (f"crop={crop}," if crop else "") + f"scale={width}:-2"
+    with tempfile.TemporaryDirectory() as tmp:
+        def cut(i: int) -> None:
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{offset + times[i]:.3f}", "-i",
+                            str(source), "-frames:v", "1", "-an", "-vf", vf, "-q:v", "4", f"{tmp}/f{i:03d}.jpg"])
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(cut, range(len(times))))
+        frames = [(t, f) for i, t in enumerate(times) if (f := Path(tmp) / f"f{i:03d}.jpg").exists()]
+        if not frames:
+            return 0
+        cells = [Image.open(f).convert("RGB") for _, f in frames]
+        font = ImageFont.load_default(size=max(14, width // 24))
+        bar = font.size + 8  # label above each cell, never over the pixels being checked
+        w, h = cells[0].size
+        cols = min(4, len(cells))
+        rows = -(-len(cells) // cols)
+        sheet = Image.new("RGB", (cols * w + (cols - 1) * 4, rows * (h + bar) + (rows - 1) * 4), "white")
+        draw = ImageDraw.Draw(sheet)
+        for i, cell in enumerate(cells):
+            x, y = (i % cols) * (w + 4), (i // cols) * (h + bar + 4)
+            draw.rectangle((x, y, x + w, y + bar), fill="black")
+            t = frames[i][0]
+            draw.text((x + 4, y + 3), f"{clock(t)}  {offset + t:.2f}s", fill="yellow", font=font)
+            sheet.paste(cell, (x, y + bar))
+        sheet.save(dst, quality=80)
+        return len(cells)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("transcript", type=Path)
+    ap.add_argument("source", type=Path, help="the original recording")
+    ap.add_argument("--offset", type=float, default=0.0, help="clip start inside SOURCE, seconds")
+    ap.add_argument("--window", type=float, default=3.0, help="seconds before and after each claim")
+    ap.add_argument("--step", type=float, default=0.5, help="seconds between grid frames")
+    ap.add_argument("--width", type=int, default=480, help="cell width in px")
+    ap.add_argument("--at", action="append", default=[], metavar="T|T1-T2", help="extra window (s or [hh:]mm:ss)")
+    ap.add_argument("--crop", default="", metavar="W:H:X:Y", help="zoom every grid on one region of the source")
+    ap.add_argument("--lint-only", action="store_true")
+    a = ap.parse_args()
+    for tool in ("ffmpeg", "ffprobe"):
+        if not shutil.which(tool):
+            sys.exit(f"{tool} missing: install ffmpeg")
+
+    duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                     str(a.source)], check=True, capture_output=True, text=True).stdout)
+    issues, wins = lint_and_windows(a.transcript.read_text(encoding="utf-8"), duration, a.offset, a.window)
+    for spec in a.at:
+        lo, _, hi = spec.partition("-")
+        t1, t2 = parse_time(lo), parse_time(hi) if hi else None
+        wins.append((t1, t2, f"--at {spec}") if t2 else (max(0.0, t1 - a.window), t1 + a.window, f"--at {spec}"))
+    print("lint: " + ("clean" if not issues else f"{len(issues)} issue(s)"))
+    for issue in issues:
+        print(f"  - {issue}")
+    if a.lint_only:
+        return 0
+
+    outdir = a.transcript.with_name(a.transcript.name.removesuffix(".md") + ".frames") / "verify"
+    shutil.rmtree(outdir, ignore_errors=True)
+    outdir.mkdir(parents=True)
+    index = [f"# Verify grids for {a.transcript.name}", "",
+             f"Source {a.source.resolve()} (offset {a.offset} s), {a.step} s per cell, labels = transcript clock + source "
+             "seconds. Per grid: does each listed line match what the frames show? Look for states that change with no "
+             "visible click (reload, reset), exact counts, ticks and removals. Fix the transcript, not this file.", ""]
+    if issues:
+        index += ["## Lint", ""] + [f"- {i}" for i in issues] + [""]
+    index += ["## Grids", ""]
+    total = 0
+    for n, (lo, hi, whys) in enumerate(merge(wins, longest=8 * a.window / 3), 1):
+        name = f"{n:02d}-{clock(lo).replace(':', '').replace('.', '_')}.jpg"
+        cells = grid(a.source, a.offset, lo, hi, a.step, a.width, a.crop, outdir / name)
+        total += 1 if cells else 0
+        index += [f"### {n:02d} · {clock(lo)}–{clock(hi)}", ""] + [f"- {w}" for w in dict.fromkeys(whys)] + \
+                 ["", f"![{clock(lo)}](<{name}>)" if cells else "(no frames)", ""]
+    (outdir / "index.md").write_text("\n".join(index), encoding="utf-8")
+    print(f"{total} grids → {outdir / 'index.md'}: read each grid against its lines, fix the transcript")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

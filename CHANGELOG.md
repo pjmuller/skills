@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02 — video-shrink-for-gemini: verify-transcript grids; prompt stops inventing actions
+
+- New `verify-transcript TRANSCRIPT ORIGINAL`: lints timestamps (names the one line that jumps ahead) and feedback items without URL/timestamp, and cuts a 0.5 s frame grid (±3 s, exact seeks, labelled) per feedback item and per "vanished / not saved / strange" cue into `<name>.transcript.frames/verify/index.md` for the verifying agent; `--at`, `--crop`, `--step` zoom. Why: on a 14-min walkthrough every Gemini run (1 fps, old or new prompt, also 2 fps) missed a sub-second form reset and an untick, and narrated the reset as "clicked Add again"; the grids covered all five frame-verified misses in every run.
+- `prompt-template.md`: unseen causes are `(action not visible)`, counts and removals named one by one, second-by-second state around "vanished/strange" remarks, items quote the element's subline. Measured: 3/5 misses caught vs 1/5 and 2/5 for the old prompt (the subline framing is the stable gain).
+- `transcribe-gemini`: 15-min request timeout (one call hung 25 min). Gemini samples 1 fps whatever the file holds; 2 fps via `videoMetadata.fps` cost 1.8x and still invented the reset's cause, so no flag.
+
 ## 2026-11-02 — global template: the wrap-up links what each outcome acted on
 
 - `agents-md/global-template.md` Report tersely: each wrap-up status sits beside the full URL of what it acted on (ticket, mail thread, PR, live page); the "link the ticket" clause moved out of "Worker reports" (read as delegated-worker only) and the "other web URLs only when…" line now scopes to delivered files. Why: a finished ClickUp task's final message reported "✅ ClickUp handed to Thomas" without the ticket link.

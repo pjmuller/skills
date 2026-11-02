@@ -9,7 +9,8 @@ design taste keep, tweak or revert each preference change.
 
 1. **Transcript** in feedback mode ([video-shrink-for-gemini](../video-shrink-for-gemini/SKILL.md)):
    numbered feedback items with timestamps and wall-clock ([paused recordings](../video-shrink-for-gemini/SKILL.md#prompt)
-   break that mapping). Check counts and claims against frames.
+   break that mapping). Check counts and claims against frames: `verify-transcript` cuts 0.5 s grids per item
+   and per "vanished / strange" cue.
 2. **Triage** each item: bug · quality (prompt/data) · taste · leave alone (the speaker said so) ·
    needs a decision. The speaker's diagnosis is a hypothesis: check the data first. (Round one: "sort
    by replies" was already true; the bold number on screen was the email count.)

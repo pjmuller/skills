@@ -8,7 +8,7 @@ description: "Use for \"transcribe this video/call\", \"what happens in this rec
 Deliverable: `<name>.transcript.md` on disk (not a chat reply, not a paste-prompt for the user),
 built from `<name>.gemini.mp4` + `<session>.gemini-prompt.md` beside the source. Helpers (`--help`
 each, which also holds their measurements): `shrink-video`, `build-prompt`, `download-fathom`,
-`download-loom`, `detect-screenshare`, `transcribe-gemini`, `extract-keyframes`, `transcribe-local`,
+`download-loom`, `detect-screenshare`, `transcribe-gemini`, `extract-keyframes`, `verify-transcript`, `transcribe-local`,
 `transcribe-openai`, `video-intake`.
 `scripts/install` links them; `--check` verifies deps and the key.
 
@@ -106,7 +106,12 @@ the template's feedback block, fill `{{WALLCLOCK}}` from the recording start (Cl
 carry it) so items line up with server logs, and pass a short screen brief plus the app's UI copy
 (i18n/strings or templates). Set `{{KEYFRAMES}}` to `requested`, then `extract-keyframes
 <name>.transcript.md ORIGINAL [--offset S]` cuts ≤4 stills from the original and links them: they
-showed what the text misread (status icons, an unticked list); off for talking-head calls. A
+showed what the text misread (status icons, an unticked list); off for talking-head calls. Then `verify-transcript
+<name>.transcript.md ORIGINAL`: lints timestamps and items, and cuts a 0.5 s frame grid (±3 s) per feedback item
+and per "vanished / not saved / strange" cue into `<name>.transcript.frames/verify/index.md`; read each grid
+against its lines. Gemini fills sub-second gaps with plausible clicks (a form reset became "clicked Add again"); it
+samples 1 fps whatever the file holds, and 2 fps (`videoMetadata.fps`, 1.8x cost) saw that reset but still invented
+its cause (2026-11-02, 14-min walk): the grids are the fix, not more frames. A
 paused recording breaks the video time = wall clock mapping: time slow steps from server data, not video offsets. Then
 [feedback-round](../recording-followups/feedback-round.md).
 
