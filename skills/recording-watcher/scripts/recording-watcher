@@ -55,6 +55,12 @@ VIDEO_SUFFIXES = (".mp4", ".webm", ".mkv")
 # Seconds; the job kills each step's process group at its limit, so 30 + 10 min < VISUAL_TIMEOUT frees the slot
 # for real. A ~50 min Fathom HLS download took ~11 min.
 DOWNLOAD_TIMEOUT, DETECT_TIMEOUT = 30 * 60, 10 * 60
+# One meeting captured by two sources (e.g. a Fathom bot joining a Leexi-recorded call): two vendors' ASR of the
+# same speech share ~30% of their distinct 4-word sequences, distinct meetings < 10% (3 weeks replayed, 3003 pairs).
+# Starts differ by minutes (Leexi stamps the scheduled start, Fathom the bot's join): time only narrows the search.
+# A same-span duplicate tops out near 35%, so 20% cannot prove full containment: length guards the longer call.
+DUP_WINDOW, DUP_MIN_SHARED, DUP_MIN_SHARE = timedelta(hours=1), 40, 0.2
+DUP_SLACK = 1.1   # ASR wordiness differs per vendor; a pinned source wins within it (its routing is certain)
 
 
 @dataclass
@@ -456,7 +462,7 @@ def visual_media(call, visual, transcript_path):
             f"no screen share.{late} " + get + store)
 
 
-def build_brief(cfg, call, workspace, visual, transcript_path):
+def build_brief(cfg, call, workspace, visual, transcript_path, also=()):
     local = call.start.astimezone(TZ)
     participants = ", ".join(others(cfg, call)) or "unnamed speakers"
     facts = (f"New {call.source.title()} call \"{call.title}\" on {local:%a %Y-%m-%d %H:%M} (Europe/Brussels), "
@@ -465,6 +471,9 @@ def build_brief(cfg, call, workspace, visual, transcript_path):
              f"Recording id: {call.source}:{call.id}. Processed on {cfg.self_id}'s machine as elected owner: "
              f"{election_line(call)}. Routed to {workspace} by recording-watcher (deterministic; "
              f"if this is the wrong repo, say so first).")
+    for d, path in also:
+        facts += (f" The same meeting was also recorded as {d.key} ({d.url}), skipped as a duplicate; its transcript "
+                  f"{path} may hold minutes this one lacks.")
     media = visual_media(call, visual, transcript_path)
     template = SKILL_DIR / "briefs" / "default.md"
     if cfg.briefs_dir:
@@ -479,6 +488,46 @@ def build_brief(cfg, call, workspace, visual, transcript_path):
 
 def transcript_path(key):
     return STATE_DIR / "calls" / key.replace(":", "-", 1) / "transcript.md"
+
+
+def word_grams(text):
+    words = re.findall(r"\w+", text.casefold())
+    return {tuple(words[i:i + 4]) for i in range(len(words) - 3)}
+
+
+def saved_grams(key):
+    """4-grams of a spawned call's transcript.md, without its header, speaker labels and [hh:mm:ss] marks."""
+    try:
+        body = transcript_path(key).read_text().split("\n## Transcript\n", 1)[1]
+    except (OSError, IndexError):
+        return set()
+    return word_grams(re.sub(r"\*\*\[[^\]]*\] [^\n]*?:\*\*|\[\d\d:\d\d:\d\d\]", " ", body))
+
+
+def find_duplicates(cfg, state, candidates):
+    """{key: (kept key, shared, share)} for qualifying calls whose transcript is mostly in another source's recording
+    of the same meeting. Survivors are picked largest first (a source pinned to a workspace counts DUP_SLACK larger)
+    and only survivors or spawned calls absorb others, so no chain hides content. A call more than DUP_SLACK longer
+    than a spawned survivor is kept: its extra minutes would reach no thread. Same-source pairs are vendor fragments
+    with distinct content: never matched."""
+    grams = {c.key: word_grams(" ".join(t for _, _, t, _ in c.segments)) for c in candidates}
+    kept = [(key, parse_ts(e["start"]), lambda key=key: saved_grams(key)) for key, e in state["calls"].items()
+            if e.get("status") in ("spawned", RELAY_PENDING) and e.get("start") and key not in grams]
+    found = {}
+    for c in sorted(candidates, key=lambda c: len(grams[c.key]) * (DUP_SLACK if cfg.sources[c.source].get("workspace")
+                                                                    else 1), reverse=True):
+        mine = grams[c.key]
+        for key, start, theirs in kept:
+            if key.partition(":")[0] == c.source or abs(start - c.start) > DUP_WINDOW:
+                continue
+            other = theirs()
+            shared = len(mine & other)
+            if shared >= DUP_MIN_SHARED and shared / len(mine) >= DUP_MIN_SHARE and len(mine) <= DUP_SLACK * len(other):
+                found[c.key] = (key, shared, shared / len(mine))
+                break
+        else:
+            kept.append((c.key, c.start, lambda c=c: grams[c.key]))
+    return found
 
 
 def write_transcript(cfg, call, visual=None):
@@ -769,9 +818,26 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
                                             "start": call.start.isoformat(), "at": now.isoformat(),
                                             **({"owner": call.decision.owner, "election": call.decision.evidence()}
                                                if call.decision else {})}
-    candidates.sort(key=lambda c: c.start, reverse=True)
+    dups = find_duplicates(cfg, state, candidates)
+    candidates.sort(key=lambda c: (c.key not in dups, c.start), reverse=True)   # survivors first, newest first
     spawned = 0
     for call in candidates:
+        if dup := dups.get(call.key):
+            kept, shared, share = dup
+            line = (f"{'skipped:duplicate':30} {call.key:48} {call.start.astimezone(TZ):%m-%d %H:%M} {call.title[:50]}"
+                    f" · {share:.0%} of its 4-word sequences ({shared}) in {kept}")
+            kept_status = (state["calls"].get(kept) or {}).get("status", "")
+            if args.dry_run or not is_final(state["calls"].get(kept)):   # survivor not launched yet: hold, never lose both
+                print(line + ("" if args.dry_run else f" (held: {kept} is {kept_status or 'not spawned'})"))
+                listed_by_source[call.source][1].append(call)
+                continue
+            print(line)
+            transcript = write_transcript(cfg, call, {"status": "not-run", "reason": f"duplicate of {kept}"})
+            state["calls"][call.key] = {"status": "skipped:duplicate", "duplicate_of": kept, "title": call.title,
+                                        "dedupe": f"{share:.0%} of its 4-word sequences ({shared}) in {kept}",
+                                        "self_share": round(self_share(cfg, call), 2), "start": call.start.isoformat(),
+                                        "at": now.isoformat(), "transcript": str(transcript)}
+            continue
         workspace = route(cfg, call)
         seen = visual(cfg, call, now, args.dry_run)
         if seen is None:   # video check running (or queued): hold the call and the watermark
@@ -783,7 +849,9 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
                                             "start": call.start.isoformat(), "at": entry.get("at") or now.isoformat()}
             continue
         transcript = write_transcript(cfg, call, seen)
-        title, brief = thread_title(cfg, call), build_brief(cfg, call, workspace, seen, transcript)
+        also = [(d, write_transcript(cfg, d, {"status": "not-run", "reason": f"duplicate of {call.key}"}))
+                for d in candidates if dups.get(d.key, ("",))[0] == call.key]   # the survivor's thread gets both
+        title, brief = thread_title(cfg, call), build_brief(cfg, call, workspace, seen, transcript, also)
         over_cap = spawned >= MAX_SPAWNS
         head = f"{'over-cap' if over_cap else 'spawn'}: {title!r} -> {workspace} · screen={visual_line(seen)}"
         if args.dry_run:

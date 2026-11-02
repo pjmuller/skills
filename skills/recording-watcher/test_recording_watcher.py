@@ -417,3 +417,132 @@ def test_run_bounded_kills_the_process_group(tmp_path):
     assert not marker.exists()
     assert rw.DOWNLOAD_TIMEOUT + rw.DETECT_TIMEOUT < rw.VISUAL_TIMEOUT.total_seconds()
 
+
+
+VOCAB = ("we de het een klant mail agent planning ticket demo prijs offerte team week morgen vandaag factuur "
+         "agenda patient tandarts praktijk score draft review screen deploy fix bug data export import call").split()
+
+
+def speech(seed, n):
+    """Neutral synthetic speech: a meeting's words, seeded so two meetings differ but share vocabulary and filler."""
+    import random
+    r = random.Random(seed)
+    return " ".join(r.choice(VOCAB) if i % 9 else "ja dat klopt" for i in range(n))
+
+
+def asr(text, seed, rate=0.15):
+    """Another vendor's transcript of the same speech: ~15% of words heard differently."""
+    import random
+    r = random.Random(seed)
+    return " ".join(r.choice(VOCAB) if r.random() < rate else w for w in text.split())
+
+
+def pair_calls(fathom_text, leexi_text, fathom_start=NOW - timedelta(hours=2, minutes=-7), leexi_start=NOW - timedelta(hours=2)):
+    f = call(id="f", segments=[seg("Ana", 0, ANA, fathom_text)], start=fathom_start)
+    lx = call(source="leexi", id="l", recorder="desk@beta.example", segments=[seg("Ana", 0, ANA, leexi_text)],
+              start=leexi_start)
+    return f, lx
+
+
+def spawn_log():
+    briefs = {}
+    return briefs, lambda cfg, ws, title, brief: briefs.setdefault(ws, []).append(brief) or f"t-{sum(map(len, briefs.values()))}"
+
+
+def test_same_meeting_from_two_sources_spawns_once(cfg, tmp_path, monkeypatch):
+    text = speech(1, 700)
+    f, lx = pair_calls(asr(text, 2), text)   # Fathom bot joined 7 min after Leexi's scheduled start, other title
+    f.title = "Impromptu Google Meet Meeting"
+    briefs, spawner = spawn_log()
+    checked = []
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [f]), FakeSource("leexi", [lx])], spawner,
+        visual=lambda cfg, c, *a: checked.append(c.key) or NO_SHARE)
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["leexi:l"]["status"] == "spawned" and checked == ["leexi:l"]   # pinned source kept, no video fetch
+    dup = state["calls"]["fathom:f"]
+    assert dup["status"] == "skipped:duplicate" and dup["duplicate_of"] == "leexi:l" and "4-word sequences" in dup["dedupe"]
+    assert Path(dup["transcript"]).exists() and dup["transcript"] in briefs[BETA][0] and list(briefs) == [BETA]
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [f]), FakeSource("leexi", [lx])], spawner,
+        now=NOW + timedelta(minutes=10))
+    assert len(briefs[BETA]) == 1
+
+
+@pytest.mark.parametrize("case", ["other meeting same time", "back to back", "same text hours apart", "same source"])
+def test_distinct_meetings_both_spawn(cfg, tmp_path, monkeypatch, case):
+    text = speech(1, 700)
+    f, lx = {
+        "other meeting same time": lambda: pair_calls(speech(3, 900), text, fathom_start=NOW - timedelta(hours=2)),
+        "back to back": lambda: pair_calls(speech(4, 900), text, fathom_start=NOW - timedelta(hours=2, minutes=28)),
+        "same text hours apart": lambda: pair_calls(asr(text, 2), text, fathom_start=NOW - timedelta(hours=5)),
+        "same source": lambda: (call(id="f", segments=[seg("Ana", 0, ANA, asr(text, 2))]), call(id="g", segments=[seg("Ana", 0, ANA, text)])),
+    }[case]()
+    briefs, spawner = spawn_log()
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [f]), FakeSource(lx.source, [lx])], spawner)
+    assert sum(map(len, briefs.values())) == 2
+
+
+def test_recorder_that_left_early_never_hides_the_longer_one(cfg, tmp_path, monkeypatch):
+    text = speech(1, 1700)
+    half = asr(" ".join(text.split()[:850]), 2)              # Leexi (preferred) has only the first half
+    f, lx = pair_calls(text, half)
+    briefs, spawner = spawn_log()
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [f]), FakeSource("leexi", [lx])], spawner)
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["fathom:f"]["status"] == "spawned" and state["calls"]["leexi:l"]["duplicate_of"] == "fathom:f"
+    # the half spawned first: the full recording arriving later still gets its own thread
+    f.id, lx.id, f.start, lx.start = "f2", "l2", NOW, NOW - timedelta(minutes=7)
+    f.created = lx.created = NOW + timedelta(minutes=40)
+    run(tmp_path, monkeypatch, cfg, [FakeSource("leexi", [lx])], spawner, now=NOW + timedelta(minutes=50))
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [f])], spawner, now=NOW + timedelta(minutes=55))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["leexi:l2"]["status"] == state["calls"]["fathom:f2"]["status"] == "spawned"
+
+
+def test_a_dropped_call_never_absorbs_another(cfg, tmp_path, monkeypatch):
+    one, two = speech(1, 450), speech(2, 450)
+    a, b = pair_calls(asr(one, 3), one + " " + two)                  # A only overlaps B's first half
+    c = call(source="monologue", id="c", recorder="", segments=[seg("Ana", 0, ANA, asr(two, 4) + " " + speech(5, 1500))],
+             start=NOW - timedelta(hours=2))                         # C, the largest, holds B's second half
+    briefs, spawner = spawn_log()
+    run(tmp_path, monkeypatch, cfg, [FakeSource(x.source, [x]) for x in (a, b, c)], spawner)
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["leexi:l"]["duplicate_of"] == "monologue:c" and state["calls"]["fathom:f"]["status"] == "spawned"
+
+
+def test_late_arrival_against_spawned_transcript(cfg, tmp_path, monkeypatch):
+    text = speech(1, 700)
+    f, lx = pair_calls(asr(text, 2), text)
+    lx.segments, ready = [], lx.segments                      # Leexi transcript not ready yet: no verdict, Fathom goes
+    briefs, spawner = spawn_log()
+    srcs = [FakeSource("fathom", [f]), FakeSource("leexi", [lx])]
+    run(tmp_path, monkeypatch, cfg, srcs, spawner)
+    lx.segments = ready
+    run(tmp_path, monkeypatch, cfg, srcs, spawner, now=NOW + timedelta(minutes=10))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["leexi:l"]["duplicate_of"] == "fathom:f" and sum(map(len, briefs.values())) == 1
+    # a kicked bot's short capture spawned first never hides the full recording that arrives later
+    short, full = pair_calls(asr(text[:1500], 3), text + " " + speech(5, 2000), fathom_start=NOW,
+                             leexi_start=NOW - timedelta(minutes=7))
+    short.id, full.id = "s", "full"
+    run(tmp_path, monkeypatch, cfg, [FakeSource("fathom", [short])], spawner, now=NOW + timedelta(minutes=20))
+    run(tmp_path, monkeypatch, cfg, [FakeSource("leexi", [full])], spawner, now=NOW + timedelta(minutes=30))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["fathom:s"]["status"] == state["calls"]["leexi:full"]["status"] == "spawned"
+
+
+def test_duplicate_waits_for_its_survivor(cfg, tmp_path, monkeypatch):
+    text = speech(1, 700)
+    f, lx = pair_calls(asr(text, 2), text)
+    srcs = [FakeSource("fathom", [f]), FakeSource("leexi", [lx])]
+    briefs, spawner = spawn_log()
+    run(tmp_path, monkeypatch, cfg, srcs, spawner, visual=lambda *a: None)          # survivor's video check running
+
+    def boom(*a):
+        raise RuntimeError("T3 down")
+    run(tmp_path, monkeypatch, cfg, srcs, boom, now=NOW + timedelta(minutes=5))      # survivor's launch fails
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert "fathom:f" not in state["calls"] and not briefs
+    assert rw.parse_ts(state["sources"]["fathom"]["watermark"]) < f.created
+    run(tmp_path, monkeypatch, cfg, srcs, spawner, now=NOW + timedelta(minutes=10))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["fathom:f"]["status"] == "skipped:duplicate" and len(briefs[BETA]) == 1

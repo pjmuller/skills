@@ -28,6 +28,11 @@ lives in one config file ([config.md](config.md)); new machine (macOS or WSL): [
 ## How it decides (`scripts/recording-watcher`)
 
 - No transcript → pending, `skipped:no-transcript` after 6 h; < 150 words → `skipped:too-short`.
+- One meeting from two sources (a Fathom bot on a Leexi-recorded call): a qualifying call is `skipped:duplicate`
+  when ≥ 20% (and ≥ 40) of its distinct 4-word sequences appear in another source's recording starting ≤ 1 h
+  apart. Survivors go largest first (a pinned-`workspace` source counts 10% larger); a call > 10% longer than an
+  already spawned one is kept (its extra minutes would reach no thread). The duplicate waits until its survivor
+  spawned, whose brief links its transcript. Time alone never matches: concurrent distinct meetings are common.
 - Election on vendor-verified speaker emails; a `personal` source (own Monologue account) is always
   this machine's. Not owner → `skipped:<reason>` + owner + evidence.
 - Route: the source's pinned `workspace`, else known non-self speakers vote by words, then
