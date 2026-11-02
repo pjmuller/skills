@@ -62,6 +62,8 @@ def test_desktop_rule_never_bridges_a_webcam_frame():
     result = detect.detect(f, 1.0, float(len(camera)), "desktop")
     assert result["method"] == "desktop" and result["uncertain_seconds"] == 0.0  # dimmed webcams: 0.36 >= CAMERA_SURE
     assert [(r["start"], r["end"]) for r in result["ranges"]] == [(11.0, 19.0), (27.0, 45.0)]
+    # 0.2 fps (preset extreme): one screen frame trimmed by a step per side is dropped, never inverted (Sol S2).
+    assert detect.to_ranges([False, True, False], 5.0, 15.0, min_run=5, gap=0, layout_gap=0, pad=-5.0) == []
 
 
 @needs_tools

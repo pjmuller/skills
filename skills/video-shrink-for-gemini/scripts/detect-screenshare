@@ -133,7 +133,7 @@ def features(stream) -> dict:
             still = float((tile == prev[inner]).mean()) if prev is not None else 0.0
         prev, prev_raw = luma, raw
         r, g, b = (rgb[inner][..., c] for c in range(3))
-        step = np.abs(np.diff(luma, axis=1))  # whole frame, for the desktop rule
+        step = np.abs(np.diff(luma, axis=1))  # whole frame, for the desktop rule (camera_share: same test)
         values = (margin, x, float(cols[x]), float(1 - cols[int(W * 0.03):max(int(W * 0.03) + 1, x - 1)].mean()),
                   float(1 - cols[x + 2:int(W * 0.98)].mean()), film, stack, (x0, y0, x, y1),
                   float((np.diff(tile, axis=1) == 0).mean()) if tile.shape[1] > 1 else 0.0,
@@ -207,6 +207,8 @@ def to_ranges(flags: list[bool], step: float, duration: float, gutters=None, str
     out: list[dict] = []
     for a, b in merged:
         start_s, end_s = max(0.0, a * step - pad), min(duration, b * step + pad)
+        if end_s <= start_s:  # negative pad (desktop) on a run of one sparse frame
+            continue
         confidence = round(sum(flags[a:b]) / (b - a), 2)
         if out and start_s <= out[-1]["end"]:
             out[-1]["end"] = round(end_s, 1)
@@ -229,6 +231,16 @@ def share_box(f: dict, flags: list[bool], start: float, end: float, step: float)
     x, y = max(0, np.percentile(box[:, 0], 5) - 1) / W, max(0, np.percentile(box[:, 1], 5) - 1) / H
     right, bottom = (box[:, 2].max() - 1) / W, min(H, np.percentile(box[:, 3], 95) + 1) / H
     return [round(x, 3), round(y, 3), round(right - x, 3), round(bottom - y, 3)]
+
+
+def camera_share(rgb) -> float:
+    """Share of pixels with camera texture (luma steps 1-12 to the right neighbour) in a W x H rgb frame."""
+    import numpy as np
+
+    rgb = rgb.astype(np.int32)
+    luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
+    step = np.abs(np.diff(luma, axis=1))
+    return float(((step >= 1) & (step <= 12)).mean())
 
 
 def desktop(f: dict) -> tuple[list[bool], list[bool]]:

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["google-genai>=1.30"]
+# dependencies = ["google-genai>=1.30", "numpy>=1.26"]
 # ///
 """Transcribe/narrate one recording with the Gemini API: plain model call, no agent, no clipboard.
 
@@ -39,6 +39,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 from google import genai
@@ -53,6 +55,10 @@ INLINE_MAX = 20 * 1024 * 1024
 AUDIO_MIME = {".ogg": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac",
               ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac"}
 MACHINE_ENV = Path.home() / ".config/transcribe-gemini/env"
+# detect-screenshare's frame test, so the upload check and the detector cannot drift apart.
+_loader = SourceFileLoader("detect_screenshare", str(Path(__file__).resolve().with_name("detect-screenshare")))
+DETECT = module_from_spec(spec_from_loader("detect_screenshare", _loader))
+_loader.exec_module(DETECT)
 UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
 # USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
 # 3.7/3.8 Flash list price doubles on 2027-01-01.
@@ -127,19 +133,45 @@ def mixed_copy(video: Path, tmp: Path) -> Path:
     return out
 
 
-def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[dict], tmp: Path) -> list:
+def blank_webcam_frames(clip: Path) -> int:
+    """Black out every 1 fps frame of a desktop clip that looks like a webcam (detect-screenshare's camera test):
+    a gallery flashed between the detector's samples never reaches the upload. Returns frames blanked."""
+    import numpy as np
+
+    w, h = DETECT.W, DETECT.H
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(clip), "-vf", f"scale={w}:{h}", "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "pipe:"], check=True, capture_output=True).stdout
+    frames = np.frombuffer(raw, np.uint8).reshape(-1, h, w, 3)
+    bad = [k for k, f in enumerate(frames) if DETECT.camera_share(f) >= DETECT.CAMERA_MAX]
+    if bad:
+        enable = "+".join(f"between(n,{k},{k})" for k in bad)
+        fixed = clip.with_name(clip.stem + ".checked.mp4")
+        ffmpeg("-i", str(clip), "-vf", f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{enable}'", "-c:v", "libx264",
+               "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(fixed))
+        fixed.replace(clip)
+        print(f"{clip.name}: blanked {len(bad)} webcam frame(s)", file=sys.stderr)
+    return len(bad)
+
+
+def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[dict], tmp: Path,
+                 checked: bool = False) -> list:
     """Full audio track + one silent clip per range, cut locally and labelled with its absolute time."""
-    audio = tmp / "audio.m4a"
-    ffmpeg("-i", str(video), "-vn", *audio_args(video), "-c:a", "aac", "-b:a", "48k", str(audio))
-    parts = ["Full audio of the recording follows. Its timeline is the recording timeline.",
-             media_part(client, backend, audio, "audio/mp4"),
-             "Video was sent only for these ranges (screen sharing). Outside them there is audio only: "
-             "do not describe visuals there." if ranges else "No screen was shared: audio only, no visual section."]
+    parts = ["The recording has no audio track."]
+    if audio_streams(video):
+        audio = tmp / "audio.m4a"
+        ffmpeg("-i", str(video), "-vn", *audio_args(video), "-c:a", "aac", "-b:a", "48k", str(audio))
+        parts = ["Full audio of the recording follows. Its timeline is the recording timeline.",
+                 media_part(client, backend, audio, "audio/mp4")]
+    parts += ["Video was sent only for these ranges (screen sharing). Outside them there is audio only: "
+             "do not describe visuals there." if ranges else "No screen was detected: audio only, no visual section."]
     for i, r in enumerate(ranges):
         # Re-encoded, not stream-copied: a copy starts at the previous keyframe and would carry webcam frames.
+        # 1 fps = Gemini's sampling; desktop clips then get every frame checked (detection samples only 1/s).
         clip = tmp / f"clip{i:02d}.mp4"
-        ffmpeg("-ss", f"{r['start']:.2f}", "-i", str(video), "-t", f"{r['end'] - r['start']:.2f}", "-an", "-c:v", "libx264",
-               "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(clip))
+        ffmpeg("-ss", f"{r['start']:.2f}", "-i", str(video), "-t", f"{r['end'] - r['start']:.2f}", "-an", "-vf", "fps=1",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(clip))
+        if checked:
+            blank_webcam_frames(clip)
         parts.append(f"Video clip {clock(r['start'])}-{clock(r['end'])} (recording timeline; the clip's own "
                      f"timestamps start at 00:00:00: add {clock(r['start'])}).")
         parts.append(media_part(client, backend, clip, "video/mp4"))
@@ -185,7 +217,7 @@ def main() -> None:
         plan = json.loads(args.ranges.read_text()) if args.ranges else {"method": "full-fallback"}
         if plan.get("method") == "full-fallback":
             sys.exit("dry run: no --ranges (or full-fallback): the whole video would be sent")
-        ranged_parts(None, "dry-run", args.video, plan["ranges"], args.dry_run)
+        ranged_parts(None, "dry-run", args.video, plan["ranges"], args.dry_run, plan.get("method") == "desktop")
         for f in sorted(args.dry_run.glob("*.m4a")) + sorted(args.dry_run.glob("clip*.mp4")):
             print(f"{f}  {f.stat().st_size} bytes")
         return
@@ -204,7 +236,7 @@ def main() -> None:
         try:
             plan = json.loads(args.ranges.read_text()) if args.ranges else {"method": "full-fallback"}
             if plan.get("method") != "full-fallback":  # detect-screenshare could not tell: send every frame
-                parts = ranged_parts(client, backend, args.video, plan["ranges"], Path(tmp))
+                parts = ranged_parts(client, backend, args.video, plan["ranges"], Path(tmp), plan.get("method") == "desktop")
             else:
                 mime = AUDIO_MIME.get(args.video.suffix.lower(), "video/mp4")
                 parts = [media_part(client, backend, mixed_copy(args.video, Path(tmp)), mime)]

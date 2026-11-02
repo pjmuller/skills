@@ -53,7 +53,7 @@ def test_ranges_upload_only_local_clips_and_mixed_audio(tmp_path):
     assert abs(_duration(tmp_path / "clip00.mp4") - 3) < 0.5 and abs(_duration(tmp_path / "clip01.mp4") - 2) < 0.5
     assert tg.audio_streams(video) == 2 and tg.audio_streams(tmp_path / "audio.m4a") == 1
     assert "add 00:00:08" in parts[-2]
-    assert tg.ranged_parts(None, "vertex", video, [], tmp_path)[2].startswith("No screen was shared")
+    assert tg.ranged_parts(None, "vertex", video, [], tmp_path)[2].startswith("No screen was detected")
 
 
 @needs_ffmpeg
@@ -65,3 +65,22 @@ def test_full_video_gets_one_mixed_track(tmp_path):
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(video), "-map", "0:v", "-map", "0:a:0", "-c", "copy",
                     str(single)], check=True)
     assert tg.mixed_copy(single, tmp_path) == single
+
+
+@needs_ffmpeg
+def test_desktop_clips_never_carry_a_webcam_flash(tmp_path):
+    """A gallery shown for 0.2 s between two detector samples is blacked out before upload (Sol S1)."""
+    fixtures = HERE / "fixtures" / "screenshare"
+    listing = tmp_path / "l.txt"
+    listing.write_text(f"file '{fixtures / 'meet-share.jpg'}'\nduration 5.4\nfile '{fixtures / 'meet-gallery.jpg'}'\n"
+                       f"duration 0.6\nfile '{fixtures / 'meet-share.jpg'}'\nduration 4\nfile '{fixtures / 'meet-share.jpg'}'\n")
+    video = tmp_path / "flash.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vf",
+                    "fps=10,format=yuv420p", "-c:v", "libx264", str(video)], check=True)
+    tg.ranged_parts(None, "dry-run", video, [{"start": 1.0, "end": 9.0}], tmp_path, checked=True)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(tmp_path / "clip00.mp4"), "-vf", "scale=320:180",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:"], check=True, capture_output=True).stdout
+    import numpy as np
+    frames = np.frombuffer(raw, np.uint8).reshape(-1, 180, 320, 3)
+    assert len(frames) == 8 and max(tg.DETECT.camera_share(f) for f in frames) < tg.DETECT.CAMERA_MAX
+    assert sum(int(f.max()) < 20 for f in frames) == 1  # exactly the flash frame went black
