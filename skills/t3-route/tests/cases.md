@@ -235,3 +235,13 @@ Each variant independent, in `routing-01`. The harness also injects T3's rules: 
 `routing-01` compacted once today. Since then Alex corrected two placements ("that should have been its own thread"). Router owns no children. Next message: a new Beacon ticket link.
 
 Variant B (independent): no corrections; turn-start `t3-context` prints `context 61% (157k/258k, lessons at 155k) · messages 23/50 · compactions 1 · lessons`. Next message: a translation request. Variant C: same, but `messages 50/50 · … · reset`. Variant D: one correction, caused by a conflicting wrapper rule that is still unfixed.
+
+## 22. Message an owner mid-turn
+
+`work-17` as in case 7, verified owner, Claude, turn running (tests in progress). Each variant independent.
+
+- A: "Another customer hit the export bug too, add this: `https://app.clickup.com/t/fixture-h02`."
+- B: "Stop, you're editing the Beacon exporter; the bug is in Harbor's." (`t3_thread_read` confirms it edits `/fixture/beacon-app`.)
+- C: "Tell work-17 this now, interrupt it if needed: the customer's export has 12 rows, not 9."
+- D: As A, but `work-17` is idle and settled.
+- E: "Have Fable review work-17's fix again with this objection: it drops the header row." `work-17`'s review child `task-3` finished.

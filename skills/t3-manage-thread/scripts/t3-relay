@@ -10,7 +10,7 @@ Agents inside T3 never need this: they call the T3 MCP tools directly.
     t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
                     [--allow-small-model] [--settle-when-done | --settle-after-run SECS]
                     [--wait SECS] -- PROMPT
-    t3-relay send   --thread ID [--mode auto|queue|steer] [--wait SECS] -- MESSAGE
+    t3-relay send   --thread ID [--mode queue|auto|steer] [--wait SECS] -- MESSAGE
     (launch/send) --request-id KEY   caller's retry key: a repeat with the same key never re-sends
     t3-relay status RID   # ok <ids> | failed <why> | pending
     t3-relay find --project PATH --title TITLE [--json]   # open root threads with that exact title + pin state
@@ -498,7 +498,8 @@ def main() -> None:
                     help="for probes only: wait up to SECS, then settle a completed, untouched first run")
     se = sub.add_parser("send")
     se.add_argument("--thread", required=True)
-    se.add_argument("--mode", default="auto", choices=["auto", "queue", "steer"])
+    # queue: a busy thread gets it as its next turn; steering a Claude turn aborts its running tools
+    se.add_argument("--mode", default="queue", choices=["queue", "auto", "steer"])
     for p in (la, se):
         p.add_argument("--wait", type=float, default=0, metavar="SECS",
                        help="kept for callers: the effect exists on exit 0; prints `ok <threadId>`")

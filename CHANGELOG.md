@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02 — thread messages queue by default; steer only for corrections
+
+- `t3-manage-thread` **Send mode**: always pass `mode`; `queue` for supplements, evidence, follow-ups and wakes; `steer` only when the running turn must not finish without the correction; `restart` only on request; never `auto`. Why (T3 source, upstream main): `auto` steers whenever a provider turn runs, and steering a Claude turn aborts its in-flight tool calls; `queue` on an idle or settled thread starts (and unsettles) it just like `auto`.
+- `t3-relay send` default `auto` → `queue` (changed default): `t3-schedule` resumes and `t3-mail-link` wakes no longer cut a running turn. `--mode steer` keeps the old cutting behaviour.
+- `t3-route` existing-task: send mode per intent; another review round goes to the owner, which starts a fresh `delegate_task`. Eval case 22.
+
 ## 2026-11-02 — global template: a repo file is reported by its checkout path, never a Downloads copy
 
 - `agents-md/global-template.md` Local files: a repo file → its stable-checkout path, else its GitHub URL; never a duplicate in `~/Downloads`. Why: a brief asked for "a user-facing copy in Downloads" of a committed guide; a later thread then linked the user only to the copy, which goes stale and hides the shared one.

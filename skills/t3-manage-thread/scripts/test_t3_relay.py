@@ -82,7 +82,7 @@ def test_send_is_idempotent_per_request(posted):
     tool, args = posted("send", "--thread", "mcp:abc", "--", 'quote " and {{body.x}}')
     assert tool == "t3_thread_send"
     assert args["threadId"] == "mcp:abc" and args["message"] == 'quote " and {{body.x}}'
-    assert args["clientRequestId"] == f"relay-{posted.record['rid']}" and args["mode"] == "auto"
+    assert args["clientRequestId"] == f"relay-{posted.record['rid']}" and args["mode"] == "queue"
 
 
 def test_lost_answer_is_accepted_but_unconfirmed(posted, capsys):

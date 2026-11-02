@@ -114,8 +114,11 @@ search. Exclude the routing thread and other intake-only mentions.
   revival; never restore rows into T3's live database.
 - Verified match, live or settled → continue it: `t3_thread_read`, then `t3_thread_send` to its
   exact ID with the new task verbatim and new evidence separated; keep its lifecycle unless the
-  user changes it. Age alone never justifies a copy; fresh periodic reports carry durable rules
-  and baselines, not the old session as backlog. Search-only requests return the match, no ping.
+  user changes it. `mode: "queue"` for supplements and follow-ups; `steer` only for a correction
+  the running turn must not finish without; `restart` only on request
+  ([send mode](../t3-manage-thread/SKILL.md#send-mode)). Another review round of its work goes
+  to the owner too, which starts the fresh `delegate_task`; never send to its old child. Age
+  alone never justifies a copy; fresh periodic reports carry durable rules and baselines, not the old session as backlog. Search-only requests return the match, no ping.
 - Target in a broader permission mode (Auto → Full Access) is refused by T3 →
   [permission-ceiling](../t3-manage-thread/permission-ceiling.md) (preflight, continuation kept in
   a brief, one user action); never a duplicate thread or relay around it. Keep explicit

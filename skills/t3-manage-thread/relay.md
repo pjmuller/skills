@@ -10,7 +10,7 @@ for capacity routing, house effort and confirmed delivery.
 
 ```bash
 t3-relay launch --project /abs/repo --title "⏰ Daily digest" --model opus [--wait 120] -- "Read and execute /abs/brief.md"
-t3-relay send --thread <threadId> [--mode queue] [--wait 120] -- "New mail in the linked thread: …"
+t3-relay send --thread <threadId> [--mode steer] [--wait 120] -- "New mail in the linked thread: …"   # default queue: never cuts a running turn
 t3-relay status <rid> [--wait 60]   # ok <threadId> | failed <why> | pending <why>
 t3-relay find --project /abs/repo --title "🧭 Ana routing" [--json]   # open root threads, exact title, pinnedAt
 t3-relay check                      # T3 reachable, MCP client approved, legacy relay hosts listed

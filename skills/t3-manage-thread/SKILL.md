@@ -17,7 +17,7 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 | 🏓 ping-pong inside this task (opinion, research, review; any provider) | `delegate_task`: no row, result wakes you ([which one](workers.md#which-one)) |
 | 📤 independent topic, other repo, selected recording follow-up | `t3_thread_launch` ([workers.md](workers.md#-t3_thread_launch)) |
 | Model + account with capacity | `t3-pick-instance MODEL` → `<instanceId> <modelId> <effort>` ([routing.md](routing.md)) |
-| Message a thread | `t3_thread_send` (`mode` auto/queue/steer; `clientRequestId` for retries); target in a broader permission mode (Auto → Full Access) → [permission-ceiling.md](permission-ceiling.md) |
+| Message a thread | `t3_thread_send` with an explicit `mode` ([send mode](#send-mode)); `clientRequestId` for retries; target in a broader permission mode (Auto → Full Access) → [permission-ceiling.md](permission-ceiling.md) |
 | Read / find threads | `t3_thread_read` · `t3_thread_list` (`currentThreadId` = your own id) · `t3_thread_search`; vague memory, a short id or a purged thread → `t3-find-thread` · open/link one → `t3-open-thread` ([find-thread.md](find-thread.md)) · own context use → `t3-context` · project id for a repo path → `t3-project-id` (not `t3_project_list`, ~35k tokens) |
 | Rename · switch model | `t3_thread_update {action:"rename"}` · `t3_thread_configure` (model/account only, never permission mode) |
 | Settle yourself / another thread | `t3_thread_organize {action:"settle"}` ([settle-thread.md](settle-thread.md)) |
@@ -27,6 +27,22 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 - Nothing needs hiding: 🏓 children have no row; T3's **Working section** (Settings → General) folds busy threads until done or needing input. No snoozing workers.
 - Opposite-model review: [code-review.md](code-review.md) · ticket/finding threads: [dispatch-workers.md](dispatch-workers.md) · rate limits: [limits.md](limits.md) · browser / computer use: [browser.md](browser.md) · replace a routing thread: [routing-reset.md](routing-reset.md).
 - Fleet audit, purge: [t3-maintenance](../t3-maintenance/SKILL.md) · scheduled threads: [t3-schedule](../t3-schedule/SKILL.md).
+
+## Send mode
+
+Always pass `mode`, chosen by intent; the user's explicit word wins: "after it finishes" → `queue`, "now", "interrupt it" → `steer`, "start over", "restart it" → `restart`.
+
+| `mode` | Idle or settled thread | Turn running | Use for |
+|---|---|---|---|
+| `queue` (house default) | starts a turn, unsettles | own turn after the current one | additive evidence, non-urgent feedback, follow-ups, scheduled or mail wakes |
+| `steer` | refused: nothing to steer | joins the running turn; **Claude aborts its in-flight tool calls** | the turn is heading the wrong way or toward harm, so waiting costs more than the abort |
+| `restart` | refused | interrupts, reruns the turn, cancels its background work | only when the user asks or the brief authorizes it |
+| `auto` (tool default) | starts | steers whenever a provider turn runs, else queues | don't: it steers by accident |
+
+- A turn waiting on an approval or question holds queued text too; queued text keeps a self-settling turn open ([settle](settle-thread.md)). `t3_queue` lists, edits, cancels or `promote_to_steer`s it.
+- Report the result's `delivery` (`started`/`queued`/`steered`/`restarted`).
+- A new review round is a fresh `delegate_task` with full context, never a send to the old child ([workers.md](workers.md)).
+- Source: T3 `ThreadManagementService.sendToThread`, `CommandPolicy`, Claude adapter `activeSteeringInterruptsTools` (upstream main, 2026-11-02). Scripts: `t3-relay send` defaults to `queue` ([relay.md](relay.md)).
 
 ## Model tier
 
