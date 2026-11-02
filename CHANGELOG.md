@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-02 — global template: the wrap-up links what each outcome acted on
+
+- `agents-md/global-template.md` Report tersely: each wrap-up status sits beside the full URL of what it acted on (ticket, mail thread, PR, live page); the "link the ticket" clause moved out of "Worker reports" (read as delegated-worker only) and the "other web URLs only when…" line now scopes to delivered files. Why: a finished ClickUp task's final message reported "✅ ClickUp handed to Thomas" without the ticket link.
+
 ## 2026-11-02 — thread messages queue by default; steer only for corrections
 
 - `t3-manage-thread` **Send mode**: always pass `mode`; `queue` for supplements, evidence, follow-ups and wakes; `steer` only when the running turn must not finish without the correction; `restart` only on request; never `auto`. Why (T3 source, upstream main): `auto` steers whenever a provider turn runs, and steering a Claude turn aborts its in-flight tool calls; `queue` on an idle or settled thread starts (and unsettles) it just like `auto`.
