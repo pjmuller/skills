@@ -10,13 +10,15 @@ benchmark/run ~/.local/share/screenshare-benchmark/full      # private real reco
 
 `DIR/labels.json`: `{"<name>": {"video": path (absolute or relative to DIR), "shares": [[start, end], …]
 | "full", "layout": "note"}}`. A share = seconds Meet shows the presentation layout, presenter placeholder
-tile included; `"full"` = not a Meet recording, expect `full-fallback`. Padding shows as −2/+2 s.
+tile included; `"full"` = a screen recording without webcams, expect ≥ 90% of it to get frames. Optional
+`"detector": "desktop"` runs `--layout desktop` (local recordings: shares = seconds a screen, not webcams, fills the
+frame). Padding shows as −2/+2 s (desktop: +1/−1).
 
 > [!IMPORTANT]
 > Real calls contain faces, names, meeting codes and customer UI: they never enter this public repo.
 > Keep them in a private, non-git directory (owner's machine: `~/.local/share/screenshare-benchmark/`
 > with `full/` 17 tuning recordings, `heldout/` 5 recordings labelled after tuning, `clips/` 14 audio-free
-> 35–80 s cuts). Labels hold only paths and seconds.
+> 35–80 s cuts, `desktop/` local CleanShot calls). Labels hold only paths and seconds.
 
 ## Synthetic set (`make-clips`)
 
@@ -57,4 +59,10 @@ set (14 cuts): P 0.97 / R 0.83, all of the loss in the isolated near-black termi
 - A share that opens on a photo of people starts late (r6: +84 s) until slides or UI appear.
 - Ranges with two gutter positions (participant count changed) crop to the wider box: a filmstrip
   sliver may stay in.
-- Only Google Meet as recorded by Fathom/Leexi bots; Zoom/Teams/Loom/CleanShot → `full-fallback`.
+- The Meet rule knows only Google Meet as recorded by Fathom/Leexi bots; everything else takes the desktop rule
+  (`auto` without a Meet margin, or `--layout desktop`).
+- Desktop rule, 2026-11-02: one real call (CleanShot of a 2-person ClickUp SyncUp, own-desktop demo) P 1.00 /
+  R 0.91, no webcam second sent; Meet sets unchanged (it never runs there); pure screen recordings 96–99% of
+  seconds get frames. Unvalidated: a remote share inside a desktop recording with big webcam tiles beside it
+  (whole-frame camera texture ≥ 25% → audio only, a safe miss); fixture `meet-share.jpg` scores 0.15 (passes).
+  A photo- or video-heavy screen reads as camera: audio only.

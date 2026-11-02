@@ -16,8 +16,11 @@ Key/backend, first match wins (Gemini Developer API; files over 20 MB go through
 Audio files (.ogg/.opus/.m4a/.aac/.mp3/.wav/.flac) are sent as audio; anything else as video/mp4.
 
 --ranges <name>.screenshare.json (from detect-screenshare; {"method", "ranges": [{"start", "end"}]}) sends
-the full audio but frames only inside those ranges; the rest costs audio tokens only. "ranges": [] means
-audio only; method "full-fallback" (not a Meet recording) sends the whole video as without --ranges.
+the full audio but frames only inside those ranges: each range is cut locally into its own silent clip, so
+frames outside them (webcam faces) are never uploaded; the rest costs audio tokens only. "ranges": [] means
+audio only; method "full-fallback" sends the whole video as without --ranges.
+Several audio tracks (CleanShot/QuickTime: system audio + microphone) are mixed into one; otherwise only the
+first track (the remote side) would be heard.
 
 Writes OUT (the model's markdown) and OUT with .usage.json (tokens per modality, latency, USD at list).
 Measured 2026-10-08, 2-min 480p clip, 11.2k input tokens (video 66/frame at default resolution, audio
@@ -99,24 +102,47 @@ def ffmpeg(*args: str) -> None:
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args], check=True)
 
 
+def audio_streams(video: Path) -> int:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                          "-of", "csv=p=0", str(video)], capture_output=True, text=True).stdout
+    return len(out.split())
+
+
+def audio_args(video: Path) -> list[str]:
+    """ffmpeg output args for one mono speech track: all input audio tracks mixed (local + remote side)."""
+    n = audio_streams(video)
+    if n <= 1:
+        return ["-map", "0:a:0?", "-ac", "1"]
+    inputs = "".join(f"[0:a:{i}]" for i in range(n))
+    # normalize=0: amix would otherwise divide every track by n, and the remote side is already quiet.
+    return ["-filter_complex", f"{inputs}amix=inputs={n}:duration=longest:normalize=0[a]", "-map", "[a]", "-ac", "1"]
+
+
+def mixed_copy(video: Path, tmp: Path) -> Path:
+    """The video itself, or a copy whose several audio tracks are mixed into one (video stream copied)."""
+    if audio_streams(video) <= 1:
+        return video
+    out = tmp / f"mixed{video.suffix or '.mp4'}"
+    ffmpeg("-i", str(video), "-map", "0:v?", "-c:v", "copy", *audio_args(video), "-c:a", "aac", "-b:a", "48k", str(out))
+    return out
+
+
 def ranged_parts(client: genai.Client, backend: str, video: Path, ranges: list[dict], tmp: Path) -> list:
-    """Full audio track + the silent video clipped to each range, each clip labelled with its absolute time."""
-    audio, silent = tmp / "audio.m4a", tmp / "silent.mp4"
-    ffmpeg("-i", str(video), "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "48k", str(audio))
+    """Full audio track + one silent clip per range, cut locally and labelled with its absolute time."""
+    audio = tmp / "audio.m4a"
+    ffmpeg("-i", str(video), "-vn", *audio_args(video), "-c:a", "aac", "-b:a", "48k", str(audio))
     parts = ["Full audio of the recording follows. Its timeline is the recording timeline.",
              media_part(client, backend, audio, "audio/mp4"),
              "Video was sent only for these ranges (screen sharing). Outside them there is audio only: "
              "do not describe visuals there." if ranges else "No screen was shared: audio only, no visual section."]
-    if not ranges:
-        return parts
-    ffmpeg("-i", str(video), "-an", "-c:v", "copy", str(silent))
-    silent_part = media_part(client, backend, silent, "video/mp4")
-    for r in ranges:
-        parts.append(f"Video clip {clock(r['start'])}-{clock(r['end'])} (recording timeline; if the clip's own "
-                     f"timestamps start at 00:00:00, add {clock(r['start'])}).")
-        clip = types.Part(file_data=silent_part.file_data, inline_data=silent_part.inline_data)
-        clip.video_metadata = types.VideoMetadata(start_offset=f"{r['start']:.1f}s", end_offset=f"{r['end']:.1f}s")
-        parts.append(clip)
+    for i, r in enumerate(ranges):
+        # Re-encoded, not stream-copied: a copy starts at the previous keyframe and would carry webcam frames.
+        clip = tmp / f"clip{i:02d}.mp4"
+        ffmpeg("-ss", f"{r['start']:.2f}", "-i", str(video), "-t", f"{r['end'] - r['start']:.2f}", "-an", "-c:v", "libx264",
+               "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(clip))
+        parts.append(f"Video clip {clock(r['start'])}-{clock(r['end'])} (recording timeline; the clip's own "
+                     f"timestamps start at 00:00:00: add {clock(r['start'])}).")
+        parts.append(media_part(client, backend, clip, "video/mp4"))
     return parts
 
 
@@ -150,7 +176,19 @@ def main() -> None:
                         help="high (default, ~264 tokens/frame) reads screen text; low/medium (66) cost 4x less "
                              "video tokens but invent most small text: only for long videos where the screen doesn't matter")
     parser.add_argument("--ranges", type=Path, help="JSON with ranges [{start,end}] that get frames; audio covers all")
+    parser.add_argument("--dry-run", type=Path, metavar="DIR",
+                        help="write exactly what would be uploaded (audio.m4a, clipNN.mp4) to DIR and stop: no key, no call")
     args = parser.parse_args()
+
+    if args.dry_run:  # inspect the payload (faces?) before paying for it
+        args.dry_run.mkdir(parents=True, exist_ok=True)
+        plan = json.loads(args.ranges.read_text()) if args.ranges else {"method": "full-fallback"}
+        if plan.get("method") == "full-fallback":
+            sys.exit("dry run: no --ranges (or full-fallback): the whole video would be sent")
+        ranged_parts(None, "dry-run", args.video, plan["ranges"], args.dry_run)
+        for f in sorted(args.dry_run.glob("*.m4a")) + sorted(args.dry_run.glob("clip*.mp4")):
+            print(f"{f}  {f.stat().st_size} bytes")
+        return
 
     # meeting.gemini.part01.mp4 -> meeting.part01.transcript.md: keep version/part suffixes distinct.
     out = args.out or args.video.with_name(args.video.stem.replace(".gemini", "", 1) + ".transcript.md")
@@ -169,7 +207,7 @@ def main() -> None:
                 parts = ranged_parts(client, backend, args.video, plan["ranges"], Path(tmp))
             else:
                 mime = AUDIO_MIME.get(args.video.suffix.lower(), "video/mp4")
-                parts = [media_part(client, backend, args.video, mime)]
+                parts = [media_part(client, backend, mixed_copy(args.video, Path(tmp)), mime)]
             started = time.time()
             for attempt in range(3):
                 try:

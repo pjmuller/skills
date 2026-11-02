@@ -36,3 +36,21 @@ Resolution is the big lever, the crop adds on top (input tokens identical per co
 writes longer output). Uncropped low invented page names, 2023 dates and practitioners. Webcam faces
 are not uploaded. Video tokens = seconds × 66 even at 0.5 fps: Gemini samples 1 fps. Tile box:
 `share_box` (detect-screenshare); overlay graph: `video_filter` (shrink-video).
+
+## Encoding resolution vs media resolution
+
+Gemini 3 bills a fixed 280 tokens/frame at `high`, 70 at `low`/`medium`, audio 25/s
+([media resolution](https://ai.google.dev/gemini-api/docs/media-resolution), checked 2026-11-02); the encoded
+pixel size is not an input. 2026-11-02, 33 s of a CleanShot desktop demo (ClickUp chat, Google results) at 1 fps,
+3.8 Flash, thinking medium, same prompt, 2 runs per arm, 19 visible facts held out from the source frames:
+
+| encode | bytes | API resolution | input tokens | facts found | $ / run |
+| --- | --- | --- | --- | --- | --- |
+| 1920×1080 | 630 KB | high | 9,847 | 13, 13 | 0.020–0.022 |
+| 1280×720 (presets) | 420 KB | high | 9,847 | 16, 13 | 0.021–0.023 |
+| 854×480 | 297 KB | high | 9,847 | 16, 12 | 0.016–0.023 |
+| 1280×720 | 420 KB | low | 3,313 | 6, 5 | 0.012–0.019 |
+
+Run-to-run spread exceeds any resolution effect; `low` loses the message texts. All arms misread about half of
+the ~9 px message times (8:59 → 9:19, 18:51 → 16:51) and two invented an app (1Password) or a Google Doc ID:
+small text and IDs need source frames at any encode. Keep the 720p presets (smaller upload, same read).

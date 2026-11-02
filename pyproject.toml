@@ -13,6 +13,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "google-genai>=1",
+    "numpy>=1.26",
     "pytest>=8",
     "tomlkit>=0.13,<1",
 ]

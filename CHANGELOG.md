@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-02 — video: webcam frames never uploaded; desktop recordings; both audio tracks
+
+- `transcribe-gemini --ranges` cuts each range into its own local clip; before, it uploaded the whole silent video and only told Gemini which offsets to read, so webcam frames reached Google's File API. New `--dry-run DIR` writes exactly the audio + clips it would send. Why: PJ's requirement that faces-only stretches stay audio only (a KA daily recorded with CleanShot).
+- `detect-screenshare --layout desktop` (also `auto` without a Meet margin, replacing `full-fallback`): per-frame camera texture, no smoothing/bridging/padding, so local recordings of any meeting app send frames only while a screen fills the frame, whoever shares. Meet-bot results unchanged (benchmark identical). Why: a dark ClickUp SyncUp window passed the Meet margin test → 0 ranges, demo lost; non-Meet files used to upload every frame.
+- `shrink-video` and `transcribe-gemini` mix all audio tracks: CleanShot/QuickTime store system audio and microphone separately and ffmpeg kept only the remote side.
+- `compression.md`: 1080p/720p/480p encodes bill the same tokens and read the same; `--media-resolution` is the lever (measured). `recording-watcher` treats a `desktop` verdict like a Meet one.
+
 ## 2026-11-02 — Bitwarden page fill: named failures, page ready first
 
 - `fill_js` returns `error` + `next` per cause: `expired` (re-copy `--to page`), `csp` / `blocked` / `field_changed` (re-copy `--to clipboard`), `no_field` (fix the page, rerun), `wrong_origin` (copy for the tab's host). Origin and deadline are checked in-page before the single fetch, CSP via `securitypolicyviolation`; verified in headless Chromium 156. Why: a real login got "fetch blocked (page CSP?) or expired" and the agent could not pick between re-copy and clipboard; the broker's refusals carry no CORS header, so every server-side refusal looked like a block.

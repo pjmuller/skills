@@ -49,7 +49,19 @@ def test_score_counts_seconds_and_boundaries():
     result = {"duration": 40.0, "method": "meet-layout", "ranges": [{"start": 8.0, "end": 30.0}]}
     s = bench.score([[10, 28]], result)
     assert (s["tp"], s["fp"], s["fn"], s["errors"]) == (18, 4, 0, [[-2, 2]])
-    assert bench.score("full", {"method": "full-fallback"})["full_ok"]
+    assert bench.score("full", {"method": "desktop", "duration": 60.0, "share_seconds": 58.0})["full_ok"]
+    assert not bench.score("full", {"method": "desktop", "duration": 60.0, "share_seconds": 20.0})["full_ok"]
+
+
+def test_desktop_rule_never_bridges_a_webcam_frame():
+    """Unsmoothed per-frame flags: one gallery frame between two screen runs splits them; ranges shrink 1 step."""
+    import numpy as np
+    camera = np.array([0.43] * 10 + [0.13] * 10 + [0.43] + [0.36] * 5 + [0.13] * 20 + [0.43] * 10)
+    f = {"camera": camera, "page_flat": np.where(camera < 0.2, 0.8, 0.5), "page_text": np.full(len(camera), 0.03),
+         "margin": np.ones(len(camera), bool)}
+    result = detect.detect(f, 1.0, float(len(camera)), "desktop")
+    assert result["method"] == "desktop" and result["uncertain_seconds"] == 0.0  # dimmed webcams: 0.36 >= CAMERA_SURE
+    assert [(r["start"], r["end"]) for r in result["ranges"]] == [(11.0, 19.0), (27.0, 45.0)]
 
 
 @needs_tools
@@ -74,6 +86,18 @@ def video(tmp: Path, name: str, timeline: list[tuple[str, int]]) -> Path:
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing),
                     "-vf", "fps=2,format=yuv420p", "-c:v", "libx264", "-g", "2", str(out)], check=True)
     return out
+
+
+@needs_tools
+def test_desktop_layout_sends_share_frames_never_the_gallery(tmp_path):
+    """A local recording of a call (someone shares, then back to the webcam gallery): only share seconds get frames."""
+    path = video(tmp_path, "desk", [("meet-gallery", 12), ("meet-share", 20), ("meet-gallery", 12)])
+    subprocess.run(["uv", "run", "-q", "--script", str(SCRIPT), str(path), "--layout", "desktop", "--out",
+                    str(path.with_suffix(".json"))], check=True)
+    plan = json.loads(path.with_suffix(".json").read_text())
+    assert plan["method"] == "desktop" and len(plan["ranges"]) == 1
+    r = plan["ranges"][0]
+    assert 12 <= r["start"] <= 14 and 30 <= r["end"] <= 32
 
 
 @needs_tools

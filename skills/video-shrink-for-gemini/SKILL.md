@@ -61,8 +61,9 @@ one question round only for gaps.
 
 ## Shrink
 
-`shrink-video --preset normal FILE` (keep the original). API tokens follow duration, not bytes:
-shrinking only speeds the upload. Native `agy` rejects attachments over **50 MiB**: add
+`shrink-video --preset normal FILE` (keep the original). API tokens follow duration × frames, not bytes or
+pixels: 1080p, 720p and 480p bill the same and read the same ([measured](compression.md#encoding-resolution-vs-media-resolution));
+`--media-resolution` is the lever. Shrinking only speeds the upload. Native `agy` rejects attachments over **50 MiB**: add
 `--max-bytes 48M` (overlapping parts + `<name>.chunks.md`); presets and stitching parts:
 [compression.md](compression.md). Never `extreme` when small screen text matters.
 
@@ -123,12 +124,22 @@ Defaults are tuned (`--help` has the numbers): `--thinking medium` (`low` drops 
 doubles cost for nothing); `--media-resolution high` decides whether screen text is read or
 invented. `low` only for long videos whose screen doesn't matter.
 
-**Google Meet recordings (Fathom, Leexi)**: `detect-screenshare <name>.gemini.mp4` →
-`<name>.gemini.screenshare.json`; `shrink-video --crop <that json> SOURCE` → `<name>.gemini.crop.mp4`
-(share tile fills the frame, no webcam faces); transcribe the crop with `--ranges <that json>`
-(frames only while sharing, audio throughout). Not Meet → the JSON says `full-fallback`, whole video
-is sent. Don't locate shares from transcript cues ("share my screen"): they miss most starts.
-Changing the detector → run [benchmark](benchmark/README.md) (synthetic set in pytest, real calls private).
+**Any recording with webcams: faces never go to Gemini.** `detect-screenshare` → `<name>.screenshare.json`, then
+transcribe with `--ranges` that JSON: full audio, frames only inside the ranges, each cut locally into its own clip
+(nothing else is uploaded). Check the payload first when it matters: `transcribe-gemini … --dry-run DIR` writes
+exactly the audio + clips it would send. Never send a webcam recording without `--ranges`.
+- **Meet bots (Fathom, Leexi)**: default `--layout auto`; `shrink-video --crop <json> SOURCE` →
+  `<name>.gemini.crop.mp4` (share tile fills the frame, filmstrip cut off); transcribe the crop.
+- **Local recordings** (CleanShot, QuickTime, a Loom with a camera bubble; any meeting app, whoever shares):
+  `detect-screenshare --layout desktop ORIGINAL`. Frames go only where a screen fills the frame (webcam texture
+  < 25%), never across a webcam frame; a dark meeting app fools `auto` into the Meet rule (0 ranges, demo lost).
+  `uncertain_seconds` > 0: look at those frames. Shared from your own desktop, a ≥ 5 s glance at another app is
+  sent too: record the meeting window (CleanShot "window") when the rest of the desktop is private.
+- CleanShot/QuickTime write system audio and microphone as **two tracks**: `shrink-video`/`transcribe-gemini`
+  mix them; a plain `ffmpeg -i` keeps only the first (the remote side).
+
+Don't locate shares from transcript cues ("share my screen"): they miss most starts. Changing the detector → run
+[benchmark](benchmark/README.md) (synthetic set in pytest, real calls private).
 
 Verify: read the file; check speech, visual changes, timestamps and coverage against the recording;
 report gaps. Apply corrections in the transcript file itself and replace its `Verification: none

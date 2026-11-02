@@ -6,7 +6,8 @@
 """Score detect-screenshare against labelled clips: share-second precision/recall and boundary error.
 
 DIR/labels.json maps a clip name to {"video": path (absolute or relative to DIR), "shares": [[start, end], ...]
-seconds with a share layout on screen | "full" (not a Meet recording: expect full-fallback), "layout": note}.
+seconds with a share layout on screen | "full" (a screen recording without webcams: expect >= 90% of it to get
+frames), "layout": note, optional "detector": "desktop" (passed as --layout)}.
 Synthetic set: `make-clips DIR` (public). Real calls stay private, outside git (README.md).
 
 Boundary error per labelled share: predicted start minus true start and predicted end minus true end of the
@@ -27,7 +28,7 @@ DETECT = Path(__file__).resolve().parent.parent / "scripts" / "detect-screenshar
 def score(label, result: dict) -> dict:
     """One clip: true/false positive and missed seconds, boundary errors, verdict for non-Meet clips."""
     if label == "full":
-        return {"full_ok": result["method"] == "full-fallback", "tp": 0, "fp": 0, "fn": 0, "errors": []}
+        return {"full_ok": result["share_seconds"] >= 0.9 * result["duration"], "tp": 0, "fp": 0, "fn": 0, "errors": []}
     n = int(result["duration"]) + 1
     truth, pred = [False] * n, [False] * n
     for a, b in label:
@@ -41,7 +42,7 @@ def score(label, result: dict) -> dict:
         errors.append([round(min(r["start"] for r in hit) - a), round(max(r["end"] for r in hit) - b)] if hit else "miss")
     return {"tp": sum(t and p for t, p in zip(truth, pred)), "fp": sum(p and not t for t, p in zip(truth, pred)),
             "fn": sum(t and not p for t, p in zip(truth, pred)), "errors": errors,
-            "full_ok": result["method"] == "meet-layout"}
+            "full_ok": result["method"] in ("meet-layout", "desktop")}
 
 
 def run(directory: Path, out: Path, jobs: int = 4) -> dict:
@@ -54,9 +55,11 @@ def run(directory: Path, out: Path, jobs: int = 4) -> dict:
         video = Path(spec["video"]).expanduser()
         video = video if video.is_absolute() else directory / video
         dest = out / f"{name}.json"
-        subprocess.run([str(DETECT), str(video), "--out", str(dest)], check=True, capture_output=True)
+        subprocess.run([str(DETECT), str(video), "--out", str(dest), "--layout", spec.get("detector", "auto")],
+                       check=True, capture_output=True)
         result = json.loads(dest.read_text())
-        return name, {**score(spec["shares"], result), "layout": spec.get("layout", ""), "result": result}
+        return name, {**score(spec["shares"], result), "layout": spec.get("layout", ""), "result": result,
+                      "label": "full" if spec["shares"] == "full" else "shares"}
 
     with ThreadPoolExecutor(jobs) as pool:
         return dict(pool.map(one, [n for n in labels if not n.startswith("_")]))
@@ -73,8 +76,8 @@ def report(scores: dict) -> dict:
         method = s["result"]["method"]
         if not s["full_ok"]:
             line = f"WRONG method {method}"
-        elif method == "full-fallback":
-            line = "full-fallback OK"
+        elif s["label"] == "full":
+            line = f"screen recording OK ({s['result']['share_seconds']:.0f} of {s['result']['duration']:.0f} s get frames)"
         else:
             p = s["tp"] / (s["tp"] + s["fp"]) if s["tp"] + s["fp"] else 1.0
             r = s["tp"] / (s["tp"] + s["fn"]) if s["tp"] + s["fn"] else 1.0

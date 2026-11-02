@@ -437,7 +437,7 @@ def visual_media(call, visual, transcript_path):
              f"header), never at the raw transcript.md, so no later thread watches the video again.")
     if status == "audio-only":
         return "Audio-only recording: work from the transcript."
-    meet = status == "done" and visual.get("method") == "meet-layout"
+    meet = status == "done" and visual.get("method") in ("meet-layout", "desktop")  # desktop: not a Meet layout (Zoom, Teams)
     if meet and not visual.get("ranges"):
         video = visual.get("video")
         where = (f"the video stays at {video} for {MEDIA_KEEP.days} day" if video else f"re-download it per {skill}")

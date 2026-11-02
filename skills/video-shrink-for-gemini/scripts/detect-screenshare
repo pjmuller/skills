@@ -19,8 +19,19 @@ geometry only locates; the big tile's content decides. One frame per second at 3
 - runs of >= 10 s open a share; gaps <= 20 s merge, gaps <= 120 s merge while the share's gutter and
   filmstrip stay (near-black terminals and photos look like background or webcams); edges padded 2 s.
 
-Each share range carries "crop": the tile's [x, y, w, h] (fractions) for shrink-video --crop. Anything else
-(no dark client margin: Loom, Zoom, Teams, CleanShot) gets one range over the whole video ("full-fallback").
+Each share range carries "crop": the tile's [x, y, w, h] (fractions) for shrink-video --crop.
+
+--layout desktop (local screen recordings: CleanShot, QuickTime, Loom; any meeting app, whoever shares), also
+auto when the frame has no Meet client margin: per frame, "screen" = camera texture (luma steps of 1-12 between
+neighbours: sensor noise, skin, gradients) on < 25% of the frame, >= 60% flat pixels and text edges. No smoothing,
+gap bridging or padding (ranges shrink one step per side: keyframe sampling is ±1 s), runs >= 5 s: a webcam frame between two screen frames is
+never sent. Other frames are audio only; "uncertain_seconds" counts frames neither camera nor screen (a share
+picker over dimmed webcams) for the verifier to look at. A dark meeting app (ClickUp SyncUp) passes the Meet margin
+test, so callers with a local recording pass --layout desktop: auto would apply the Meet rule and send nothing.
+Measured 2026-11-02 on a 13-min CleanShot of a 2-person ClickUp SyncUp (faces 92%, own-desktop demo at the end):
+faces camera 0.39-0.44, share picker over dimmed faces 0.36, ClickUp/Google screens 0.06-0.18; ranges 731-740 and
+748-781 s, every face second skipped. Pure CleanShot walkthroughs keep 66/67 s and 579/583 s. Applied to the Meet
+benchmark instead of the Meet rule it adds camera-off avatar and logo galleries (r6: 59 s): hence the explicit flag.
 
 Measured 2026-10-27 (benchmark/README.md: runner, sets, limits): 17 labelled Meet recordings (11.5 h;
 Fathom + Leexi; speaker view, 2-6 tile galleries, spotlight; slides, live UI, dark IDE/terminal) and 5
@@ -45,6 +56,8 @@ VOTE_WINDOW = 9            # seconds of median smoothing for the content votes
 MIN_RUN = 10               # seconds of share frames that open a share
 GAP, LAYOUT_GAP = 20, 120  # merge gaps up to GAP s always, up to LAYOUT_GAP s while the share layout stays
 PAD = 2                    # seconds added on both sides (transitions, sampling)
+CAMERA_MAX, CAMERA_SURE = 0.25, 0.35  # desktop rule: camera-texture share below = screen, above SURE = webcam
+DESKTOP_MIN_RUN = 5        # seconds; shorter app switches (a glance at the inbox) stay audio only
 
 
 def probe(video: Path) -> tuple[float, float, float]:
@@ -85,7 +98,8 @@ def features(stream) -> dict:
     right of it (tallest as a fraction of the height, how many stacked), the big tile's box, its screen votes."""
     import numpy as np
 
-    keys = ("margin", "gutter", "strength", "left", "right", "film", "stack", "box", "flat", "grey", "still", "skin", "detail")
+    keys = ("margin", "gutter", "strength", "left", "right", "film", "stack", "box", "flat", "grey", "still", "skin", "detail",
+            "camera", "page_flat", "page_text")
     out = {k: [] for k in keys}
     bg, prev, prev_raw, still = 17, None, None, 0.0
     lo, hi = int(W * WINDOW[0]), int(W * WINDOW[1])
@@ -119,12 +133,14 @@ def features(stream) -> dict:
             still = float((tile == prev[inner]).mean()) if prev is not None else 0.0
         prev, prev_raw = luma, raw
         r, g, b = (rgb[inner][..., c] for c in range(3))
+        step = np.abs(np.diff(luma, axis=1))  # whole frame, for the desktop rule
         values = (margin, x, float(cols[x]), float(1 - cols[int(W * 0.03):max(int(W * 0.03) + 1, x - 1)].mean()),
                   float(1 - cols[x + 2:int(W * 0.98)].mean()), film, stack, (x0, y0, x, y1),
                   float((np.diff(tile, axis=1) == 0).mean()) if tile.shape[1] > 1 else 0.0,
                   float((spread[inner] <= 3).mean()), still,
                   float(((r > 95) & (g > 40) & (b > 20) & (r - g > 15) & (r - b > 15) & (r - b < 120)).mean()),
-                  float((np.abs(np.diff(tile, axis=1)) > 20).mean()) if tile.shape[1] > 1 else 0.0)
+                  float((np.abs(np.diff(tile, axis=1)) > 20).mean()) if tile.shape[1] > 1 else 0.0,
+                  float(((step >= 1) & (step <= 12)).mean()), float((step == 0).mean()), float((step > 20).mean()))
         for k, v in zip(keys, values):
             out[k].append(v)
     return {k: np.array(v) for k, v in out.items()}
@@ -215,11 +231,20 @@ def share_box(f: dict, flags: list[bool], start: float, end: float, step: float)
     return [round(x, 3), round(y, 3), round(right - x, 3), round(bottom - y, 3)]
 
 
-def detect(f: dict, step: float, duration: float) -> dict:
+def desktop(f: dict) -> tuple[list[bool], list[bool]]:
+    """Per frame, unsmoothed: (screen, uncertain). Webcams and dimmed webcams fail on camera texture alone."""
+    screen = (f["camera"] < CAMERA_MAX) & (f["page_flat"] >= 0.6) & (f["page_text"] >= 0.005)
+    uncertain = ~screen & (f["camera"] < CAMERA_SURE)
+    return screen.tolist(), uncertain.tolist()
+
+
+def detect(f: dict, step: float, duration: float, layout: str = "auto") -> dict:
     """Features -> the JSON contract (method, ranges with crop, share_seconds)."""
-    if not len(f["margin"]) or f["margin"].mean() < 0.6:
-        result = {"duration": round(duration, 1), "method": "full-fallback",
-                  "ranges": [{"start": 0.0, "end": round(duration, 1), "kind": "share", "confidence": 0.0}]}
+    if layout == "desktop" or (layout == "auto" and (not len(f["margin"]) or f["margin"].mean() < 0.6)):
+        screen, uncertain = desktop(f)
+        ranges = to_ranges(screen, step, duration, min_run=DESKTOP_MIN_RUN, gap=0, layout_gap=0, pad=-step)
+        result = {"duration": round(duration, 1), "method": "desktop", "ranges": ranges,
+                  "uncertain_seconds": round(sum(uncertain) * step, 1)}
     else:
         flags = classify(f, step)
         ranges = to_ranges(flags, step, duration, f["gutter"], filmstrip(f, step))
@@ -234,6 +259,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("video", type=Path)
     parser.add_argument("--out", type=Path, help="default <video stem>.screenshare.json beside the video")
+    parser.add_argument("--layout", choices=["auto", "meet", "desktop"], default="auto",
+                        help="meet: Fathom/Leexi bot recording; desktop: local screen recording (any app, whoever shares); "
+                             "auto: meet when the Meet client margin is seen, else desktop")
     parser.add_argument("--step", type=float, default=1.0,
                         help="seconds between analysed frames (default 1; never finer than the video's frame rate)")
     args = parser.parse_args()
@@ -247,11 +275,12 @@ def main() -> None:
     f = features(frames(video, step, keyframes_only=key_spacing <= 1.5 * step))
     if not len(f["margin"]):
         raise SystemExit("no frames decoded")
-    result = detect(f, step, duration)
+    result = detect(f, step, duration, args.layout)
     out.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
     shared = result["share_seconds"]
     print(f"{out}: {result['method']}, {len(result['ranges'])} ranges, {shared / 60:.1f} of {duration / 60:.1f} min "
-          f"get frames ({100 * (1 - shared / duration) if duration else 0:.0f}% skipped)")
+          f"get frames ({100 * (1 - shared / duration) if duration else 0:.0f}% skipped)"
+          + (f"; {result['uncertain_seconds']:.0f} s uncertain, audio only: check those frames" if result.get("uncertain_seconds") else ""))
 
 
 if __name__ == "__main__":
