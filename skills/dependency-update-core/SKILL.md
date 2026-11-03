@@ -80,8 +80,14 @@ read the CI/deploy workflow triggers: a branch push must not deploy anything.
 
 1. Run the wrapper's checks on `origin/<base>` first (baseline), then on the branch: tests, lint,
    build, the QA skill's critical flows. A failure on both is pre-existing; only on the branch is ours.
-2. Add upgrade-specific checks from the release notes: the changed behaviour or deprecation on the
-   paths we use (a page, a job, an API call, an asset build, a container boot).
+2. **Impact map, then run the real paths.** The suite stubs exactly the edges dependencies live on
+   (server process, file parsing, outbound HTTP, cloud and SaaS SDKs), so green tests prove little
+   about an upgrade. Per upgraded runtime package: our call sites (direct imports + the parents that
+   pull it in), the user-visible flow behind them, and the cheapest *real* local exercise of it,
+   run differentially (same inputs on base and branch, outputs diffed). Add the release notes'
+   changed behaviour on those paths. Method + edge → exercise table: [references/impact-qa.md](references/impact-qa.md).
+   The PR carries the matrix (package → our path → check → result); a path left unexercised is a
+   "Not run" line, never silence.
 3. UI possibly affected (asset pipeline, admin framework, CSS/JS) → same screens before/after
    ([ui-before-after](../ui-before-after/SKILL.md) when installed); screenshots go on the ticket.
 4. Synthetic data and the wrapper's safe environment only: no production writes, no mail/SMS to
