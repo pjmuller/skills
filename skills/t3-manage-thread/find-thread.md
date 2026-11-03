@@ -11,7 +11,7 @@ Never dump a whole thread into context. Flags: `--help`.
 
 1. **Translate the ask** into filters + 4–8 keyword variants (synonyms, table/file names, error
    strings). Voice-dictated: `--fuzzy` for phonetic terms. `--since` = *active* in the window.
-2. **`search`**: full term coverage (`3/4` column) beats raw hits. Sub-agent / delegated threads
+2. **`search`**: full term coverage (`3/4` column) beats raw hits. Sub-agent / delegated / side-chat threads
    are hidden; `--subagents` includes them.
 3. **`peek`** the top 3–5 (first prompts usually settle it).
 4. **`grep`** finalists for the distinguishing fact.

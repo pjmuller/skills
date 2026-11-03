@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — T3 0.1.6 side chats: purge and find-thread treat them as hidden children
+
+- T3 0.1.6 side chats ([#26901](https://github.com/pingdotgg/t3code/pull/26901), `/btw` or `/side`) are stored as `lineage.relationshipToParent = "fork"` + `lineage.sideChat = true`, hidden from every native list and deleted with their parent. `t3-purge-threads` now purges a side chat with its parent's family (before: counted as an independent fork, so purging the parent left an invisible orphan); `t3-find-thread` hides them like sub-agents unless `--subagents`. Forks stay independent. `t3_store.py` documents the field.
+
 ## 2026-11-02 — video-shrink-for-gemini: verify-transcript grids; prompt stops inventing actions
 
 - New `verify-transcript TRANSCRIPT ORIGINAL`: lints timestamps (names the one line that jumps ahead) and feedback items without URL/timestamp, and cuts a 0.5 s frame grid (±3 s, exact seeks, labelled) per feedback item and per "vanished / not saved / strange" cue into `<name>.transcript.frames/verify/index.md` for the verifying agent; `--at`, `--crop`, `--step` zoom. Why: on a 14-min walkthrough every Gemini run (1 fps, old or new prompt, also 2 fps) missed a sub-second form reset and an untick, and narrated the reset as "clicked Add again"; the grids covered all five frame-verified misses in every run.

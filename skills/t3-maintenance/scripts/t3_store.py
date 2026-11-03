@@ -7,7 +7,8 @@ Store facts the CLIs rely on:
 - threads: `orchestration_v2_projection_threads`; settle/pin/lineage live in
   `payload_json` (`$.settledOverride`, `$.pinnedAt`, `$.lineage.parentThreadId`,
   `$.lineage.relationshipToParent` = 'subagent' for Agent-tool sub-agents and
-  `delegate_task` children, which are not top-level threads).
+  `delegate_task` children, which are not top-level threads; `$.lineage.sideChat`
+  = true marks a side chat, a hidden fork of its parent, also not top-level).
 - messages: `orchestration_v2_projection_messages`, roles user|assistant only
   (reasoning is a turn item, not a message); text, `$.createdBy` ('user' = the
   human) and `$.senderThreadId` (cross-thread sends) in `payload_json`.

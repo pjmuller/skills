@@ -23,6 +23,7 @@ REFERRAL = "aaaaaaaa-0000-4000-8000-000000000001"  # bare UUID (imported history
 STYLING = "mcp:bbbbbbbb-0000-4000-8000-000000000002"
 WORK = f"thread:project:{PID}:cccccccc-0000-4000-8000-000000000003"
 SUBAGENT = "thread:delegated-task:command%3Amcp%3Axyz"
+SIDE_CHAT = "mcp:5ide0c4a-0000-4000-8000-000000000001"
 PURGED = "mcp:dddddddd-0000-4000-8000-000000000004"
 
 
@@ -95,9 +96,13 @@ def make_store(root: Path) -> Path:
         (STYLING, "p1", "Fix button styling", "2026-05-01T09:00:00Z", "2026-05-01T10:00:00Z", "2026-05-02T00:00:00Z", None),
         (WORK, PID, "Ahoy events for patient emails", "2026-08-20T09:00:00Z", "2026-08-20T12:00:00Z", None, None),
         (SUBAGENT, PID, "Ahoy worker", "2026-08-21T09:00:00Z", "2026-08-21T12:00:00Z", None, "subagent"),
+        (SIDE_CHAT, PID, "Ahoy side question", "2026-08-21T09:00:00Z", "2026-08-21T12:00:00Z", None, "side"),
     ]
     for thread_id, project, title, created, updated, archived, relation in threads:
-        payload = json.dumps({"lineage": {"relationshipToParent": relation, "parentThreadId": None}})
+        lineage = {"relationshipToParent": relation, "parentThreadId": None}
+        if relation == "side":  # T3 0.1.6 side chat: a hidden fork (#26901)
+            lineage = {"relationshipToParent": "fork", "parentThreadId": WORK, "sideChat": True}
+        payload = json.dumps({"lineage": lineage})
         db.execute(
             "INSERT INTO orchestration_v2_projection_threads VALUES (?,?,?,?,?,?,NULL,?)",
             (thread_id, project, title, created, updated, archived, payload),
@@ -109,6 +114,7 @@ def make_store(root: Path) -> Path:
         ("m4", STYLING, "user", "the button padding is off", "2026-05-01T09:01:00Z"),
         ("m5", WORK, "assistant", "ahoy_events table has no rows for this tenant", "2026-08-20T09:30:00Z"),
         ("m6", SUBAGENT, "user", "ahoy_events worker brief", "2026-08-21T09:30:00Z"),
+        ("m7", SIDE_CHAT, "user", "ahoy_events side question", "2026-08-21T09:31:00Z"),
     ]
     for message in messages:
         add_message(db, *message)
@@ -153,14 +159,14 @@ class FindThreadTest(unittest.TestCase):
         self.assertEqual(len(self.mod.short_id(SUBAGENT)), 8)  # sha1 fallback
 
     def test_index_then_incremental_is_a_noop(self):
-        self.assertEqual(self.mod.sync_index(self.store, rebuild=True)["threads_refreshed"], 4)
+        self.assertEqual(self.mod.sync_index(self.store, rebuild=True)["threads_refreshed"], 5)
         self.assertEqual(self.mod.sync_index(self.store)["threads_refreshed"], 0)
 
     def test_cache_version_bump_forces_rebuild(self):
         self.mod.sync_index(self.store)
         with sqlite3.connect(self.mod.CACHE_DB) as cache:
             cache.execute("UPDATE meta SET value = 'old' WHERE key = 'version'")
-        self.assertEqual(self.mod.sync_index(self.store)["threads_refreshed"], 4)
+        self.assertEqual(self.mod.sync_index(self.store)["threads_refreshed"], 5)
 
     def test_incremental_picks_up_a_new_message(self):
         self.mod.sync_index(self.store, rebuild=True)
@@ -183,7 +189,9 @@ class FindThreadTest(unittest.TestCase):
 
     def test_subagents_hidden_unless_asked(self):
         self.assertNotIn(SUBAGENT, [r["thread_id"] for r in self.search("ahoy")])
+        self.assertNotIn(SIDE_CHAT, [r["thread_id"] for r in self.search("ahoy")])
         self.assertIn(SUBAGENT, [r["thread_id"] for r in self.search("--subagents", "ahoy")])
+        self.assertIn(SIDE_CHAT, [r["thread_id"] for r in self.search("--subagents", "ahoy")])
 
     def test_all_requires_every_term(self):
         self.assertEqual([r["thread_id"] for r in self.search("--all", "ahoy", "snapshot")], [REFERRAL])

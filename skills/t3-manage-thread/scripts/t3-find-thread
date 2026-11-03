@@ -13,8 +13,8 @@ Progressive disclosure - each step costs more context than the last:
 
 `read` pages a whole thread's messages (live or purged). Reads T3's store read-only
 ($T3CODE_HOME/userdata/statev2.sqlite, default ~/.t3/...) and keeps a private FTS5 cache at
-~/.cache/t3-find-thread/index.sqlite, refreshed incrementally before every command. Sub-agent and
-delegated-task threads are skipped unless --subagents. Nothing is ever written back to T3.
+~/.cache/t3-find-thread/index.sqlite, refreshed incrementally before every command. Sub-agent,
+delegated-task and side-chat threads are skipped unless --subagents. Nothing is ever written back to T3.
 
 Purged threads live on in the backup archive ($T3_ARCHIVE, default ~/.t3/backups/t3-archive.sqlite,
 written by t3-purge-threads / t3-thread-archive). `--backup auto` (default) also searches it when the
@@ -169,7 +169,8 @@ def set_meta(cache: sqlite3.Connection, key: str, value: str) -> None:
 
 THREADS_SQL = """
 SELECT t.thread_id, t.project_id, t.title, t.created_at, t.updated_at, t.archived_at,
-       json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent' AS subagent,
+       (json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+        OR json_extract(t.payload_json, '$.lineage.sideChat') IS 1) AS subagent,
        p.title AS project_title, p.workspace_root
   FROM orchestration_v2_projection_threads t JOIN projection_projects p USING (project_id)
  WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL

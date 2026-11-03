@@ -176,8 +176,10 @@ def load_threads(store: Path, now: datetime) -> dict[str, Thread]:
                 title=row["title"],
                 updated_at=iso(moment),
                 age_seconds=(now - moment).total_seconds(),
-                # Forks also carry a parentThreadId but are independent threads.
-                top_level=lineage.get("relationshipToParent") != "subagent",
+                # Forks also carry a parentThreadId but are independent threads; a side chat
+                # (T3 0.1.6, #26901) is a hidden fork that T3 deletes with its parent.
+                top_level=lineage.get("relationshipToParent") != "subagent"
+                and lineage.get("sideChat") is not True,
                 parent_id=lineage.get("parentThreadId"),
                 archived=row["archived_at"] is not None,
                 deleted=row["deleted_at"] is not None,

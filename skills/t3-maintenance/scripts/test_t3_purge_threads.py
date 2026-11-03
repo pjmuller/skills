@@ -58,6 +58,7 @@ def store(tmp_path: Path) -> Path:
     s.thread("archold-task", "child", parent="archold", minutes=10 * DAY)
     s.thread("archold-grandchild", "grandchild", parent="archold-task", minutes=10 * DAY)
     s.thread("archold-fork", "fork", parent="archold", fork=True, minutes=10 * DAY)
+    s.thread("archold-side", "side chat", parent="archold", fork=True, side_chat=True, minutes=10 * DAY)
     s.thread("archnew", "archnew", archived=True, minutes=13 * 60)
     s.thread("settold", "settold", settled=True, minutes=10 * DAY)
     s.thread("delold", "delold", deleted=True, minutes=10 * DAY)
@@ -105,7 +106,7 @@ def test_cohorts_and_exclusions(store: Path) -> None:
 
 def test_family_goes_together(store: Path) -> None:
     threads = cli.load_threads(store, datetime.now(UTC))
-    assert sorted(threads["archold"].descendants) == ["archold-grandchild", "archold-task"]
+    assert sorted(threads["archold"].descendants) == ["archold-grandchild", "archold-side", "archold-task"]
     assert threads["archold-fork"].top_level  # a fork is its own thread, never purged with its source
     assert threads["archold"].attachment_ids == {"archold-att"}
 
@@ -198,11 +199,11 @@ def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, 
     assert not child_log.exists() and fork_log.exists()  # family files go, a fork's stay
     with sqlite3.connect(backup) as copy:  # the whole family is searchable after the purge
         archived = {r[0] for r in copy.execute("SELECT thread_id FROM threads")}
-        assert archived == {"archold", "archold-task", "archold-grandchild", "otherpr"}
+        assert archived == {"archold", "archold-task", "archold-grandchild", "archold-side", "otherpr"}
         assert copy.execute("SELECT thread_id FROM entries WHERE entries MATCH 'SECRET'").fetchone()[0] == "archold"
     with sqlite3.connect(store) as live:
         left = {r[0] for r in live.execute("SELECT thread_id FROM orchestration_v2_projection_threads")}
-        assert not left & {"archold", "archold-task", "archold-grandchild", "otherpr"}
+        assert not left & {"archold", "archold-task", "archold-grandchild", "archold-side", "otherpr"}
         assert {"settold", "pinned", "livechild", "archold-fork"} <= left
         assert live.execute("SELECT stream_id FROM orchestration_events").fetchall() == [("settold",)]
         assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 1
