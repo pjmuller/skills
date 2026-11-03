@@ -11,15 +11,12 @@ establish. Cloud-only agents without a local T3 session cannot route: report tha
 In the user's personal setup repository:
 
 ```bash
-pnpm dlx skills add pjmuller/skills -g -s t3-route -a claude-code codex -y
+pnpm dlx skills add pjmuller/skills -s t3-route -a claude-code codex -y
 ```
 
-Global on purpose: [skills-refresh](../t3-manage-thread/skills-refresh.md) only updates real copies
-under `~/.agents/skills` (often the setup repo's `ai/skills`); a repo-local copy freezes at install
-day and core fixes never reach that router. The private wrapper's `../t3-route/` links then need a
-relative symlink `.agents/skills/t3-route → <managed copy>` beside it. Migrating an existing
-repo-local copy: diff it against the source first (keep personal edits in the wrapper), move it
-there in one commit with the symlink; refresh adopts it from the next release on.
+Commit the copy: [skills-refresh](../t3-manage-thread/skills-refresh.md) keeps it at the newest
+release (repo-local public copies in the setup repo are managed too). Never edit it; personal
+policy goes in the wrapper.
 
 No installer here. Install/check the command skills actually needed (`t3-manage-thread`,
 which also ships `t3-find-thread` for reuse) with each skill's `scripts/install` and `--check`; verify T3

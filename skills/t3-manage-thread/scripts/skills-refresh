@@ -49,10 +49,37 @@ actions_block() { # true when there was a block
 fingerprint() {
   (cd "$1" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 | LC_ALL=C sort -z | xargs -0 cksum)
 }
-edited_files() { # skill: release files changed or deleted since its install, space-separated
+edited_files() { # slot: release files changed or deleted since its install, space-separated
   [[ -s "$STATE/manifest/$1" ]] || return 0
-  comm -23 <(LC_ALL=C sort "$STATE/manifest/$1") <(fingerprint "$SKILLS/$1" | LC_ALL=C sort) |
+  comm -23 <(LC_ALL=C sort "$STATE/manifest/$1") <(fingerprint "$(dir_of "$1")" | LC_ALL=C sort) |
     cut -d' ' -f3- | sed 's#^\./##' | tr '\n' ' '
+}
+# Slots = managed copies. `name`: global copy $SKILLS/name. `repo/name`: a public core committed in
+# the setup repo's own .agents/skills (the git repo holding $SKILLS), which nothing else updates.
+dir_of() { case "$1" in repo/*) echo "$LOCAL/${1#repo/}" ;; *) echo "$SKILLS/$1" ;; esac; }
+# The author's machine (t3-manage-thread symlinked from a pjmuller/skills checkout) keeps its
+# repo-local copies with shared-skill-sync, which follows main, not tags.
+source_checkout() {
+  local dir="$SKILLS/t3-manage-thread" top
+  [[ -d "$dir" ]] && top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" &&
+    [[ "$top" == "$(cd -P "$dir/../.." && pwd -P)" ]]
+}
+LOCAL=""
+find_local() { # sets LOCAL to the setup repo's .agents/skills when its copies are ours to manage
+  local real root
+  LOCAL=""
+  source_checkout && return 0
+  real="$(cd -P "$SKILLS" 2>/dev/null && pwd -P)" || return 0
+  root="$(git -C "$real" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [[ -d "$root/.agents/skills" && ! -L "$root/.agents/skills" ]] || return 0
+  [[ "$(cd -P "$root/.agents/skills" && pwd -P)" != "$real" ]] || return 0
+  LOCAL="$root/.agents/skills"
+}
+slots() { # one slot key per line: every real (non-symlink) skill dir in both places
+  local d
+  for d in "$SKILLS"/*; do if [[ -d "$d" && ! -L "$d" ]]; then echo "${d##*/}"; fi; done
+  [[ -n "$LOCAL" ]] || return 0
+  for d in "$LOCAL"/*; do if [[ -d "$d" && ! -L "$d" ]]; then echo "repo/${d##*/}"; fi; done
 }
 version_at_least() {
   [[ "$(printf '%s\n' "${1#v}" "${2#v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "${1#v}" ]]
@@ -84,12 +111,10 @@ verify_release() (
 )
 
 version() {
-  local dir="$SKILLS/t3-manage-thread" top
   # Source checkout only when the (symlinked) dir is <repo>/skills/t3-manage-thread of the repo
   # itself: a managed copy inside some other repo (a setup repo's ai/skills) reads the stamp.
-  if [[ -d "$dir" ]] && top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" &&
-    [[ "$top" == "$(cd -P "$dir/../.." && pwd -P)" ]]; then
-    echo "source checkout $(git -C "$dir" describe --tags --always)"
+  if source_checkout; then
+    echo "source checkout $(git -C "$SKILLS/t3-manage-thread" describe --tags --always)"
   elif [[ -s "$STAMP" ]]; then
     read -r tag day _ < "$STAMP" || true; echo "$tag (applied $day)"
   else
@@ -105,8 +130,10 @@ changelog() {
     started' "$1"
 }
 
-run_install() { # skill [args]; returns install's exit code
-  local script="$SKILLS/$1/scripts/install"; shift
+run_install() { # slot [args]; returns install's exit code
+  # One command checkout per skill: a global copy of the same skill owns the installed commands.
+  [[ "$1" == repo/* && -e "$SKILLS/${1#repo/}" ]] && return 0
+  local script; script="$(dir_of "$1")/scripts/install"; shift
   [[ -x "$script" ]] || return 0
   "$script" "$@"
 }
@@ -114,13 +141,13 @@ run_install() { # skill [args]; returns install's exit code
 # Undo a partial activation: skills moved aside in THIS run come back from last-good (a stale
 # last-good from an earlier run is never restored), staged copies are dropped.
 rollback() { # reason
-  local n
+  local n d
   echo "skills-refresh: $1; rolling back to $installed" >&2
   for n in ${moved[@]+"${moved[@]}"}; do
-    rm -rf "${SKILLS:?}/$n"; mv "$STATE/last-good/$n" "$SKILLS/$n"
+    d="$(dir_of "$n")"; rm -rf "${d:?}"; mv "$STATE/last-good/$n" "$d"
     run_install "$n" >/dev/null 2>&1 || echo "skills-refresh: $n: reinstall after rollback failed" >&2
   done
-  for n in "${managed[@]}"; do rm -rf "$SKILLS/.$n.new"; done
+  for n in "${managed[@]}"; do d="$(dir_of "$n")"; rm -rf "${d%/*}/.${n##*/}.new"; done
   rm -rf "$stage"; exit 1
 }
 
@@ -162,10 +189,9 @@ refresh() {
     die "$new needs T3 Code >= 0.1.0: update the T3 app first, then rerun (staying on $installed)"
   fi
 
-  local candidates=() name
-  for name in "$SKILLS"/*; do
-    [[ -d "$name" && ! -L "$name" ]] && candidates+=("${name##*/}")
-  done
+  local candidates=() name dir
+  find_local
+  while IFS= read -r name; do candidates+=("$name"); done < <(slots)
   ((${#candidates[@]})) || { echo "up to date: nothing to manage (all copies under $SKILLS are symlinks to a source checkout)"; return 0; }
 
   stage="$STATE/staging/$new"
@@ -180,17 +206,28 @@ refresh() {
     { rm -rf "$stage"; die "$new: cannot check out verified commit"; }
   echo "verified $new $verified_commit (installed signing pin)"
   managed=() moved=()
-  for name in "${candidates[@]}"; do [[ -d "$stage/skills/$name" ]] && managed+=("$name"); done
+  for name in "${candidates[@]}"; do
+    [[ -d "$stage/skills/${name##*/}" ]] || continue
+    dir="$(dir_of "$name")"
+    # First adoption of a committed repo copy: uncommitted changes there may be the user's work.
+    if [[ "$name" == repo/* && ! -s "$STATE/manifest/$name" &&
+          -n "$(git -C "$LOCAL" status --porcelain -- "$dir" 2>/dev/null)" ]]; then
+      action "commit or discard the uncommitted changes in $dir: skills-refresh keeps that public copy current once it is clean"
+      continue
+    fi
+    managed+=("$name")
+  done
   if ((${#managed[@]} == 0)); then
     rm -rf "$stage"; echo "up to date: nothing to manage (no copy under $SKILLS exists at $new)"; return 0
   fi
 
-  local file
+  local file src
   for name in "${managed[@]}"; do
+    src="$stage/skills/${name##*/}"
     while IFS= read -r file; do
       head -1 "$file" | grep -Eq '^#!.*(bash|/sh)' || continue
-      bash -n "$file" 2>/dev/null || { rm -rf "$stage"; die "$new: syntax error in skills/$name/${file#"$stage/skills/$name/"}; nothing activated"; }
-    done < <(find "$stage/skills/$name/scripts" -maxdepth 2 -type f 2>/dev/null)
+      bash -n "$file" 2>/dev/null || { rm -rf "$stage"; die "$new: syntax error in skills/${name##*/}/${file#"$src/"}; nothing activated"; }
+    done < <(find "$src/scripts" -maxdepth 2 -type f 2>/dev/null)
   done
 
   # A copy edited since its install would be silently replaced (last-good keeps it one release).
@@ -208,14 +245,17 @@ $edited  Move what you need into your own skill, then discard: rm $STATE/manifes
 
   # Stage a complete replacement next to the live copy first; the live directory is only
   # moved once its successor exists, and any failure from here on restores every skill.
+  mkdir -p "$STATE/last-good/repo"
   for name in "${managed[@]}"; do
-    rm -rf "$SKILLS/.$name.new" "$STATE/last-good/$name" 2>/dev/null || rollback "$name: cannot clear last-good"
-    cp -R "$stage/skills/$name" "$SKILLS/.$name.new" || rollback "$name: staging copy failed"
+    dir="$(dir_of "$name")"
+    rm -rf "${dir%/*}/.${name##*/}.new" "$STATE/last-good/$name" 2>/dev/null || rollback "$name: cannot clear last-good"
+    cp -R "$stage/skills/${name##*/}" "${dir%/*}/.${name##*/}.new" || rollback "$name: staging copy failed"
   done
   for name in "${managed[@]}"; do
-    mv "$SKILLS/$name" "$STATE/last-good/$name" || rollback "$name: cannot move the live copy aside"
+    dir="$(dir_of "$name")"
+    mv "$dir" "$STATE/last-good/$name" || rollback "$name: cannot move the live copy aside"
     moved+=("$name")
-    mv "$SKILLS/.$name.new" "$SKILLS/$name" || rollback "$name: cannot activate"
+    mv "${dir%/*}/.${name##*/}.new" "$dir" || rollback "$name: cannot activate"
   done
   for name in "${managed[@]}"; do
     run_install "$name" >/dev/null || rollback "$name: scripts/install failed on $new"
@@ -231,9 +271,9 @@ $edited  Move what you need into your own skill, then discard: rm $STATE/manifes
     printf '%s\n' "$check" | grep '^skipped' | sed 's/^/warning: /' || true
   fi
 
-  mkdir -p "$STATE/manifest"
+  mkdir -p "$STATE/manifest/repo"
   # From the staged release, not the live dir: files installs or runs add later (.venv) never count.
-  for name in "${managed[@]}"; do fingerprint "$stage/skills/$name" > "$STATE/manifest/$name"; done
+  for name in "${managed[@]}"; do fingerprint "$stage/skills/${name##*/}" > "$STATE/manifest/$name"; done
 
   echo "$new $(date +%F) $verified_commit" > "$STAMP"
   echo "applied $new (was $installed)"
@@ -252,7 +292,7 @@ removed_refs() { # new tag
       b="${f##*/}"
       # Moved to another installed skill (a merge) is not removed.
       [[ -f "$f" && -x "$f" && "$b" != *.* && "$b" != test_* && "$b" != install &&
-         ! -e "$SKILLS/$n/scripts/$b" ]] && ! compgen -G "$SKILLS/*/scripts/$b" >/dev/null && removed+=("$b")
+         ! -e "$(dir_of "$n")/scripts/$b" ]] && ! compgen -G "$SKILLS/*/scripts/$b" >/dev/null && removed+=("$b")
     done
   done
   ((${#removed[@]})) || return 0
@@ -269,7 +309,7 @@ removed_refs() { # new tag
       while IFS= read -r line; do printf '%s/%s\n' "$repo" "$line"; done
   } 2>/dev/null | head -40 | while IFS= read -r line; do
     path="${line%%:*}"
-    for n in "${managed[@]}"; do [[ "$path" == "$real/$n/"* ]] && continue 2; done
+    for n in "${managed[@]}"; do [[ "$path" == "$real/$n/"* || "$path" == "$(dir_of "$n")/"* ]] && continue 2; done
     line="${line#*:}"
     action "\`$(grep -oE "$pattern" <<<"${line#*:}" | head -1 | grep -oE "$names")\` was removed in $1 (see the changelog) but $path:${line%%:*} still uses it"
   done || true
@@ -279,20 +319,28 @@ removed_refs() { # new tag
 # dirs whose content still equals the release it installed, so it commits those and nothing else.
 # Runs every time (not only on apply): a failed commit or push is retried and reported until fixed.
 publish_managed() {
-  local real root n f files=() branch remote merge unpushed sha
+  local real root n d f files=() branch remote merge unpushed sha
   local mine='skills-refresh: pjmuller/skills '
   [[ -d "$STATE/manifest" && -s "$STAMP" ]] || return 0
   real="$(cd -P "$SKILLS" 2>/dev/null && pwd -P)" || return 0
   root="$(git -C "$real" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  find_local
   local -x GIT_LITERAL_PATHSPECS=1 # file names are not pathspec magic; scoped to this function
   # Release files plus tracked files the swap removed; never files the user added beside them.
-  for n in "$STATE/manifest"/*; do
-    n="${n##*/}"
-    [[ -d "$real/$n" && ! -L "$SKILLS/$n" ]] || continue
+  for n in "$STATE/manifest"/* "$STATE/manifest/repo"/*; do
+    [[ -f "$n" ]] || continue
+    n="${n#"$STATE/manifest/"}"
+    if [[ "$n" == repo/* ]]; then
+      [[ -n "$LOCAL" ]] || continue
+      d="$LOCAL/${n#repo/}"
+    else
+      d="$real/$n"
+    fi
+    [[ -d "$d" && ! -L "$(dir_of "$n")" ]] || continue
     [[ -z "$(edited_files "$n")" ]] || continue # the user's edits: never commit them as ours
-    env -u GIT_LITERAL_PATHSPECS git -C "$root" check-ignore -q "$real/$n" && continue # no literal support
-    while IFS= read -r f; do files+=("$real/$n/${f#./}"); done < <(cut -d' ' -f3- "$STATE/manifest/$n")
-    while IFS= read -r f; do files+=("$root/$f"); done < <(git -C "$root" ls-files -d --full-name -- "$real/$n")
+    env -u GIT_LITERAL_PATHSPECS git -C "$root" check-ignore -q "$d" && continue # no literal support
+    while IFS= read -r f; do files+=("$d/${f#./}"); done < <(cut -d' ' -f3- "$STATE/manifest/$n")
+    while IFS= read -r f; do files+=("$root/$f"); done < <(git -C "$root" ls-files -d --full-name -- "$d")
   done
   ((${#files[@]})) || return 0
   if [[ -n "$(git -C "$root" status --porcelain -- "${files[@]}" 2>/dev/null)" ]]; then

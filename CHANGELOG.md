@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — skills-refresh also updates public cores committed in the setup repo
+
+- **Repo-local public copies are managed now.** Besides `~/.agents/skills`, the refresh updates real dirs in the setup repo's own `.agents/skills` that exist at the release (e.g. `t3-route`, `agents-md`, `disk-audit`), with the same signature check, edit guard, all-or-nothing rollback and refresh-only commit. Why: those copies were updated by nothing, so colleague routers ran 1–2 week old rules while their global skills were current. Private wrappers and symlinks stay untouched; a copy with uncommitted changes isn't adopted (ACTION); the author's source-checkout machine keeps its repo copies with shared-skill-sync. Takes effect one release after this one (an apply runs the previously installed script). Supersedes the "install `t3-route` globally" onboarding note below: a plain repo-local install is kept current.
+
 ## 2026-11-03 — t3-route: link-only replies, one-way handoffs, refresh-managed core
 
 - `t3-route` reply = the thread link, nothing else (no recap, plan, evidence or narration); extra words only for a model substitution or a routing failure. Bare-link intake reads only enough to place and brief; the investigation is the worker's. Every brief and owner handoff ends with a literal one-way line: the owner never reports to, pings or asks review from the router; owner output landing in the router gets at most a pointer. Why: routers grew verbose prose around each thread chip and one colleague's wrapper had already pinned "one link line" privately. Eval case 23.

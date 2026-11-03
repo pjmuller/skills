@@ -6,8 +6,12 @@ running agent. Usage, exit codes, env overrides: `skills-refresh --help`; code: 
 Design: [proposal](https://github.com/pjmuller/skills/blob/main/docs/proposals/2026-09-25-skill-distribution.md).
 Not `skills update` / `skills check`: those follow HEAD, and `check` silently updates.
 
-- **Managed** = real directories under `~/.agents/skills` that exist at the tag; symlinks (source
-  checkouts) are left alone.
+- **Managed** = real directories that exist at the tag, under `~/.agents/skills` and, when that dir
+  lives in a setup repo, under the repo's own `.agents/skills` (committed public cores such as
+  `t3-route`, `agents-md`; state key `repo/<name>`). Symlinks (source checkouts) and private wrappers
+  are left alone. A repo copy with uncommitted changes is not adopted the first time (ACTION). The
+  author's machine (`t3-manage-thread` symlinked from a source checkout) keeps repo copies with
+  shared-skill-sync, which follows main. New copies are picked up with the next newer release.
 - **Signed releases only** (hard rule): the updater pins the maintainer's SSH key in `ALLOWED_SIGNERS` and verifies
   the fetched tag's signature, name and commit before checkout; the version stamp records that commit.
   Unsigned, unknown-key, tampered or renamed tags and automatic downgrades fail closed.
