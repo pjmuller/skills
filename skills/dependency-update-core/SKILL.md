@@ -49,7 +49,7 @@ Commands per ecosystem: [references/ecosystems.md](references/ecosystems.md).
 ## 2. Research (primary sources, every run)
 
 For each candidate: vendor release notes/changelog, security advisories (GHSA, OSV, the
-ecosystem's advisory DB), the vendor's support/EOL policy page (endoflife.date as a pointer, the
+ecosystem's advisory DB, the repo's open Dependabot alerts), the vendor's support/EOL policy page (endoflife.date as a pointer, the
 vendor as proof). Note URL + date per claim. Does the advisory hit code we use? Is the fixed
 version in our current line?
 

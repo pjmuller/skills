@@ -8,6 +8,12 @@ uv.lock, poetry/pip, pnpm/yarn/npm, go.mod, Cargo.lock, composer). `-L <lockfile
 Container images: `osv-scanner scan image <image:tag>` after a local build. A hit is a lead: read
 the advisory and check we use the affected code path.
 
+**GitHub Dependabot alerts** (already computed when enabled):
+`gh api 'repos/<owner>/<repo>/dependabot/alerts?state=open&per_page=100' --paginate --jq '.[] | [.security_advisory.severity, .dependency.manifest_path, .dependency.package.name] | @tsv'`.
+Group by `manifest_path`: only the wrapper's in-scope manifests count. Docs sites, prototypes or
+copied skill cores (`.agents/skills/*-core/…`) are someone else's: name them in the report, fix a
+core in its source repo, not the copy.
+
 | Ecosystem | Outdated / inventory | Apply exactly the selection | Notes |
 | --- | --- | --- | --- |
 | Ruby (bundler) | `bundle outdated --only-explicit`; `bundle-audit check --update` | `bundle update --conservative <gems…>` | `--conservative` keeps shared deps still; paid gem sources need their env token |
