@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-03 — t3-route: link-only replies, one-way handoffs, refresh-managed core
+
+- `t3-route` reply = the thread link, nothing else (no recap, plan, evidence or narration); extra words only for a model substitution or a routing failure. Bare-link intake reads only enough to place and brief; the investigation is the worker's. Every brief and owner handoff ends with a literal one-way line: the owner never reports to, pings or asks review from the router; owner output landing in the router gets at most a pointer. Why: routers grew verbose prose around each thread chip and one colleague's wrapper had already pinned "one link line" privately. Eval case 23.
+- Onboarding installs `t3-route` globally (`skills add -g`) plus a repo-local symlink for the wrapper's links: skills-refresh only updates `~/.agents/skills`, so repo-local copies froze at install day (two colleague routers were 1–2 weeks behind). Existing copies migrate in one commit and are adopted from the next release.
+- `skills-refresh` fix: a refresh commit waiting under a newer commit of the user's was neither pushed nor reported (the check looked at HEAD's subject only); now any unpushed refresh commit raises the existing "push when ready" ACTION.
+
 ## 2026-11-03 — dependency-update-core: monthly tested upgrade PR, never merged
 
 - New project-copied core + thin `dependency-update` wrapper pattern: dedupe by dependency family, inventory of what actually runs (lockfiles, runtime pins, base images, dev/CI/production DB versions), primary-source research (`osv-scanner` + vendor release/EOL pages), a bounded selection (Must/Should/Skip, at most two PRs: routine set + one Must major), feature branch, the wrapper's QA before/after, opposite-model review when code changed, PR + one ticket for the tester. Two result words only: `tested` (green on the head sha) or `QA blocked` (draft PR). Why: monthly upgrades were ad hoc per product and ended either as version churn or not at all; the human merge stays the approval gate even in repos whose rules say merge-and-ship. Instruction-only: native outdated/audit commands, no bot. Validated: `osv-scanner`, `uv tree --outdated`, `bundle outdated` on real lockfiles.

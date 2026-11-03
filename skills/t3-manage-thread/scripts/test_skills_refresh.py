@@ -570,6 +570,18 @@ def test_refresh_never_pushes_the_users_unpushed_commits(env, tmp_path):
     assert g("rev-list", "--count", "origin/main..HEAD").strip() == "2"
 
 
+def test_waiting_refresh_commit_is_still_reported_under_a_newer_user_commit(env, tmp_path):
+    g = setup_repo(tmp_path, env)
+    remote = tmp_path / "remote.git"
+    remote.rename(tmp_path / "away.git")
+    assert "push failed" in run(env, "--job", "--quiet").stdout
+    (tmp_path / "away.git").rename(remote)
+    g("commit", "-qam", "my later work")  # HEAD is now the user's, the refresh commit sits below it
+    out = run(env, "--job", "--quiet").stdout.splitlines()
+    assert out[-1].startswith("thread: KEEP OPEN") and "1 commit(s) of yours there are unpushed too" in out[-2]
+    assert g("rev-list", "--count", "origin/main..HEAD").strip() == "2"
+
+
 def test_removed_command_still_used_by_the_user_is_listed(env, tmp_path):
     old = env["repo"] / "skills/demo/scripts/t3-old-cmd"
     moved = env["repo"] / "skills/demo/scripts/t3-moved-cmd"

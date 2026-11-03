@@ -42,9 +42,10 @@ authorizes stay available.
 2. Ownership: the wrapper's catalog, then the candidate repo's entrypoint and workflow wrapper,
    fetching only enough read-only context to distinguish. A shared workspace, the word "email"
    or a title match alone is insufficient.
-3. Separate source evidence from inferred intent. Bare link → smallest useful read-only
-   investigation. Ask the smallest decision only when equally plausible readings produce
-   materially different work; disclose unavailable evidence, never invent it.
+3. Separate source evidence from inferred intent. Bare link → read only enough to place and
+   brief it; the investigation itself is the worker's. Ask the smallest decision only when
+   equally plausible readings produce materially different work; disclose unavailable
+   evidence, never invent it.
 4. Before spawning, look for an execution thread that already owns this task and continue it
    there ([existing task](intake.md#existing-task)); never a parallel duplicate.
 
@@ -70,6 +71,9 @@ grant it.
   opinion", "review with X", a budget) travel verbatim to it.
 - **Caught executing mid-turn** (about to `delegate_task`, render a chart or report, recommend on
   the task itself) → stop and launch, passing what you found as evidence.
+- **One-way.** The router never waits on, follows up on or relays a launched task; the owner
+  talks to the user in its own thread. Owner output arriving here (a report, question, review
+  request) is misrouted: answer nothing on the task, at most one line pointing to the owner.
 
 Only the user explicitly keeping the work here ("do it in this thread") makes the router the
 lead. Outside the routing thread, "subagent" means a 🏓 child, never a top-level thread
@@ -134,16 +138,24 @@ Write it to a file; `message` = "Read and execute /abs/brief.md". Contents:
   this bounds the worker even if its workflow normally changes statuses;
 - **Lifecycle:** one sentence, mode plus concrete destination (or the specific pending action
   for keep-open), referencing the footer without duplicating it. Name live production/ticket
-  delivery only when actually authorized and required.
+  delivery only when actually authorized and required;
+- last, this literal line (also in a `t3_thread_send` handoff to an existing owner):
+
+> One-way handoff: own execution, questions to the user and completion in this thread; never report to, ping or request review from the routing thread.
 
 Pass verified facts, entrypoints and scope boundaries; leave implementation choices to the
 execution thread.
 
 ## Report and learn
 
-Verify the tool result; report destination/title and actual account/model, or which thread was
-reused and why. Substitution and account reasons come from `t3-pick-instance` stderr (candidates,
-chosen account, reason), never a guessed association. Routing failures stay visible. Durable user corrections →
+**Reply = the thread link, nothing else.** Verify the tool result, then answer one line per
+task: the launched or messaged thread's `link` (a found thread for a search request; settled
+target → plus its [dead-chip fallback](../t3-manage-thread/workers.md#-t3_thread_launch)), no summary,
+plan, evidence, scope, caveat or narration of what the worker will do; the brief carries those
+and the owner asks its own questions. Add a few words only for a model substitution
+(`preferred X → used Y (reason)`, reason from `t3-pick-instance` stderr, never guessed) or a
+routing failure/blocker, which stays visible. An inline deliverable (translation, one-line fact)
+is the answer itself, equally bare. Durable user corrections →
 [corrections.md](corrections.md). Requested router reset → review lessons once, then the
 [replacement playbook](../t3-manage-thread/routing-reset.md); no transcript replay.
 

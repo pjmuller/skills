@@ -306,17 +306,18 @@ publish_managed() {
     echo "committed $(git -C "$root" rev-parse --short HEAD) in $root (refreshed skills only)"
   fi
   branch="$(git -C "$root" symbolic-ref -q --short HEAD)" || return 0
-  git -C "$root" log -1 --format=%s | grep -q "^$mine" || return 0 # nothing of ours waiting
   remote="$(git -C "$root" config "branch.$branch.remote")" || true
   merge="$(git -C "$root" config "branch.$branch.merge")" || true
   if [[ -z "$remote" || -z "$merge" ]]; then
+    git -C "$root" log -1 --format=%s | grep -q "^$mine" || return 0 # nothing of ours waiting
     [[ -z "$(git -C "$root" remote)" ]] || action "push $root yourself: branch $branch has no upstream"
     return 0
   fi
   if ! unpushed="$(git -C "$root" log --format=%s '@{u}..HEAD' 2>/dev/null)"; then
+    git -C "$root" log -1 --format=%s | grep -q "^$mine" || return 0
     action "push $root yourself: upstream of $branch ($remote $merge) is not fetched or does not exist"
-  elif [[ -z "$unpushed" ]]; then
-    return 0
+  elif ! grep -q "^$mine" <<<"$unpushed"; then
+    return 0 # nothing of ours waiting, even under a newer commit of the user's
   elif grep -vq "^$mine" <<<"$unpushed"; then
     # Push only when every unpushed commit is ours, and only this branch (push.default may be "matching").
     action "push $root when ready: the refreshed skills are committed, not pushed, because $(grep -vc "^$mine" <<<"$unpushed") commit(s) of yours there are unpushed too"

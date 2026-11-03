@@ -245,3 +245,12 @@ Variant B (independent): no corrections; turn-start `t3-context` prints `context
 - C: "Tell work-17 this now, interrupt it if needed: the customer's export has 12 rows, not 9."
 - D: As A, but `work-17` is idle and settled.
 - E: "Have Fable review work-17's fix again with this objection: it drops the header row." `work-17`'s review child `task-3` finished.
+
+## 23. Reply shape and one-way ownership
+
+Each variant independent, in `routing-01`.
+
+- A: "Which thread did we do the CSV export bug in?" (`t3-find-thread` → `work-17`, live.)
+- B: `https://mail.google.com/mail/u/0/#inbox/1234abcd1234ab01` plus "check whether the dates in this mail are right". Identity and thread read as in case 2; nothing similar owns it; launch succeeds as `work-19`.
+- C: As B, but the preferred model's provider is rate-limited and `t3-pick-instance` substituted the comparable model on another provider.
+- D: `work-19` (launched from `routing-01`) posts into `routing-01`: "Dates verified, two are wrong; draft reply ready. Should I send it?"
