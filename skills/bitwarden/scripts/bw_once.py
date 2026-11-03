@@ -660,13 +660,16 @@ def broker(request):
         if not select.select([child.stdout], [], [], BROKER_SECONDS)[0]:
             raise ValueError
         result = json.loads(child.stdout.readline())
-        if "pick" not in result and "recopy_until" not in result:  # Else it keeps running (pick / re-copies).
+        if not {"pick", "recopy_until", "capture_url"} & set(result):  # Else it keeps running (pick / re-copies / capture).
             child.wait(10)
         return result
     except (OSError, ValueError, subprocess.TimeoutExpired, Failure) as error:  # Failure: Ctrl-C/SIGTERM while waiting.
         if request["op"] == "send-text":
             raise Failure(f"{error if isinstance(error, Failure) else 'Touch ID broker did not answer'}; a Send may "
                           "exist: check the vault's Sends before asking again", stage="unknown", retry_safe=False) from None
+        if request["op"] in WRITES:
+            raise Failure(f"{error if isinstance(error, Failure) else 'Touch ID broker did not answer'}; the login may "
+                          "have been written: check it before asking again", write="unknown", retry_safe=False) from None
         if isinstance(error, Failure):
             raise
         raise Failure("Touch ID broker failed; nothing released") from None
@@ -752,11 +755,74 @@ def end_recopies(host_name, thread):
     return {"ok": True, "ended": ended}
 
 
+WRITES = ("create", "update", "delete")
+NOTES_LIMIT = 2000  # UTF-8 bytes, as the broker's notesLimit.
+
+
+def broker_write(args, vaults):
+    """create/update one login with one touch: the broker validates, shows, acquires the secret, writes and locks."""
+    if args.get("password") and args.get("totp"):
+        raise Failure("One secret field per request: --password or --totp")
+    if not vaults or not broker_enrolled(vaults, vaults[0]["name"]):
+        raise Failure("Writes need the Touch ID broker for this vault (bw-once touchid enroll); no Terminal/session path")
+    secret = "password" if args.get("password") else "totp" if args.get("totp") else None
+    notes = None
+    if args.get("notes_file"):
+        notes = Path(args["notes_file"]).expanduser().read_text(encoding="utf-8")
+        if len(notes.encode()) > NOTES_LIMIT:
+            raise Failure(f"Notes must be at most {NOTES_LIMIT} UTF-8 bytes")
+    request = {"op": args["op"], "vaults": vaults, "host": host(args["host"]), "uris": args.get("uris") or None,
+               "secret": secret, "source": secret and args[secret], "notes": notes, "to": args.get("to"),
+               **{key: args.get(key) for key in ("name", "username", "id", "collection", "thread", "why")}}
+    result = broker({key: value for key, value in request.items() if value is not None})
+    if result.get("capture_url"):
+        deadline_ms = int((time.time() + result.pop("capture_expires_in", 120) - 3) * 1000)
+        result["capture_js"] = capture_js(result.pop("capture_url"), result["kind"], args.get("capture_selector"),
+                                          deadline_ms, result["host"])
+        result["next"] = (f"preview_evaluate capture_js in the tab on https://{result['host']}, then "
+                          f"`bw-once wait --token {result['token']}` (the human approves in the window meanwhile)")
+    return result
+
+
+def wait_write(token, selector=None):
+    """After a page capture: block until the broker answers (approval, write, lock), then add fill_js if one was sent."""
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise Failure("Use the token from the create/update answer")
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(BROKER_SECONDS)
+    try:
+        client.connect(str(cache_dir() / f"write-{token}.sock"))
+    except OSError:
+        client.close()
+        raise Failure("No write waiting (already collected, or the request ended); check the login before asking again",
+                      write="unknown", retry_safe=False) from None
+    with client:
+        try:
+            result = json.loads(read_line(client))
+        except (OSError, ValueError):
+            raise Failure("The broker ended without an answer; the login may have been written: check it before asking "
+                          "again", write="unknown", retry_safe=False) from None
+    return with_fill_js(result, selector, result.get("host"))
+
+
+def capture_js(url, kind, selector, deadline_ms, host):
+    """For `preview_evaluate` in the tab showing the new key: find it, POST it to the broker, return its length only.
+
+    The mirror image of `fill_js`. Without --capture-selector a TOTP key is found as an otpauth:// link/attribute or,
+    better, decoded from the page's QR code (`BarcodeDetector`), so the key never has to be revealed as text where a
+    snapshot would put it in the transcript. A selector names one input/text element (or the QR image/canvas/svg).
+    """
+    config = json.dumps({"url": url, "kind": kind, "selector": selector, "deadline": deadline_ms,
+                         "origin": f"https://{host}"})
+    code = [line for line in (ROOT / "capture.js").read_text().splitlines() if not line.startswith("//")]  # Header comment.
+    return "\n".join(code).replace("__CONFIG__", config).strip()
+
+
 FILL_SELECTORS = {"password": "input[type=password]", "username": "input[autocomplete~=username], input[type=email]",
-                  "totp": "input[autocomplete=one-time-code]"}
+                  "totp": "input[autocomplete=one-time-code]", "new-password": "input[autocomplete=new-password]"}
 
 
-def fill_js(url, selector, deadline_ms, host=None):
+def fill_js(url, selector, deadline_ms, host=None, every=1):
     """For `preview_evaluate` in the login tab: fetch the one-time value straight into the field; returns its length only.
 
     Each failure is named with its next step, because the fixes differ (2026-11-02: one "blocked or expired" error cost
@@ -764,7 +830,7 @@ def fill_js(url, selector, deadline_ms, host=None):
     page an expired, used or wrong-origin fetch looks like a block. A CSP block fires `securitypolicyviolation`.
     """
     recopy = "re-copy (same --host, --username/--id, --thread; no touch within 15 min)"
-    return ("(async () => { const url = %s, origin = %s, field = document.querySelector(%s),"
+    return ("(async () => { const url = %s, origin = %s, fields = [...document.querySelectorAll(%s)].slice(0, %d), field = fields[0],"
             " fail = (error, next) => ({ok: false, error, next});"
             " if (origin && location.origin !== origin) return fail('wrong_origin', 'tab is on ' + location.origin"
             " + ', the fill is pinned to ' + origin + ': copy with --host ' + location.host + ' if that is the real login host');"
@@ -780,13 +846,13 @@ def fill_js(url, selector, deadline_ms, host=None):
             " if (csp) return fail('csp', 'this site blocks loopback fetches: %s --to clipboard');"
             " if (!answer || !answer.ok) return fail('blocked', 'the browser refused loopback (e.g. a local-network permission)"
             " or this fill_js already ran: %s --to clipboard');"
-            " const value = await answer.text(); field.focus();"
+            " const value = await answer.text(); for (const field of fields) { field.focus();"
             " Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, value);"
             " field.dispatchEvent(new Event('input', {bubbles: true})); field.dispatchEvent(new Event('change', {bubbles: true}));"
             " if (field.value.length !== value.length) return fail('field_changed', 'a page script kept ' + field.value.length"
-            " + ' of ' + value.length + ' characters: do not submit; %s --to clipboard');"
-            " return {ok: true, length: field.value.length}; })()") % (
-        json.dumps(url), json.dumps(host and f"https://{host}"), json.dumps(selector), deadline_ms, recopy, recopy, recopy, recopy)
+            " + ' of ' + value.length + ' characters: do not submit; %s --to clipboard'); }"
+            " return {ok: true, length: field.value.length, fields: fields.length}; })()") % (
+        json.dumps(url), json.dumps(host and f"https://{host}"), json.dumps(selector), every, deadline_ms, recopy, recopy, recopy, recopy)
 
 
 def with_fill_js(result, selector=None, host=None):
@@ -797,8 +863,10 @@ def with_fill_js(result, selector=None, host=None):
     """
     if result.get("fill_url"):
         deadline_ms = int((time.time() + result.get("fill_expires_in", 60) - 3) * 1000)  # The server's clock started first.
-        result["fill_js"] = fill_js(result.pop("fill_url"), selector or FILL_SELECTORS[result.get("copied", "password")],
-                                    deadline_ms, result.get("host") or host)
+        copied = result.get("copied", "password")
+        # A new password goes into every new-password field (new + confirm), at most 3; anything else into the first.
+        result["fill_js"] = fill_js(result.pop("fill_url"), selector or FILL_SELECTORS[copied], deadline_ms,
+                                    result.get("host") or host, 3 if copied == "new-password" else 1)
     return result
 
 
@@ -1178,6 +1246,34 @@ def main():
         if op == "send-text":  # Touch ID panel claim; file Sends always use the Terminal (bw serve can't create them).
             send.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
             send.add_argument("--why", help="one line: why this Send is needed (shown as the agent's claim)")
+    trash = commands.add_parser("delete", help="move one login to the trash with one Touch ID (restorable 30 days)")
+    trash.add_argument("--host", required=True)
+    trash.add_argument("--id", required=True, help="item UUID")
+    for option in ("--thread", "--why"):
+        trash.add_argument(option)
+    for op in ("create", "update"):
+        write = commands.add_parser(op, help=f"{op} one login with one Touch ID (values never pass through the agent)")
+        write.add_argument("--host", required=True, help="the site's exact host (the login matches it; --to page is pinned to it)")
+        write.add_argument("--username", help="the login's username" + (" (new login)" if op == "create" else " (selects it)"))
+        if op == "create":
+            write.add_argument("--name", required=True)
+            write.add_argument("--collection", help="exact collection name (organization); default the account's own vault")
+            write.add_argument("--uri", action="append", dest="uris", help="extra https URI (https://HOST is always added)")
+        else:
+            write.add_argument("--id", help="item UUID (from a copy/list answer)")
+            write.add_argument("--add-uri", action="append", dest="uris", help="https URI to add")
+        write.add_argument("--password", choices=("generate", "page", "ask"), help="new password: made by the broker, "
+                           "captured from the page (capture_js), or pasted by the human in the window")
+        write.add_argument("--totp", choices=("page", "ask"), help="authenticator key: from the page (QR/otpauth/selector) or pasted")
+        write.add_argument("--notes-file", help="notes text file (≤2000 bytes)" + ("; appended" if op == "update" else ""))
+        write.add_argument("--to", choices=("page", "clipboard"), help="then send the generated password or one current TOTP code")
+        write.add_argument("--selector", help="CSS selector for fill_js (default: new-password fields / one-time-code)")
+        write.add_argument("--capture-selector", help="CSS selector of the element holding the key/password on the page")
+        write.add_argument("--thread", help="T3 thread title, shown in the Touch ID panel as the agent's claim")
+        write.add_argument("--why", help="one line: why this change is needed (shown as the agent's claim)")
+    waiting = commands.add_parser("wait", help="after capture_js: wait for the approval and the write")
+    waiting.add_argument("--token", required=True)
+    waiting.add_argument("--selector", help="CSS selector for fill_js if the write sends a password/code to the page")
     session = commands.add_parser("session").add_subparsers(dest="action")
     start = session.add_parser("start")
     start.add_argument("--ttl", default=f"{TTL_DEFAULT_MINUTES}m", help="minutes, e.g. 60m or 1h")
@@ -1205,6 +1301,10 @@ def main():
         if args["op"] == "done":
             print(json.dumps(end_recopies(args["host"], args["thread"])))
             return
+        if args["op"] == "wait":
+            result = wait_write(args["token"], args["selector"])
+            print(json.dumps(result))
+            raise SystemExit(0 if result.get("ok") else 1)
         if args["op"] == "pick":
             result = with_fill_js(submit_pick(args["token"], args["id"]), args["selector"])
             print(json.dumps(result))
@@ -1263,6 +1363,10 @@ def main():
             if not result and to == "page":
                 raise Failure("--to page needs the Touch ID broker (bw-once touchid enroll)")
             result = with_fill_js(result or launch(args), selector, args["host"])
+        elif args["op"] in WRITES:
+            result = broker_write(args, broker_vaults(args["vault"]))
+            if not result.get("capture_js") and args["op"] != "delete":
+                result = with_fill_js(result, args.get("selector"), args["host"])
         elif args["op"] == "send-text":
             claim = {"thread": args.pop("thread"), "why": args.pop("why")}
             vaults = broker_vaults(args["vault"])

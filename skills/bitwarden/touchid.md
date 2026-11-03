@@ -89,6 +89,23 @@ bw-once touchid status | bw-once touchid forget
   server still returns its link. Any create failure is ambiguous (bw saves before it re-reads): `retry_safe: false`,
   never retried, `reason` says why (timeout, bw's message, malformed answer); a lock failure after the create
   withholds the link and returns `send_id`.
+- <a id="writes"></a>**Writes** (`create`/`update`/`delete`): built like a Send: the request is
+  validated and frozen in Swift (one vault, https URIs, notes ≤2000 bytes, at most one secret field), the green box
+  lists every change, the sheet names op/host/account/vault/field. The secret is acquired **before** the touch, so the
+  approval covers a known value and nothing is unsealed while waiting: `generate` (18 random letters/digits in
+  Apple's `xxxxxx-xxxxxx-xxxxxx` shape), `ask` (secure field in the window), or `page`: `Capture` listens on
+  127.0.0.1 (random port + 128-bit path, 120 s) for one POST from `Origin: https://<host>`; the front end returns
+  `capture_js` at once and `bw-once wait` collects the answer from a private socket (`resultServer`). After the touch:
+  successful sync required (a stale item would undo another device's edit), unlock, exactly one login matching
+  host + `--id`/`--username` (else refused, nothing written), preconditions (different TOTP → refused), one
+  PUT/POST/DELETE, read-back (`write: confirmed`), optional one code/password for `--to`, lock + verify, then delivery.
+  Failure after the save started → `write: unknown`, never retried; bw's answers (the decrypted item) and messages are
+  never passed on. Why page capture (the mirror image of `--to page`): keys on 2FA pages would otherwise be revealed as
+  text, where a snapshot puts them in the transcript; T3 0.1.6 (Chrome 152) has `BarcodeDetector`, so `capture.js`
+  reads the QR code instead (verified 2026-11-03). Exposure: a same-user process that learns the URL can post a value;
+  for a TOTP key the site's own code check (with the code bw computes from the stored key) catches a wrong one.
+  Second opinion (Astra, 2026-11-03) shaped it: receiver inside the approving broker, refuse instead of replace,
+  fixed errors; Astra would have skipped QR decoding, kept because it removes the reveal step.
 - **Progress**: the window says "Approved · …" right after the touch (waiting for Bitwarden, searching/unlocking,
   creating). A `bw serve` call that times out ends that connection (its late answer would be read as the next
   call's) and the vault is locked through a fresh one; a sync over 120 s makes that vault unavailable.

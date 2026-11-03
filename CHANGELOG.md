@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — bitwarden: create, update and trash logins with one Touch ID
+
+- New `bw-once create|update|delete` (+ `bw-once wait`): one login, one vault, one touch, Touch ID broker only. The green box lists every change; values never reach the agent. Secret sources: `--password generate` (made in the broker, old one kept in Bitwarden's password history), `page` (`capture_js` decodes the 2FA QR code or an `otpauth://` link in the tab and posts it to an origin-pinned loopback capture; mirror image of `fill_js`), `ask` (human pastes in the window). `--to page|clipboard` then sends the new password (new + confirm fields) or one current TOTP code for the site's confirm step. Different existing TOTP keys are refused (no TOTP history), writes need a successful sync and are read back (`write: confirmed|unchanged|unknown`), never retried. Why: agents signing up or enabling 2FA had to hand the vault work to the human. Live: QR capture → save → code fill in T3 0.1.6; real-vault create → update → trash.
+
 ## 2026-11-03 — `t3-relay project`: pin/archive projects from an Auto thread
 
 - New `t3-relay project pin|unpin|archive|unarchive --project PATH…` calls `t3_project_update` through the relay's approved full-access client. Why: T3 0.1.6 hard-codes project/environment writes to full-access threads (`McpToolAccess.writesEnvironment`), so an Auto thread asked to pin projects got `capability_denied` and the user had to switch to Full Access. Scope stays at the four organize actions; project scripts (which run code), paths and default models remain behind T3's gate. Each call is checked against T3's returned `pinnedAt`/`archivedAt`. Live: pin, archive + unarchive round trip on T3 0.1.6.

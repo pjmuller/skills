@@ -962,3 +962,65 @@ def test_standalone_totp_requests_fresh_approval_after_buffer_miss(front, monkey
     monkeypatch.setattr(bw, 'via_recopy', lambda *_: None)
     sent = run('copy', '--host', 'admin.example.com', '--username', 'alice', '--field', 'totp', '--thread', 'Sign-in')
     assert sent['field'] == 'totp' and not sent.get('with_totp') and not launched
+
+
+@macos_only
+def test_update_goes_to_one_vault_with_named_changes_and_never_a_value(front, tmp_path):
+    run, launched = front
+    notes = tmp_path / "notes.txt"
+    notes.write_text("rotated by agent")
+    sent = run("--vault", "other", "update", "--host", "Dash.Example.com", "--id", "2adf56dc-5d3b-46c5-b335-b24b00fbcb78",
+               "--totp", "page", "--add-uri", "https://dash.example.com/login", "--notes-file", str(notes),
+               "--to", "page", "--thread", "2FA", "--why", "enable 2FA")
+    assert sent == {"op": "update", "host": "dash.example.com", "id": "2adf56dc-5d3b-46c5-b335-b24b00fbcb78",
+                    "uris": ["https://dash.example.com/login"], "secret": "totp", "source": "page",
+                    "notes": "rotated by agent", "to": "page", "thread": "2FA", "why": "enable 2FA",
+                    "vaults": [{"name": "other", "email": "b@example.com", "appdata": os.path.realpath("/tmp/x"),
+                                "default_match": "base_domain"}]}
+    assert launched == []
+
+
+@macos_only
+def test_writes_need_the_broker_and_one_secret_field(front, capsys):
+    run, launched = front
+    capsys.readouterr()
+    assert run("create", "--host", "a.example.com", "--name", "A", enrolled=False)["op"] == "status"  # Never the write.
+    assert "need the Touch ID broker" in capsys.readouterr().out and launched == []
+    (bw.ROOT / "broker-request.json").unlink()
+    assert run("update", "--host", "a.example.com", "--username", "u", "--password", "generate", "--totp", "ask") is None
+    assert "One secret field" in capsys.readouterr().out
+
+
+def test_capture_answer_becomes_capture_js_pinned_to_the_host(monkeypatch):
+    monkeypatch.setattr(bw, "broker_enrolled", lambda vaults, name=None: True)
+    monkeypatch.setattr(bw, "broker", lambda request: {"ok": True, "capture_url": "http://127.0.0.1:5/" + "a" * 32,
+                                                       "token": "a" * 32, "capture_expires_in": 120, "kind": "totp",
+                                                       "host": "dash.example.com"})
+    answer = bw.broker_write({"op": "update", "host": "dash.example.com", "username": "u", "totp": "page"},
+                             [{"name": "work"}])
+    script = answer["capture_js"]
+    assert "capture_url" not in answer and "bw-once wait --token " + "a" * 32 in answer["next"]
+    assert '"origin": "https://dash.example.com"' in script and '"url": "http://127.0.0.1:5/' in script
+    assert "__CONFIG__" not in script and "location.origin !== config.origin" in script
+    assert script.index("location.origin !== config.origin") < script.index("await fetch")
+    for error in ("wrong_origin", "expired", "no_field", "not_found", "ambiguous", "csp", "blocked"):
+        assert f"'{error}'" in script
+    # Only fixed fields go back to the agent: never the found value or an exception's text.
+    assert "return { ok: true, kind: result.kind, length: result.length, source }" in script
+    assert "catch {" in script and "console" not in script
+
+
+def test_new_password_fill_covers_new_and_confirm_fields_only():
+    script = bw.with_fill_js({"copied": "new-password", "fill_url": "http://127.0.0.1:5/t"}, None, "a.example.com")["fill_js"]
+    assert 'querySelectorAll("input[autocomplete=new-password]")].slice(0, 3)' in script
+    script = bw.with_fill_js({"copied": "password", "fill_url": "http://127.0.0.1:5/t"}, None, "a.example.com")["fill_js"]
+    assert 'querySelectorAll("input[type=password]")].slice(0, 1)' in script
+
+
+def test_wait_rejects_a_bad_token_and_reports_unknown_when_nothing_waits(monkeypatch, tmp_path):
+    with pytest.raises(bw.Failure):
+        bw.wait_write("../x")
+    monkeypatch.setattr(bw, "cache_dir", lambda: tmp_path)
+    with pytest.raises(bw.Failure) as error:
+        bw.wait_write("b" * 32)
+    assert error.value.details == {"write": "unknown", "retry_safe": False}

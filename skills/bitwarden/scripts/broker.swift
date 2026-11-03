@@ -41,7 +41,31 @@ let resultSeconds = 0.0
 let resultSeconds = 1.8  // Long enough to read "Copied … · vault locked".
 #endif
 
+/// Page capture: the front end returned the capture URL already; `bw-once wait` collects the answer here.
+var resultServer: (fd: Int32, path: String)?
+/// One value handed between threads (page capture or the window's paste → the request's worker).
+final class Held {
+    private let lock = NSLock()
+    private var stored: String?
+    var value: String? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+let acquired = Held()  // A write's one secret, from `request.source`; kept across a renewal re-run.
+
 func finish(_ result: [String: Any]) -> Never {
+    if let server = resultServer {
+        // The agent usually waits already (its connection sits in the backlog); give a late one 120 s.
+        var poller = pollfd(fd: server.fd, events: Int16(POLLIN), revents: 0)
+        if poll(&poller, 1, 120_000) > 0 {
+            let client = accept(server.fd, nil, nil)
+            if client >= 0 { reply(client, result) }
+        }
+        close(server.fd)
+        unlink(server.path)
+        exit(result["ok"] as? Bool == true ? 0 : 1)
+    }
     if !stdoutWritten, let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
         stdoutWritten = true
         FileHandle.standardOutput.write(data + Data("\n".utf8))
@@ -80,6 +104,7 @@ let answerSeconds: Double = {
     #endif
 }()
 let answerDeadline = Date().addingTimeInterval(answerSeconds)
+var acquireDeadline = answerDeadline  // A write's secret must arrive by then; a page capture ends sooner (`captureSeconds`).
 
 /// How long one `bw serve` call may take (the sync twice, the Send create until the front end gives up).
 let serveSeconds: Double = {
@@ -184,13 +209,19 @@ struct Request {
     var withTOTP = false
     // send-text: frozen here, before any window, so a renewal re-run shows and creates the very same Send.
     var sendName = "", sendText = "", views = 0, days = 0, until = ""
+    // create / update (one login, one vault): non-secret changes frozen here; the one secret field's value comes
+    // from `source` (generated here, captured from the page, or typed in the window), never from the request.
+    var name = "", collection: String? = nil, uris: [String] = [], notes: String? = nil
+    var secret: String? = nil, source = "", writeTo: String? = nil
+    var isWrite: Bool { op == "create" || op == "update" || op == "delete" }
 }
 
 let sendTextLimit = 600  // UTF-8 bytes, as the front end's TEXT_LIMIT.
+let notesLimit = 2000  // UTF-8 bytes appended to (or set as) a login's notes.
 
 /// Send text the panel can show faithfully: no controls but tab/newline, no invisible format or bidi characters.
-func sendText(_ value: Any?) -> String? {
-    guard let value = value as? String, !value.isEmpty, value.utf8.count <= sendTextLimit,
+func sendText(_ value: Any?, limit: Int = sendTextLimit) -> String? {
+    guard let value = value as? String, !value.isEmpty, value.utf8.count <= limit,
           !value.unicodeScalars.contains(where: { scalar in
               if [9, 10, 13].contains(scalar.value) { return false }
               switch scalar.properties.generalCategory {
@@ -221,9 +252,18 @@ func exactHost(_ value: Any?) -> String? {
     return value
 }
 
+/// A login URI a write may add: https, an exact DNS host, no credentials, printable ASCII.
+func loginURI(_ value: Any?) -> String? {
+    guard let value = value as? String, value.utf8.count <= 500,
+          !value.unicodeScalars.contains(where: { $0.value < 33 || $0.value > 126 }),
+          let parts = URLComponents(string: value), parts.scheme == "https", parts.user == nil, parts.password == nil,
+          exactHost(parts.host) != nil else { return nil }
+    return value
+}
+
 func parseRequest(_ data: Data) throws -> Request {
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let op = json["op"] as? String, ["list", "copy", "send-text", "enroll", "status", "forget"].contains(op),
+          let op = json["op"] as? String, ["list", "copy", "send-text", "create", "update", "delete", "enroll", "status", "forget"].contains(op),
           let rawVaults = json["vaults"] as? [[String: Any]], !rawVaults.isEmpty, rawVaults.count <= 8 else {
         throw Failure(message: "Invalid broker request")
     }
@@ -243,11 +283,11 @@ func parseRequest(_ data: Data) throws -> Request {
         vaults.append(Vault(name: name, email: email, appdata: appdata, defaultMatch: defaultMatch))
     }
     var request = Request(op: op, vaults: vaults)
-    if op == "list" || op == "copy" {
+    if op == "list" || op == "copy" || request.isWrite {
         guard let host = exactHost(json["host"]) else { throw Failure(message: "Use an exact DNS host") }
         request.host = host
     }
-    if op == "list" || op == "copy" || op == "send-text" {
+    if op == "list" || op == "copy" || op == "send-text" || request.isWrite {
         request.thread = json["thread"] is NSNull ? nil : text(json["thread"], max: 120)
         request.why = json["why"] is NSNull ? nil : text(json["why"], max: 200)
         if (json["thread"] != nil && !(json["thread"] is NSNull) && request.thread == nil)
@@ -273,6 +313,7 @@ func parseRequest(_ data: Data) throws -> Request {
         request.days = days
         request.until = ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(days) * 86400))
     }
+    if request.isWrite { try parseWrite(json, &request) }
     if op == "copy" {
         guard let field = json["field"] as? String, ["username", "password", "totp"].contains(field) else {
             throw Failure(message: "Unsupported credential field")
@@ -282,12 +323,12 @@ func parseRequest(_ data: Data) throws -> Request {
             guard let value = to as? String, ["clipboard", "page"].contains(value) else { throw Failure(message: "--to clipboard|page") }
             request.to = value
         }
-        if let id = json["id"], !(id is NSNull) {
-            guard let value = (id as? String)?.lowercased(), UUID(uuidString: value) != nil else {
-                throw Failure(message: "Use an exact item UUID")
-            }
-            request.id = value
+    }
+    if op == "copy" || op == "update" || op == "delete", let id = json["id"], !(id is NSNull) {
+        guard let value = (id as? String)?.lowercased(), UUID(uuidString: value) != nil else {
+            throw Failure(message: "Use an exact item UUID")
         }
+        request.id = value
     }
     if let flag = json["with_totp"] {
         guard let flag = flag as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else {
@@ -300,6 +341,61 @@ func parseRequest(_ data: Data) throws -> Request {
         }
     }
     return request
+}
+
+/// create/update: one vault, named non-secret changes, at most one secret field whose source is not the request.
+func parseWrite(_ json: [String: Any], _ request: inout Request) throws {
+    func given(_ key: String) -> Any? { json[key] is NSNull ? nil : json[key] }
+    guard request.vaults.count == 1 else { throw Failure(message: "A write goes to exactly one vault") }
+    if request.op == "create" {
+        guard let name = text(given("name"), max: 200) else { throw Failure(message: "Login name must be 1-200 plain characters") }
+        request.name = name
+        request.username = text(given("username"), max: 254)  // Stored as given; matching lowercases on its own.
+        if let collection = given("collection") {
+            guard let value = text(collection, max: 200) else { throw Failure(message: "Invalid collection name") }
+            request.collection = value
+        }
+    } else if request.op == "delete" {
+        // Trash only (Bitwarden keeps it 30 days); nothing else may ride along.
+        guard given("id") != nil, ["uris", "notes", "secret", "source", "to"].allSatisfy({ given($0) == nil }) else {
+            throw Failure(message: "delete takes --host and --id only")
+        }
+        return
+    } else if request.username == nil && given("id") == nil {
+        throw Failure(message: "Name the login to update: --username or --id")
+    }
+    let uris = given("uris") ?? []
+    guard let list = uris as? [Any], list.count <= 5 else { throw Failure(message: "At most 5 URIs") }
+    request.uris = try list.map { value in
+        guard let uri = loginURI(value) else { throw Failure(message: "URIs must be https URLs with an exact host") }
+        return uri
+    }
+    if request.op == "create" && !request.uris.contains("https://\(request.host)") { request.uris.insert("https://\(request.host)", at: 0) }
+    if let notes = given("notes") {
+        guard let value = sendText(notes, limit: notesLimit) else {
+            throw Failure(message: "Notes must be 1-\(notesLimit) UTF-8 bytes without control, invisible or bidi characters")
+        }
+        request.notes = value
+    }
+    if let secret = given("secret") {
+        let sources = ["password": ["generate", "page", "ask"], "totp": ["page", "ask"]]
+        guard let secret = secret as? String, let allowed = sources[secret], let source = given("source") as? String,
+              allowed.contains(source) else {
+            throw Failure(message: "--password generate|page|ask or --totp page|ask (one per request)")
+        }
+        request.secret = secret
+        request.source = source
+    } else if given("source") != nil { throw Failure(message: "A source needs --password or --totp") }
+    if let to = given("to") {
+        guard let value = to as? String, ["page", "clipboard"].contains(value),
+              request.secret == "totp" || request.source == "generate" else {
+            throw Failure(message: "--to delivers a generated password or one TOTP code: page|clipboard")
+        }
+        request.writeTo = value
+    }
+    guard request.op == "create" || request.secret != nil || !request.uris.isEmpty || request.notes != nil else {
+        throw Failure(message: "Nothing to update")
+    }
 }
 
 // MARK: - Keychain (legacy file keychain, one item per broker build)
@@ -823,17 +919,20 @@ final class Serve {
     /// Locked, right account, and with `sync` a fresh encrypted cache: ready for an unlock after the human approves.
     /// A Send needs no fresh logins, and each one changes the vault, so the next sync downloads it whole (3.7 MB took
     /// over 60 s on a poor link, 2026-10-27).
-    func prepare(sync: Bool = true) throws {
+    func prepare(sync: Bool = true, strict: Bool = false) throws {
         let (state, email) = try status()
         if state == "unauthenticated" { throw Failure(message: "\(vault.name): CLI logged out; run `bw-once --vault \(vault.name) login`") }
         guard state == "locked" else { throw Failure(message: "\(vault.name): CLI must be locked (status \(state))") }
         guard email == vault.email else { throw Failure(message: "\(vault.name): CLI is signed in as another account") }
         guard sync else { return }
         // bw answering success: false (offline) is fine, stale cache beats no answer; no answer in time ends the connection.
-        do { _ = try call("POST", "/sync", seconds: 2 * serveSeconds) } catch {
+        let synced: [String: Any]
+        do { synced = try call("POST", "/sync", seconds: 2 * serveSeconds) } catch {
             throw Failure(message: "\(vault.name): Bitwarden sync did not finish in \(Int(2 * serveSeconds)) s (slow network?)",
                           reason: (error as? Failure)?.reason)
         }
+        // A write edits the item as last synced: a stale copy could undo another device's change.
+        if strict && synced["success"] as? Bool != true { throw Failure(message: "\(vault.name): Bitwarden sync failed; nothing written") }
     }
 
     func unlock(_ password: String) throws -> Bool {
@@ -934,6 +1033,143 @@ final class Serve {
     }
 }
 
+// MARK: - Writes (create / update one login)
+
+/// Where a write stands, for the failure answer: `unknown` once bw was asked to save (it may have saved).
+var writeState = "not_attempted"
+
+extension Serve {
+    /// Moves the one approved login to Bitwarden's trash (restorable for 30 days), then reads it back.
+    func trash(_ item: [String: Any], _ request: Request) throws -> [String: Any] {
+        let id = (item["id"] as? String ?? "").lowercased()
+        writeState = "unknown"
+        let reply: [String: Any]
+        do { reply = try call("DELETE", "/object/item/\(id)") } catch {
+            throw Failure(message: "Bitwarden did not confirm the delete; check the trash before asking again",
+                          reason: (error as? Failure)?.reason)
+        }
+        guard reply["success"] as? Bool == true, (try? readItem(id))?["deletedDate"] as? String != nil else {
+            throw Failure(message: "Bitwarden did not confirm the delete; check the trash before asking again",
+                          reason: "no deletedDate after delete")
+        }
+        writeState = "confirmed"
+        return ["vault": vault.name, "host": request.host, "id": id, "name": item["name"] as? String ?? "",
+                "username": (item["login"] as? [String: Any])?["username"] ?? NSNull(), "changed": ["trashed"], "write": "confirmed"]
+    }
+
+    func readItem(_ id: String) throws -> [String: Any] {
+        let reply = try call("GET", "/object/item/\(id)")
+        guard reply["success"] as? Bool == true, let data = reply["data"] as? [String: Any] else {
+            throw Failure(message: "\(vault.name): cannot read item \(id)")
+        }
+        return data
+    }
+
+    /// The approved change, once. Refusals happen before bw is asked to save; bw's answers (the decrypted item) are
+    /// never passed on, and its messages are not quoted (they may echo values): fixed errors only.
+    func saveLogin(_ request: Request, secret: String?) throws -> [String: Any] {
+        let logins = try items().filter { matches($0, host: request.host, defaultMatch: vault.defaultMatch) }
+        func username(_ entry: [String: Any]) -> String { (((entry["login"] as? [String: Any])?["username"] as? String) ?? "").lowercased() }
+        var item: [String: Any]
+        var changed: [String] = []
+        if request.op != "create" {
+            let picked = logins.filter { entry in
+                (request.id == nil || (entry["id"] as? String)?.lowercased() == request.id)
+                    && (request.username == nil || username(entry) == request.username)
+            }
+            guard picked.count == 1 else {
+                throw Failure(message: picked.isEmpty ? "No login in \(vault.name) matches the host and account; nothing written"
+                              : "\(picked.count) logins match; pass --id; nothing written")
+            }
+            item = picked[0]
+            if request.op == "delete" { return try trash(item, request) }
+        } else {
+            if logins.contains(where: { username($0) == (request.username ?? "").lowercased() }) {
+                throw Failure(message: "A login for this host and username exists in \(vault.name); use update; nothing written")
+            }
+            item = ["type": 1, "name": request.name, "notes": NSNull(), "favorite": false, "fields": [], "reprompt": 0,
+                    "folderId": NSNull(), "organizationId": NSNull(), "collectionIds": [],
+                    "login": ["username": request.username.map { $0 as Any } ?? NSNull(), "password": NSNull(), "totp": NSNull(), "uris": []]]
+            if let collection = request.collection {
+                let reply = try call("GET", "/list/object/collections")
+                let found = ((reply["data"] as? [String: Any])?["data"] as? [[String: Any]] ?? []).filter { $0["name"] as? String == collection }
+                guard found.count == 1, let id = found[0]["id"] as? String, let org = found[0]["organizationId"] as? String else {
+                    throw Failure(message: "Collection \(collection) not found once in \(vault.name); nothing written")
+                }
+                item["organizationId"] = org
+                item["collectionIds"] = [id]
+            }
+            changed.append("login")
+        }
+        var login = item["login"] as? [String: Any] ?? [:]
+        // Hidden-password items (shared "can't view") come back with password and TOTP as null: a "missing" key may
+        // exist, so no secret write there (it could replace a key nobody can see).
+        if request.secret != nil, item["viewPassword"] as? Bool == false {
+            throw Failure(message: "This login hides its password and TOTP from this account; change them in the Bitwarden app; nothing written")
+        }
+        if let secret, request.secret == "totp" {
+            let current = login["totp"] as? String ?? ""
+            if current.isEmpty { login["totp"] = secret; changed.append("totp") } else if parseTOTP(current) != parseTOTP(secret) {
+                throw Failure(message: "This login already has a different authenticator key; replace it in the Bitwarden app "
+                              + "(there is no TOTP history); nothing written")
+            }
+        }
+        if let secret, request.secret == "password", login["password"] as? String != secret {
+            login["password"] = secret; changed.append("password")
+        }
+        var uris = login["uris"] as? [[String: Any]] ?? []
+        for uri in request.uris where !uris.contains(where: { $0["uri"] as? String == uri }) {
+            uris.append(["uri": uri, "match": NSNull()])
+            if request.op == "update" { changed.append("uri") }
+        }
+        login["uris"] = uris
+        item["login"] = login
+        if let notes = request.notes {
+            let current = item["notes"] as? String ?? ""
+            item["notes"] = current.isEmpty ? notes : current + "\n\n" + notes
+            if request.op == "update" { changed.append("notes") }
+        }
+        let id = (item["id"] as? String)?.lowercased()
+        var result: [String: Any] = ["vault": vault.name, "host": request.host, "name": item["name"] as? String ?? "",
+                                     "username": login["username"] ?? NSNull(), "changed": changed]
+        guard !changed.isEmpty, request.op == "create" || id != nil else {
+            return result.merging(["id": id ?? NSNull(), "write": "unchanged"]) { $1 }
+        }
+        writeState = "unknown"
+        let reply: [String: Any]
+        let started = Date()
+        do {
+            reply = request.op == "create" ? try call("POST", "/object/item", item, seconds: max(serveSeconds, answerDeadline.timeIntervalSinceNow))
+                : try call("PUT", "/object/item/\(id!)", item, seconds: max(serveSeconds, answerDeadline.timeIntervalSinceNow))
+        } catch {
+            throw Failure(message: "Bitwarden did not confirm the write; it may have happened: check the item before asking again",
+                          reason: ((error as? Failure)?.reason ?? "\(type(of: error))") + " after \(Int(-started.timeIntervalSinceNow)) s")
+        }
+        guard reply["success"] as? Bool == true,
+              let saved = ((reply["data"] as? [String: Any])?["id"] as? String)?.lowercased(), UUID(uuidString: saved) != nil else {
+            throw Failure(message: "Bitwarden refused or did not confirm the write; check the item before asking again",
+                          reason: "bw answered without success and id")
+        }
+        // Read back what was saved: every approved change present → confirmed.
+        let stored = try readItem(saved)
+        let storedLogin = stored["login"] as? [String: Any] ?? [:]
+        let storedURIs = (storedLogin["uris"] as? [[String: Any]] ?? []).compactMap { $0["uri"] as? String }
+        let confirmed = (request.secret != "password" || secret == nil || storedLogin["password"] as? String == secret)
+            && (request.secret != "totp" || secret == nil || (storedLogin["totp"] as? String).flatMap(parseTOTP) == parseTOTP(secret!))
+            && request.uris.allSatisfy(storedURIs.contains)
+            && (request.notes == nil || (stored["notes"] as? String ?? "").hasSuffix(request.notes!))
+        writeState = confirmed ? "confirmed" : "unknown"
+        guard confirmed else {
+            throw Failure(message: "Bitwarden saved item \(saved), but reading it back did not show every change; check it in the app",
+                          reason: "read-back mismatch")
+        }
+        result["id"] = saved
+        result["write"] = "confirmed"
+        result["password_history"] = (stored["passwordHistory"] as? [Any])?.count ?? 0
+        return result
+    }
+}
+
 // MARK: - Matching (same rules as the front end's `matching`)
 
 // publicSuffixRules is generated from the vendored ICANN + PRIVATE list by build_broker.py.
@@ -1015,37 +1251,46 @@ final class TOTPCodes {
     }
 }
 
-/// Strictly supported RFC 6238 forms. Unsupported values never appear in error text.
-/// Cross-check against Bitwarden before retaining the bounded table; a discrepancy fails closed.
-func prepareTOTP(_ raw: String?, serve: Serve, id: String) throws -> (String, TOTPCodes?) {
-    guard let raw, !raw.isEmpty else { return ("absent", nil) }
+struct TOTPKey: Equatable { let key: [UInt8], algorithm: String, digits: Int, period: Int }
+
+/// Strictly supported RFC 6238 forms (bare base32 or otpauth://totp); nil for anything else.
+func parseTOTP(_ raw: String) -> TOTPKey? {
     var seed = raw, algorithm = "SHA1", digits = 6, period = 30
     if raw.lowercased().hasPrefix("otpauth://") {
         guard let url = URLComponents(string: raw), url.host?.lowercased() == "totp",
-              let queries = url.queryItems else { return ("unsupported", nil) }
+              let queries = url.queryItems else { return nil }
         var values: [String: String] = [:]
         for query in queries {
             let key = query.name.lowercased()
-            guard values[key] == nil, let value = query.value else { return ("unsupported", nil) }
+            guard values[key] == nil, let value = query.value else { return nil }
             values[key] = value
         }
         guard let secret = values["secret"], let d = Int(values["digits"] ?? "6"),
               let p = Int(values["period"] ?? "30"), (6...8).contains(d), (15...120).contains(p),
-              values["counter"] == nil else { return ("unsupported", nil) }
+              values["counter"] == nil else { return nil }
         seed = secret; digits = d; period = p; algorithm = (values["algorithm"] ?? "SHA1").uppercased()
     }
-    guard ["SHA1", "SHA256", "SHA512"].contains(algorithm), seed.utf8.count <= 1024 else { return ("unsupported", nil) }
+    guard ["SHA1", "SHA256", "SHA512"].contains(algorithm), seed.utf8.count <= 1024 else { return nil }
     let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".utf8)
     var bytes: [UInt8] = [], buffer: UInt32 = 0, bits = 0, padding = false
     for char in seed.uppercased().utf8 {
         if [9, 10, 13, 32].contains(char) { continue } // Human-formatted base32; Bitwarden cross-check still required.
         if char == 61 { padding = true; continue }
-        guard !padding, let index = alphabet.firstIndex(of: char) else { return ("unsupported", nil) }
+        guard !padding, let index = alphabet.firstIndex(of: char) else { return nil }
         buffer = (buffer << 5) | UInt32(index); bits += 5
         if bits >= 8 { bits -= 8; bytes.append(UInt8((buffer >> bits) & 255)) }
     }
-    guard !bytes.isEmpty, bits < 5, buffer & ((1 << bits) - 1) == 0 else { return ("unsupported", nil) }
-    let key = SymmetricKey(data: Data(bytes))
+    guard !bytes.isEmpty, bits < 5, buffer & ((1 << bits) - 1) == 0 else { return nil }
+    return TOTPKey(key: bytes, algorithm: algorithm, digits: digits, period: period)
+}
+
+/// Cross-check against Bitwarden before retaining the bounded table; a discrepancy fails closed.
+/// Unsupported values never appear in error text.
+func prepareTOTP(_ raw: String?, serve: Serve, id: String) throws -> (String, TOTPCodes?) {
+    guard let raw, !raw.isEmpty else { return ("absent", nil) }
+    guard let parsed = parseTOTP(raw) else { return ("unsupported", nil) }
+    let (algorithm, digits, period) = (parsed.algorithm, parsed.digits, parsed.period)
+    let key = SymmetricKey(data: Data(parsed.key))
     let now = Date().timeIntervalSince1970
     guard now > Double(period) else { return ("unsupported", nil) }
     let first = UInt64(now / Double(period))
@@ -1168,6 +1413,36 @@ func isThisBuild(_ pid: pid_t) -> Bool {
             ? cdhash(unsafeBitCast($0, to: SecStaticCode.self)) : nil }.map { "broker-" + $0 } == ownAccount
 }
 
+/// One HTTP request from a loopback client: request line, lower-cased headers, and a body of at most `maxBody` bytes
+/// (nil when it is larger, malformed or incomplete). Bounded in size and time, like every reader here.
+func readHTTP(_ client: Int32, until deadline: Date, maxBody: Int = 0) -> ([String], [String: String], Data?) {
+    var timeout = timeval(tv_sec: 0, tv_usec: 250_000)
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while data.count < 16_384, data.range(of: Data("\r\n\r\n".utf8)) == nil, Date() < deadline {
+        let count = read(client, &buffer, buffer.count)
+        if count <= 0 { break }
+        data.append(buffer, count: count)
+    }
+    guard let end = data.range(of: Data("\r\n\r\n".utf8)) else { return ([], [:], nil) }
+    let lines = String(decoding: data[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
+    let start = lines.first?.split(separator: " ").map(String.init) ?? []
+    let headers = Dictionary(lines.dropFirst().compactMap { line -> (String, String)? in
+        guard let colon = line.firstIndex(of: ":") else { return nil }
+        return (line[..<colon].lowercased(), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
+    }, uniquingKeysWith: { first, _ in first })
+    var body = Data(data[end.upperBound...])
+    guard headers["transfer-encoding"] == nil, let length = Int(headers["content-length"] ?? "0"),
+          (0...maxBody).contains(length) else { return (start, headers, nil) }
+    while body.count < length, Date() < deadline {
+        let count = read(client, &buffer, min(buffer.count, length - body.count))
+        if count <= 0 { break }
+        body.append(buffer, count: count)
+    }
+    return (start, headers, body.count == length ? body : nil)
+}
+
 /// `bw-broker --serve-once` (stdin: value, token, origin): prints its port, answers one matching GET, then exits.
 func serveOnce() -> Never {
     guard let job = try? JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as? [String: String],
@@ -1190,21 +1465,7 @@ func serveOnce() -> Never {
         guard poll(&poller, 1, 500) > 0 else { continue }
         let client = accept(server, nil, nil)
         guard client >= 0 else { continue }
-        var timeout = timeval(tv_sec: 0, tv_usec: 250_000)
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        var head = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while head.count < 16_384, head.range(of: Data("\r\n\r\n".utf8)) == nil, Date() < deadline {
-            let count = read(client, &buffer, buffer.count)
-            if count <= 0 { break }
-            head.append(buffer, count: count)
-        }
-        let lines = String(decoding: head, as: UTF8.self).components(separatedBy: "\r\n")
-        let start = lines.first?.split(separator: " ").map(String.init) ?? []
-        let headers = Dictionary(lines.dropFirst().compactMap { line -> (String, String)? in
-            guard let colon = line.firstIndex(of: ":") else { return nil }
-            return (line[..<colon].lowercased(), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
-        }, uniquingKeysWith: { first, _ in first })
+        let (start, headers, _) = readHTTP(client, until: deadline)
         // Exact origin (the approved host's page over https) and path; a preflight (private network) never consumes.
         let allowed = start.count == 3 && start[1] == "/" + token && headers["origin"] == origin && Date() < deadline
         let method = start.first ?? ""
@@ -1220,6 +1481,105 @@ func serveOnce() -> Never {
         if !body.isEmpty { exit(0) }
     }
     exit(0)
+}
+
+// MARK: - Page capture (`create`/`update` with a `page` source): the mirror image of `--to page`
+
+let captureSeconds: Double = {
+    #if BW_BROKER_TEST
+    return Double(ProcessInfo.processInfo.environment["BW_BROKER_TEST_CAPTURE_SECONDS"] ?? "120")!
+    #else
+    return 120
+    #endif
+}()
+
+/// The one secret a write stores: a TOTP key in a supported form, or a password of printable characters.
+func secretValue(_ raw: String, kind: String) -> String? {
+    if kind == "totp" {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)  // Bare base32 is stored as Bitwarden shows it: upper case, no spaces.
+        let stored = value.lowercased().hasPrefix("otpauth://") ? value : value.uppercased().filter { !$0.isWhitespace }
+        return parseTOTP(stored) == nil ? nil : stored
+    }
+    let value = raw  // A password exactly as given: a trimmed one would not log in.
+    guard (1...256).contains(value.count), !value.unicodeScalars.contains(where: {
+        $0.value < 32 || $0.value == 127 || $0.properties.generalCategory == .format }) else { return nil }
+    return value
+}
+
+/// Listens on 127.0.0.1 (random port, 128-bit path) for one POST `{"value": …}` from `Origin: https://<host>` within
+/// `captureSeconds`; `capture_js` reads the key from the agent's tab and posts it, so it never enters the transcript.
+/// A preflight never consumes; an invalid value is refused and the next post may try again. The answer carries only
+/// kind and length. Exposure, as for `--to page`: a same-user process that learns the URL can post a value (the
+/// window says so; a wrong TOTP key fails the site's own code check).
+final class Capture {
+    let token = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    let port: Int
+    private let server: Int32
+    private let captured = Held()
+    var value: String? { captured.value }
+
+    init(host: String, kind: String, until deadline: Date) throws {
+        server = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let fd = server
+        guard fd >= 0, withUnsafeMutablePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(fd, $0, size) == 0 && listen(fd, 8) == 0 && getsockname(fd, $0, &size) == 0 } }) else {
+            if fd >= 0 { close(fd) }
+            throw Failure(message: "Cannot open the page capture")
+        }
+        port = Int(UInt16(bigEndian: address.sin_port))
+        let origin = "https://" + host, path = "/" + token
+        Thread.detachNewThread { [self] in
+            defer { close(server) }
+            while value == nil, Date() < deadline {
+                var poller = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
+                guard poll(&poller, 1, 500) > 0 else { continue }
+                let client = accept(server, nil, nil)
+                guard client >= 0 else { continue }
+                let (start, headers, body) = readHTTP(client, until: deadline, maxBody: 4096)
+                let allowed = start.count == 3 && start[1] == path && headers["origin"] == origin
+                var status = "403 Forbidden", answer: [String: Any] = ["ok": false, "error": "refused"]
+                if allowed && start[0] == "OPTIONS" {
+                    status = "204 No Content"; answer = [:]
+                } else if allowed && start[0] == "POST" {
+                    let posted = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    if let raw = posted?["value"] as? String, let secret = secretValue(raw, kind: kind) {
+                        captured.value = secret
+                        status = "200 OK"; answer = ["ok": true, "kind": kind, "length": secret.count]
+                    } else {
+                        status = "422 Unprocessable Content"; answer = ["ok": false, "error": "invalid_\(kind)"]
+                    }
+                }
+                let json = answer.isEmpty ? Data() : (try? JSONSerialization.data(withJSONObject: answer)) ?? Data()
+                var head = "HTTP/1.1 \(status)\r\n"
+                if allowed {
+                    head += "Access-Control-Allow-Origin: \(origin)\r\nVary: Origin\r\nAccess-Control-Allow-Methods: POST\r\n"
+                        + "Access-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Private-Network: true\r\n"
+                }
+                head += "Cache-Control: no-store\r\nContent-Type: application/json\r\nContent-Length: \(json.count)\r\nConnection: close\r\n\r\n"
+                (Data(head.utf8) + json).withUnsafeBytes { _ = write(client, $0.baseAddress!, $0.count) }
+                close(client)
+            }
+        }
+    }
+}
+
+/// A new password made here (never seen by the agent): 3 × 6 letters/digits joined by hyphens, with at least one
+/// upper, lower and digit. Apple's strong-password shape: accepted by nearly every site's rules, 100+ bits.
+func generatedPassword() -> String {
+    let alphabet = Array("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    while true {
+        var generator = SystemRandomNumberGenerator()
+        let chars = (0..<18).map { _ in alphabet[Int.random(in: 0..<alphabet.count, using: &generator)] }
+        let groups = stride(from: 0, to: 18, by: 6).map { String(chars[$0..<$0 + 6]) }
+        if chars.contains(where: \.isUppercase) && chars.contains(where: \.isLowercase) && chars.contains(where: \.isNumber) {
+            return groups.joined(separator: "-")
+        }
+    }
 }
 
 /// `bw-broker --clear-after SECONDS TOKEN CHANGECOUNT`: clear only our unchanged write (a newer copy stays).
@@ -1520,6 +1880,9 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
                 ("Expires", "\(request.until) (deleted then; \(request.days) day(s))"),
                 ("Goes to", "the agent gets only the link and dates; anyone holding the link can open it")]
     }
+    if request.isWrite, let vault = request.vaults.first {
+        return describeWrite(request, vault)
+    }
     var what: String
     switch request.op {
     case "list": what = "names and usernames of matching logins" + (request.username.map { " with username \($0)" } ?? "")
@@ -1550,11 +1913,59 @@ func describe(_ request: Request, vaults: [String]) -> [(String, String)] {
     return rows
 }
 
+let secretLabel = ["password": "Password", "totp": "Authenticator key (TOTP)"]
+
+func describeWrite(_ request: Request, _ vault: Vault) -> [(String, String)] {
+    var rows: [(String, String)]
+    if request.op == "create" {
+        rows = [("Creates", "one login in \(vault.name) (\(vault.email)); refused if one exists for this host and username"),
+                ("Name", request.name), ("Username", request.username ?? "none"),
+                ("Collection", request.collection ?? "none (the account's own vault)")]
+    } else if request.op == "delete" {
+        return [("Moves to trash", "the login in \(vault.name) (\(vault.email)) with id \(request.id ?? "?") if it matches "
+                 + "https://\(request.host); restorable from the trash for 30 days"), ("Agent gets", "item id and name")]
+    } else {
+        rows = [("Updates", "the one login in \(vault.name) (\(vault.email)) for https://\(request.host) "
+                 + (request.id.map { "with id \($0)" } ?? "") + (request.username.map { " with username \($0)" } ?? "")
+                 + "; refused if none or several match")]
+    }
+    if !request.uris.isEmpty { rows.append((request.op == "create" ? "URIs" : "Adds URIs", request.uris.joined(separator: "\n"))) }
+    if let notes = request.notes {
+        let digest = SHA256.hash(data: Data(notes.utf8)).map { String(format: "%02x", $0) }.joined()
+        rows.append(("Notes", "\(notes.count) characters · SHA-256 \(digest.prefix(12))" + (request.op == "update" ? " · appended" : "")
+                     + " · shown below"))
+    }
+    if let secret = request.secret {
+        let source = ["generate": "new one made here, never shown to the agent; the old one stays in Bitwarden's password history",
+                      "page": "sent once by a page on https://\(request.host) within \(Int(captureSeconds)) s (any local "
+                        + "process that learns the one-time URL could send one too)",
+                      "ask": "you paste it below"][request.source] ?? "?"
+        rows.append((secretLabel[secret] ?? secret, source + (secret == "totp"
+            ? "; set only if the login has none (identical: no change; different: refused, no TOTP history)" : "")))
+    }
+    if let to = request.writeTo {
+        let what = request.secret == "totp" ? "one current code" : "the new password"
+        rows.append(("Then", "\(what) to " + (to == "page" ? "a page on https://\(request.host) (one fetch within \(fillSeconds) s)"
+                                                         : "the clipboard, cleared after \(clipboardSeconds) s")))
+    }
+    rows.append(("Agent gets", "item id, name, which fields changed; never a value"))
+    if request.host.split(separator: ".").contains(where: { $0.hasPrefix("xn--") }) {
+        rows.append(("⚠ Lookalike?", "\(request.host) is an internationalized name (xn--): approve only if you expected exactly this host."))
+    }
+    return rows
+}
+
 /// The text in macOS's own Touch ID sheet (the one part of the screen no other app can draw): the checked request
 /// (field, host, login filter; all validated in `parseRequest`), never the agent's `--why`/`--thread`.
 func touchReason(_ request: Request) -> String {
     switch request.op {
     case "send-text": return "create a one-view text Send in \(request.vaults.first?.name ?? "?") (see window)"
+    case "delete": return "move the login \(request.id ?? "?") for \(request.host) in \(request.vaults.first?.name ?? "?") to the trash"
+    case "create", "update":
+        let fields = request.secret.map { [$0 == "totp" ? "authenticator key" : "password"] } ?? []
+        return "\(request.op) the login for \(request.host)" + (request.username.map { " (\($0))" } ?? "")
+            + " in \(request.vaults.first?.name ?? "?")" + (fields.isEmpty ? "" : ": set " + fields[0])
+            + (request.writeTo.map { " and send \(request.secret == "totp" ? "a code" : "it") to the \($0)" } ?? "")
     case "list": return "list logins for \(request.host) (no secrets)"
     default: return "release the \(request.withTOTP ? "password and TOTP codes (if configured)" : request.field) for \(request.host)" + (request.username.map { " (\($0))" } ?? "")
     }
@@ -1776,18 +2187,55 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     if claim.isEmpty { claim.append(("", "no reason given")) }
     panel.box("AGENT SAYS (unverified)", claim, tint: .systemOrange)
     panel.box("BW-ONCE WILL (checked)", describe(request, vaults: vaults.map(\.name)), tint: .systemGreen)
-    if request.op == "send-text" {
+    if let hidden = request.op == "send-text" ? request.sendText : request.notes {
         // Hidden until asked: the agent wrote the text already; the window must not leak it into a screen recording.
-        let shown = NSTextField(wrappingLabelWithString: "Text hidden · Show text displays it exactly as sent")
+        let shown = NSTextField(wrappingLabelWithString: "Text hidden · Show text displays it exactly as "
+                                + (request.op == "send-text" ? "sent" : "written to the notes"))
         shown.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         shown.preferredMaxLayoutWidth = 480
         panel.stack.addArrangedSubview(shown)
         panel.button("Show text") {
-            shown.stringValue = request.sendText
+            shown.stringValue = hidden
             panel.window.setContentSize(panel.stack.fittingSize)
         }
     }
     panel.line("Touch ID approves exactly the green box.", color: .secondaryLabelColor, size: 11)
+    // A write's one secret: made here, sent by the page (`capture_js`), or pasted by the human; acquired before the
+    // touch and kept across a renewal re-run (`acquired`), so the approval always covers a known value.
+    var waiting: String?
+    if request.isWrite && acquired.value == nil {
+        let label = secretLabel[request.secret ?? ""]?.lowercased() ?? ""
+        switch request.source {
+        case "generate": acquired.value = generatedPassword()
+        case "ask":
+            waiting = "Paste the \(label), then Continue"
+            panel.secureField("secret", label: "The \(label) (from the site's setup page; never shown to the agent)")
+            panel.button("Continue", primary: true) {
+                guard let value = secretValue(panel.value("secret"), kind: request.secret ?? "") else {
+                    panel.setStatus("Not a valid \(label); paste it again", color: .systemRed); return
+                }
+                acquired.value = value
+                panel.setButtons(enabled: false)
+            }
+        case "page":
+            do {
+                acquireDeadline = Date().addingTimeInterval(captureSeconds)
+                let capture = try Capture(host: request.host, kind: request.secret ?? "", until: acquireDeadline)
+                let server = try privateSocket("write-\(capture.token)")
+                resultServer = (server.0, server.1)
+                DispatchQueue.global().async {  // The page's value becomes the request's once it arrives.
+                    while acquired.value == nil, Date() < acquireDeadline {
+                        if let value = capture.value { acquired.value = value; break }
+                        usleep(100_000)
+                    }
+                }
+                waiting = "Waiting for the page on https://\(request.host) to send the \(label)…"
+                emit(["ok": true, "capture_url": "http://127.0.0.1:\(capture.port)/\(capture.token)", "token": capture.token,
+                      "capture_expires_in": Int(captureSeconds), "kind": request.secret ?? "", "host": request.host])
+            } catch { fail("Cannot open the page capture; nothing written") }
+        default: break
+        }
+    }
 
     let context = LAContext()
     context.localizedReason = touchReason(request)
@@ -1811,7 +2259,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 300) { panel.onCancel(); panel.window.orderOut(nil) }
     panel.button("Cancel") { panel.window.close() }
     panel.show()
-    panel.setStatus("Touch ID to approve…")
+    panel.setStatus(waiting ?? "Touch ID to approve…")
 
     DispatchQueue.global().async {
         do {
@@ -1825,7 +2273,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 DispatchQueue.global().async {
                     let outcome = Result { () throws -> Serve in
                         let serve = try Serve(vault, binary: binary)
-                        do { try serve.prepare(sync: request.op != "send-text") } catch {
+                        do { try serve.prepare(sync: request.op != "send-text", strict: request.isWrite) } catch {
                             if !serve.lockAndClose() { guardLock.lock(); unverifiedLock = true; guardLock.unlock() }
                             throw error
                         }
@@ -1834,6 +2282,19 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     guardLock.lock(); prepared[vault.name] = outcome; guardLock.unlock()
                     group.leave()
                 }
+            }
+            if request.isWrite && request.secret != nil {
+                // Page or human first; nothing is unsealed or unlocked before the value is here.
+                while acquired.value == nil, !gate.isCancelled, Date() < acquireDeadline { usleep(100_000) }
+                guard let value = acquired.value, !gate.isCancelled else {
+                    group.wait()
+                    serves = prepared.values.compactMap { try? $0.get() }
+                    let locked = cleanup()
+                    finish(["ok": false, "error": gate.isCancelled ? "Request cancelled; nothing written"
+                            : "No value arrived in time; nothing written", "write": "not_attempted", "retry_safe": locked])
+                }
+                let label = secretLabel[request.secret!] ?? ""
+                onMain { panel.setStatus("\(label) received (\(value.count) characters) · Touch ID to approve…") }
             }
             let sealed = item["sealed"] as? [String: String] ?? [:]
             var bundle: [String: [String: String]]
@@ -1887,7 +2348,7 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                     serves.append(serve)
                     guard let password = bundle[vault.name]?["password"], bundle[vault.name]?["email"] == vault.email,
                           try serve.unlock(password) else { rejected.append(vault); continue }
-                    if request.op == "send-text" { continue }
+                    if request.op == "send-text" || request.isWrite { continue }
                     for entry in try serve.items() where matches(entry, host: request.host, defaultMatch: vault.defaultMatch) {
                         candidates.append((vault, entry, serve))
                     }
@@ -1909,6 +2370,42 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
                 return
             }
             bundle = [:]
+            if request.isWrite {
+                guard let serve = serves.first else {
+                    throw Failure(message: unavailable.map { "\($0["vault"] ?? "?"): \($0["reason"] ?? "unavailable")" }
+                        .joined(separator: "; ") + "; nothing written")
+                }
+                guard Date() < answerDeadline.addingTimeInterval(-30) else { throw Failure(message: "Request took too long; nothing written, ask again") }
+                guard !callerGone(), gate.commit() else { _ = cleanup(); fail("Request cancelled; nothing written") }
+                onMain { panel.setStatus("Approved · writing…") }
+                var written = try serve.saveLogin(request, secret: acquired.value)
+                // What --to sends: the generated password, or one current code from the key just saved (bw computes
+                // it, which also proves bw reads the stored key).
+                var delivery = request.writeTo == nil ? nil : request.secret == "totp"
+                    ? try? serve.totp(written["id"] as? String ?? "") : acquired.value
+                acquired.value = nil
+                guard cleanup() else {
+                    throw Failure(message: "Login \(written["id"] ?? "?") written (\(written["write"] ?? "?")), but lock verification "
+                                  + "failed: nothing sent, run `bw lock` now")
+                }
+                if let to = request.writeTo {
+                    if let value = delivery {
+                        written.merge(try deliver(value, request, to: to)) { $1 }
+                        written["copied"] = request.secret == "totp" ? "totp" : "new-password"
+                    } else { written["delivery"] = "unavailable" }
+                }
+                delivery = nil
+                onMain {
+                    panel.onCancel = {}
+                    let changed = (written["changed"] as? [String] ?? []).joined(separator: ", ")
+                    panel.setStatus("✓ \(written["write"] as? String == "unchanged" ? "Already as asked, nothing written" : "Saved \(changed)")"
+                                    + " · \(written["name"] as? String ?? "?") · vault locked", color: .systemGreen)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + resultSeconds) {
+                        finish(["ok": true, "via": "touchid"].merging(written) { $1 })
+                    }
+                }
+                return
+            }
             if request.op == "send-text" {
                 guard let serve = serves.first else {
                     throw Failure(message: unavailable.map { "\($0["vault"] ?? "?"): \($0["reason"] ?? "unavailable")" }
@@ -2041,6 +2538,10 @@ func serveRequest(_ request: Request, item: [String: Any], binary: String) {
             let locked = cleanup()
             var answer: [String: Any] = ["ok": false, "error": locked ? message : message + "; lock verification failed, run `bw lock`"]
             answer["reason"] = (error as? Failure)?.reason
+            if request.isWrite {
+                answer["write"] = writeState
+                answer["retry_safe"] = writeState == "not_attempted" && locked
+            }
             if request.op == "send-text" {
                 // Retry-safe only when no create was attempted and every vault is verified locked.
                 answer["stage"] = created == nil ? (locked ? "prepare" : "lock") : (created!.isEmpty ? "create" : "lock")

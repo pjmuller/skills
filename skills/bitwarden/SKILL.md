@@ -1,10 +1,10 @@
 ---
 name: bitwarden
-description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\"), share a secret/file through a one-view Bitwarden Send, or hand API keys to a colleague's agent and install a received Send link into their env (`bw-receive`, no account needed). One approved field, or an explicit password/TOTP login bundle, per Touch ID; never a vault session."
+description: "Use when an agent must log into a site with a Bitwarden credential (\"log in with my Bitwarden password\", \"get the TOTP for X\"), create or update a login (new/generated password, add a 2FA authenticator key from a setup page, URIs, notes), share a secret/file through a one-view Bitwarden Send, or hand API keys to a colleague's agent and install a received Send link into their env (`bw-receive`, no account needed). One approved field, or an explicit password/TOTP login bundle, per Touch ID; never a vault session."
 ---
 
-`bw-once` releases **one field** (username, password or generated TOTP), an explicitly approved **login bundle**, or creates a
-text/file Send, after the human approves exactly that request. A bundle covers one exact host/account: password now,
+`bw-once` releases **one field** (username, password or generated TOTP), an explicitly approved **login bundle**, creates a
+text/file Send, or **writes one login** ([Writes](#writes-create--update--delete)), after the human approves exactly that request. A bundle covers one exact host/account: password now,
 up to two TOTP deliveries within five minutes, vaults locked, only expiring codes retained. Approval paths, best first: **Touch ID broker**
 (one native window, one touch: [touchid.md](touchid.md)), a time-boxed **session holder** the human unlocks once
 ([session.md](session.md)), else a fresh human Terminal unlock per request.
@@ -19,6 +19,8 @@ up to two TOTP deliveries within five minutes, vaults locked, only expiring code
   never rewrite its origin check.
 - Terminal approval: never send keystrokes to, or read, the Terminal while authentication is in progress. No agent
   PTY fallback.
+- Writes: a password or authenticator key never goes into argv, a file or a page read by you; it is generated,
+  captured by `capture_js` or pasted by the human. No snapshot/text read of a page while a key is shown.
 - Request the **actual destination host** (`--host`), with `--username` when known. Never substitute one vault's
   credentials for another's.
 - Send: **never open a one-view link to verify it, or forward it without authorization.** A creation failure may
@@ -96,6 +98,33 @@ Afterwards: the site's logout in the same tab ([session.md](session.md#browser-c
 CLI data dir, `server`, `default_match`, exactly one `"default": true`). `--vault N` goes before the command;
 locks, sockets and audit lines are per vault; a context signed in as another email fails before any Terminal.
 Touch ID searches every enrolled vault unless `--vault` is given.
+
+## Writes (create / update / delete)
+
+One login, one vault, one touch, Touch ID only (no Terminal/session path). The green box names every change; secret
+values (password, authenticator key) never come from the agent and never come back. Mechanism and why:
+[touchid.md](touchid.md#writes).
+
+```sh
+bw-once [--vault V] update --host H --username U --totp page --to page --thread "<title>" --why "enable 2FA"
+bw-once [--vault V] update --host H --id X --password generate --to page   # password change: new + confirm fields
+bw-once [--vault V] create --host H --name N --username U --password generate --to page [--collection C] [--uri …] [--notes-file F]
+bw-once [--vault V] delete --host H --id X                                   # trash, restorable 30 days
+```
+
+- Secret source, one per request: `--password generate` (broker makes it; old one stays in password history),
+  `page` (captured from the tab), `ask` (the human pastes it into the window). `--totp page|ask`.
+- `page`: the answer carries `capture_js` + `token`. **Never snapshot or read the page while a key or password is
+  visible**: open the 2FA setup until the QR code shows, `preview_evaluate` `capture_js` verbatim (it decodes the QR,
+  or an `otpauth://` link; `--capture-selector` for a text key), `{ok, kind, length}` only. Then
+  `bw-once wait --token T` (blocks while the human touches) → the write's result. `csp`/`blocked` → rerun with `ask`.
+- `--to page|clipboard` sends the generated password, or **one current TOTP code** for the site's "enter the code"
+  step, after the vault is locked: run the result's `fill_js` at once, then submit.
+- An existing different authenticator key is refused (Bitwarden keeps no TOTP history): replacing is the human's, in
+  the app. `create` refuses a host+username that exists (use `update`).
+- Result `write`: `confirmed` (read back), `unchanged`, or on failure `not_attempted` (`retry_safe: true`) / `unknown`
+  (**check the item before asking again**). Saving ≠ the site accepted it: report both. Site rejected a new password →
+  the vault has it, the old one is in history: tell the human, don't loop.
 
 ## Send
 

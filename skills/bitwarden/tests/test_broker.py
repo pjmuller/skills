@@ -7,6 +7,7 @@ import subprocess
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -71,8 +72,28 @@ while True:
         if not cfg.get("fail_lock"): state["locked"] = True
     elif path == "/sync":  # Real bw syncs a locked vault too (checked 2026-10-27).
         if cfg.get("slow_sync"): import time; time.sleep(cfg["slow_sync"])  # The whole vault over a poor link.
+        if cfg.get("sync_fail"): reply = {"success": False, "message": "offline"}
     elif state["locked"]: code, reply = 400, {"success": False, "message": "Vault is locked."}
     elif path == "/list/object/items": reply["data"] = {"object": "list", "data": cfg["items"]}
+    elif path == "/list/object/collections": reply["data"] = {"object": "list", "data": cfg.get("collections", [])}
+    elif path.startswith("/object/item"):  # Real bw answers a write with the whole decrypted item.
+        if method == "DELETE":
+            with (root / "writes").open("a") as stream: stream.write(json.dumps({"method": method, "path": path}) + "\n")
+            for i in cfg["items"]:
+                if i["id"] == path.rsplit("/", 1)[-1]: i["deletedDate"] = "2026-11-03T00:00:00.000Z"
+            (root / "config.json").write_text(json.dumps(cfg))
+        elif method in ("PUT", "POST"):
+            with (root / "writes").open("a") as stream: stream.write(json.dumps({"method": method, "path": path, "item": data}) + "\n")
+            data = {**data, "id": data.get("id") or "fedcba98-1234-1234-1234-123456789abc"}
+            if not cfg.get("lose_write"):
+                cfg["items"] = [i for i in cfg["items"] if i["id"] != data["id"]] + [data]
+                (root / "config.json").write_text(json.dumps(cfg))
+            if cfg.get("fail_write"): code, reply = 400, {"success": False, "message": "echo " + json.dumps(data)}
+            else: reply["data"] = data
+        else:
+            found = [i for i in cfg["items"] if i["id"] == path.rsplit("/", 1)[-1]]
+            if found: reply["data"] = found[0]
+            else: code, reply = 404, {"success": False}
     elif path.startswith("/object/totp/"):
         value = "123456"
         if cfg.get("real_totp"):
@@ -971,3 +992,232 @@ def test_bundle_cannot_report_ready_without_socket(world, monkeypatch):
         assert world['clip']() == SECRET_A
     finally:
         path.rmdir()
+
+
+# Writes (create / update one login). Values never reach stdout, the panel or the agent.
+
+NEW_SEED = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"  # Fixture key, never a real credential.
+
+
+def writes(world, name="testa"):
+    path = Path(world["vault_dirs"][name]) / "writes"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def stored(world, name="testa", item=ID_A):
+    config = json.loads((Path(world["vault_dirs"][name]) / "config.json").read_text())
+    return next(entry for entry in config["items"] if entry["id"] == item)
+
+
+def write(world, op="update", typed=None, names=("testa",), **fields):
+    base = {"host": HOST, "thread": "2FA setup"} | ({"username": "alice"} if op == "update" else {"name": "Example"})
+    return world["run"](op, names=names, typed=typed, **{**base, **fields})
+
+
+def no_secret(*texts, values=(NEW_SEED, SECRET_A)):
+    return not any(value in text for value in values for text in texts)
+
+
+def test_update_sets_a_pasted_totp_key_once_and_never_shows_it(world):
+    enroll(world)
+    item = login(ID_A, SECRET_A, "alice")
+    item["login"]["totp"] = None
+    world["configure"]("testa", items=[item])
+    result, panel = write(world, secret="totp", source="ask", typed={"secret": " jbsw y3dp ehpk 3pxp jbsw y3dp ehpk 3pxp "})
+    assert result["ok"] and result["write"] == "confirmed" and result["changed"] == ["totp"] and result["id"] == ID_A
+    [saved] = writes(world)
+    assert saved["method"] == "PUT" and saved["path"] == f"/object/item/{ID_A}" and saved["item"]["login"]["totp"] == NEW_SEED
+    assert saved["item"]["login"]["password"] == SECRET_A and saved["item"]["notes"] == "private note"  # Rest untouched.
+    assert no_secret(json.dumps(result), panel) and world["locked"]("testa")
+    assert "touch: update the login for admin.example.com (alice) in testa: set authenticator key" in panel
+    paths = [e.get("path") for e in world["events"]("testa")]
+    assert paths.index("/sync") < paths.index("/unlock") < paths.index(f"/object/item/{ID_A}") < len(paths) - paths[::-1].index("/lock")
+
+
+def test_a_different_existing_totp_is_refused_and_an_identical_one_is_no_write(world):
+    enroll(world)
+    item = login(ID_A, SECRET_A, "alice")
+    item["login"]["totp"] = TOTP_SEED
+    world["configure"]("testa", items=[item])
+    result, _ = write(world, secret="totp", source="ask", typed={"secret": NEW_SEED})
+    assert result["ok"] is False and "different authenticator key" in result["error"]
+    assert result["write"] == "not_attempted" and result["retry_safe"] is True and writes(world) == []
+    result, _ = write(world, secret="totp", source="ask", typed={"secret": TOTP_SEED.lower()})
+    assert result["ok"] and result["write"] == "unchanged" and writes(world) == [] and world["locked"]("testa")
+
+
+def test_invalid_pasted_key_is_never_written(world):
+    enroll(world)
+    before = len(world["events"]("testa"))
+    result, panel = write(world, secret="totp", source="ask", typed={"secret": "not a key 1"},
+                          extra_env={"BW_BROKER_TEST_ANSWER_SECONDS": "3"})
+    assert result["ok"] is False and "Not a valid authenticator key" in panel and writes(world) == []
+    assert "/unlock" not in [e.get("path") for e in world["events"]("testa")[before:]]
+
+
+def test_generated_password_is_saved_then_filled_into_the_page_only(world):
+    enroll(world)
+    result, panel = write(world, secret="password", source="generate", to="page")
+    [saved] = writes(world)
+    new = saved["item"]["login"]["password"]
+    assert result["ok"] and result["write"] == "confirmed" and result["copied"] == "new-password"
+    assert len(new) == 20 and new != SECRET_A and new.count("-") == 2 and world["clip"]() is None
+    assert new not in json.dumps(result) + panel and "password history" in panel and "Then" in panel
+    request = urllib.request.Request(result["fill_url"], headers={"Origin": f"https://{HOST}"})
+    with urllib.request.urlopen(request, timeout=5) as answer:
+        assert answer.read().decode() == new
+    passwords = {write(world, secret="password", source="generate")[0]["ok"] for _ in range(2)}
+    assert passwords == {True} and len({w["item"]["login"]["password"] for w in writes(world)}) == 3
+
+
+def test_totp_write_can_send_one_current_code_to_the_page(world):
+    enroll(world)
+    item = login(ID_A, SECRET_A, "alice")
+    item["login"]["totp"] = None
+    world["configure"]("testa", items=[item], real_totp=True)
+    result, _ = write(world, secret="totp", source="ask", typed={"secret": TOTP_SEED}, to="page")
+    assert result["ok"] and result["copied"] == "totp" and result["fill_url"].startswith("http://127.0.0.1:")
+    request = urllib.request.Request(result["fill_url"], headers={"Origin": f"https://{HOST}"})
+    with urllib.request.urlopen(request, timeout=5) as answer:
+        assert answer.read().decode() in {expected_totp(time.time() + shift) for shift in (-30, 0, 30)}
+
+
+def post(url, origin, value=None, method="POST"):
+    body = None if value is None else json.dumps({"value": value}).encode()
+    request = urllib.request.Request(url, data=body, method=method, headers={"Origin": origin, "Content-Type": "text/plain"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as answer:
+            return answer.status, answer.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+def test_page_capture_takes_one_valid_key_from_the_exact_origin_then_the_waiter_gets_the_result(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    item = login(ID_A, SECRET_A, "alice")
+    item["login"]["totp"] = ""
+    world["configure"]("testa", items=[item])
+    child, first = world["start"]("update", names=("testa",), host=HOST, username="alice", secret="totp", source="page")
+    try:
+        assert first["ok"] and first["kind"] == "totp" and len(first["token"]) == 32 and "id" not in first
+        url = first["capture_url"]
+        assert url.startswith("http://127.0.0.1:") and url.endswith(first["token"])
+        assert post(url, "https://evil.example", NEW_SEED)[0] == 403
+        assert post(url + "x", f"https://{HOST}", NEW_SEED)[0] == 403
+        assert post(url, f"http://{HOST}", NEW_SEED)[0] == 403
+        assert post(url, f"https://{HOST}", method="OPTIONS")[0] == 204  # A preflight never consumes.
+        assert post(url, f"https://{HOST}", "not-a-key")[0] == 422
+        uri = f"otpauth://totp/Example:alice?secret={NEW_SEED}&issuer=Example"
+        status, body = post(url, f"https://{HOST}", uri)
+        assert status == 200 and json.loads(body) == {"ok": True, "kind": "totp", "length": len(uri)}
+        result = bw_once.wait_write(first["token"])
+        assert result["ok"] and result["write"] == "confirmed" and no_secret(json.dumps(result))
+        assert writes(world)[0]["item"]["login"]["totp"].endswith(f"secret={NEW_SEED}&issuer=Example")
+        assert child.wait(10) == 0 and world["locked"]("testa")
+        panel = child.stderr.read().decode()
+        assert "Waiting for the page on https://admin.example.com" in panel and no_secret(panel)
+    finally:
+        if child.poll() is None:
+            child.kill(); child.wait(10)  # The broker ignores SIGTERM (its panel owns cleanup).
+
+
+def test_page_capture_that_never_arrives_writes_nothing(world, monkeypatch):
+    enroll(world)
+    monkeypatch.setattr(bw_once, "cache_dir", lambda: world["sockets"])
+    before = len(world["events"]("testa"))
+    child, first = world["start"]("update", names=("testa",), host=HOST, username="alice", secret="totp", source="page",
+                                  extra_env={"BW_BROKER_TEST_CAPTURE_SECONDS": "2"})
+    try:
+        result = bw_once.wait_write(first["token"])
+        assert result == {"ok": False, "error": "No value arrived in time; nothing written", "write": "not_attempted",
+                          "retry_safe": True}
+        assert writes(world) == [] and "/unlock" not in [e.get("path") for e in world["events"]("testa")[before:]]
+    finally:
+        child.wait(10)
+
+
+def test_create_adds_one_login_in_the_named_collection_and_refuses_a_duplicate(world):
+    enroll(world)
+    collection = {"id": "c0ffee00-1234-1234-1234-123456789abc", "organizationId": "0a0a0a0a-1234-1234-1234-123456789abc",
+                  "name": "Ops"}
+    world["configure"]("testa", collections=[collection])
+    result, panel = write(world, op="create", username="Bob", collection="Ops", uris=[f"https://{HOST}/signup"],
+                          notes="created by test", secret="password", source="generate")
+    assert result["ok"] and result["write"] == "confirmed" and result["username"] == "Bob"
+    [saved] = writes(world)
+    assert saved["method"] == "POST" and saved["item"]["collectionIds"] == [collection["id"]]
+    assert saved["item"]["organizationId"] == collection["organizationId"] and saved["item"]["notes"] == "created by test"
+    assert [u["uri"] for u in saved["item"]["login"]["uris"]] == [f"https://{HOST}", f"https://{HOST}/signup"]
+    assert "Ops" in panel and "Bob" in panel and saved["item"]["login"]["password"] not in panel + json.dumps(result)
+    result, _ = write(world, op="create", username="alice")
+    assert result["ok"] is False and "exists" in result["error"] and len(writes(world)) == 1
+
+
+def test_ambiguous_write_is_reported_unknown_never_retried_and_never_quoted(world):
+    enroll(world)
+    world["configure"]("testa", fail_write=True)
+    result, _ = write(world, secret="password", source="generate", to="clipboard")
+    assert result["ok"] is False and result["write"] == "unknown" and result["retry_safe"] is False
+    assert len(writes(world)) == 1 and world["clip"]() is None and world["locked"]("testa")
+    assert no_secret(json.dumps(result), values=(writes(world)[0]["item"]["login"]["password"], "private note"))
+
+
+def test_lost_write_fails_the_read_back(world):
+    enroll(world)
+    world["configure"]("testa", lose_write=True)
+    result, _ = write(world, uris=[f"https://{HOST}/new"])
+    assert result["ok"] is False and result["write"] == "unknown" and "check it in the app" in result["error"]
+
+
+def test_failed_sync_or_cancelled_touch_writes_nothing(world):
+    enroll(world)
+    world["configure"]("testa", sync_fail=True)
+    result, _ = write(world, notes="x")
+    assert result["ok"] is False and writes(world) == [] and world["locked"]("testa")
+    world["configure"]("testa", sync_fail=False)
+    before = len(world["events"]("testa"))
+    result, _ = write(world, notes="x", touch="cancel")
+    assert result["ok"] is False and writes(world) == [] and "/unlock" not in [e.get("path") for e in world["events"]("testa")[before:]]
+
+
+@pytest.mark.parametrize("fields", [{"names": ("testa", "testb")}, {"uris": ["http://admin.example.com"]},
+                                    {"uris": ["https://user:pw@admin.example.com"]}, {"secret": "totp", "source": "generate"},
+                                    {"secret": "password", "source": "page", "to": "page"}, {},
+                                    {"username": None}, {"notes": "a‮b"}, {"secret": "password", "source": "argv"}])
+def test_write_validation_rejects_before_any_window(world, fields):
+    enroll(world)
+    result, panel = write(world, **fields)
+    assert result["ok"] is False and "panel:" not in panel and writes(world) == []
+
+
+def test_delete_moves_only_the_named_matching_login_to_the_trash(world):
+    enroll(world)
+    result, panel = world["run"]("delete", names=("testa",), host="other.example.org", id=ID_A, thread="cleanup")
+    assert result["ok"] is False and writes(world) == []  # Not a login for that host.
+    result, panel = world["run"]("delete", names=("testa",), host=HOST, id=ID_A, thread="cleanup")
+    assert result["ok"] and result["changed"] == ["trashed"] and writes(world) == [{"method": "DELETE", "path": f"/object/item/{ID_A}"}]
+    assert "restorable from the trash for 30 days" in panel and stored(world)["deletedDate"] and world["locked"]("testa")
+    result, panel = world["run"]("delete", names=("testa",), host=HOST, id=ID_A, notes="x")
+    assert result["ok"] is False and "panel:" not in panel
+
+
+def test_hidden_password_items_get_no_secret_write_and_passwords_keep_their_spaces(world):
+    enroll(world)
+    item = login(ID_A, None, "alice")
+    item["login"]["totp"] = None  # As bw shows a "can't view password" item: a key may exist behind the null.
+    item["viewPassword"] = False
+    world["configure"]("testa", items=[item])
+    result, _ = write(world, secret="totp", source="ask", typed={"secret": NEW_SEED})
+    assert result["ok"] is False and "hides its password" in result["error"] and writes(world) == []
+    del item["viewPassword"]
+    world["configure"]("testa", items=[item])
+    result, _ = write(world, secret="password", source="ask", typed={"secret": " spaced pass "})
+    assert result["ok"] and writes(world)[0]["item"]["login"]["password"] == " spaced pass "
+
+
+def test_notes_are_shown_on_request_before_the_touch(world):
+    enroll(world)
+    result, panel = write(world, notes="agent note line")
+    assert result["ok"] and "Show text displays it exactly as written to the notes" in panel and "agent note line" not in panel
+    assert stored(world)["notes"] == "private note\n\nagent note line"

@@ -50,7 +50,7 @@ done
 if [ "$check" = true ]; then
   [ -x "$target/clipboard" ] && [ -x "$target/bw-broker" ] && [ -L "$command_path" ] \
     && [ "$(readlink "$command_path")" = "$target/bw-once" ] || { echo "bw-once installation missing" >&2; exit 1; }
-  for name in bw-once bw_once.py clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
+  for name in bw-once bw_once.py capture.js clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
     cmp -s "$source_dir/$name" "$target/$name" || { echo "Installed $name differs; rerun installer" >&2; exit 1; }
   done
   for pair in 'broker.swift broker.built.swift' 'public_suffix_list.dat public_suffix_list.built.dat' 'build_broker.py build_broker.built.py'; do
@@ -70,7 +70,7 @@ if [ -e "$command_path" ] || [ -L "$command_path" ]; then
 fi
 mkdir -p "$target" "$prefix/bin"
 chmod 700 "$target"
-for name in bw-once bw_once.py clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
+for name in bw-once bw_once.py capture.js clipboard.swift broker.swift build_broker.py public_suffix_list.dat; do
   cp "$source_dir/$name" "$target/$name"
 done
 rm -f "$target/touchid" "$target/touchid.swift"  # Replaced by bw-broker.
