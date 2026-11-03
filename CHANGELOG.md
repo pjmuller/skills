@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — dependency-update-core removed
+
+- `dependency-update-core` is gone from the catalogue, the same day it shipped. Its workflow now lives in one private skill next to the security scanner it duplicated, run monthly by the person who owns dependency security for the whole fleet. Why: two systems (a public core with product wrappers, and a private scanner with its own auto-fix) scanned the same lockfiles and both could open upgrade PRs. Projects that copied it: delete `.agents/skills/dependency-update-core` and its `skills-lock.json` entry.
+
 ## 2026-11-03 — t3-route: link-only replies, one-way handoffs, refresh-managed core
 
 - `t3-route` reply = the thread link, nothing else (no recap, plan, evidence or narration); extra words only for a model substitution or a routing failure. Bare-link intake reads only enough to place and brief; the investigation is the worker's. Every brief and owner handoff ends with a literal one-way line: the owner never reports to, pings or asks review from the router; owner output landing in the router gets at most a pointer. Why: routers grew verbose prose around each thread chip and one colleague's wrapper had already pinned "one link line" privately. Eval case 23.
