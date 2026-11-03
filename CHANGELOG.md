@@ -3,6 +3,9 @@
 ## 2026-11-03 — dependency-update-core removed
 
 - `dependency-update-core` is gone from the catalogue, the same day it shipped. Its workflow now lives in one private skill next to the security scanner it duplicated, run monthly by the person who owns dependency security for the whole fleet. Why: two systems (a public core with product wrappers, and a private scanner with its own auto-fix) scanned the same lockfiles and both could open upgrade PRs. Projects that copied it: delete `.agents/skills/dependency-update-core` and its `skills-lock.json` entry.
+## 2026-11-03 — skills-refresh also updates public cores committed in the setup repo
+
+- **Repo-local public copies are managed now.** Besides `~/.agents/skills`, the refresh updates real dirs in the setup repo's own `.agents/skills` that exist at the release (e.g. `t3-route`, `agents-md`, `disk-audit`), with the same signature check, edit guard, all-or-nothing rollback and refresh-only commit. Why: those copies were updated by nothing, so colleague routers ran 1–2 week old rules while their global skills were current. Private wrappers and symlinks stay untouched; a copy with uncommitted changes isn't adopted (ACTION); the author's source-checkout machine keeps its repo copies with shared-skill-sync. Takes effect one release after this one (an apply runs the previously installed script). Supersedes the "install `t3-route` globally" onboarding note below: a plain repo-local install is kept current.
 
 ## 2026-11-03 — t3-route: link-only replies, one-way handoffs, refresh-managed core
 

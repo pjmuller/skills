@@ -504,8 +504,9 @@ def test_local_edit_blocks_activation_extra_files_do_not(env):
     assert run(env).returncode == 10 and stamp(env) == "v0.3.0"
 
 
-def setup_repo(tmp_path, env, unpushed=False):
-    """~/.agents/skills symlinked into a setup repo that tracks ai/skills, with a pushed upstream."""
+def setup_repo(tmp_path, env, unpushed=False, local=()):
+    """~/.agents/skills symlinked into a setup repo that tracks ai/skills, with a pushed upstream.
+    `local`: skill names committed as repo-local copies under .agents/skills."""
     gcfg = tmp_path / "gitconfig"
     gcfg.write_text("[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgSign = false\n")
     env["env"].update(GIT_CONFIG_GLOBAL=str(gcfg))
@@ -514,6 +515,9 @@ def setup_repo(tmp_path, env, unpushed=False):
     (setup / "ai/skills/demo").mkdir(parents=True)
     (setup / "ai/skills/demo/SKILL.md").write_text("demo 1\n")
     (setup / "notes.md").write_text("mine\n")
+    for name in local:
+        (setup / ".agents/skills" / name).mkdir(parents=True)
+        (setup / ".agents/skills" / name / "SKILL.md").write_text(f"{name} 0\n")
     g = lambda *a: subprocess.run(["git", "-C", str(setup), *a], check=True, capture_output=True, text=True,
                                   env={**os.environ, "GIT_CONFIG_GLOBAL": str(gcfg)}).stdout
     g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-qm", "setup")
@@ -568,6 +572,47 @@ def test_refresh_never_pushes_the_users_unpushed_commits(env, tmp_path):
     out = run(env, "--job", "--quiet").stdout.splitlines()
     assert out[-1].startswith("thread: KEEP OPEN") and "1 commit(s) of yours there are unpushed too" in out[-2]
     assert g("rev-list", "--count", "origin/main..HEAD").strip() == "2"
+
+
+def test_repo_local_public_copies_are_refreshed_and_committed_too(env, tmp_path):
+    g = setup_repo(tmp_path, env, local=("demo", "my-wrapper"))
+    local = tmp_path / "setup/.agents/skills"
+    calls = tmp_path / "install.calls"
+    release(env["repo"], "v0.2.1", "2", install=f'#!/usr/bin/env bash\necho "$0" >> {calls}\n')
+    result = run(env, "--job")
+    assert result.returncode == 10 and "pushed" in result.stdout and "ACTION NEEDED" not in result.stdout
+    assert (local / "demo/SKILL.md").read_text() == "demo 2\n"
+    # The global copy owns the commands: the repo copy's installer never runs (it would relink them).
+    assert calls.read_text() and ".agents/skills" not in calls.read_text()
+    assert (local / "my-wrapper/SKILL.md").read_text() == "my-wrapper 0\n"  # not in the release
+    shown = g("show", "--name-only", "--format=", "HEAD").split()
+    assert ".agents/skills/demo/SKILL.md" in shown and "ai/skills/demo/SKILL.md" in shown
+    assert g("rev-parse", "HEAD") == g("rev-parse", "origin/main")
+    release(env["repo"], "v0.3.0", "3")
+    (local / "demo/SKILL.md").write_text("demo 2, my tweak\n")  # edited since install: blocks like a global copy
+    blocked = run(env)
+    assert blocked.returncode == 1 and "repo/demo: SKILL.md" in blocked.stderr
+
+
+def test_dirty_repo_local_copy_is_not_adopted(env, tmp_path):
+    setup_repo(tmp_path, env, local=("demo",))
+    local = tmp_path / "setup/.agents/skills/demo/SKILL.md"
+    local.write_text("demo 0, uncommitted work\n")
+    out = run(env, "--job", "--quiet").stdout
+    assert "commit or discard the uncommitted changes" in out and out.splitlines()[-1].startswith("thread: KEEP OPEN")
+    assert local.read_text() == "demo 0, uncommitted work\n"
+    assert (tmp_path / "setup/ai/skills/demo/SKILL.md").read_text() == "demo 2\n"
+
+
+def test_author_machine_leaves_repo_local_copies_to_shared_skill_sync(env, tmp_path):
+    setup_repo(tmp_path, env, local=("demo",))
+    src = tmp_path / "src"
+    (src / "skills/t3-manage-thread").mkdir(parents=True)
+    git(src, "init", "-q")
+    (tmp_path / "setup/ai/skills/t3-manage-thread").symlink_to(src / "skills/t3-manage-thread")
+    assert run(env).returncode == 10
+    assert (tmp_path / "setup/.agents/skills/demo/SKILL.md").read_text() == "demo 0\n"
+    assert (tmp_path / "setup/ai/skills/demo/SKILL.md").read_text() == "demo 2\n"
 
 
 def test_waiting_refresh_commit_is_still_reported_under_a_newer_user_commit(env, tmp_path):
