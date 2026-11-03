@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — dead thread-link rule: still on T3 0.1.6, also idle delegated children
+
+- `t3-manage-thread/workers.md`: the "Settled targets render dead" fallback (title + full id beside the link) applies through T3 0.1.6 and also to idle `delegate_task` children, whose shells T3 omits too (`omitIdleSubagentShells`, reported on [#26472](https://github.com/pingdotgg/t3code/pull/26472)). Fix #26472 is collaborator-verified, CI green, awaiting a maintainer merge.
+
 ## 2026-11-03 — T3 0.1.6 side chats: purge and find-thread treat them as hidden children
 
 - T3 0.1.6 side chats ([#26901](https://github.com/pingdotgg/t3code/pull/26901), `/btw` or `/side`) are stored as `lineage.relationshipToParent = "fork"` + `lineage.sideChat = true`, hidden from every native list and deleted with their parent. `t3-purge-threads` now purges a side chat with its parent's family (before: counted as an independent fork, so purging the parent left an invisible orphan); `t3-find-thread` hides them like sub-agents unless `--subagents`. Forks stay independent. `t3_store.py` documents the field.
