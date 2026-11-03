@@ -22,6 +22,7 @@ T3 MCP tools (Claude `mcp__t3-code__*`, Codex `t3_code.*`); scripts add only acc
 | Rename · switch model | `t3_thread_update {action:"rename"}` · `t3_thread_configure` (model/account only, never permission mode) |
 | Settle yourself / another thread | `t3_thread_organize {action:"settle"}` ([settle-thread.md](settle-thread.md)) |
 | Script outside T3 starts/messages a thread | `t3-relay launch\|send` ([relay.md](relay.md)) |
+| Pin / archive a project the user named (Auto thread: T3 refuses `t3_project_update` without Full Access) | `t3-relay project pin\|unpin\|archive\|unarchive --project PATH` ([relay.md](relay.md)) |
 | Gmail case thread woken by new mail (drafting claims it) · which thread owns a Gmail URL | `t3-mail-link` · `t3-mail-link find` ([mail-link.md](mail-link.md)) |
 
 - Nothing needs hiding: 🏓 children have no row; T3's **Working section** (Settings → General) folds busy threads until done or needing input. No snoozing workers.

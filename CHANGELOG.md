@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-03 — `t3-relay project`: pin/archive projects from an Auto thread
+
+- New `t3-relay project pin|unpin|archive|unarchive --project PATH…` calls `t3_project_update` through the relay's approved full-access client. Why: T3 0.1.6 hard-codes project/environment writes to full-access threads (`McpToolAccess.writesEnvironment`), so an Auto thread asked to pin projects got `capability_denied` and the user had to switch to Full Access. Scope stays at the four organize actions; project scripts (which run code), paths and default models remain behind T3's gate. Each call is checked against T3's returned `pinnedAt`/`archivedAt`. Live: pin, archive + unarchive round trip on T3 0.1.6.
+
 ## 2026-11-03 — dead thread-link rule: still on T3 0.1.6, also idle delegated children
 
 - `t3-manage-thread/workers.md`: the "Settled targets render dead" fallback (title + full id beside the link) applies through T3 0.1.6 and also to idle `delegate_task` children, whose shells T3 omits too (`omitIdleSubagentShells`, reported on [#26472](https://github.com/pingdotgg/t3code/pull/26472)). Fix #26472 is collaborator-verified, CI green, awaiting a maintainer merge.

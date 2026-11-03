@@ -5,7 +5,9 @@
 # ///
 """t3-relay: let a script OUTSIDE T3 (launchd job, poller) start or message a T3 thread.
 
-Agents inside T3 never need this: they call the T3 MCP tools directly.
+Agents inside T3 call the T3 MCP tools directly. One exception, `project`: T3 lets only full-access
+threads change project settings, so an Auto thread organizes projects the user asked about here
+(pin/archive only; scripts, paths and default models stay out of reach).
 
     t3-relay launch --project PATH --title TITLE [--model M] [--instance ID] [--effort E]
                     [--allow-small-model] [--settle-when-done | --settle-after-run SECS]
@@ -15,6 +17,7 @@ Agents inside T3 never need this: they call the T3 MCP tools directly.
     t3-relay status RID   # ok <ids> | failed <why> | pending
     t3-relay find --project PATH --title TITLE [--json]   # open root threads with that exact title + pin state
     t3-relay check        # T3 reachable, MCP client approved
+    t3-relay project pin|unpin|archive|unarchive --project PATH [--project PATH ...]
 
 How: calls T3's own MCP endpoint (loopback /mcp, the tools agents use) as an approved MCP
 client "t3-relay" with full-access ceiling. The client token comes from T3's OAuth flow, approved
@@ -480,6 +483,23 @@ def settle_after_run(mcp: Mcp, thread: str, seconds: int) -> str:
         return f"left open: settlement unconfirmed ({type(exc).__name__})"
 
 
+PROJECT_ACTIONS = {"pin": ("pinned", True), "unpin": ("pinned", False),
+                   "archive": ("archived", True), "unarchive": ("archived", False)}
+
+
+def cmd_project(base: str, action: str, paths: list[str]) -> None:
+    """Pin/archive projects the user asked about. Archive hides a project from T3's pickers only;
+    its threads, settings and files stay, and `unarchive` (or adding the folder again) restores it."""
+    field, value = PROJECT_ACTIONS[action]
+    mcp = connect(base)
+    for path in paths:
+        result = mcp.call("t3_project_update", {"projectId": project_id(mcp, path), field: value})
+        stamp_key = "pinnedAt" if field == "pinned" else "archivedAt"
+        if bool(result.get(stamp_key)) != value:
+            die(f"{action} {path}: T3 answered {stamp_key}={result.get(stamp_key)!r}")
+        print(f"{action}: {result.get('title') or path} ({result.get('id')})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="t3-relay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -516,6 +536,9 @@ def main() -> None:
     fi.add_argument("--title", required=True)
     fi.add_argument("--json", action="store_true")
     sub.add_parser("check")
+    pr = sub.add_parser("project", help="pin/unpin/archive/unarchive projects (nothing else)")
+    pr.add_argument("action", choices=sorted(PROJECT_ACTIONS))
+    pr.add_argument("--project", action="append", required=True, metavar="PATH", help="workspace root; repeatable")
     a = ap.parse_args()
     if getattr(a, "request_id", None) and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", a.request_id):
         die("--request-id must be 1-64 of [A-Za-z0-9_-]", 2)
@@ -529,6 +552,9 @@ def main() -> None:
     base = origin()
     if a.cmd == "check":
         cmd_check(base)
+        return
+    if a.cmd == "project":
+        cmd_project(base, a.action, a.project)
         return
     if a.cmd == "find":
         found = cmd_find(base, a.project, a.title)

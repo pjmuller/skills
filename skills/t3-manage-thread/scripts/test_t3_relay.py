@@ -451,3 +451,34 @@ def test_pin_state_schema_drift_is_unavailable_not_unpinned(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         relay.pin_state(["a"])
     assert exc.value.code == 1
+
+
+def test_project_organizes_only_pin_and_archive(monkeypatch, capsys):
+    calls = []
+
+    class Fake:
+        def call(self, tool, args):
+            calls.append((tool, args))
+            if tool == "t3_project_list":
+                return {"projects": [{"id": "p1", "workspaceRoot": "/r1"}, {"id": "p2", "workspaceRoot": "/r2"}],
+                        "nextCursor": None}
+            return {"id": args["projectId"], "title": args["projectId"], "pinnedAt": "2026-11-03T08:00:00Z",
+                    "archivedAt": None}
+
+    monkeypatch.setattr(relay, "connect", lambda base: Fake())
+    monkeypatch.setattr(relay, "origin", lambda: "http://127.0.0.1:1")
+    monkeypatch.setattr(relay.Path, "resolve", lambda self: self)
+    monkeypatch.setattr(sys, "argv", ["t3-relay", "project", "pin", "--project", "/r1", "--project", "/r2"])
+    relay.main()
+    assert [a for t, a in calls if t == "t3_project_update"] == [{"projectId": "p1", "pinned": True},
+                                                                 {"projectId": "p2", "pinned": True}]
+    assert "pin: p1 (p1)" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["t3-relay", "project", "archive", "--project", "/r1"])
+    with pytest.raises(SystemExit) as exc:  # T3 did not record the archive -> failure, not success
+        relay.main()
+    assert exc.value.code == 1
+
+
+def test_project_refuses_other_settings():
+    out = subprocess.run([str(SCRIPT), "project", "scripts", "--project", "/tmp"], capture_output=True, text=True)
+    assert out.returncode == 2 and "invalid choice" in out.stderr

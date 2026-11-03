@@ -2,7 +2,7 @@
 
 For launchd jobs and pollers (t3-schedule, recording-watcher, t3-mail-link, warm-ups). Agents inside T3
 call the MCP tools directly and never need this, not even to get past a `runtime_mode_escalation_denied`
-([permission-ceiling.md](permission-ceiling.md)).
+([permission-ceiling.md](permission-ceiling.md)). One exception, `project` below.
 
 T3 ≥ 0.1.2's own CLI (`~/.t3/bin/t3 thread start|send|show|list`) is fine for a quick manual thread, but
 takes no model options (T3 defaults: Opus medium, Sol low) and no retry key: scripts keep `t3-relay`
@@ -14,7 +14,15 @@ t3-relay send --thread <threadId> [--mode steer] [--wait 120] -- "New mail in th
 t3-relay status <rid> [--wait 60]   # ok <threadId> | failed <why> | pending <why>
 t3-relay find --project /abs/repo --title "🧭 Ana routing" [--json]   # open root threads, exact title, pinnedAt
 t3-relay check                      # T3 reachable, MCP client approved, legacy relay hosts listed
+t3-relay project pin|unpin|archive|unarchive --project /abs/repo [--project …]
 ```
+
+- **project** (T3 ≥ 0.1.6, [#26154](https://github.com/pingdotgg/t3code/pull/26154)): T3 accepts
+  `t3_project_update` only from a full-access thread (`capability_denied` otherwise, hard-coded in
+  `McpToolAccess.writesEnvironment`). When the user asks to pin or archive projects, an Auto thread uses this
+  instead of asking for Full Access. Only these four actions: project scripts, paths and default models stay
+  behind T3's gate. Archive hides a project from pickers only (threads, settings, files kept); verified per
+  call from T3's answer (`pinnedAt`/`archivedAt`).
 
 - **Retry key** (`launch`/`send --request-id KEY`, `[A-Za-z0-9_-]{1,64}`): the record is written before the
   call. Same key again: landed → prints `accepted … (already delivered, not re-sent)` and exits 0; unconfirmed
