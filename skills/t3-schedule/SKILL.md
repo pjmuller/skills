@@ -29,7 +29,7 @@ the missed slot at wake, the catch-up poller covers the rest
 
 **Wake this thread later → native, not this tool** (T3 ≥ 0.1.7, [#28104](https://github.com/pingdotgg/t3code/pull/28104)):
 `schedule_task {schedule:{type:"once", runAt}}` posts into the calling thread (wakes it when settled), runs
-late when the Mac slept or T3 was closed, never expires, needs no thread id. `t3-schedule list` shows these too.
+late when the Mac slept or T3 was closed, never expires, needs no thread id. `t3-schedule list` shows these too. A task created by a Full-Access thread can be changed or deleted only from a Full-Access thread (`runtime_mode_escalation_denied`).
 This tool stays for recurring jobs, one-shots that start a **new** thread with model/account routing, and
 scripts outside T3.
 
