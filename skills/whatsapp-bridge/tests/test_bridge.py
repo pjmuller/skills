@@ -234,18 +234,36 @@ class VoiceTests(unittest.TestCase):
                              ['img'])
             self.assertNotIn('media', store.read('+32470123456', 5, own)[0])
 
+    def test_transcribe_timeout_kills_grandchild(self):
+        # transcribe-gemini runs under `uv run`: a timeout must also stop the Python it spawned.
+        from whatsapp_bridge import transcribe_audio
+        import subprocess, time
+        with tempfile.TemporaryDirectory() as directory:
+            pidfile = Path(directory) / 'pid'
+            hang = Path(directory) / 'transcribe-gemini'
+            hang.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nwait\n')
+            hang.chmod(0o755)
+            with patch('whatsapp_bridge.TRANSCRIBE', hang), patch('whatsapp_bridge.TRANSCRIBE_TIMEOUT', 1):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    transcribe_audio(Path(directory) / '1-x.ogg')
+            grandchild = int(pidfile.read_text())
+            time.sleep(0.2)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(grandchild, 0)
+
     def test_transcribe_passes_hint_and_strips_provenance(self):
         from whatsapp_bridge import transcribe_audio, download_voice_notes
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / '1-x.ogg'
-            def fake(cmd, **_):
-                self.assertEqual(cmd[1:4], [str(audio), '--prompt', str(audio.with_suffix('.prompt.md'))])
-                Path(cmd[5]).write_text('<!-- provenance -->\n- header\n\nHallo PJ, Mexem.')
-            with patch('whatsapp_bridge.subprocess.run', side_effect=fake):
+            # Stand-in transcriber: checks the argv shape, writes the transcript like transcribe-gemini.
+            fake = Path(directory) / 'transcribe-gemini'
+            fake.write_text('#!/bin/sh\n[ "$1" = "%s" ] && [ "$2" = --prompt ] && [ "$6" = --timeout ] || exit 3\n'
+                            'printf "<!-- provenance -->\\n- header\\n\\nHallo PJ, Mexem." > "$5"\n' % audio)
+            fake.chmod(0o755)
+            with patch('whatsapp_bridge.TRANSCRIBE', fake):
                 self.assertEqual(transcribe_audio(audio, 'Flemish; Mexem'), 'Hallo PJ, Mexem.')
-            self.assertIn('Flemish; Mexem', audio.with_suffix('.prompt.md').read_text())
-            self.assertNotIn('## Context', audio.with_suffix('.prompt.md').read_text())
-            with patch('whatsapp_bridge.subprocess.run', side_effect=fake):
+                self.assertIn('Flemish; Mexem', audio.with_suffix('.prompt.md').read_text())
+                self.assertNotIn('## Context', audio.with_suffix('.prompt.md').read_text())
                 transcribe_audio(audio, 'Flemish', context='A note-to-self about portfolio questions.')
             prompt = audio.with_suffix('.prompt.md').read_text()
             self.assertLess(prompt.index('## Context'), prompt.index('## Hint'))

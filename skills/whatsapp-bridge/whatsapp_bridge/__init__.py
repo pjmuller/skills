@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -12,6 +13,7 @@ MAX_MESSAGES = 200
 MAX_CONTEXT_CHARS = 12_000
 # Sibling core in the skills checkout; `transcribe-gemini` on PATH (its scripts/install) otherwise.
 TRANSCRIBE = Path(__file__).resolve().parents[2] / "video-shrink-for-gemini" / "scripts" / "transcribe-gemini"
+TRANSCRIBE_TIMEOUT = 600  # s, whole transcribe-gemini run
 VOICE_PROMPT = """# WhatsApp voice note
 
 Transcribe this WhatsApp voice note verbatim in its spoken language; do not translate, summarise, reorder or
@@ -155,8 +157,17 @@ def transcribe_audio(path: str | Path, hint: str | None = None, context: str | N
                       + (f"\n## Context (only to recognise words; still transcribe verbatim)\n\n{context.strip()}\n"
                          if context else "")
                       + (f"\n## Hint (spell these exactly when heard)\n\n{hint.strip()}\n" if hint else ""))
-    subprocess.run([script, str(path), "--prompt", str(prompt), "--out", str(out)], check=True,
-                   stdout=subprocess.DEVNULL, timeout=600)
+    cmd = [script, str(path), "--prompt", str(prompt), "--out", str(out), "--timeout", "120"]
+    # Own process group: the script runs under `uv run`, and killing only uv on timeout left the Python
+    # grandchild waiting on Gemini (2026-11-04). 3 attempts x 120 s + backoff stay under 600.
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, start_new_session=True)
+    try:
+        if proc.wait(timeout=TRANSCRIBE_TIMEOUT):
+            raise subprocess.CalledProcessError(proc.returncode, cmd)
+    finally:
+        if proc.poll() is None:  # timeout, Ctrl-C or any other exit
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
     # Drop transcribe-gemini's provenance header (written for video passes).
     return out.read_text().split("\n\n", 1)[-1].strip()
 

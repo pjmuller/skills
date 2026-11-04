@@ -43,6 +43,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
+import httpx  # google-genai's transport: its timeout exception
 from google import genai
 from google.genai import types
 
@@ -60,6 +61,7 @@ _loader = SourceFileLoader("detect_screenshare", str(Path(__file__).resolve().wi
 DETECT = module_from_spec(spec_from_loader("detect_screenshare", _loader))
 _loader.exec_module(DETECT)
 # A 14-min walk answers in 2-3 min; one request hung 25 min with no reply (2026-11-02): fail instead of waiting forever.
+# Client default (uploads, deletes); the generate request takes --timeout.
 HTTP = types.HttpOptions(timeout=15 * 60 * 1000)  # ms
 UPLOADED: list[str] = []  # File API names, deleted after the call (otherwise kept 48 h in the key's project)
 # USD per 1M tokens (input, output incl. thinking), ai.google.dev/gemini-api/docs/pricing, 2026-10-08.
@@ -213,7 +215,13 @@ def main() -> None:
     parser.add_argument("--ranges", type=Path, help="JSON with ranges [{start,end}] that get frames; audio covers all")
     parser.add_argument("--dry-run", type=Path, metavar="DIR",
                         help="write exactly what would be uploaded (audio.m4a, clipNN.mp4) to DIR and stop: no key, no call")
+    parser.add_argument("--timeout", type=int, default=15 * 60, metavar="SECONDS",
+                        help="per generate request, retried twice like a 5xx (default 900 for long videos). "
+                             "Voice notes answer in ~20 s; one hung 30 min (2026-11-04): whatsapp-bridge passes 120. "
+                             "Also sent as Gemini's server deadline (504 when exceeded, minimum 10)")
     args = parser.parse_args()
+    if args.timeout < 10:
+        parser.error("--timeout below Gemini's 10 s minimum deadline")
 
     if args.dry_run:  # inspect the payload (faces?) before paying for it
         args.dry_run.mkdir(parents=True, exist_ok=True)
@@ -232,7 +240,8 @@ def main() -> None:
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_level=args.thinking),
         # The reply is the file (agent routes get their file-writing instructions from agy-route.md, not the template).
-        system_instruction="Reply with the complete markdown document itself.")
+        system_instruction="Reply with the complete markdown document itself.",
+        http_options=types.HttpOptions(timeout=args.timeout * 1000))
     config.media_resolution = f"MEDIA_RESOLUTION_{args.media_resolution.upper()}"
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -248,10 +257,11 @@ def main() -> None:
                 try:
                     response = client.models.generate_content(model=args.model, contents=[*parts, prompt], config=config)
                     break
-                except genai.errors.ServerError as error:  # 5xx: retry; 4xx (quota, auth, bad request) fails fast
+                # 5xx or no reply within --timeout: retry; 4xx (quota, auth, bad request) fails fast
+                except (genai.errors.ServerError, httpx.TimeoutException) as error:
                     if attempt == 2:
                         raise
-                    print(f"retrying after {error.code}", file=sys.stderr)
+                    print(f"retrying after {getattr(error, 'code', None) or type(error).__name__}", file=sys.stderr)
                     time.sleep(10 * (attempt + 1))
         finally:
             for name in UPLOADED:  # best effort: a failed delete must not lose the paid output
