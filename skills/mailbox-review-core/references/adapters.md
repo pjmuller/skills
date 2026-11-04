@@ -47,7 +47,8 @@ intercom.py recheck --bundle <dir>                                  # right befo
   match exactly one run's draft. A new host string shows up as false `curated`/`person_note_after`:
   add it to `HOST_CHROME` with its host source, never loosen the match.
 - **Eligible** (`scope: draft`): latest suggestion, open, no newer customer message or run, no person's
-  reply since the customer message it answers (even one sent before placement), no send link, no
+  reply since the customer message it answers (even one sent before placement; any part with text
+  counts, since reply-and-assign/close/snooze are not `comment` parts), no send link, no
   person's note after it, not edited. **Follow-up** (`scope: followup`): open, customer spoke last,
   ReplyPen placed nothing. Everything else is excluded with one reason (`answered`, `closed`,
   `snoozed`, `newer_inbound`, `superseded_by_run`, `sent_linked`, `person_note_after`, `curated`,

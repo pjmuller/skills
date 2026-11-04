@@ -158,7 +158,9 @@ def timeline(conv, runs):
     run_notes += ['\n'.join(n.get('body', '') for n in r.get('notes') or []) for r in runs if r.get('notes')]
     for p in conv.get('parts', []):
         a, body, kind = p.get('author') or {}, text(p.get('body')), None
-        if p.get('part_type') == 'comment' and (body or p.get('attachments')):
+        if p.get('part_type') != 'note' and (body or p.get('attachments')):
+            # Not only comments: "reply and assign/close/snooze" is an assignment/close/snoozed part with a
+            # body, and a customer reopening by writing is an `open` part.
             kind = 'customer' if a.get('type') in CUSTOMER else 'automation' if automated(a) else 'reply'
         elif p.get('part_type') == 'note' and body:
             if automated(a):

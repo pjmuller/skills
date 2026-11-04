@@ -108,6 +108,13 @@ class Eligibility(unittest.TestCase):
         self.assertEqual(verdict([suggestion(body='Totally different words from a person')])['reason'], 'curated')
         self.assertEqual(verdict([suggestion(updated=NOW - 1000)])['reason'], 'curated')
 
+    def test_reply_and_assign_or_reopen_parts_count(self):
+        reply_assign = part('a', 'assignment', SEAT, NOW - 10, 'Here is how to finish setup')
+        self.assertEqual(verdict([suggestion(), reply_assign])['reason'], 'answered')
+        reopened = part('o', 'open', CONTACT, NOW - 10, 'Any news?')
+        self.assertEqual(verdict([suggestion(), reopened])['reason'], 'newer_inbound')
+        self.assertTrue(verdict([suggestion(), part('x', 'assignment', SEAT, NOW - 10)])['eligible'])
+
     def test_attachment_only_comments_count(self):
         sent_file = {**part('c', 'comment', SEAT, NOW - 10), 'attachments': 1}
         self.assertEqual(verdict([suggestion(), sent_file])['reason'], 'answered')
