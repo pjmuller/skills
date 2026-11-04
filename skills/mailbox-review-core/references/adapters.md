@@ -24,3 +24,34 @@ instead of `cockpit.py`; nothing in this core calls it. Reference adapter: KampA
 - Continuity per [continuity](continuity.md) with the state file standing in for `t3-mail-link index`:
   earlier 🧭 threads and reviewer threads named in state are read first; every round is a fresh
   `delegate_task`.
+
+## Intercom via ReplyPen: `scripts/intercom.py` (report-only)
+
+Intercom has no draft object: ReplyPen posts its suggestion as an admin **note** ("📝 Suggested reply —
+copy into the reply box…") plus an internal note, often from the same admin seat the team replies with.
+So "unused" is only observable as **no reply from a person after the suggestion**; text pasted into an
+unsent composer is invisible. Say so (the coverage line does); never claim paste detection.
+
+```sh
+intercom.py collect --project <p> [--tenant <slug>] --mailbox-id <intercom-uuid> --out <new dir> [--days 7]
+intercom.py detail  --bundle <dir> --thread-id <conversation id>   # refresh + re-evaluate + fingerprint
+intercom.py recheck --bundle <dir>                                  # right before the report
+```
+
+- **Reads:** `rp run list` → `rp run thread` (provider must be intercom; the mailbox must be the
+  project's only Intercom one, since lineage has no mailbox id) → `rp run show` → the raw conversation
+  through `rp dev console bash run` with the runtime's own Intercom connector (one GET; no local token).
+  `rp project mailbox thread` is not enough: it drops notes and conversation state.
+- **Ours vs a person's** by content, never by author: after stripping only the host's own fixed strings
+  (`HOST_CHROME`), a note must carry a run's draft or notes and **not one word more**; a suggestion must
+  match exactly one run's draft. A new host string shows up as false `curated`/`person_note_after`:
+  add it to `HOST_CHROME` with its host source, never loosen the match.
+- **Eligible** (`scope: draft`): latest suggestion, open, no newer customer message or run, no person's
+  reply since the customer message it answers (even one sent before placement), no send link, no
+  person's note after it, not edited. **Follow-up** (`scope: followup`): open, customer spoke last,
+  ReplyPen placed nothing. Everything else is excluded with one reason (`answered`, `closed`,
+  `snoozed`, `newer_inbound`, `superseded_by_run`, `sent_linked`, `person_note_after`, `curated`,
+  `ambiguous_*`, `outside_window`, `no_suggestion`); flag `unanswered` marks the ones a snooze or close
+  hides. Failed reads are `unread`, not excluded. Rules: `evaluate()`, tests `test_intercom.py`.
+- No `apply`, no state file: a better reply is a proposal in the report. Reviewers get the core recipe
+  with `Ticket-ref: intercom:<id> <mailbox>` and the detail file.

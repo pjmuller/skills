@@ -61,3 +61,8 @@ closed `<details>`.
 
 Every card keeps its `Mail-ref` line: that is how tomorrow's `t3-mail-link index` finds today's
 conclusion. Omit empty sections.
+
+Another channel (an [adapter](adapters.md)): same template, its ref line (`Ticket-ref: …`) and link;
+title `## <Channel> today · …`. A report-only adapter never writes: a better reply is a *proposed*
+replacement (folded under its card), never "draft corrected"; its `coverage.line` goes in verbatim,
+caveat included.
