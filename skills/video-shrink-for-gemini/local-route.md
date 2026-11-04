@@ -15,10 +15,22 @@ Codex specifics: [codex-recipe.md](../video-frames-for-vision/codex-recipe.md#co
 
 ## Why local ASR is mandatory on a subscription
 
-Claude accepts images and PDF, no audio/video
-([vision docs](https://platform.claude.com/docs/en/build-with-claude/vision)); Codex CLI attaches
-images only ("cannot access audio" for MP3/WAV, verified 2026-09-25). Audio must go through a model
-first: vendor transcript, `transcribe-local`, or `transcribe-openai`.
+Neither coding CLI hears an audio file on subscription auth (re-verified 2026-11-04, controlled runs,
+no tools allowed):
+- **Claude Code** (2.1.317): Read refuses `.ogg` as binary, `@file` passes only the path; the API has no
+  audio block ([files](https://platform.claude.com/docs/en/build-with-claude/files)). `/voice` is mic
+  dictation over a private websocket, not a file route.
+- **Codex** (0.166): `exec -i` is images only. The client already carries audio (`localAudio` input on
+  app-server v2 `turn/start`), but every subscription model lists `input_modalities` text+image
+  (`~/.codex/models_cache.json`), so the client strips it ("audio content omitted…"); forcing `audio` via
+  `model_catalog_json` gets HTTP 400 "Audio input is not available." from the ChatGPT backend on all
+  five models. Re-test once `audio` appears in that cache.
+
+So audio goes through a speech model first: vendor transcript, `transcribe-gemini`, `transcribe-local`,
+or `transcribe-openai`. WhatsApp voice notes (2026-11-04, 24 s Flemish + 44 s English): Gemini clean
+(≈$0.01/note, mostly thinking tokens, ~20 s); local turbo free in ~8 s with the meaning intact but
+product names wrong despite `--prompt` ("Cloud Code", "codec CLI", "It's Me" for itsme): Gemini stays
+the intake layer, local is the offline fallback.
 
 Install elsewhere: Apple Silicon `uv tool install mlx-whisper` (plus `parakeet-mlx` for
 word-timestamp clip cutting; models land in the Hugging Face cache on first run); other OS: closest

@@ -13,7 +13,7 @@ Two modes, one output shape (`seconds speaker: verbatim text`, one line per turn
   chunk  (default)                 fixed --chunk-seconds windows; speakers unknown ("?") unless
                                    --diarize (gpt-4o-transcribe-diarize: speakers A/B, no hint allowed).
 
-Needs OPENAI_API_KEY and ffmpeg. Codex CLI cannot read audio itself (verified 2026-09-25), so this
+Needs OPENAI_API_KEY and ffmpeg. Codex CLI cannot read audio itself (re-verified 2026-11-04, local-route.md), so this
 runs as a tool from the agent. Measured on Flemish meeting audio: gpt-transcribe + a 20-word hint
 fixed most of Leexi's product/company-name errors (split or phonetic misspellings); rare names
 the hint omits still fail. gpt-audio chat models
