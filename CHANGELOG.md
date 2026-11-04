@@ -3,6 +3,7 @@
 ## 2026-11-04 — thread titles in plain words, set at launch
 
 - `t3-manage-thread/workers.md`: titles are ≤5 words naming the problem or outcome as the user would say it, without internal mechanism words. Why: a bug thread a mailbox review launched was titled `Intercom outbound-email dead-letter`, which its owner could not place. Also documents that every creation path takes a title and that T3 keeps it after the first run (verified live on 0.1.7); `t3_thread_update rename` fixes a bad one.
+- `t3-manage-thread/workers.md`: a launched thread's parent is already shown (its first message sits folded under the parent's title with an Open thread button); `delegatedFrom` stays unset on same-machine launches because it hides the thread under its parent in the sidebar.
 - `recording-followups`, `mailbox-review-core`: the threads they launch take their title from that rule (the prompt's title line; the bug's symptom).
 
 ## 2026-11-04 — ⏰ follow-ups move to T3's native one-shot tasks
