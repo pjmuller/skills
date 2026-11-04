@@ -31,7 +31,8 @@ CREATE TABLE projection_thread_activities (activity_id TEXT PRIMARY KEY, thread_
 CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT,
   type TEXT, status TEXT, updated_at TEXT, payload_json TEXT, run_id TEXT, node_id TEXT, ordinal INTEGER);
 CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, stream_id TEXT, payload_json TEXT);
-CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY, title TEXT, enabled INTEGER, thread_id TEXT);
+CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY, title TEXT, enabled INTEGER, thread_id TEXT,
+  schedule_json TEXT, next_run_at TEXT);
 INSERT INTO projection_projects VALUES ('p', 'fixture', '/tmp/fixture', NULL);
 INSERT INTO projection_projects VALUES ('q', 'other', '/tmp/other', NULL);
 """

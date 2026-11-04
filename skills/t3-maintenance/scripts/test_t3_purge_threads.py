@@ -69,7 +69,11 @@ def store(tmp_path: Path) -> Path:
     s.thread("livechild-sub", "sub", parent="livechild", run="waiting", minutes=10 * DAY)
     s.thread("active", "active", minutes=10 * DAY)
     s.thread("sched", "sched", settled=True, minutes=10 * DAY)
-    s.db.execute("INSERT INTO scheduled_tasks VALUES ('t1', 'nightly', 1, 'sched')")
+    s.db.executemany("INSERT INTO scheduled_tasks VALUES (?, ?, 1, ?, ?, ?)", [
+        ("t1", "nightly", "sched", '{"type":"fixed_time","timeOfDay":"07:30"}', "2099-01-01T06:30:00.000Z"),
+        ("t2", "hook", "active", '{"type":"webhook"}', None),
+        ("t3", "fired once", "settold", '{"type":"once","runAt":"2026-11-04T15:00:00.000Z"}', None),
+    ])
     s.db.execute("INSERT INTO orchestration_events VALUES (1, 'archold', '{}')")
     s.db.execute("INSERT INTO orchestration_events VALUES (2, 'settold', '{}')")
     return s.close()
@@ -136,7 +140,8 @@ def test_keep_rules_save_conversations_and_open_prs(tmp_path: Path) -> None:
 
 def test_wakes_keep_threads(store: Path) -> None:
     wakes = cli.pending_wakes(store)
-    assert wakes == {"sched": "scheduled task nightly"}
+    # settold's `once` task already fired: it no longer protects the thread.
+    assert wakes == {"sched": "scheduled task nightly", "active": "scheduled task hook"}
     assert selected(store, "--settled", wakes=wakes) == {"settold"}
 
 
@@ -206,7 +211,7 @@ def test_hard_purge_deletes_every_thread_keyed_row(store: Path, tmp_path: Path, 
         assert not left & {"archold", "archold-task", "archold-grandchild", "archold-side", "otherpr"}
         assert {"settold", "pinned", "livechild", "archold-fork"} <= left
         assert live.execute("SELECT stream_id FROM orchestration_events").fetchall() == [("settold",)]
-        assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 1
+        assert live.execute("SELECT COUNT(*) FROM scheduled_tasks").fetchone()[0] == 3
 
 
 def test_full_backup_is_verified_restorable_copy(store: Path, tmp_path: Path, monkeypatch) -> None:

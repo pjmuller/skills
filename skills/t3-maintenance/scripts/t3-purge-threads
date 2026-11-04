@@ -315,7 +315,10 @@ def pending_wakes(store: Path) -> dict[str, str]:
     wakes: dict[str, list[str]] = defaultdict(list)
     with connect_readonly(store) as db:
         for row in db.execute(
+            # A fired `once` task stays enabled with no next run (T3 0.1.7): no longer a wake.
+            # Webhook tasks never have a next run but still wake their thread.
             "SELECT thread_id, title FROM scheduled_tasks WHERE enabled = 1 AND thread_id IS NOT NULL"
+            " AND (next_run_at IS NOT NULL OR json_extract(schedule_json, '$.type') = 'webhook')"
         ):
             wakes[row["thread_id"]].append(f"scheduled task {row['title']}")
     for command, reason in (

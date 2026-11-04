@@ -24,7 +24,10 @@ flowchart LR
 ```
 
 Not T3's native `fixed_time` tasks: they skip a run >10 min late (sleeping Mac); launchd replays
-the missed slot at wake, the catch-up poller covers the rest.
+the missed slot at wake, the catch-up poller covers the rest. Native one-shots are fine since T3 0.1.7
+([#28104](https://github.com/pingdotgg/t3code/pull/28104)): `schedule_task {schedule:{type:"once", runAt}}`
+(bound to the calling thread by default) runs late after sleep and wakes a settled thread, with no relay
+or thread id; `list_scheduled_tasks` shows it, not `t3-schedule list`.
 
 ```bash
 t3-schedule add --name check-deploy --once 2026-10-20 --at 10:00 --resume-thread <threadId> \

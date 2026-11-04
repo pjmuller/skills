@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-04 — T3 0.1.7: native one-shot schedules, purge guard, dead-link rule
+
+- `t3-schedule`: T3 0.1.7 ships native one-shots ([#28104](https://github.com/pingdotgg/t3code/pull/28104), `schedule_task {schedule:{type:"once", runAt}}`). Live: a task bound to a settled thread fired on time and woke it. Documented as an option for a single wake-up of the calling thread; recurring jobs stay on launchd (`fixed_time` still skips runs >10 min late).
+- `t3-purge-threads`: a fired `once` task stays `enabled` with no next run, which kept its thread from ever being purged. A scheduled task now protects its thread only while it has a next run (webhook tasks always).
+- `t3-manage-thread/workers.md`: dead settled-thread links still apply on 0.1.7 ([#26472](https://github.com/pingdotgg/t3code/pull/26472) open); the Settled shelf crash is fixed ([#27231](https://github.com/pingdotgg/t3code/pull/27231)), so the warning is gone.
+
 ## 2026-11-03 — dependency-update-core removed
 
 - `dependency-update-core` is gone from the catalogue, the same day it shipped. Its workflow now lives in one private skill next to the security scanner it duplicated, run monthly by the person who owns dependency security for the whole fleet. Why: two systems (a public core with product wrappers, and a private scanner with its own auto-fix) scanned the same lockfiles and both could open upgrade PRs. Projects that copied it: delete `.agents/skills/dependency-update-core` and its `skills-lock.json` entry.
