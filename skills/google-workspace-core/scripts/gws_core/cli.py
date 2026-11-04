@@ -453,7 +453,7 @@ def cmd_gmail_draft(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     draft = ws.gmail.create_draft(a.to, a.subject, body, cc=a.cc, html=a.html,
                                   html_body=html_body, reply_to_message=a.reply_to_message,
-                                  attach=a.attach, from_=a.from_addr)
+                                  reply_exact=a.reply_exact, attach=a.attach, from_=a.from_addr)
     message = draft.get("message") or {}
     out(draft, a.json, f"draft created: {draft['id']}  message={message.get('id')}  "
                        f"thread={message.get('threadId')}  files={draft['verified']['files']}")
@@ -466,8 +466,8 @@ def cmd_gmail_draft(a, ws):
 def cmd_gmail_send(a, ws):
     body, html_body = body_text(a), alternative_html(a)
     sent = ws.gmail.send(a.to, a.subject, body, cc=a.cc, html=a.html,
-                         html_body=html_body, reply_to_message=a.reply_to_message, attach=a.attach,
-                         from_=a.from_addr)
+                         html_body=html_body, reply_to_message=a.reply_to_message,
+                         reply_exact=a.reply_exact, attach=a.attach, from_=a.from_addr)
     out(sent, a.json, f"sent {sent.get('id')} (thread {sent.get('threadId')})  "
                       f"files={sent['verified']['files']}")
     if sent.get("replyToMessage") and not a.json:
@@ -1089,6 +1089,9 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="keep the body as plain text and attach this HTML alternative")
         command.add_argument("--reply-to-message",
                              help="reply to and quote the latest non-draft in this message's thread; subject must match")
+        command.add_argument("--reply-exact", action="store_true",
+                             help="reply to and quote exactly --reply-to-message, not the thread's "
+                                  "latest (e.g. the latest is a side conversation with another audience)")
         command.add_argument("--from", dest="from_addr",
                              help="send-as alias or 'Name <alias>' (default: the mailbox's "
                                   "default send-as identity)")

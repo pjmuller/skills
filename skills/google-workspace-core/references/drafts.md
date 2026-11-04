@@ -34,6 +34,8 @@ non-draft message (including your own sent mail), ordered by Gmail's `internalDa
 `Reply-to-message: <id>`; JSON includes `replyToMessage`. Recipients stay as explicitly supplied.
 Read the latest thread before composing: advancing the reply target does not update your authored
 text. Body-only `gmail-draft-update` and `gmail-draft-send` preserve the existing reply target.
+Latest mail went to another audience (a private side reply to one Cc)? `--reply-exact` answers
+`ID` itself, so that side conversation is neither quoted nor referenced.
 The builder sets no Date header; Gmail supplies it. Quotes preserve the source Date and offset.
 
 ## Signatures

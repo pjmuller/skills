@@ -686,6 +686,23 @@ def test_reply_advances_to_sent_message_and_ignores_drafts(operation):
         assert "Latest sent" in quoted and "Old inbound" not in quoted and "Unsent draft" not in quoted
 
 
+def test_reply_exact_skips_a_later_side_conversation():
+    # Thread: our mail to Kristof (Cc Lisa), then a private exchange with Lisa only.
+    seed = {"id": "to-kristof", "threadId": "t1", "internalDate": "1000", "labelIds": ["SENT"],
+            "payload": {"headers": [{"name": "Subject", "value": "Topic"},
+                                    {"name": "Message-ID", "value": "<to-kristof@example.com>"},
+                                    {"name": "From", "value": ACCOUNT}], **body_part("Public follow-up")}}
+    session = FakeSession([Recorded(seed), Recorded({"id": "d", "message": {"id": "new", "threadId": "t1"}})])
+    result = GmailClient(session, sender=ACCOUNT).create_draft(
+        "kristof@example.com", "Re: Topic", "Nudge", reply_to_message="to-kristof", reply_exact=True)
+    assert result["replyToMessage"] == "to-kristof"
+    assert [url for _, url, _ in session.calls if "/threads/" in url] == []  # private reply never read
+    message = message_from_bytes(base64.urlsafe_b64decode(session.calls[-1][2]["json"]["message"]["raw"]),
+                                 policy=default)
+    assert message["In-Reply-To"] == "<to-kristof@example.com>"
+    assert "Public follow-up" in message.get_body(("plain",)).get_content()
+
+
 def test_reply_refuses_thread_with_only_drafts():
     seed = {"id": "draft", "threadId": "t1", "labelIds": ["DRAFT"]}
     session = FakeSession([Recorded(seed), Recorded({"messages": [seed]})])

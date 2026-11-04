@@ -501,19 +501,24 @@ class GmailClient:
 
     def build(self, to: str, subject: str, body: str, *, cc: str | None = None,
               html: bool = False, html_body: str | None = None,
-              reply_to_message: str | None = None, attach: list[str] | None = None,
+              reply_to_message: str | None = None, reply_exact: bool = False,
+              attach: list[str] | None = None,
               from_: str | None = None) -> tuple[str, str | None]:
         """Build MIME and thread id; replies follow the latest non-draft in the thread."""
         raw, thread_id, _ = self._build(
             to, subject, body, cc=cc, html=html, html_body=html_body,
-            reply_to_message=reply_to_message, attach=attach, from_=from_)
+            reply_to_message=reply_to_message, reply_exact=reply_exact, attach=attach, from_=from_)
         return raw, thread_id
 
     def _build(self, to: str, subject: str, body: str, *, cc: str | None = None,
               html: bool = False, html_body: str | None = None,
-              reply_to_message: str | None = None, attach: list[str] | None = None,
+              reply_to_message: str | None = None, reply_exact: bool = False,
+              attach: list[str] | None = None,
               from_: str | None = None) -> tuple[str, str | None, str | None]:
         """Build the base64url MIME payload; replies thread, quote and keep the subject.
+
+        A reply follows the thread's latest non-draft; `reply_exact` answers `reply_to_message`
+        itself, so a later side conversation (another audience) is neither quoted nor referenced.
 
         Always multipart/alternative. Plain `body` gets an escaped HTML twin: Gmail web opens a
         text/plain-only draft in plain-text mode and hard-wraps it at ~70 characters on Send;
@@ -534,12 +539,15 @@ class GmailClient:
         quote_plain = quote_html = ""
         if reply_to_message:
             seed = self.get(reply_to_message)
-            thread = self.thread(seed["threadId"])
-            candidates = [m for m in thread.get("messages", []) if "DRAFT" not in m.get("labelIds", [])]
-            if not candidates:
-                raise WorkspaceError(f"thread {seed['threadId']} has no non-draft message to reply to")
-            # Gmail internalDate orders the mailbox, independent of sender time zones/Date headers.
-            latest = max(enumerate(candidates), key=lambda pair: (int(pair[1]["internalDate"]), pair[0]))[1]
+            if reply_exact:
+                latest = seed
+            else:
+                thread = self.thread(seed["threadId"])
+                candidates = [m for m in thread.get("messages", []) if "DRAFT" not in m.get("labelIds", [])]
+                if not candidates:
+                    raise WorkspaceError(f"thread {seed['threadId']} has no non-draft message to reply to")
+                # Gmail internalDate orders the mailbox, independent of sender time zones/Date headers.
+                latest = max(enumerate(candidates), key=lambda pair: (int(pair[1]["internalDate"]), pair[0]))[1]
             replied_to = latest["id"]
             original = self.view(latest, trim=True)
             reference = original["headers"].get("Message-ID")
