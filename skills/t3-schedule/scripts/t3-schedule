@@ -1072,6 +1072,55 @@ def specs() -> list[dict]:
     return [load_spec(path) for path in sorted(base.glob("*.json"))] if base.exists() else []
 
 
+def native_tasks() -> list[dict]:
+    """T3's own scheduled tasks that can still run (read-only V2 store). Since T3 0.1.7 agents arm
+    one-off follow-ups natively (`schedule_task` type `once`), so "what's scheduled?" lists both."""
+    db = Path.home() / ".t3/userdata/statev2.sqlite"
+    if not db.exists():
+        return []
+    try:
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10) as con:
+            rows = con.execute(
+                "select t.title, t.schedule_json, t.thread_id, t.next_run_at, t.prompt, p.title "
+                "from scheduled_tasks t left join projection_projects p on p.project_id = t.project_id "
+                "where t.enabled = 1 and (t.next_run_at is not null "
+                "or json_extract(t.schedule_json, '$.type') = 'webhook') "
+                "order by t.next_run_at is null, t.next_run_at").fetchall()
+    except sqlite3.Error:
+        return []
+    out = []
+    for title, schedule, thread, next_run, prompt, project in rows:
+        sch = json.loads(schedule)
+        kind = sch.get("type")
+        when = {"once": "once", "webhook": "webhook",
+                "interval": f"every {sch.get('everyMs', 0) // 60000} min"}.get(kind)
+        if kind == "fixed_time":
+            days = sch.get("weekdays")
+            names = ",".join("sun mon tue wed thu fri sat".split()[d] for d in days) if days else "daily"
+            when = f"{names} {sch.get('timeOfDay')}"
+        local = (datetime.fromisoformat(next_run.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H:%M")
+                 if next_run else "-")
+        out.append({"title": title, "when": when or kind, "next": local, "thread": thread or "new thread per run",
+                    "project": project or "", "prompt": " ".join(prompt.split())})
+    return out
+
+
+def print_native(markdown: bool) -> None:
+    tasks = native_tasks()
+    if not tasks:
+        return
+    print("\nT3 native tasks (`schedule_task`; pause/remove with `schedule_task enabled=false` / `delete_scheduled_task`):")
+    if markdown:
+        print("| task | schedule | next run | project | posts into | prompt |\n|---|---|---|---|---|---|")
+    for t in tasks:
+        prompt = t["prompt"][:120] + ("…" if len(t["prompt"]) > 120 else "")
+        if markdown:
+            cells = [t["title"], t["when"], t["next"], t["project"], t["thread"], prompt]
+            print("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
+        else:
+            print(f"{t['title'][:28]:<28} {t['when']:<16} next {t['next']}  {t['project']}  → {t['thread']}")
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     rows = specs()
     if args.json:
@@ -1086,6 +1135,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     rows = rows if args.all else [spec for spec in rows if not spec.get("retired")]
     if not rows:
         print("No scheduled jobs." + (f" ({retired} finished hidden: --all)" if retired else ""))
+        print_native(args.markdown)
         return 0
     me = machine_identity()
     print(f"catch-up poller: {'loaded' if loaded(CATCH_UP) else 'NOT loaded (t3-schedule refresh)'} · every {CATCH_UP_INTERVAL // 60} min, retries until slot+{CATCH_UP_GRACE_HOURS}h")
@@ -1108,6 +1158,7 @@ def cmd_list(args: argparse.Namespace) -> int:
             )
         if retired:
             print(f"\n{retired} finished jobs hidden (`--all`).")
+        print_native(True)
         return 0
     for spec in rows:
         name = spec["name"]
@@ -1128,6 +1179,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         print(f"{'':<28} last: {last_run(paths(name)['log'])}")
     if retired:
         print(f"\n{retired} finished jobs hidden (--all)")
+    print_native(False)
     return 0
 
 

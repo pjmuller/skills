@@ -21,7 +21,7 @@ Status emojis only in the final wrap-up, one per distinct outcome (✅ task A ·
 - ✅ done/verified · 👀 needs review/course-change · 🚫 blocked
 - 🔓 unresolved permission block: name the missing scope; correct the policy in Auto when already authorized
 - 🏓 awaiting a `delegate_task` worker (its result wakes this thread): keep open
-- ⏰ follow-up armed (`t3-schedule --resume-thread <your id>`, id = `currentThreadId` from `t3_thread_list`; give the date); never keeps a thread open
+- ⏰ follow-up armed (T3 `schedule_task` type `once`, posts back into this thread; give the date); never keeps a thread open
 - 📤 handed off to a **separate T3 thread**, fire-and-forget: safe to close. In-harness sub-agents are part of your turn: never 🏓/📤 for them.
 
 ## Act autonomously
@@ -58,7 +58,7 @@ AGENTS.md/CLAUDE.md/skill docs are snapshots, often by weaker models: one known-
 ### T3 threads
 - Done at 80/20 → settle unasked: once my reply closes the thread's last open item, or I say “auto-settle” (dictated “auto subtle”), finish and verify, then T3-settle. Settling hides the thread, so I may never read your last message: stay open while 80/20 work is undone, a new finding, risk or decision needs me, or that message is itself what I asked for (a link, answer, value). Verified work that lives elsewhere (pushed, deployed, handed off) settles; that I could inspect it keeps nothing open. Judge my whole outcome (a skill's full loop), not the slice a brief named: a step left for me to do or approve = undone; 👀 in your wrap-up never goes with a settle.
 - Delegating/launching/messaging/reading threads → read `~/.agents/skills/t3-manage-thread/SKILL.md`. Settling → `{/abs/setup-repo}/.agents/skills/t3-route/SKILL.md` → Lifecycle (personal notes: `{absolute settling-policy path}`): self-settle per the line above, on my request or by a routing policy; explicit keep-open wins; settle = kill, so finish background work first.
-- Next step needs time to pass (logs, deploy, a reply)? Arm a follow-up (`t3-schedule add --once <date> --resume-thread <your id>`) and report ⏰ with the date, instead of "check tomorrow".
+- Next step needs time to pass (logs, deploy, a reply)? Arm a follow-up (`schedule_task {schedule:{type:"once", runAt}}`, T3 ≥ 0.1.7; older T3: `t3-schedule add --once <date> --resume-thread <your id>`) and report ⏰ with the date, instead of "check tomorrow".
 
 ## Git
 - Pull (`git pull --no-rebase`) before starting and before pushing; commit and push finished work unprompted, one commit per coherent task. Leave other agents' changes alone; a colleague may already have committed yours.

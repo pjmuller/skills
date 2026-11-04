@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-04 — ⏰ follow-ups move to T3's native one-shot tasks
+
+- Global template, `t3-schedule`: on T3 ≥ 0.1.7 an agent arms a follow-up with `schedule_task {schedule:{type:"once", runAt}}`: it posts back into the calling thread, runs late after sleep or a closed T3, never expires, needs no thread id. `t3-schedule add --once --resume-thread` stays for older T3 and scripts outside T3 (its one-shots expire at 23:00 that day); recurring jobs stay on launchd. Already armed `t3-schedule` one-shots keep working, no migration.
+- `t3-schedule list` (text and `--markdown`) also lists T3 native tasks that can still run, so "what's scheduled?" covers both.
+
 ## 2026-11-04 — T3 0.1.7: native one-shot schedules, purge guard, dead-link rule
 
 - `t3-schedule`: T3 0.1.7 ships native one-shots ([#28104](https://github.com/pingdotgg/t3code/pull/28104), `schedule_task {schedule:{type:"once", runAt}}`). Live: a task bound to a settled thread fired on time and woke it. Documented as an option for a single wake-up of the calling thread; recurring jobs stay on launchd (`fixed_time` still skips runs >10 min late).

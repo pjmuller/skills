@@ -914,3 +914,29 @@ def test_unreadable_local_spec_and_markers_isolate_one_job(tmp_path, monkeypatch
     mod.cmd_catch_up(argparse.Namespace(dry_run=True))
     mod.cmd_list(argparse.Namespace(json=False, markdown=False, all=False))
     assert "bad" in capsys.readouterr().out
+
+
+def test_list_shows_native_tasks_that_can_still_run(tmp_path, monkeypatch, capsys):
+    import argparse
+    import sqlite3
+    monkeypatch.setenv("HOME", str(tmp_path))
+    db = tmp_path / ".t3/userdata/statev2.sqlite"
+    db.parent.mkdir(parents=True)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE projection_projects (project_id TEXT, title TEXT)")
+    con.execute("CREATE TABLE scheduled_tasks (title TEXT, enabled INTEGER, schedule_json TEXT, "
+                "thread_id TEXT, next_run_at TEXT, prompt TEXT, project_id TEXT)")
+    con.execute("INSERT INTO projection_projects VALUES ('p', 'app')")
+    con.executemany("INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, 'p')", [
+        ("follow-up", 1, '{"type":"once","runAt":"2099-01-01T08:00:00Z"}', "mcp:t1", "2099-01-01T08:00:00Z", "check | logs"),
+        ("weekly", 1, '{"type":"fixed_time","timeOfDay":"09:00","weekdays":[4]}', None, "2099-01-01T08:00:00Z", "x"),
+        ("fired", 1, '{"type":"once","runAt":"2020-01-01T08:00:00Z"}', "mcp:t2", None, "x"),
+        ("paused", 0, '{"type":"interval","everyMs":60000}', None, "2099-01-01T08:00:00Z", "x"),
+    ])
+    con.commit()
+    con.close()
+    mod.cmd_list(argparse.Namespace(json=False, markdown=True, all=False))
+    out = capsys.readouterr().out
+    assert "No scheduled jobs." in out and "| follow-up | once |" in out and "check \\| logs" in out
+    assert "| weekly | thu 09:00 |" in out and "| app | new thread per run |" in out
+    assert "fired" not in out and "paused" not in out

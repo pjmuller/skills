@@ -24,10 +24,14 @@ flowchart LR
 ```
 
 Not T3's native `fixed_time` tasks: they skip a run >10 min late (sleeping Mac); launchd replays
-the missed slot at wake, the catch-up poller covers the rest. Native one-shots are fine since T3 0.1.7
-([#28104](https://github.com/pingdotgg/t3code/pull/28104)): `schedule_task {schedule:{type:"once", runAt}}`
-(bound to the calling thread by default) runs late after sleep and wakes a settled thread, with no relay
-or thread id; `list_scheduled_tasks` shows it, not `t3-schedule list`.
+the missed slot at wake, the catch-up poller covers the rest
+([#25930](https://github.com/pingdotgg/t3code/pull/25930) would fix that natively).
+
+**Wake this thread later → native, not this tool** (T3 ≥ 0.1.7, [#28104](https://github.com/pingdotgg/t3code/pull/28104)):
+`schedule_task {schedule:{type:"once", runAt}}` posts into the calling thread (wakes it when settled), runs
+late when the Mac slept or T3 was closed, never expires, needs no thread id. `t3-schedule list` shows these too.
+This tool stays for recurring jobs, one-shots that start a **new** thread with model/account routing, and
+scripts outside T3.
 
 ```bash
 t3-schedule add --name check-deploy --once 2026-10-20 --at 10:00 --resume-thread <threadId> \
@@ -38,7 +42,7 @@ t3-schedule list --markdown   # answer "what's scheduled?" with this (finished j
 
 ## Jobs
 
-- **Continuation** (`--resume-thread ID`, usually `--once`): sends the prompt as a turn to that
+- **Continuation** (`--resume-thread ID`, usually `--once`; inside T3 ≥ 0.1.7 use native `once` above): sends the prompt as a turn to that
   thread ("Scheduled follow-up (<date>), as agreed earlier in this thread: …"); settled threads
   wake. Inside T3 pass **your own id** (`t3_thread_list` → `currentThreadId`); a launchd job
   cannot resolve "self". Arm one whenever the next step needs time to pass (logs, cache expiry,
