@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-04 — thread titles in plain words, set at launch
+
+- `t3-manage-thread/workers.md`: titles are ≤5 words naming the problem or outcome as the user would say it, without internal mechanism words. Why: a bug thread a mailbox review launched was titled `Intercom outbound-email dead-letter`, which its owner could not place. Also documents that every creation path takes a title and that T3 keeps it after the first run (verified live on 0.1.7); `t3_thread_update rename` fixes a bad one.
+- `recording-followups`, `mailbox-review-core`: the threads they launch take their title from that rule (the prompt's title line; the bug's symptom).
+
 ## 2026-11-04 — ⏰ follow-ups move to T3's native one-shot tasks
 
 - Global template, `t3-schedule`: on T3 ≥ 0.1.7 an agent arms a follow-up with `schedule_task {schedule:{type:"once", runAt}}`: it posts back into the calling thread, runs late after sleep or a closed T3, never expires, needs no thread id. `t3-schedule add --once --resume-thread` stays for older T3 and scripts outside T3 (its one-shots expire at 23:00 that day); recurring jobs stay on launchd. Already armed `t3-schedule` one-shots keep working, no migration.

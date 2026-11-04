@@ -40,7 +40,8 @@ for the prompt step. Automatic per-call entry: [recording-watcher](../recording-
    catalogue of finished work).
 3. **One file per prompt**: `~/Downloads/<date>-<who>-prompt-N.md` (title line + body). Launch by
    path so extra instructions are a quick edit, not a retype: `t3_thread_launch` with `message:
-   "Read and execute <absolute path>"`. Files stay after launch (a worker may still read them);
+   "Read and execute <absolute path>"` and `title` = the prompt's title line, cut to a
+   [thread title](../t3-manage-thread/workers.md#briefs-and-titles) (`📤 ` + ≤5 plain words). Files stay after launch (a worker may still read them);
    thread ids and links go in the debrief or a manifest so a retry cannot launch twice.
 
 ## Repository retention (off by default)
