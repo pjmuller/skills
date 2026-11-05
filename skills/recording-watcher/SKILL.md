@@ -28,11 +28,14 @@ lives in one config file ([config.md](config.md)); new machine (macOS or WSL): [
 ## How it decides (`scripts/recording-watcher`)
 
 - No transcript → pending, `skipped:no-transcript` after 6 h; < 150 words → `skipped:too-short`.
-- One meeting from two sources (a Fathom bot on a Leexi-recorded call): a qualifying call is `skipped:duplicate`
-  when ≥ 20% (and ≥ 40) of its distinct 4-word sequences appear in another source's recording starting ≤ 1 h
-  apart. Survivors go largest first (a pinned-`workspace` source counts 10% larger); a call > 10% longer than an
-  already spawned one is kept (its extra minutes would reach no thread). The duplicate waits until its survivor
-  spawned, whose brief links its transcript. Time alone never matches: concurrent distinct meetings are common.
+- One meeting, one thread. A source pinned to a `workspace` is that workspace's recorder: another source's call
+  routed there waits 2 h after its start (`DEDICATED_WAIT`; Leexi lists a meeting only once it ended, a Fathom
+  bot can leave early and finish first), then spawns only if that recorder did not capture the same meeting.
+  Same meeting = ≥ 20% (and ≥ 40) of a call's distinct 4-word sequences appear in the other source's recording
+  starting ≤ 1 h apart → `skipped:duplicate` (+ `duplicate_of`); the survivor (largest, pinned counts 10% more)
+  spawns first and its brief links the duplicate's transcript. A call > 10% longer than an already spawned one
+  still spawns (its extra minutes would reach no thread). Time or title alone never matches: concurrent
+  distinct meetings are common.
 - Election on vendor-verified speaker emails; a `personal` source (own Monologue account) is always
   this machine's. Not owner → `skipped:<reason>` + owner + evidence.
 - Route: the source's pinned `workspace`, else known non-self speakers vote by words, then

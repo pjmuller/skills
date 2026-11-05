@@ -546,3 +546,39 @@ def test_duplicate_waits_for_its_survivor(cfg, tmp_path, monkeypatch):
     run(tmp_path, monkeypatch, cfg, srcs, spawner, now=NOW + timedelta(minutes=10))
     state = json.loads((tmp_path / "state" / "state.json").read_text())
     assert state["calls"]["fathom:f"]["status"] == "skipped:duplicate" and len(briefs[BETA]) == 1
+
+
+def test_call_for_a_recorded_workspace_waits_for_that_recorder(tmp_path, monkeypatch):
+    """11-05: the Fathom bot left at minute 26 and spawned 35 min before Leexi listed the 62-min meeting."""
+    cfg = config(tmp_path, routes=[{"workspace": BETA, "names": r"\bdan\b"}])
+    text = speech(1, 2800)
+    f = call(id="f", segments=[seg("Ana", 0, ANA, asr(" ".join(text.split()[:1200]), 2)), seg("Dan", 0, "", speech(7, 40))],
+             start=NOW - timedelta(hours=2, minutes=-2))
+    f.created = f.start + timedelta(minutes=26)
+    lx = call(source="leexi", id="l", recorder="desk@beta.example", segments=[seg("Ana", 0, ANA, text)],
+              start=NOW - timedelta(hours=2))
+    lx.created = lx.start + timedelta(minutes=63)
+    fathom, leexi = FakeSource("fathom", [f]), FakeSource("leexi", [])
+    briefs, spawner = spawn_log()
+    t0 = f.created + timedelta(minutes=5)
+    run(tmp_path, monkeypatch, cfg, [fathom, leexi], spawner, now=t0)
+    assert not briefs                                         # Fathom routed to BETA waits for BETA's recorder
+    leexi.calls = [lx]
+    run(tmp_path, monkeypatch, cfg, [fathom, leexi], spawner, now=t0 + timedelta(minutes=40))
+    state = json.loads((tmp_path / "state" / "state.json").read_text())
+    assert state["calls"]["fathom:f"]["duplicate_of"] == "leexi:l" and len(briefs[BETA]) == 1
+    # a call only that source recorded spawns once the wait is over, routed as before
+    solo = call(id="solo", segments=[seg("Ana", 0, ANA, speech(9, 600)), seg("Dan", 0, "", speech(8, 300))], start=t0)
+    solo.created = t0 + timedelta(minutes=30)
+    fathom.calls = [solo]
+    run(tmp_path, monkeypatch, cfg, [fathom], spawner, now=t0 + timedelta(minutes=35))
+    assert len(briefs[BETA]) == 1
+    run(tmp_path, monkeypatch, cfg, [fathom], spawner, now=t0 + rw.DEDICATED_WAIT)
+    assert len(briefs[BETA]) == 2
+    # a pinned source's own call never waits, even when another source is pinned to the same workspace
+    both = config(tmp_path, sources={**CONFIG["sources"], "fathom": {"env_file": "/none", "workspace": BETA}})
+    own = call(source="leexi", id="own", recorder="desk@beta.example", segments=[seg("Ana", 0, ANA, speech(11, 600))],
+               start=t0 + timedelta(hours=3))
+    own.created = own.start + timedelta(minutes=30)
+    run(tmp_path, monkeypatch, both, [FakeSource("leexi", [own])], spawner, now=own.created + timedelta(minutes=5))
+    assert len(briefs[BETA]) == 3

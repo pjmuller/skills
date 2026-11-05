@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05 — recording-watcher: a call waits for its workspace's own recorder
+
+- A call routed to a workspace another source is pinned to (Fathom → DentAI, recorded by Leexi) waits 2 h after its start (`DEDICATED_WAIT`) before spawning; the existing 4-gram match then drops it once that recorder lists the same meeting. Why: a Fathom bot left a 62-min meeting at minute 26, its recording finished first and spawned 35 min before Leexi listed the meeting (Leexi lists only after a meeting ends, ≤ 77 min after its scheduled start in 4 weeks), so both got a thread. Replay of every poll 10-12..11-05 on 93 real calls: the same spawns as before except this duplicate; the one Fathom-only DentAI call spawns 84 min later.
+
 ## 2026-11-05 — skills-refresh installs default global skills
 
 - `skills-refresh`: one fleet-wide list of default globals (t3-manage-thread, t3-schedule, t3-find-thread, settle-8020, auto-mode-policy, recording-watcher, recording-followups, video-shrink-for-gemini, t3-retro). A missing one is installed once from the verified release, then refreshed and committed like the others. Why: the refresh only updated skills already present, so new shared skills (settle-8020, pr-review, auto-mode-policy) never reached colleagues and their prompt merges skipped the lines that use them. Opt out by deleting the skill: it is not re-added. Installs only link commands, never schedule a job. Takes effect from the release after this one.

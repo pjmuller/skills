@@ -61,6 +61,10 @@ DOWNLOAD_TIMEOUT, DETECT_TIMEOUT = 30 * 60, 10 * 60
 # A same-span duplicate tops out near 35%, so 20% cannot prove full containment: length guards the longer call.
 DUP_WINDOW, DUP_MIN_SHARED, DUP_MIN_SHARE = timedelta(hours=1), 40, 0.2
 DUP_SLACK = 1.1   # ASR wordiness differs per vendor; a pinned source wins within it (its routing is certain)
+# A call routed to a workspace another source is pinned to (Fathom -> DentAI, recorded by Leexi) waits this long after
+# its start, so the dedicated recording can list and absorb it. Leexi lists a call only once the meeting ended (seen:
+# <= 77 min after the scheduled start); a Fathom bot that left at minute 26 otherwise spawned 35 min before it.
+DEDICATED_WAIT = timedelta(hours=2)
 
 
 @dataclass
@@ -839,6 +843,13 @@ def poll(args, cfg=None, sources=None, spawner=spawn, now=None, checker=relay_st
                                         "at": now.isoformat(), "transcript": str(transcript)}
             continue
         workspace = route(cfg, call)
+        if now - call.start < DEDICATED_WAIT and not cfg.sources[call.source].get("workspace") and any(
+                spec.get("workspace") == workspace for spec in cfg.sources.values()):
+            print(f"{'waiting-dedicated':30} {call.key:48} {call.start.astimezone(TZ):%m-%d %H:%M} {call.title[:50]}"
+                  f" · {Path(workspace).name} has its own recorder; spawns after "
+                  f"{(call.start + DEDICATED_WAIT).astimezone(TZ):%H:%M} unless it recorded this meeting")
+            listed_by_source[call.source][1].append(call)
+            continue
         seen = visual(cfg, call, now, args.dry_run)
         if seen is None:   # video check running (or queued): hold the call and the watermark
             print(f"{'visual-pending':30} {call.key:48} {call.start.astimezone(TZ):%m-%d %H:%M} {call.title[:50]}")
