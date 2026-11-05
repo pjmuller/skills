@@ -1,6 +1,7 @@
 """skills-refresh against a local release repo: apply, idempotence, rollback, lock."""
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -37,6 +38,11 @@ def release(repo, tag, version, install=INSTALL, changelog=LOG_V2):
     signed_tag(repo, tag)
 
 
+def with_defaults(script, names):
+    text = script.read_text()
+    script.write_text(re.sub(r"DEFAULT_GLOBALS=\([^)]*\)", f"DEFAULT_GLOBALS=({names})", text, count=1))
+
+
 @pytest.fixture
 def env(tmp_path):
     key = tmp_path / "signer"
@@ -46,6 +52,7 @@ def env(tmp_path):
     pin = 'release-test namespaces="git" ' + key.with_suffix(".pub").read_text().strip()
     script.write_text(re.sub(r"ALLOWED_SIGNERS='[^']*'", f"ALLOWED_SIGNERS='{pin}'", SCRIPT.read_text())
                       .replace("MIN_VERIFYING_RELEASE='v0.5.5'", "MIN_VERIFYING_RELEASE='v0.1.0'"))
+    with_defaults(script, "")
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -110,6 +117,73 @@ def test_changelog_since_installed_tag(env):
     assert result.returncode == 10
     assert "third" in result.stdout and "second release" in result.stdout
     assert "first release" not in result.stdout
+
+
+def add_skill(repo, name, tag, install=None):
+    (repo / f"skills/{name}").mkdir(parents=True, exist_ok=True)
+    (repo / f"skills/{name}/SKILL.md").write_text(f"{name} {tag}\n")
+    if install:
+        (repo / f"skills/{name}/scripts").mkdir(exist_ok=True)
+        (repo / f"skills/{name}/scripts/install").write_text(install)
+        (repo / f"skills/{name}/scripts/install").chmod(0o755)
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", tag)
+    signed_tag(repo, tag)
+
+
+def test_missing_default_global_is_installed_once_and_removal_sticks(env):
+    with_defaults(env["script"], "extra absent")
+    add_skill(env["repo"], "extra", "v0.3.0")
+    result = run(env)
+    assert result.returncode == 10, result.stderr
+    assert "installed default skills: extra" in result.stdout
+    assert (env["home"] / "skills/extra/SKILL.md").read_text() == "extra v0.3.0\n"
+    assert (env["home"] / "pjmuller-skills/defaults-offered").read_text().split() == ["extra"]
+    # Managed from now on: the next release updates it like any other copy.
+    add_skill(env["repo"], "extra", "v0.4.0")
+    assert run(env).returncode == 10
+    assert (env["home"] / "skills/extra/SKILL.md").read_text() == "extra v0.4.0\n"
+    # The user deleted it: a later release never brings it back.
+    shutil.rmtree(env["home"] / "skills/extra")
+    add_skill(env["repo"], "extra", "v0.5.0")
+    result = run(env)
+    assert result.returncode == 10 and "installed default skills" not in result.stdout
+    assert not (env["home"] / "skills/extra").exists()
+
+
+def test_failed_install_of_new_default_global_never_blocks_the_release(env):
+    with_defaults(env["script"], "extra")
+    add_skill(env["repo"], "extra", "v0.3.0", install="#!/usr/bin/env bash\nexit 1\n")
+    result = run(env)
+    assert result.returncode == 10, result.stderr
+    assert "default skill extra not installed" in result.stdout and "installed default skills" not in result.stdout
+    assert not (env["home"] / "skills/extra").exists()
+    assert (env["home"] / "skills/demo/SKILL.md").read_text() == "demo 2\n"
+    assert not (env["home"] / "pjmuller-skills/defaults-offered").exists()  # retried next release
+
+
+def test_default_global_deleted_before_it_became_default_stays_deleted(env):
+    add_skill(env["repo"], "extra", "v0.3.0")
+    (env["home"] / "skills/extra").mkdir()
+    (env["home"] / "skills/extra/SKILL.md").write_text("extra 0\n")
+    assert run(env).returncode == 10  # managed copy: manifest written
+    shutil.rmtree(env["home"] / "skills/extra")
+    with_defaults(env["script"], "extra")
+    add_skill(env["repo"], "extra", "v0.4.0")
+    result = run(env)
+    assert result.returncode == 10, result.stderr
+    assert not (env["home"] / "skills/extra").exists()
+    assert (env["home"] / "pjmuller-skills/defaults-offered").read_text().split() == ["extra"]
+
+
+def test_default_global_kept_out_when_a_setup_repo_copy_owns_it(env, tmp_path):
+    setup_repo(tmp_path, env, local=("extra",))
+    with_defaults(env["script"], "extra")
+    add_skill(env["repo"], "extra", "v0.3.0")
+    result = run(env)
+    assert result.returncode == 10, result.stderr
+    assert not (tmp_path / "setup/ai/skills/extra").exists()
+    assert (tmp_path / "setup/.agents/skills/extra/SKILL.md").read_text() == "extra v0.3.0\n"
 
 
 def test_symlinked_skill_is_left_alone(env, tmp_path):
@@ -766,7 +840,6 @@ def test_history_rewrite_heals_with_the_next_signed_release(tenv):
     out = job(tenv).stdout
     assert "applied v0.4.0" in out and out.splitlines()[-1].startswith("thread: DELEGATE"), out
     # A machine whose cache predates nothing: a fresh clone of the rewritten history also delegates.
-    import shutil
     state = tenv["home"] / "pjmuller-skills"
     shutil.rmtree(state / "repo.git")
     (state / "template-sync.claim").unlink()

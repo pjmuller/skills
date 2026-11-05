@@ -12,6 +12,11 @@ Not `skills update` / `skills check`: those follow HEAD, and `check` silently up
   are left alone. A repo copy with uncommitted changes is not adopted the first time (ACTION). The
   author's machine (`t3-manage-thread` symlinked from a source checkout) keeps repo copies with
   shared-skill-sync, which follows main. New copies are picked up with the next newer release.
+- **Default globals** (`DEFAULT_GLOBALS` in the script, one fleet-wide list): each one missing under
+  `~/.agents/skills` is installed once from the verified release, then managed like the rest and
+  committed with them. Deleting one opts out: `pjmuller-skills/defaults-offered` remembers it was
+  offered. Never on the author's source checkout. Installs link commands only; nothing gets scheduled
+  (e.g. `recording-watcher` polls only after `install --schedule` on the one machine that owns calls).
 - **Signed releases only** (hard rule): the updater pins the maintainer's SSH key in `ALLOWED_SIGNERS` and verifies
   the fetched tag's signature, name and commit before checkout; the version stamp records that commit.
   Unsigned, unknown-key, tampered or renamed tags and automatic downgrades fail closed.

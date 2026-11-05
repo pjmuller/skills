@@ -8,6 +8,10 @@ REPO="${SKILLS_REFRESH_REPO:-https://github.com/pjmuller/skills.git}"
 SKILLS="$HOME_/skills" STAMP="$HOME_/pjmuller-skills.version" STATE="$HOME_/pjmuller-skills"
 LOCK="$STATE/lock" ACTIONS="$STATE/actions.$$"
 MIN_VERIFYING_RELEASE='v0.5.5'
+# Fleet-wide default globals: a missing one is installed once per machine from the verified release
+# (recorded in $STATE/defaults-offered, so deleting it sticks). Never on the author's source checkout.
+DEFAULT_GLOBALS=(t3-manage-thread t3-schedule t3-find-thread settle-8020 auto-mode-policy
+  recording-watcher recording-followups video-shrink-for-gemini t3-retro)
 # Bootstrap trust is the installed script, never the fetched release. No env override.
 ALLOWED_SIGNERS='pjmuller namespaces="git" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDlzBlNIEQq+VIuJRLVILwIikQ3B0uytO32FlNsNfT1GalT3yD+GB5cgSrXFmkz3updjSkTdSOkL45k3C3BZgvYfDvr1lKdaKLxhrL1WA0fux0R94DwGa+pYR1B4tox/5HD/01h8XyM9OXLVW9ZRJzMfDhIK+tk7a8VBX9A2NgbrQIFURzSbvjoSnVsbY/okj3QYuTwKjzC5Ah6PWh1LMyUqqF/TQKAozVeJiBhSOOpDTuVk/76BTCu/LsR9XIPtmb6jbRwE3HfeAZ0+CuigoZwy0eYZ2M3P0viGLIurygfIogMc+RMGChUlJcaXzKhA+t69xDt+5DYImSbCyo19ttZTZeQx8VYMK5MzC9pbSVfJgpLG+C4m22iJwRenH1ARjqAuctwIKUOa42LHxuu6fvdCMSmu+2F3vrDnUxdlFd8/nFEIDh74qhvVyobhWqMJKCqT5rBlBeALr9DdJ4cifhZdyEc8BtUdPvME1CTKGcOHAQad6smNmSLkcYSrYxCzK+hCki9Gz25gOOLbR6Hdl/Hf3TXWLIdtBsA3aj3GUmb9GchFTGLd0RN22VgOOQBtrsB+VvI4jndwIfEDTemqlWqI+zcscIJQhIxyLOktewjSpPFFFYMew5zjRk66MiG7rGtEDv7j4LmGabz5fls96XHLFApnMpZ59otjiIv5Tclfw=='
 
@@ -147,6 +151,7 @@ rollback() { # reason
     d="$(dir_of "$n")"; rm -rf "${d:?}"; mv "$STATE/last-good/$n" "$d"
     run_install "$n" >/dev/null 2>&1 || echo "skills-refresh: $n: reinstall after rollback failed" >&2
   done
+  for n in ${created[@]+"${created[@]}"}; do rm -rf "$(dir_of "$n")"; done
   for n in "${managed[@]}"; do d="$(dir_of "$n")"; rm -rf "${d%/*}/.${n##*/}.new"; done
   rm -rf "$stage"; exit 1
 }
@@ -192,6 +197,19 @@ refresh() {
   local candidates=() name dir
   find_local
   while IFS= read -r name; do candidates+=("$name"); done < <(slots)
+  if ! source_checkout; then
+    for name in ${DEFAULT_GLOBALS[@]+"${DEFAULT_GLOBALS[@]}"}; do
+      [[ -e "$SKILLS/$name" || -L "$SKILLS/$name" ]] && continue
+      grep -qxF "$name" "$STATE/defaults-offered" 2>/dev/null && continue
+      # A setup-repo copy already owns its commands; a global beside it would fight the installer.
+      [[ -n "$LOCAL" && ( -e "$LOCAL/$name" || -L "$LOCAL/$name" ) ]] && continue
+      # Managed before and deleted since: the user's opt-out, not a missing default.
+      if [[ -s "$STATE/manifest/$name" ]]; then
+        mkdir -p "$STATE"; echo "$name" >> "$STATE/defaults-offered"; continue
+      fi
+      candidates+=("$name")
+    done
+  fi
   ((${#candidates[@]})) || { echo "up to date: nothing to manage (all copies under $SKILLS are symlinks to a source checkout)"; return 0; }
 
   stage="$STATE/staging/$new"
@@ -205,7 +223,7 @@ refresh() {
   git -C "$stage" -c core.hooksPath=/dev/null checkout -q --detach "$verified_commit" ||
     { rm -rf "$stage"; die "$new: cannot check out verified commit"; }
   echo "verified $new $verified_commit (installed signing pin)"
-  managed=() moved=()
+  managed=() moved=() created=()
   for name in "${candidates[@]}"; do
     [[ -d "$stage/skills/${name##*/}" ]] || continue
     dir="$(dir_of "$name")"
@@ -253,13 +271,27 @@ $edited  Move what you need into your own skill, then discard: rm $STATE/manifes
   done
   for name in "${managed[@]}"; do
     dir="$(dir_of "$name")"
-    mv "$dir" "$STATE/last-good/$name" || rollback "$name: cannot move the live copy aside"
-    moved+=("$name")
+    if [[ -e "$dir" ]]; then
+      mv "$dir" "$STATE/last-good/$name" || rollback "$name: cannot move the live copy aside"
+      moved+=("$name")
+    else
+      created+=("$name") # a default global new on this machine
+    fi
     mv "${dir%/*}/.${name##*/}.new" "$dir" || rollback "$name: cannot activate"
   done
+  # A new default whose install fails is dropped (retried next release); it never blocks the release.
+  local kept=() fresh=()
   for name in "${managed[@]}"; do
-    run_install "$name" >/dev/null || rollback "$name: scripts/install failed on $new"
+    if run_install "$name" >/dev/null; then
+      kept+=("$name"); [[ " ${created[*]-} " != *" $name "* ]] || fresh+=("$name"); continue
+    fi
+    [[ " ${created[*]-} " == *" $name "* ]] || rollback "$name: scripts/install failed on $new"
+    rm -rf "$(dir_of "$name")"
+    echo "warning: default skill $name not installed: its scripts/install failed (retried with the next release)"
   done
+  created=(${fresh[@]+"${fresh[@]}"})
+  if ((${#kept[@]} == 0)); then rm -rf "$stage"; echo "up to date: no default skill could be installed"; return 0; fi
+  managed=("${kept[@]}")
   local check
   for name in "${managed[@]}"; do
     check="$(run_install "$name" --check 2>&1)" && continue
@@ -277,6 +309,12 @@ $edited  Move what you need into your own skill, then discard: rm $STATE/manifes
 
   echo "$new $(date +%F) $verified_commit" > "$STAMP"
   echo "applied $new (was $installed)"
+  for name in ${DEFAULT_GLOBALS[@]+"${DEFAULT_GLOBALS[@]}"}; do
+    if [[ -e "$SKILLS/$name" || -L "$SKILLS/$name" ]] && ! grep -qxF "$name" "$STATE/defaults-offered" 2>/dev/null; then
+      echo "$name" >> "$STATE/defaults-offered"
+    fi
+  done
+  if ((${#created[@]})); then echo "installed default skills: ${created[*]} (delete one to opt out; it is not re-added)"; fi
   [[ -f "$stage/CHANGELOG.md" ]] && changelog "$stage/CHANGELOG.md" "$installed"
   removed_refs "$new"
   rm -rf "$stage"

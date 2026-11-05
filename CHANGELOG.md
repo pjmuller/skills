@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05 — skills-refresh installs default global skills
+
+- `skills-refresh`: one fleet-wide list of default globals (t3-manage-thread, t3-schedule, t3-find-thread, settle-8020, auto-mode-policy, recording-watcher, recording-followups, video-shrink-for-gemini, t3-retro). A missing one is installed once from the verified release, then refreshed and committed like the others. Why: the refresh only updated skills already present, so new shared skills (settle-8020, pr-review, auto-mode-policy) never reached colleagues and their prompt merges skipped the lines that use them. Opt out by deleting the skill: it is not re-added. Installs only link commands, never schedule a job. Takes effect from the release after this one.
+
 ## 2026-11-05 — `D1A S`: answer and settle in one reply
 
 - Global template, ask format: a separate final `S` after the decision answers (`D1A S`, `D1A D2B S`) = apply them all, then `/settle-8020` this thread. When answering every open ask leaves only small, authorized, verifiable work, the agent ends with the whole recommended reply incl. `S` (`⭐ **D1A D2B S**`). Why: most decision replies are the thread's last input; one letter closes it after a final check, and the hint shows which threads can close now. A suggestion invokes nothing; the skill's keep-open checks still apply. Needs `settle-8020` installed; without it, skip this line.

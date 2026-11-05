@@ -106,7 +106,9 @@ fix what --check reports; PATH availability does not change the skill's discover
 
 ## Update
 
-The daily `skills-refresh` job applies new release tags of t3-manage-thread + t3-schedule
+The daily `skills-refresh` job applies new release tags to every global copy and installs missing
+default globals once: t3-manage-thread, t3-schedule, t3-find-thread, settle-8020, auto-mode-policy,
+recording-watcher, recording-followups, video-shrink-for-gemini, t3-retro (delete one to opt out)
 (stamp `~/.agents/pjmuller-skills.version`, `skills-refresh --version`). Repo-local copies:
 `pnpm dlx skills update -p` inside the repo (commit the diff + lockfile), then rerun
 `scripts/install` and `--check` for updated skills that ship commands. That follows `main`; to match
