@@ -108,7 +108,8 @@ detects a template change between the marker and the installed release tag (neve
 `git log -p <marker>..<tag> -- skills/agents-md/global-template.md`. Three-way: their
 wording, facts and deletions win; apply clear improvements, ask about unclear ones;
 uncommitted prompt edits → change nothing, recommend. Log each skipped change in
-`template-decisions.md` beside the prompt so it is never re-proposed; rerun the pointer
+`template-decisions.md` beside the prompt so it is never re-proposed (unless its only reason was a missing
+skill or tool that is now installed); rerun the pointer
 check of step 6; set the marker to the tag even when everything was skipped.
 
 ## Port a live file's improvements into a shared template

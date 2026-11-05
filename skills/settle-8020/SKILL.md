@@ -1,6 +1,6 @@
 ---
 name: settle-8020
-description: "Only when the user explicitly invokes /settle-8020 or $settle-8020 (alone, or after answering pending decisions, e.g. \"D1A /settle-8020\") or asks to settle this thread at 80/20. Audits the current T3 thread's goal, finishes the small remaining work that still moves the needle, verifies it, then settles this thread. Never on your own initiative, never for another thread."
+description: "Only when the user explicitly invokes /settle-8020 or $settle-8020 (alone, or after answering pending decisions, e.g. \"D1A /settle-8020\"), ends a decision reply with a separate S (\"D1A S\", \"D1A D2B S\"), or asks to settle this thread at 80/20; never from an agent's own suggestion or a quote. Audits the current T3 thread's goal, finishes the small remaining work that still moves the needle, verifies it, then settles this thread. Never on your own initiative, never for another thread."
 argument-hint: "[goal; default = this thread's goal]"
 ---
 
@@ -13,6 +13,11 @@ other threads, and no authorization beyond what the user or the brief already ga
 **Goal** = the text accompanying the invocation if it names one; else the thread's goal as the user
 stated it, plus their later corrections. Other text in the same message (decision answers such as `D1A`,
 extra instructions) is part of the request: carry it out first, then audit.
+
+**`S` shorthand**: a decision reply ending in a separate `S` invokes this for the whole reply, however many
+decisions it answers: `D1A S`, `D1A D2B S`, `d1: a, d2: b s.` (case, colons, commas, final punctuation don't
+matter). Apply every answer, then audit. Not an invocation: a bare `S`, `D1AS`, `S` quoted or inside other
+text. Decisions the reply left unanswered keep the thread open (ask them again).
 
 1. **Audit against the goal, not the work log.** Delivered and verified where it lives (pushed, deployed,
    published, filed)? Anything half-done, unverified, unpushed, or still running (background shells,

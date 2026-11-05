@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-05 — `D1A S`: answer and settle in one reply
+
+- Global template, ask format: a separate final `S` after the decision answers (`D1A S`, `D1A D2B S`) = apply them all, then `/settle-8020` this thread. When answering every open ask leaves only small, authorized, verifiable work, the agent ends with the whole recommended reply incl. `S` (`⭐ **D1A D2B S**`). Why: most decision replies are the thread's last input; one letter closes it after a final check, and the hint shows which threads can close now. A suggestion invokes nothing; the skill's keep-open checks still apply. Needs `settle-8020` installed; without it, skip this line.
+- `settle-8020`: recognises that `S` (case/punctuation-insensitive; bare `S`, `D1AS` or quoted text don't count); unanswered decisions keep the thread open.
+- Template re-sync: a line skipped only because its skill or tool was missing is reconsidered once it is installed (logged skips used to block it forever). Takes effect one release after this one.
+
 ## 2026-11-05 — whatsapp-bridge: delete one own message for everyone
 
 - `wa revoke <number|group JID> <message-id>` / `revoke_message(target, message_id)`: revokes one message this account sent, for everyone, in one explicit allowlisted chat. Refuses IDs not in local history for that chat, from another chat or from another author (no admin deletes, no delete-for-me, no bulk). Same allowlist, lock and pacing as a send; no retry. Returns `accepted` / `failed` (server error) / `uncertain`, CLI exit 1 unless accepted; attempts land in a new `revocations` table, the message row stays, an accepted or unknown attempt blocks a replay. Live-verified on a self chat. Why: an obsolete message sent to a group had to be taken back without the phone. Neonize 0.4.7's `build_revoke(with_go=True)` misparses the Go reply, so its Python builder is used.

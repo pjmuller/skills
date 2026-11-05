@@ -491,7 +491,7 @@ prompt_sync() {
     cat <<BRIEF
 
 Rules (clean file):
-1. Read the decisions log \`template-decisions.md\` beside the prompt (may not exist). Never re-propose a change it records as skipped, also when reworded.
+1. Read the decisions log \`template-decisions.md\` beside the prompt (may not exist). Never re-propose a change it records as skipped, also when reworded; exception: a skip whose only reason was a missing skill or tool, now installed, is reconsidered (log the new outcome).
 2. Three-way merge: base template, released template, their file. Apply what is a clear improvement for this person in their wording; their facts, rules and deliberate deletions win; drop parts for tools they lack. Not sure → don't apply, list it as a question.
 3. End the file with \`<!-- template: pjmuller/skills@$tag -->\` (replace the old marker; also when everything was skipped). Append one line per skipped change to the decisions log: \`$tag: <change> — <reason>\`.
 4. Pointer check: \`git -C $cache show $tag_sha:skills/agents-md/scripts/check-pointers | bash -s -- $prompt\`; missing pointer → drop or fix that line.
