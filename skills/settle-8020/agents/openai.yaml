@@ -1,0 +1,6 @@
+interface:
+  display_name: "Settle 80/20"
+  short_description: "Finish what still moves the needle, verify, then settle this T3 thread"
+  default_prompt: "Use $settle-8020 to check this thread's goal is done at 80/20, finish the small remaining work, then settle this thread."
+# policy.allow_implicit_invocation stays default (true): plain-text "D1A /settle-8020" in a T3 message
+# reaches the skill only through the model. The description limits it to explicit user requests.

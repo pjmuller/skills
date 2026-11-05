@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05 — settle-8020: close a finished thread in one word
+
+- New global skill `settle-8020` (`pnpm dlx skills add pjmuller/skills -s settle-8020 -g -y`): `/settle-8020`, alone or after answering a decision (`D1A /settle-8020`), audits the thread's goal, finishes the small remaining work, verifies, then settles the thread. Why: a thread whose question you just answered otherwise comes back for one more read; this closes it and double-checks nothing that moves the needle was left. Works in Claude Code and Codex (T3 `$settle-8020` chips too). Model invocation stays on deliberately: plain-text mid-message invocations only reach the skill through the model; the description restricts it to explicit requests.
+
 ## 2026-11-05 — HTML deliverables stay local unless a hosted page is asked for
 
 - Global template: HTML reports and proposals go to a local `.html` in `~/Downloads/<task>/` (or the owning repo); a hosted Claude artifact only when the user asks for one or the page is for other people. Why: Claude Code's Artifact tool instructions let an agent publish its own work unasked, and a session published a single-reader proposal to claude.ai where a local file was expected.

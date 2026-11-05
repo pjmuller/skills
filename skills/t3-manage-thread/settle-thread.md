@@ -14,7 +14,7 @@ Stops the provider session, incl. background shells and in-session sub-agents (A
 
 ## Settle yourself
 
-Only on the user's explicit request or an authorized routing policy in the brief ([completion footer](#completion-footer-for-t3_thread_launch)). Applies when the turn ends; a failed/interrupted turn or queued message keeps it open.
+Only on the user's explicit request (incl. [`/settle-8020`](../settle-8020/SKILL.md): finish the remaining 80/20 first) or an authorized routing policy in the brief ([completion footer](#completion-footer-for-t3_thread_launch)). Applies when the turn ends; a failed/interrupted turn or queued message keeps it open.
 
 Finish all work (no background shells, sub-agents or monitors left: they'd wake it), settle as the last tool call, then the final answer.
 
