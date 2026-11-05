@@ -22,6 +22,12 @@ def normalize_target(value: str) -> str:
     return normalize_number(value)
 
 
+def check_message_id(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Za-z-]{6,64}", value):
+        raise ValueError("message id must be one exact WhatsApp message id from wa read (letters, digits, -)")
+    return value
+
+
 def check_recipient(target: str, own: str):
     """Groups are never implicit: a group JID must be listed verbatim in WA_ALLOWED_RECIPIENTS."""
     allowed = {normalize_number(own)}
@@ -44,6 +50,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS names (name TEXT, jid TEXT, PRIMARY KEY(name,jid));
                 CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, jid TEXT);
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+                -- Append-only delete-for-everyone attempts; the revoked message row itself stays.
+                CREATE TABLE IF NOT EXISTS revocations (chat TEXT, id TEXT, status TEXT,
+                    revoke_id TEXT, timestamp INTEGER, error TEXT);
             """)
             # media: serialized Message holding the download keys; kind: audio/image/video/... (added 2026-10).
             # forwarded: WhatsApp's "Forwarded" flag, NULL for rows synced before 2026-10-28 (unknown).
@@ -151,6 +160,45 @@ class Store:
                     if len(result) == n:
                         break
             return result if since is not None else list(reversed(result))
+
+    def chat_ids(self, chat_jid):
+        """The chat plus its LID/PN aliases (1:1 only: groups have none)."""
+        jid = self.canonical(chat_jid)
+        with self.db() as db:
+            return {jid, *(r[0] for r in db.execute("SELECT alias FROM aliases WHERE jid=?", (jid,)))}
+
+    def own_message(self, chat_jid, msg_id):
+        """Timestamp of msg_id if we sent it in exactly this chat; else ValueError (no admin deletes)."""
+        chats = self.chat_ids(chat_jid)
+        with self.db() as db:
+            rows = db.execute("SELECT chat, from_me, timestamp FROM messages WHERE id=?", (msg_id,)).fetchall()
+        here = [r for r in rows if r[0] in chats]
+        if not here:
+            raise ValueError("Message id belongs to another chat" if rows else
+                             "Message id not in local history for this chat; wa read it first")
+        if not all(r[1] for r in here):
+            raise ValueError("Only messages sent by this account can be revoked (no admin deletes)")
+        return max(r[2] for r in here)
+
+    def begin_revoke(self, chat_jid, msg_id):
+        """Record a pending attempt before the network call; refuse replays of accepted/unknown ones."""
+        chats = self.chat_ids(chat_jid)
+        marks = ",".join("?" for _ in chats)
+        with self.db() as db:
+            prior = {r[0] for r in db.execute(
+                f"SELECT status FROM revocations WHERE id=? AND chat IN ({marks})", (msg_id, *chats))}
+            if "accepted" in prior:
+                raise ValueError("Already revoked (accepted earlier); not sending again")
+            if "pending" in prior:
+                raise ValueError("An earlier revoke of this message has an unknown outcome; check the chat "
+                                 "on the phone, delete there if needed. Not sending again")
+            return db.execute("INSERT INTO revocations (chat, id, status) VALUES (?,?,'pending')",
+                              (chat_jid, msg_id)).lastrowid
+
+    def finish_revoke(self, attempt, status, revoke_id=None, timestamp=None, error=None):
+        with self.db() as db:
+            db.execute("UPDATE revocations SET status=?, revoke_id=?, timestamp=?, error=? WHERE rowid=?",
+                       (status, revoke_id, timestamp, error, attempt))
 
     def reserve_send(self):
         # Caller holds session flock; persist BEFORE network call, including failures.

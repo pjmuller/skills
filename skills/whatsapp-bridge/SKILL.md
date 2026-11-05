@@ -1,6 +1,6 @@
 ---
 name: whatsapp-bridge
-description: "Use when an agent must read WhatsApp chats, resolve contacts, transcribe voice notes, or draft and send allowlisted individual messages from a locally paired account. Read the repository's wrapper first (account, allowed recipients, drafting policy)."
+description: "Use when an agent must read WhatsApp chats, resolve contacts, transcribe voice notes, or draft, send or delete-for-everyone allowlisted individual messages from a locally paired account. Read the repository's wrapper first (account, allowed recipients, drafting policy)."
 ---
 
 This core owns mechanics: Neonize build, history store, `wa` CLI, Python API. A repo-local **wrapper skill** owns
@@ -8,9 +8,9 @@ policy (paired account, own number, who may be messaged, tone, AI-badge use, con
 no wrapper → sending is self-only.
 
 - `uv run --project <this dir> wa --help`; same functions exported from `whatsapp_bridge` (editable uv path dependency).
-- Read → draft → send, result shapes, attachments: [reply-workflow.md](reply-workflow.md). Install, checks, why Neonize: [README.md](README.md).
+- Read → draft → send, result shapes, attachments, delete-for-everyone (`wa revoke`): [reply-workflow.md](reply-workflow.md). Install, checks, why Neonize: [README.md](README.md).
 - `whatsapp_bridge/__init__.py`: API, CLI, validation, context budgets · `store.py`: history DB, name resolution,
-  recipient allowlist, send pacing · `worker.py`: one native session per subprocess, serialized by a file lock (no daemon/polling).
+  recipient allowlist, send pacing, revoke audit · `worker.py`: one native session per subprocess, serialized by a file lock (no daemon/polling).
 
 ## Safety (hard rules)
 
@@ -22,6 +22,8 @@ Ban/abuse guardrails for an unofficial protocol client: breaking them risks the 
 - Never bulk-send, never widen the allowlist to make a test pass, never auto-retry an uncertain send (a worker crash
   can mean it went out). Before sending to a group JID, verify its name in `wa contacts`. Send through `wa` or the
   API only; never a temporary script that patches the source.
+- `wa revoke` (delete for everyone) counts as a send: same authorization, allowlist, pacing, no retry; only one own
+  message per call, never delete-for-me or others' messages.
 - E2E tests only to the paired account's self chat: resolve `me`, verify the own identity against the wrapper, pass
   that explicit number; harmless synthetic files, minimal sends.
 - Reading any chat is allowed. Never print or copy session/credential files (`~/.config/whatsapp-bridge/`, 0700).

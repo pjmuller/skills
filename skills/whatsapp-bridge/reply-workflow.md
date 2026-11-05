@@ -24,3 +24,27 @@ Python `send_document(target, path, caption="", *, filename=None, mimetype=None,
 Local regular nonempty files only, no URLs. Limits: documents 100 MiB, JPEG/PNG images 16 MiB (content-validated; other formats → send as document), captions 1,024 characters, no automatic mentions. Documents keep their basename (`--filename` overrides, no directories/control characters); `--mimetype` overrides MIME (`.md`/`.txt` → `text/markdown`/`text/plain`, else inferred, binary fallback).
 
 Returns `{id, chat, timestamp, kind, filename, mimetype, bytes, status: "accepted"}`: platform acceptance, **not verified delivery**. `source: "sent"` = local send record; `live`/`history`/`resent` = synced observation. Keep the receipt. Crash/timeout/unknown outcome → check history before any retry; never blindly resend. A history-write `warning` keeps the accepted ID: do not resend.
+
+## Delete for everyone
+
+Needs the same explicit authorization as a send (this chat, this message). One own message per call:
+
+```sh
+WA_ALLOWED_RECIPIENTS=120363…@g.us uv run --project <core-dir> wa revoke 120363…@g.us <message-id>
+```
+
+Python `revoke_message(target, message_id)`. The ID comes from `wa read` and must be in local history **in that
+chat** (LID/number aliases of a 1:1 count) with `from_me: true`; unknown, other-chat or other-author IDs are refused
+before anything is sent. No delete-for-me, no admin deletes of others' messages, no bulk. The bridge never retries
+(whatsmeow resends the same frame after a disconnect) and never deletes the local row.
+
+Returns `{status, chat, id, ...}`; the CLI exits 1 unless `accepted`:
+- `accepted` + `revoke_id`, `timestamp`: the server took the revoke; devices remove the message when they process
+  it, unverified. `warning` when older than WhatsApp's [~2-day window](https://faq.whatsapp.com/1370476507114859/):
+  it may stay visible.
+- `failed` + `error`: the server answered `server returned error N`: not revoked; a new explicit attempt is allowed.
+- `uncertain` + `error`: any other failure (or a worker timeout/crash, raised as an error): check the phone; the
+  bridge refuses a repeat.
+
+Attempts are kept in the `revocations` table of `history.sqlite` (pending → accepted/failed); an accepted or pending
+attempt blocks a replay.

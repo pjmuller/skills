@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from .store import STATE, Store, check_recipient, normalize_number, normalize_target
+from .store import STATE, Store, check_message_id, check_recipient, normalize_number, normalize_target
 from . import _bounded_context
 
 MEDIA_FIELDS = {"audioMessage": "audio", "imageMessage": "image", "videoMessage": "video", "ptvMessage": "video",
@@ -96,6 +96,51 @@ def send_attachment(client, store, request, own):
     except Exception:
         receipt["warning"] = "Accepted, but local history write failed. Do not resend."
     return receipt
+
+
+REVOKE_WINDOW = 2 * 24 * 3600  # s; WhatsApp FAQ: "about 2 days" to delete for everyone. Warning only.
+
+
+def revoke(client, store, request, own):
+    """Delete one own message for everyone. Called under the session lock; no bridge-level retry
+    (whatsmeow itself resends the same frame after a disconnect)."""
+    from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ProtocolMessage
+    from neonize.utils.jid import build_jid
+    target, msg_id = normalize_target(request["target"]), check_message_id(request["id"])
+    check_recipient(target, own)
+    user, _, server = target.partition("@")
+    chat = target if server else target + "@s.whatsapp.net"
+    sent_at = store.own_message(chat, msg_id)
+    chat_jid = build_jid(user, server or "s.whatsapp.net")
+    # Sender = own JID gives key.fromMe, which whatsmeow sends as edit=7 (sender revoke), never 8 (admin).
+    # Not with_go=True: Neonize 0.4.7 parses that Go reply (a BuildMessageReturnFunction) as a Message.
+    message = client.build_revoke(chat_jid, client.get_me().JID, msg_id)
+    proto, key = message.protocolMessage, message.protocolMessage.key
+    if (not message.HasField("protocolMessage") or not proto.HasField("type") or proto.type != ProtocolMessage.REVOKE
+            or not key.fromMe or key.participant or key.ID != msg_id or key.remoteJID != chat):
+        raise RuntimeError("Built revoke is not a sender revoke of this exact message; nothing sent")
+    attempt = store.begin_revoke(chat, msg_id)
+    store.reserve_send()
+    result = {"chat": chat, "id": msg_id}
+    try:
+        response = client.send_message(chat_jid, message)
+    except Exception as exc:
+        reason = " ".join(str(exc).split())[:200]
+        if re.fullmatch(r"server returned error \d+", reason):  # the server's ack refused it
+            store.finish_revoke(attempt, "failed", error=reason)
+            return {**result, "status": "failed", "error": f"WhatsApp rejected the revoke ({reason}); not revoked"}
+        return {**result, "status": "uncertain",
+                "error": f"Revoke outcome unknown ({reason or type(exc).__name__}); check the chat on the phone. "
+                         "A repeat is refused."}
+    result.update(status="accepted", revoke_id=response.ID, timestamp=response.Timestamp,
+                  note="Server accepted the revoke; devices remove the message when they process it (not verified).")
+    if time.time() - sent_at > REVOKE_WINDOW:
+        result["warning"] = "Message is older than WhatsApp's ~2-day delete-for-everyone window; it may stay visible."
+    try:
+        store.finish_revoke(attempt, "accepted", response.ID, response.Timestamp)
+    except Exception:
+        result["warning"] = (result.get("warning", "") + " Local audit write failed; do not resend.").strip()
+    return result
 
 
 def execute(request):
@@ -268,6 +313,8 @@ def execute(request):
         op = request["operation"]
         if op in {"send_document", "send_image"}:
             return send_attachment(client, store, request, own)
+        if op == "revoke":
+            return revoke(client, store, request, own)
         if op == "send":
             target = normalize_target(request["target"])
             check_recipient(target, own)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05 — whatsapp-bridge: delete one own message for everyone
+
+- `wa revoke <number|group JID> <message-id>` / `revoke_message(target, message_id)`: revokes one message this account sent, for everyone, in one explicit allowlisted chat. Refuses IDs not in local history for that chat, from another chat or from another author (no admin deletes, no delete-for-me, no bulk). Same allowlist, lock and pacing as a send; no retry. Returns `accepted` / `failed` (server error) / `uncertain`, CLI exit 1 unless accepted; attempts land in a new `revocations` table, the message row stays, an accepted or unknown attempt blocks a replay. Live-verified on a self chat. Why: an obsolete message sent to a group had to be taken back without the phone. Neonize 0.4.7's `build_revoke(with_go=True)` misparses the Go reply, so its Python builder is used.
+
 ## 2026-11-05 — settle-8020: close a finished thread in one word
 
 - New global skill `settle-8020` (`pnpm dlx skills add pjmuller/skills -s settle-8020 -g -y`): `/settle-8020`, alone or after answering a decision (`D1A /settle-8020`), audits the thread's goal, finishes the small remaining work, verifies, then settles the thread. Why: a thread whose question you just answered otherwise comes back for one more read; this closes it and double-checks nothing that moves the needle was left. Works in Claude Code and Codex (T3 `$settle-8020` chips too). Model invocation stays on deliberately: plain-text mid-message invocations only reach the skill through the model; the description restricts it to explicit requests.

@@ -228,6 +228,16 @@ def send_image(target: str, path: str | Path, caption: str = "", *, ai_label: bo
     return _send_attachment("image", target, path, caption, None, None, ai_label)
 
 
+def revoke_message(target: str, message_id: str) -> dict:
+    """Delete one message this account sent, for everyone, in one explicit allowlisted chat.
+
+    Returns {status: accepted|failed|uncertain, chat, id, ...}; accepted = server accepted the revoke,
+    not proof every device removed it. Never delete-for-me, never someone else's message.
+    """
+    from .store import check_message_id, normalize_target
+    return _call("revoke", target=normalize_target(target), id=check_message_id(message_id))
+
+
 def _send_attachment(kind, target, path, caption, filename, mimetype, ai_label):
     from .attachments import attachment
     from .store import normalize_target
@@ -273,6 +283,9 @@ def main():
         if kind == "document":
             media.add_argument("--filename")
             media.add_argument("--mimetype")
+    revoke = sub.add_parser("revoke", help="delete one own message for everyone (not delete-for-me)")
+    revoke.add_argument("target", help="resolved international number or allowlisted group JID")
+    revoke.add_argument("message_id", help="exact id from wa read; must be a message this account sent there")
     args = parser.parse_args()
     try:
         if args.command == "login":
@@ -298,8 +311,12 @@ def main():
                                    mimetype=args.mimetype, ai_label=args.ai_label)
         elif args.command == "send-image":
             result = send_image(args.target, args.path, args.caption, ai_label=args.ai_label)
+        elif args.command == "revoke":
+            result = revoke_message(args.target, args.message_id)
         else:
             result = send_text(args.target, args.text, ai_label=args.ai_label)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if args.command == "revoke" and result["status"] != "accepted":
+            parser.exit(1)
     except (RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"{exc}\n")
