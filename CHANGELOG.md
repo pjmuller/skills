@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-05 — HTML deliverables stay local unless a hosted page is asked for
+
+- Global template: HTML reports and proposals go to a local `.html` in `~/Downloads/<task>/` (or the owning repo); a hosted Claude artifact only when the user asks for one or the page is for other people. Why: Claude Code's Artifact tool instructions let an agent publish its own work unasked, and a session published a single-reader proposal to claude.ai where a local file was expected.
+
 ## 2026-11-04 — thread titles in plain words, set at launch
 
 - `t3-manage-thread/workers.md`: titles are ≤5 words naming the problem or outcome as the user would say it, without internal mechanism words. Why: a bug thread a mailbox review launched was titled `Intercom outbound-email dead-letter`, which its owner could not place. Also documents that every creation path takes a title and that T3 keeps it after the first run (verified live on 0.1.7); `t3_thread_update rename` fixes a bad one.
