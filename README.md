@@ -137,6 +137,7 @@ consumer copies, otherwise the next refresh restores the source's older lock.
 several isolated Claude homes, symlink every home's `skills` directory and `~/.agents/skills` to one
 directory first (the one-time setup below does this). A committed `.claude/skills -> ../.agents/skills`
 symlink in a repo works with project installs (verified with skills CLI 1.5.24, 2026-09-09).
+Account isolation and 1-year auth per home: [Claude Code profiles](setup/t3-setup/claude-profiles.md).
 
 ## One-time machine setup
 

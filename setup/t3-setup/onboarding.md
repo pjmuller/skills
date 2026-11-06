@@ -75,7 +75,8 @@ First, serially: one working provider, GitHub identity, private setup repo, chec
 - Deploy channels per repo (push to `main` = production?) and whether server-side branch protection
   exists; if not, the guard lives in the person's global prompt and Auto-mode environment.
 - Subscription accounts: one person per consumer seat (Claude/ChatGPT terms forbid sharing); team seats
-  or their own login. A setup-token is model-only, lasts a year and hides usage from routing.
+  or their own login. A setup-token is model-only and lasts a year
+  ([claude-profiles.md](claude-profiles.md)).
 - Never copy the sender's env files: they hold production DSNs, deploy keys and
   `CLAUDE_CODE_OAUTH_TOKEN`, which outranks the recipient's own login. Build theirs from an allowlist.
 - One OAuth token per (account, machine): the recipient mints their own Workspace token; a copied

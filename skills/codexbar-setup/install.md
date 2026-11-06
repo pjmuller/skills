@@ -41,9 +41,9 @@ resolve symlinks differently): it determines the Keychain service hash. Leave
 
 ### Claude quota from t3-limits
 
-Why: with 1-year `claude setup-token` profiles, `/login` tokens are kept alive only by claude-swap,
-whose refreshes can spend a refresh token (lost reply,
-[claude-swap#434](https://github.com/realiti4/claude-swap/issues/434)) and die after ~30 days anyway.
+Why: [1-year setup-token profiles](https://github.com/pjmuller/skills/blob/main/setup/t3-setup/claude-profiles.md) need no `/login`;
+claude-swap needs one, its refreshes can spend a refresh token (lost reply,
+[claude-swap#434](https://github.com/realiti4/claude-swap/issues/434)) and `/login` dies after ~30 days anyway.
 
 Set the Claude provider's `claudeSwapExecutablePath` to the absolute path of
 `codexbar-claude-usage` (keep `claudeSwapEnabled: true`), validate, restart CodexBar. Verify:

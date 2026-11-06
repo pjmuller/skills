@@ -65,9 +65,7 @@ in a terminal. Install only what `command -v` misses; verify each with `--versio
   verify the user manager with `systemctl --user show-environment`. Keep WSL and T3 running
   and the computer awake. No Windows execution wrapper or launchd in WSL.
   `t3-open-thread` remains macOS-only (thread *search* works). Claude on Linux stores its /login in `<home>/.credentials.json`; `t3-limits`
-  reads that. A profile that only has a `claude setup-token` (settings.json `env`) can run
-  turns but shows no usage: the usage API refuses setup-tokens, so `t3-limits` prints
-  "setup-token only" for it and capacity routing treats it as unknown.
+  reads that, and probes setup-token profiles like on macOS.
 
 ## Merge prompts and unify homes
 
@@ -106,6 +104,8 @@ env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
 ```
 
 Never set global token variables or change `HOME` to isolate accounts.
+Then give each profile a 1-year setup-token (recommended; `/login` dies after ~30 days):
+[claude-profiles.md](claude-profiles.md).
 
 T3 has no UI/CLI to add a Claude provider instance. Quit T3, back up
 `~/.t3/userdata/settings.json`, add a `providerInstances` entry shaped like the existing

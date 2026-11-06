@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-06 — Claude Code profiles: 1-year setup-token is the recommended auth
+
+- New `setup/t3-setup/claude-profiles.md`: one `CLAUDE_CONFIG_DIR` per account, a `claude setup-token` per profile in `<home>/settings.json` `env`, verification, renewal, pty gotchas for agent-driven minting, and what the inference-only token cannot do (Remote Control, claude.ai connectors, Claude in Chrome, cloud sessions API → 401 `oauth_scope_insufficient`). Linked from t3-setup, onboarding, README and codexbar-setup. Why: 35 days on three Max accounts with zero auth failures in T3/`claude -p`, while `/login` dies after ~30 days. Stale claim removed: setup-token profiles no longer "show no usage" (`t3-limits` probes them).
+
 ## 2026-11-05 — recording-watcher: a call waits for its workspace's own recorder
 
 - A call routed to a workspace another source is pinned to (Fathom → DentAI, recorded by Leexi) waits 2 h after its start (`DEDICATED_WAIT`) before spawning; the existing 4-gram match then drops it once that recorder lists the same meeting. Why: a Fathom bot left a 62-min meeting at minute 26, its recording finished first and spawned 35 min before Leexi listed the meeting (Leexi lists only after a meeting ends, ≤ 77 min after its scheduled start in 4 weeks), so both got a thread. Replay of every poll 10-12..11-05 on 93 real calls: the same spawns as before except this duplicate; the one Fathom-only DentAI call spawns 84 min later.
