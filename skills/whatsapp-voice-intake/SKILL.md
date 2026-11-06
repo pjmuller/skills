@@ -51,4 +51,7 @@ download, `transcribe-gemini` ≈ $0.004/min), [t3-relay](../t3-manage-thread/re
 - **Reading** pages forward from the floor (bridge `read_chat(since=)`, 200 per page, ≤25 pages). A chat too
   busy to page through (or 200 messages in one second) holds the floor and raises `backlog`: stuck, never skipped.
 - **Health**: macOS notification once per condition per 6 h (bridge/T3 outages after 30 min), no message
-  content. `status`/`check` list the conditions and captures undelivered > 1 h.
+  content. `status`/`check` list the conditions and captures undelivered > 1 h. `transcriber` carries the
+  transcriber's own last error line (e.g. Gemini `402 … prepayment credits are depleted`): a human must act.
+- **Sleep**: launchd skips intervals while the Mac sleeps (lid closed); the first poll after wake catches up
+  every note sent meanwhile. A gap in `last poll` that matches `pmset -g log` sleep is expected, not a fault.

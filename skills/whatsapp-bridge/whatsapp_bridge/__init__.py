@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 
 MAX_MESSAGES = 200
 MAX_CONTEXT_CHARS = 12_000
@@ -160,14 +161,19 @@ def transcribe_audio(path: str | Path, hint: str | None = None, context: str | N
     cmd = [script, str(path), "--prompt", str(prompt), "--out", str(out), "--timeout", "120"]
     # Own process group: the script runs under `uv run`, and killing only uv on timeout left the Python
     # grandchild waiting on Gemini (2026-11-04). 3 attempts x 120 s + backoff stay under 600.
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, start_new_session=True)
-    try:
-        if proc.wait(timeout=TRANSCRIBE_TIMEOUT):
-            raise subprocess.CalledProcessError(proc.returncode, cmd)
-    finally:
-        if proc.poll() is None:  # timeout, Ctrl-C or any other exit
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
+    # stderr into a file (a pipe can fill and block); its last line names the failure, e.g. Gemini's
+    # "402 … prepayment credits are depleted" (2026-11-06), which a bare exit code hid. Errors only, no transcript.
+    with tempfile.TemporaryFile("w+") as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+        try:
+            if proc.wait(timeout=TRANSCRIBE_TIMEOUT):
+                err.seek(0)
+                lines = [line.strip() for line in err.read().splitlines() if line.strip()]
+                raise RuntimeError(f"transcribe-gemini exit {proc.returncode}: {lines[-1][:300] if lines else 'no detail'}")
+        finally:
+            if proc.poll() is None:  # timeout, Ctrl-C or any other exit
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
     # Drop transcribe-gemini's provenance header (written for video passes).
     return out.read_text().split("\n\n", 1)[-1].strip()
 

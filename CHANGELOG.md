@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-06 — whatsapp-voice-intake: transcription failures say why and notify
+
+- `whatsapp-bridge` `transcribe_audio` now raises with the transcriber's last stderr line (errors only, never transcript text) instead of a bare `CalledProcessError`; `whatsapp-voice-intake` logs it and raises a `transcriber` health condition (one macOS notification per 6 h, cleared by the next successful transcription). Why: Gemini prepaid credits ran out on 2026-11-06 and the log only said `CalledProcessError`; notes kept retrying silently.
+
 ## 2026-11-06 — Claude Code profiles: 1-year setup-token is the recommended auth
 
 - New `setup/t3-setup/claude-profiles.md`: one `CLAUDE_CONFIG_DIR` per account, a `claude setup-token` per profile in `<home>/settings.json` `env`, verification, renewal, pty gotchas for agent-driven minting, and what the inference-only token cannot do (Remote Control, claude.ai connectors, Claude in Chrome, cloud sessions API → 401 `oauth_scope_insufficient`). Linked from t3-setup, onboarding, README and codexbar-setup. Why: 35 days on three Max accounts with zero auth failures in T3/`claude -p`, while `/login` dies after ~30 days. Stale claim removed: setup-token profiles no longer "show no usage" (`t3-limits` probes them).

@@ -263,7 +263,19 @@ def test_transcription_failure_retries_then_delivers_marked(env):
         env.run(now)
         now += 3601
     (_, _, text), = env.relay.sends
-    assert "[transcription failed: transcription: RuntimeError" in text and len(env.bridge.transcribed) == 4
+    assert "[transcription failed: transcription: RuntimeError: gemini 503" in text and len(env.bridge.transcribed) == 4
+
+
+def test_transcriber_error_alerts_once_and_clears_on_success(env):
+    env.bridge.rows = [voice("v1", T0)]
+    env.seed(T0 - 10)
+    env.bridge.fail = 2
+    env.run(T0 + 400)
+    env.run(T0 + 400 + vi.RETRY_AFTER[0])
+    health = env.state()["health"]["transcriber"]
+    assert "gemini 503" in health["detail"] and len(env.notes) == 1 and "transcriber" in env.notes[0]
+    env.run(T0 + 400 + vi.RETRY_AFTER[0] + vi.RETRY_AFTER[1])
+    assert "transcriber" not in env.state()["health"] and "> spoken words of v1" in env.relay.sends[0][2]
 
 
 def test_paid_transcript_left_by_a_crash_is_reused(env):

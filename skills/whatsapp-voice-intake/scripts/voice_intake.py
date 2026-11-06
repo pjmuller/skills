@@ -407,7 +407,7 @@ def transcribe(cfg, state, bridge, now, dry_run) -> None:
         return
     files = {n["id"]: n for n in bridge.download([m["id"] for _, m in todo])}
     day = datetime.fromtimestamp(now, cfg["tz"]).date().isoformat()
-    over_budget = False
+    over_budget, transcriber_error, transcribed = False, None, False
     for key, m in todo:
         capture, note = state["captures"][key], files.get(m["id"], {"error": "not returned by the bridge"})
         if "path" in note:
@@ -425,12 +425,14 @@ def transcribe(cfg, state, bridge, now, dry_run) -> None:
                 save_state(state)
                 try:
                     text = bridge.transcribe(note["path"], transcription_hint(cfg), cfg["context"])
-                except Exception as exc:  # transcriber exit, timeout, missing key
-                    note = {"error": f"transcription: {type(exc).__name__}"}
+                except Exception as exc:  # transcriber exit (e.g. prepaid credits depleted), timeout, missing key
+                    note = {"error": f"transcription: {type(exc).__name__}: {' '.join(str(exc).split())[:240]}"}
+                    transcriber_error = note["error"]
                     text = None
             if text is not None:
                 write_private(capture_dir(key) / f"{m['id']}.md", text + "\n")
                 log(f"{key}: transcribed {m['id']}")
+                transcribed = True
                 continue
         # Retry every error: the bridge words even a connection reset as "media may have expired".
         attempts = capture.setdefault("attempts", {})[m["id"]] = capture.get("attempts", {}).get(m["id"], 0) + 1
@@ -444,6 +446,10 @@ def transcribe(cfg, state, bridge, now, dry_run) -> None:
         set_health(state, "budget", f"daily audio cap {cfg['daily_audio_minutes']:g} min reached; waiting for tomorrow", now)
     else:
         clear_health(state, "budget")
+    if transcriber_error:   # notify: a depleted key or broken transcriber needs a human, retries alone won't fix it
+        set_health(state, "transcriber", f"{transcriber_error}; notes retry, then arrive marked failed", now)
+    elif transcribed:
+        clear_health(state, "transcriber")
 
 
 def resolve_target(cfg, state, relay, now) -> str | None:

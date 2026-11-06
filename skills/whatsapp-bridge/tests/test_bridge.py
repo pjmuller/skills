@@ -251,6 +251,16 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(grandchild, 0)
 
+    def test_transcribe_failure_names_the_transcriber_error(self):
+        from whatsapp_bridge import transcribe_audio
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / 'transcribe-gemini'
+            fake.write_text('#!/bin/sh\necho "Traceback ..." >&2\necho "ClientError: 402 RESOURCE_EXHAUSTED credits depleted" >&2\nexit 1\n')
+            fake.chmod(0o755)
+            with patch('whatsapp_bridge.TRANSCRIBE', fake):
+                with self.assertRaisesRegex(RuntimeError, r'exit 1: ClientError: 402 RESOURCE_EXHAUSTED'):
+                    transcribe_audio(Path(directory) / '1-x.ogg')
+
     def test_transcribe_passes_hint_and_strips_provenance(self):
         from whatsapp_bridge import transcribe_audio, download_voice_notes
         with tempfile.TemporaryDirectory() as directory:
