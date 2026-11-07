@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-07 — whatsapp-voice-intake: offline Whisper fallback and `recover`
+
+- After Gemini's retries fail, notes are transcribed with `transcribe-local` (free, offline, labelled in the message) before ever arriving as "transcription failed". New `recover KEY` re-transcribes a delivered capture's failed notes into one `wa-rec-…` message (images included) that the next poll delivers once. Config `local_language`. Why: Gemini prepaid credits ran out on 2026-11-06 and a note reached the router without its content.
+
 ## 2026-11-06 — whatsapp-voice-intake: transcription failures say why and notify
 
 - `whatsapp-bridge` `transcribe_audio` now raises with the transcriber's last stderr line (errors only, never transcript text) instead of a bare `CalledProcessError`; `whatsapp-voice-intake` logs it and raises a `transcriber` health condition (one macOS notification per 6 h, cleared by the next successful transcription). Why: Gemini prepaid credits ran out on 2026-11-06 and the log only said `CalledProcessError`; notes kept retrying silently.

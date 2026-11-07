@@ -20,6 +20,10 @@ download, `transcribe-gemini` ≈ $0.004/min), [t3-relay](../t3-manage-thread/re
 - `seed [--include MSG_ID…] [--force]`: start from now, **no backlog**; `--include` adds exact older voice
   notes (verified in the self chat, printed with local time). A poll without state seeds itself from now.
 - `status` (exit 1 on problems) · `check` (config, paired account, target thread, health).
+- `recover KEY [--gemini]`: a delivered capture whose notes arrived "transcription failed" → re-transcribes
+  them (local Whisper by default, never the route that just failed) into one `wa-rec-…` capture that the next
+  poll delivers once, with the capture's images, marked "same dictation, not an additional task". Rerun = no-op.
+  Needs an awake Mac: Whisper does not finish while it sleeps.
 - `scripts/install [--schedule|--unschedule|--check]`. State/log: `~/.local/state/whatsapp-voice-intake/`
   (0700; transcripts and frozen messages live there, never in logs). Never edit `state.json` by hand.
 
@@ -37,8 +41,9 @@ download, `transcribe-gemini` ≈ $0.004/min), [t3-relay](../t3-manage-thread/re
   a note-to-self a dispatcher will route, used only to recognise words) + the wrapper's `hint` and its
   `vocabulary` file, re-read for each note so an added term applies to the next one. Knowing the destination
   and the speaker's vocabulary is the point: the router acts on names it must recognise. On a synthetic Flemish clip with 10 product/model/people
-  terms: no hint 6 wrong, a one-line names hint 1, purpose + vocabulary with known mishearings 0. Failures retry after 5/15/60 min, then the note is delivered marked
-  "transcription failed" (never silently dropped). A transcript a crash left beside the audio is reused, not
+  terms: no hint 6 wrong, a one-line names hint 1, purpose + vocabulary with known mishearings 0. Failures retry after 5/15/60 min, then
+  `transcribe-local` (free offline Whisper; meaning intact, names may be misspelled; labelled in the message),
+  and only if that fails too the note is delivered marked "transcription failed" (never silently dropped). A transcript a crash left beside the audio is reused, not
   re-bought. Daily cap `daily_audio_minutes` holds further paid calls.
 - **Target** looked up per delivery (`t3-relay find`: open root threads with the exact title + pin state):
   newest pin wins (a router reset pins the successor first); else the only open one; several unpinned →

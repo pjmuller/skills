@@ -28,6 +28,7 @@ installed skill; a wrapper repo may own it and link it there. `whatsapp-voice-in
 | `target` | T3 project root and **exact** thread title to deliver to. Required. |
 | `fallback` | Optional. No open target → launch one thread with `Read and execute <brief>` (t3-relay model/effort; runtime = the user's new-thread default). Omit to only alert. |
 | `daily_audio_minutes` | Paid transcription cap per local day (default 60 ≈ $0.25). |
+| `local_language` | Optional Whisper language code for the offline fallback (`nl`); still keeps English speech English. Unset = auto-detect, which was far slower on this Mac. |
 
 Seed on a new machine: `whatsapp-voice-intake seed` (plus `--include <id>` for a specific earlier note from
 `wa read me`), then `scripts/install --schedule` and `scripts/install --check`.
