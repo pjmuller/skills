@@ -39,7 +39,7 @@ def voice(id, ts, seconds=20, **kw):
 class FakeBridge:
     def __init__(self, tmp, rows=()):
         self.tmp, self.rows, self.transcribed, self.fail, self.download_errors = tmp, list(rows), [], 0, 0
-        self.prompts = []
+        self.prompts, self.local, self.local_fail = [], [], False
         self.down = False
 
     def read(self, since):  # like the bridge: the oldest READ_LIMIT at/after `since`
@@ -70,6 +70,12 @@ class FakeBridge:
             self.fail -= 1
             raise RuntimeError("gemini 503")
         return f"spoken words of {Path(path).stem}\nsecond line"
+
+    def transcribe_local(self, path, vocabulary, language):
+        self.local.append((Path(path).stem, vocabulary, language))
+        if self.local_fail:
+            raise RuntimeError("whisper crashed")
+        return f"local words of {Path(path).stem}"
 
 
 class FakeRelay:
@@ -257,13 +263,32 @@ def test_failed_send_retries_same_key_without_retranscribing(env):
 def test_transcription_failure_retries_then_delivers_marked(env):
     env.bridge.rows = [voice("v1", T0)]
     env.seed(T0 - 10)
-    env.bridge.fail = 99
+    env.bridge.fail, env.bridge.local_fail = 99, True
     now = T0 + 400
     for _ in range(4):
         env.run(now)
         now += 3601
     (_, _, text), = env.relay.sends
     assert "[transcription failed: transcription: RuntimeError: gemini 503" in text and len(env.bridge.transcribed) == 4
+    assert "local Whisper: RuntimeError" in text and "recover wa-v1" in text
+
+
+def test_gemini_exhausted_falls_back_to_local_whisper(env):
+    vocab = env.tmp / "vocabulary.md"
+    vocab.write_text('# Terms\n\n"≈" = misheard\n\n## Products\n- Globex ≈ "Glow Bex", Initech\n')
+    data = json.loads(env.config.read_text())
+    env.config.write_text(json.dumps({**data, "vocabulary": str(vocab), "local_language": "nl"}))
+    env.bridge.rows = [voice("v1", T0)]
+    env.seed(T0 - 10)
+    env.bridge.fail = 99
+    now = T0 + 400
+    for _ in range(4):
+        env.run(now)
+        now += 3601
+    (_, _, text), = env.relay.sends
+    assert "> local words of v1" in text and "Transcript: local Whisper" in text and "transcription failed" not in text
+    (_, terms, language), = env.bridge.local
+    assert "Globex" in terms and "Glow Bex" not in terms and language == "nl"
 
 
 def test_transcriber_error_alerts_once_and_clears_on_success(env):
@@ -276,6 +301,41 @@ def test_transcriber_error_alerts_once_and_clears_on_success(env):
     assert "gemini 503" in health["detail"] and len(env.notes) == 1 and "transcriber" in env.notes[0]
     env.run(T0 + 400 + vi.RETRY_AFTER[0] + vi.RETRY_AFTER[1])
     assert "transcriber" not in env.state()["health"] and "> spoken words of v1" in env.relay.sends[0][2]
+
+
+def test_recover_delivers_failed_capture_once_with_media(env):
+    env.bridge.rows = [msg("img", T0 - 37, "Is dit te krap?", kind="image", forwarded=True),
+                       voice("v1", T0), voice("v2", T0 + 86)]
+    env.seed(T0 - 100)
+    env.bridge.fail, env.bridge.local_fail = 99, True
+    now = T0 + 400
+    for _ in range(4):
+        env.run(now)
+        now += 3601
+    assert len(env.relay.sends) == 1 and "transcription failed" in env.relay.sends[0][2]
+    env.bridge.local_fail = False
+    recover = lambda: vi.cmd_recover(SimpleNamespace(key="wa-v1", gemini=False), bridge=env.bridge, now=now)  # noqa: E731
+    assert recover() == 0
+    gemini_calls = len(env.bridge.transcribed)
+    env.run(now + 300)
+    env.run(now + 600)
+    assert recover() == 0                                   # second recover: no new capture
+    env.run(now + 900)
+    keys = [k for _, k, _ in env.relay.sends]
+    assert keys == ["wa-v1", "wa-rec-v1"] and len(env.bridge.transcribed) == gemini_calls
+    text = env.relay.sends[1][2]
+    assert "recovered transcripts for wa-v1" in text and "not an additional task" in text
+    assert "> local words of v1" in text and "> local words of v2" in text and "transcription failed:" not in text
+    assert "image · forwarded (third-party) · `img`" in text and "Image (private, this machine): `" in text
+    assert "> Is dit te krap?" in text
+
+
+def test_recover_refuses_a_healthy_capture(env):
+    env.bridge.rows = [voice("v1", T0)]
+    env.seed(T0 - 10)
+    env.run(T0 + 400)
+    with pytest.raises(SystemExit):
+        vi.cmd_recover(SimpleNamespace(key="wa-v1", gemini=False), bridge=env.bridge, now=T0 + 700)
 
 
 def test_paid_transcript_left_by_a_crash_is_reused(env):
